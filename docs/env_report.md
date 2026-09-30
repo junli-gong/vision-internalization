@@ -86,3 +86,57 @@ pip dry-run 的临时目录放在 `/dev/shm`（resolver 会下载整个 vllm whe
 | 批次 1 写报告前（05:40） | 5.911 GB | 21.09 GB | 0.43 GB |
 
 `/dev/shm` 是 91 GB tmpfs，写报告前已用 20 GB（全部为本项目）。逐步收支见 report §6 与 `raw/disk_ledger.tsv`。
+
+## 6. 内核路径（§5.6.3 摘要；细节见 model_notes §5.6）
+
+| 组件 | 实际实现 | 警告 |
+|---|---|---|
+| GDN chunk（prefill / 前向） | `fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule`（Triton） | 无 |
+| GDN recurrent（逐 token 解码） | `fla.ops.gated_delta_rule.fused_recurrent.fused_recurrent_gated_delta_rule`（Triton） | 无 |
+| 短卷积 causal_conv1d | transformers 自带的 torch 实现（`F.conv1d`）；未装 `causal-conv1d` | `` `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. `` |
+| 全注意力层 | `sdpa`（未装 flash-attn） | 加载时 `Flash Attention is not installed...` |
+| RMSNormGated 等 hub kernel 层 | torch（未装 `kernels` 包） | 无 |
+
+Triton 编译缓存在 `$PROJ/tmp/triton-cache`（根盘，写报告时 61 MB）。
+
+## 7. 显存与吞吐实测（§5.8，替换简报 v0.1 §5.4 的估算）
+
+条件：B200，bf16 权重，sdpa + fla，transformers 5.17.0，peft 0.21.1。输入是两张 COCO val2017 图，缩放到 1024×1024，得到 32×32=1024 个视觉 token；提示 "Describe the image in detail."，关闭思考，seq_len 1044（LoRA 行另附一句 14 token 的回答，seq_len 1060）。"峰值" 指 `torch.cuda.max_memory_allocated/reserved`，每项测量前都 reset。nvidia-smi 看到的占用会比 reserved 多出 CUDA context 等（见下文 GPU 利用率段落）。
+
+| 模型 | 测量 | batch | 峰值 allocated GiB | 峰值 reserved GiB | 备注 |
+|---|---|---|---|---|---|
+| qwen3.5-0.8b | 仅加载权重（bf16） | — | 1.589 | 1.605 | |
+| qwen3.5-0.8b | 推理前向 bf16，1024 视觉 token（seq 1044），logits_to_keep=1 | 1 | 1.794 | 1.812 | logits [1, 1, 248320] |
+| qwen3.5-0.8b | 推理前向 bf16，1024 视觉 token（seq 1044），full_logits | 1 | 2.152 | 2.547 | logits [1, 1044, 248320] |
+| qwen3.5-0.8b | 推理前向 bf16，1024 视觉 token（seq 1044），logits_to_keep=1 | 16 | 4.055 | 4.236 | logits [16, 1, 248320] |
+| qwen3.5-0.8b | 推理前向 bf16，1024 视觉 token（seq 1044），full_logits | 16 | 9.777 | 11.963 | logits [16, 1044, 248320] |
+| qwen3.5-0.8b | 在线探针前向 output_hidden_states=True（25 个 hidden），logits_to_keep=1 | 8 | 3.365 | 3.512 | 全部 hidden 合计 0.398 GiB |
+| qwen3.5-0.8b | 在线探针前向 output_hidden_states=True（25 个 hidden），full_logits | 8 | 6.093 | 7.375 | 全部 hidden 合计 0.398 GiB |
+| qwen3.5-0.8b | LoRA r=32（all-linear），梯度检查点，单步前向+反向，全序列 LM loss（seq 1060） | 8 | 30.664 | 31.686 | 可训练参数 26,691,584；LoRA 模块 236（其中视觉塔 50） |
+| qwen3.5-0.8b | LoRA r=32（language_model_linear_only），梯度检查点，单步前向+反向，全序列 LM loss（seq 1060） | 8 | 29.814 | 30.844 | 可训练参数 21,645,312；LoRA 模块 186（其中视觉塔 0） |
+| qwen3.5-0.8b | HF generate，greedy，思考关，max_new_tokens=64 | 16 | 4.055 | 4.439 | 3 次：16.886, 16.807, 16.934 样本/s（墙钟 0.948, 0.952, 0.945 s）；每样本生成 [64, 64] token；prompt 1044 token |
+| qwen3.5-9b | 仅加载权重（bf16） | — | 17.527 | 17.543 | |
+| qwen3.5-9b | 推理前向 bf16，1024 视觉 token（seq 1044），logits_to_keep=1 | 1 | 17.795 | 17.822 | logits [1, 1, 248320] |
+| qwen3.5-9b | 推理前向 bf16，1024 视觉 token（seq 1044），full_logits | 1 | 18.096 | 18.619 | logits [1, 1044, 248320] |
+| qwen3.5-9b | 推理前向 bf16，1024 视觉 token（seq 1044），logits_to_keep=1 | 16 | 20.983 | 21.676 | logits [16, 1, 248320] |
+| qwen3.5-9b | 推理前向 bf16，1024 视觉 token（seq 1044），full_logits | 16 | 25.811 | 29.402 | logits [16, 1044, 248320] |
+| qwen3.5-9b | 在线探针前向 output_hidden_states=True（33 个 hidden），logits_to_keep=1 | 8 | 22.848 | 23.213 | 全部 hidden 合计 2.103 GiB |
+| qwen3.5-9b | 在线探针前向 output_hidden_states=True（33 个 hidden），full_logits | 8 | 23.743 | 27.076 | 全部 hidden 合计 2.103 GiB |
+| qwen3.5-9b | LoRA r=32（all-linear），梯度检查点，单步前向+反向，全序列 LM loss（seq 1060） | 8 | 50.196 | 52.699 | 可训练参数 102,530,048；LoRA 模块 358（其中视觉塔 110） |
+| qwen3.5-9b | LoRA r=32（language_model_linear_only），梯度检查点，单步前向+反向，全序列 LM loss（seq 1060） | 8 | 47.825 | 50.143 | 可训练参数 86,556,672；LoRA 模块 248（其中视觉塔 0） |
+| qwen3.5-9b | HF generate，greedy，思考关，max_new_tokens=64 | 16 | 21.829 | 22.137 | 3 次：9.773, 9.771, 9.789 样本/s（墙钟 1.637, 1.637, 1.634 s）；每样本生成 [64, 64] token；prompt 1044 token |
+
+说明（只陈述）：
+- "full_logits" 表示 HF 前向默认对所有位置算 logits（B×L×248320）；"logits_to_keep=1" 只算最后一个位置，与 `generate` 的 prefill 相同。
+- LoRA 行：`LoraConfig(r=32, lora_alpha=64, dropout=0)`；`all-linear` 用 peft 的 `target_modules='all-linear'`，**包含视觉塔的线性层**；`language_model_linear_only` 用正则只匹配 `language_model` 下的 q/k/v/o、gate/up/down、GDN 的 in_proj_qkv/z/b/a 与 out_proj。开梯度检查点（`use_reentrant=False`）与 `enable_input_require_grads()`；labels 为整条序列（含 1024 个 `<|image_pad|>`），用 HF 默认的 `ForCausalLMLoss`，不做分块 CE。只做一次前向与反向，没有优化器、没有 step、没有保存。两种配置的 loss 逐位相同（0.8B 为 22.125221…，9B 为 22.478992…），因为 LoRA 的 B 初始化为 0。
+- 墙钟时间：每个进程的第一次调用包含 Triton JIT 编译（例如 LoRA all-linear 的第一次前向加反向，0.8B 用了 40.6 s，9B 用了 42.4 s；紧接着的 LM-only 配置只要 0.41 s 和 1.32 s）。表中的吞吐是 1 次 warmup 之后连续 3 次的结果。
+- generate：`do_sample=False, max_new_tokens=64`，16 条样本全部生成满 64 个 token（没有提前停）。
+
+GPU 利用率（nvidia-smi 每 500 ms 采样一次，每个窗口包含模型加载；`raw/p5_8_nvsmi.csv`）：
+
+| 窗口 | util 最大 | util 均值 | nvidia-smi 显存最大 | 功耗最大 |
+|---|---|---|---|---|
+| 0.8B infer | 98% | 23.4% | 13048 MiB | 586 W |
+| 0.8B lora | 99% | 18.5% | 40716 MiB | 582 W |
+| 9B infer | 100% | 33.4% | 30906 MiB | 813 W |
+| 9B lora | 99% | 17.9% | 62264 MiB | 882 W |
