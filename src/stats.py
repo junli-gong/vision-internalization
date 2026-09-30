@@ -62,6 +62,20 @@ def pooled_mean(x: np.ndarray) -> float:
     return ratio_of_sums(x)
 
 
+def f1_statistic(x: np.ndarray) -> float:
+    """(n_images, 3) 逐图 (tp, fp, n_gt) → F1 = 2Σtp / (Σ(tp+fp) + Σn_gt)。分母为 0 时返回 nan。
+
+    与 src.metrics.detection.operating_point 的 F1_50 逐位相同；逐图计数来自它返回的 per_image
+    （src.metrics.detection.per_image_counts），两个系统按同一组图像对齐后可直接交给
+    paired_bootstrap_ci 或 is_significant（D12，N8）。
+    """
+    x = np.asarray(x)
+    if x.ndim != 2 or x.shape[1] != 3:
+        raise ValueError(f"f1_statistic 要求形状 (n_images, 3)，收到 {x.shape}")
+    den = x[:, 0].sum() + x[:, 1].sum() + x[:, 2].sum()
+    return float(2 * x[:, 0].sum() / den) if den > 0 else float("nan")
+
+
 def miou_statistic(x: np.ndarray) -> float:
     """(n, 2, K) 逐图逐类 (交, 并) → mIoU，与 src.metrics.seg.mean_iou 相同（miou_from_totals）。
 
@@ -206,7 +220,7 @@ def is_significant(
     G0 报告里请项目负责人确认。
 
     输入形状 (n_samples, n_seeds, …)：A、B 在同一批样本上按样本对齐（第 0 维），seed 数可以不同，
-    每方至少 2 个 seed；尾部维度是 statistic 需要的（如 cIoU 用 (…, 2) 的 (交, 并)）。
+    每方至少 2 个 seed；n_seeds > n_samples 时报错（多半是传成了转置，D12，N7）；尾部维度是 statistic 需要的（如 cIoU 用 (…, 2) 的 (交, 并)）。
     seed 级指标 m_s = statistic(x[:, s])，在函数内部对每个 seed 的全集计算。
     1. |mean(m_A) − mean(m_B)| > 2 × sqrt((s_A² + s_B²) / 2)，s 为 m 的样本标准差（ddof=1）。
     2. 按样本配对重采样：每次对各 seed 分别算 statistic 再取 seed 平均，A 减 B；差值的 95% CI 不含 0。
@@ -223,6 +237,11 @@ def is_significant(
         raise ValueError("样本为空")
     if a.shape[1] < 2 or b.shape[1] < 2:
         raise ValueError("每种方法至少需要 2 个 seed 才能算 ddof=1 的标准差")
+    if a.shape[1] > a.shape[0] or b.shape[1] > b.shape[0]:
+        raise ValueError(
+            f"n_seeds 大于 n_samples（A {a.shape[:2]}，B {b.shape[:2]}），很可能把 (n_seeds, n_samples) 传反了；"
+            "输入应为 (n_samples, n_seeds, …)"
+        )
     _check_finite("per_sample_a", a)
     _check_finite("per_sample_b", b)
 

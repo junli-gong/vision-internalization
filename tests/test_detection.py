@@ -2,8 +2,13 @@ import numpy as np
 import pytest
 
 from src.constants import DETECTION_TIEBREAK_K
-from src.metrics.detection import detection_bootstrap_statistic, detection_map
-from src.stats import bootstrap_ci
+from src.metrics.detection import (
+    canonical_order,
+    detection_bootstrap_statistic,
+    detection_map,
+    per_image_counts,
+)
+from src.stats import bootstrap_ci, f1_statistic, paired_bootstrap_ci
 
 
 def _gt(ids=(1, 2)):
@@ -205,3 +210,90 @@ def test_detection_bootstrap_renumbers_duplicated_images():
     preds = [{"image_id": 5, "category_id": 1, "bbox_xyxy": [x, y, x + w, y + h], "score": 1 - k / 100} for k, (x, y, w, h) in enumerate(boxes)]
     _, stat = detection_bootstrap_statistic(gt, preds, "AP50")
     assert stat(np.array([0, 0])) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------- addendum-2
+
+
+def test_n3_bootstrap_checks_image_ids_upfront():
+    """复核 N3：image_id 写成字符串 '1'、GT 里是整数 1 时，bootstrap 路径与 detection_map 报同样的错（以前静默得 0）。"""
+    bad = [{**p, "image_id": str(p["image_id"])} for p in _right_on_first_wrong_on_second()]
+    with pytest.raises(ValueError, match="image_id='1' 不在 GT 里"):
+        detection_map(_gt(), bad)
+    with pytest.raises(ValueError, match="image_id='1' 不在 GT 里"):
+        detection_bootstrap_statistic(_gt(), bad, "AP50")
+
+
+def _synthetic_det(seed, n_img=40, hit_rate=0.55):
+    rng = np.random.default_rng(seed)
+    images, anns, preds = [], [], []
+    for iid in range(1, n_img + 1):
+        images.append({"id": iid, "width": 640, "height": 480})
+        for _ in range(int(rng.integers(1, 4))):
+            g = [float(rng.uniform(0, 400)), float(rng.uniform(0, 300)), 60.0, 40.0]
+            anns.append({"id": len(anns) + 1, "image_id": iid, "category_id": 1, "bbox": g})
+            if rng.random() < hit_rate:
+                preds.append({"image_id": iid, "category_id": 1, "bbox_xyxy": [g[0] + 2, g[1] + 1, g[0] + g[2] + 2, g[1] + g[3] + 1]})
+        for _ in range(int(rng.integers(0, 2))):
+            x, y = float(rng.uniform(0, 400)), float(rng.uniform(0, 300))
+            preds.append({"image_id": iid, "category_id": 1, "bbox_xyxy": [x, y, x + 30, y + 30]})
+    return {"images": images, "annotations": anns, "categories": [{"id": 1, "name": "x"}]}, preds
+
+
+def test_n8_per_image_counts_reproduce_f1_bitwise():
+    gt, preds = _synthetic_det(0)
+    gt["images"] = gt["images"][::-1]  # GT 的图像列表乱序：per_image 仍按 image_id 排序
+    r = detection_map(gt, preds, n_tiebreaks=2)
+    ids, x = per_image_counts(r)
+    assert ids == tuple(range(1, 41))  # GT 里每张图都有一行，按 image_id 排序
+    assert x.shape == (40, 3)
+    assert tuple(x.sum(axis=0)) == (r["n_tp"], r["n_fp"], r["n_gt"])
+    assert f1_statistic(x) == r["F1_50"]  # 逐位相同
+
+
+def test_n8_per_image_includes_hallucinated_category_fp():
+    gt = _gt()
+    preds = _right_on_first_wrong_on_second() + [{"image_id": 2, "category_id": 99, "bbox_xyxy": [0, 0, 5, 5]}]
+    r = detection_map(gt, preds, n_tiebreaks=2)
+    assert r["per_image"] == [(1, 1, 0, 1), (2, 0, 2, 1)]  # 幻觉类别的框在图 2 记 FP（N6）
+    assert f1_statistic(per_image_counts(r)[1]) == r["F1_50"]
+
+
+def test_n8_paired_ci_between_two_systems():
+    """两个系统在同一批图上：A 命中率高，B 低。配对 bootstrap 的 F1 差值 CI 在 0 之上。"""
+    gt, preds_a = _synthetic_det(1, n_img=60, hit_rate=0.9)
+    _, preds_b = _synthetic_det(1, n_img=60, hit_rate=0.4)
+    ra, rb = detection_map(gt, preds_a, n_tiebreaks=2), detection_map(gt, preds_b, n_tiebreaks=2)
+    ids_a, xa = per_image_counts(ra)
+    ids_b, xb = per_image_counts(rb)
+    assert ids_a == ids_b
+    ci = paired_bootstrap_ci(xa, xb, statistic=f1_statistic, n_resamples=300)
+    assert ci.estimate == pytest.approx(ra["F1_50"] - rb["F1_50"])
+    assert ci.low > 0
+
+
+def test_canonical_order():
+    p = [
+        {"image_id": 3, "k": "3a"},
+        {"image_id": 1, "k": "1a"},
+        {"image_id": 3, "k": "3b"},
+        {"image_id": 2, "k": "2a"},
+        {"image_id": 1, "k": "1b"},
+    ]
+    assert [x["k"] for x in canonical_order(p)] == ["1a", "1b", "2a", "3a", "3b"]  # 图内保持模型输出顺序
+    assert [x["k"] for x in canonical_order(p[::-1])] == ["1b", "1a", "2a", "3b", "3a"]
+
+
+def test_canonical_order_makes_ap_independent_of_list_assembly():
+    """同一组预测，调用方按不同的图间顺序拼列表：规范化之后 AP 完全相同。"""
+    gt, preds = _synthetic_det(2, n_img=30)
+    rng = np.random.default_rng(0)
+    by_img = {}
+    for q in preds:
+        by_img.setdefault(q["image_id"], []).append(q)
+    base = detection_map(gt, canonical_order(preds), n_tiebreaks=4)
+    for _ in range(2):
+        order = rng.permutation(sorted(by_img))
+        shuffled = [q for i in order for q in by_img[i]]
+        r = detection_map(gt, canonical_order(shuffled), n_tiebreaks=4)
+        assert r["AP50"] == base["AP50"] and r["AP"] == base["AP"]

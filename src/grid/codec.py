@@ -152,11 +152,15 @@ def grid_to_text(grid: np.ndarray) -> str:
 
 
 def _classify_line(line: str, n: int) -> str:
-    """'grid'：纯网格行；'dirty'：至少 ⌈N/2⌉ 个 0/1 且还含其他字符；'text'：其余（空行、说明文字等）。"""
+    """'grid'：纯网格行；'dirty'：污染行；'text'：其余（空行、说明文字等）。
+
+    污染行（D12，N4）：0/1 数字至少 ⌈N/2⌉ 个，并且占该行非分隔字符的一半或以上，同时还含别的字符。
+    """
     if _GRID_LINE.fullmatch(line):
         return "grid"
     n01 = sum(1 for c in line if c in "01")
-    if n01 >= math.ceil(n / 2) and any(c not in "01" and c not in _SEPARATORS for c in line):
+    non_sep = sum(1 for c in line if c not in _SEPARATORS)
+    if n01 >= math.ceil(n / 2) and 2 * n01 >= non_sep and n01 < non_sep:
         return "dirty"
     return "text"
 
@@ -166,10 +170,12 @@ def parse_grid_text(text: str, n: int) -> GridParse:
 
     行分类（逐行，去掉首尾空白后，见 _classify_line）：
     - 纯网格行：只含 0/1 与空格/逗号/制表符分隔；
-    - 污染行：至少 ⌈N/2⌉ 个 0/1 数字，同时还含其他任何字符（字母、别的数字、标点）。
-      例："0110 <- top row"、"01l0"、"[0,1,1,0]"。污染行归入相邻的网格块，不作分段符；
-    - 文本行：其余，包括空行和 "Here is the 16x16 grid:" 这类 0/1 数字不足 ⌈N/2⌉ 的说明行，作分段符。
-    连续的非文本行组成一段，每段都是候选块。
+    - 污染行：至少 ⌈N/2⌉ 个 0/1 数字、且 0/1 占非分隔字符的一半或以上，同时还含其他字符（字母、别的数字、
+      标点）。例："0110… <- top row"、"01l0…"、"[0,1,1,0]"。污染行归入相邻的网格块，不作分段符；
+    - 文本行：其余，包括空行、"Here is the 16x16 grid:"，以及 0/1 数字虽多但不占多数的坐标说明行、图例行
+      （如 "Bounding box (0-1000 scale): [100, 110, 1000, 1010]"），作分段符。
+    连续的非文本行组成一段。候选块 = 含至少一条纯网格行、或含至少 ⌈N/2⌉ 条污染行的段；
+    只含一两条污染行的段不是候选块，忽略（D12，N4）。
     没有候选块 → NO_GRID；多于一个 → MULTIPLE_BLOCKS（即使恰好只有一个是 N×N，也不猜，见 D10）；
     恰好一个时依次检查：含污染行 → ILLEGAL_CHAR；行数 ≠ N → WRONG_ROW_COUNT；
     某行数字个数 ≠ N → WRONG_COL_COUNT。
@@ -191,11 +197,16 @@ def parse_grid_text(text: str, n: int) -> GridParse:
     if current:
         segments.append(current)
 
-    if not segments:
+    min_dirty = math.ceil(n / 2)
+    candidates = [
+        seg for seg in segments
+        if any(k == "grid" for k, _ in seg) or sum(1 for k, _ in seg if k == "dirty") >= min_dirty
+    ]
+    if not candidates:
         return GridParse(None, GridParseFailure.NO_GRID)
-    if len(segments) > 1:
+    if len(candidates) > 1:
         return GridParse(None, GridParseFailure.MULTIPLE_BLOCKS)
-    block = segments[0]
+    block = candidates[0]
     if any(k == "dirty" for k, _ in block):
         return GridParse(None, GridParseFailure.ILLEGAL_CHAR)
     if len(block) != n:

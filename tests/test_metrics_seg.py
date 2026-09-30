@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from src.constants import ADE_IGNORE_INDEX, ADE_NUM_CLASSES, BOUNDARY_IOU_DILATION_RATIO
+from src.constants import ADE_IGNORE_INDEX, ADE_NUM_CLASSES, ADE_REDUCE_ZERO_LABEL, BOUNDARY_IOU_DILATION_RATIO
 from src.metrics.seg import (
     MaskStats,
     boundary_iou,
@@ -197,11 +197,35 @@ def test_intersect_and_union_hand():
     assert union.tolist() == [3, 4, 2, 0]
 
 
-def test_intersect_and_union_ade_defaults():
-    """ADE 常量接在默认值上：150 类、reduce_zero_label、忽略 255。"""
+def test_reduce_zero_is_required_keyword():
+    """D12，N1：reduce_zero 必填、只能按关键字传，漏传报 TypeError。"""
+    lab = np.array([[1, 2], [2, 1]])
+    with pytest.raises(TypeError):
+        intersect_and_union(lab, lab)
+    with pytest.raises(TypeError):
+        intersect_and_union(lab, lab, 3, ADE_IGNORE_INDEX, False)
+
+
+def test_reduce_zero_contract_raw_vs_reduced():
+    """原始 ADE 标注配 True、已 reduce 的标签配 False，两种写法结果相同；完美预测 mIoU = 1。"""
+    rng = np.random.default_rng(0)
+    raw = rng.integers(0, ADE_NUM_CLASSES + 1, (20, 30))  # 0 = 其他，1..150
+    reduced = reduce_zero_label(raw)
+    pred = np.where(reduced == ADE_IGNORE_INDEX, 0, reduced)  # 在有效像素上完美
+    a = intersect_and_union(pred, raw, reduce_zero=ADE_REDUCE_ZERO_LABEL)
+    b = intersect_and_union(pred, reduced, reduce_zero=False)
+    assert np.array_equal(a[0], b[0]) and np.array_equal(a[1], b[1])
+    assert mean_iou([a]) == 1.0
+    # 两类用法：不做 reduce
+    lab2 = (rng.random((20, 30)) > 0.5).astype(int)
+    assert mean_iou([intersect_and_union(lab2, lab2, 2, reduce_zero=False)]) == 1.0
+
+
+def test_intersect_and_union_ade_constants():
+    """ADE：150 类（num_classes 默认值）、reduce_zero=ADE_REDUCE_ZERO_LABEL、忽略 255（ignore_index 默认值）。"""
     raw = np.array([[0, 1, 2], [150, 150, 255]])  # 原始标注：0=其他（忽略），1..150 → 0..149
     pred = np.array([[5, 0, 1], [149, 3, 0]])
-    inter, union = intersect_and_union(pred, raw)
+    inter, union = intersect_and_union(pred, raw, reduce_zero=ADE_REDUCE_ZERO_LABEL)
     assert inter.shape == (ADE_NUM_CLASSES,)
     # 有效像素 4 个：(1→0,pred0) (2→1,pred1) (150→149,pred149) (150→149,pred3)
     assert inter[[0, 1, 149]].tolist() == [1, 1, 1] and inter.sum() == 3
