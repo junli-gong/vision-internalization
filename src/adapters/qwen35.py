@@ -23,6 +23,8 @@
 - Gated DeltaNet 的实现（DEV-0003-a1，§5.6）：transformers 在 import 时把 GDN 的两个模块级函数绑到 fla 的 Triton
   内核（装了 fla 时，只收 GPU 张量）或 torch 原函数，与张量在哪个设备无关。适配器在 CPU 上的前向与生成一律套
   `torch_gdn()`，显式换成 torch 原函数；GPU 上不动，保持 transformers 的绑定。实际走哪个见 `gdn_implementation()`。
+- 坐标（D13-4、§5.5；DEV-0006）：JSON `[{"bbox_2d": [x1, y1, x2, y2], "label": …}, …]`，0–1000，x 在前，按原图宽高
+  换算成内部的绝对像素 xyxy，见 parse_boxes / parse_one_box（模块级函数，也是适配器方法；通用 JSON 规则在 src/parsing）。
 
 处理器的用法：本适配器只用处理器的三个部件——tokenizer、image_processor、chat_template——自己完成图像占位符的
 展开与 mm_token_type_ids，做法与 `ProcessorMixin.__call__` 相同。原因：开发机没有 torchvision，
@@ -58,6 +60,8 @@ from src.adapters.base import (
     Span,
     check_grid_token_names,
 )
+from src.executors.geometry import norm1000_to_abs
+from src.parsing import BoxParse, OneBoxParse, one_box, parse_json_boxes
 
 # ---------------------------------------------------------------------------
 # Qwen3.5 家族事实（字符串来自 docs/model_notes.md §5.1–5.2；id 一律在 attach 时从 tokenizer 查）
@@ -914,6 +918,15 @@ class Qwen35Adapter(ModelAdapter):
         return int(self._model.config.text_config.hidden_size)
 
     # ------------------------------------------------------------------
+    # 输出解析（DEV-0006）
+    # ------------------------------------------------------------------
+
+    def parse_boxes(self, text: str, *, width: float, height: float) -> BoxParse:
+        """本家族的原生框（JSON 的 bbox_2d，0–1000，x 在前），规则见模块级的 parse_boxes。
+        不需要加载模型；parse_one_box 由基类在它之上给出。"""
+        return parse_boxes(text, width=width, height=height)  # 模块级函数（方法体里的名字按全局作用域查找）
+
+    # ------------------------------------------------------------------
     # GDN 实现（DEV-0003-a1）
     # ------------------------------------------------------------------
 
@@ -1181,6 +1194,38 @@ def _named_params_and_buffers(model: Any) -> Iterable[tuple[str, torch.Tensor]]:
 
 
 # ---------------------------------------------------------------------------
+# 原生坐标 → 内部绝对像素 xyxy（D13-4；docs/model_notes.md §5.5；DEV-0006）
+# ---------------------------------------------------------------------------
+
+# 原生框的键：[x1, y1, x2, y2]，0–1000，x 在前（§5.5 零样本实测；前代 Qwen3-VL cookbook 的 0–1000 相对坐标）
+BOX_KEY = "bbox_2d"
+
+
+def native_box_to_xyxy(quad: Sequence[float] | np.ndarray, *, width: float, height: float) -> np.ndarray:
+    """原生四元组 [x1, y1, x2, y2]（0–1000，x 在前）→ 内部绝对像素 xyxy：x = x_norm / 1000 · W，y = y_norm / 1000 · H
+    （geometry.norm1000_to_abs，浮点，不取整）。只做线性换算，不裁剪、不交换。"""
+    return norm1000_to_abs(quad, width=width, height=height)
+
+
+def parse_boxes(text: str, *, width: float, height: float) -> BoxParse:
+    """解析 Qwen3.5 的原生框，换算成内部绝对像素 xyxy。width、height 是原图的宽高（按原图归一化，§5.5）。
+
+    原生格式：JSON，形如 `[{"bbox_2d": [x1, y1, x2, y2], "label": "…"}, …]`，常包在 ```json 代码块里（§5.5 的四条实测都是）。
+    接受单个对象与对象的列表，label 可缺，其他键忽略；另外接受裸的 [x1, y1, x2, y2] 或它的列表，同样按 x 在前、0–1000 解释。
+    数值是有限的 JSON 数，整数或小数都接受（JSON 本身允许小数；不同于 InternVL 的整数语法）。
+    失败判定（通用规则见 src.parsing.parse_json_boxes 与 extract_json）：没有 JSON → no_box；多个代码块或多个顶层 JSON → ambiguous；
+    JSON 坏了、对象缺 bbox_2d、值不是 4 个数 → malformed；坐标 < 0 或 > 1000 → out_of_range；x2 < x1 或 y2 < y1 → inverted。
+    空列表 [] 是"没有框"的明确回答：成功、零个框（只要一个框时 parse_one_box 判 no_box）。
+    """
+    return parse_json_boxes(text, key=BOX_KEY, to_xyxy=native_box_to_xyxy, width=width, height=height)
+
+
+def parse_one_box(text: str, *, width: float, height: float) -> OneBoxParse:
+    """只要一个框（如 RefCOCO 的 REC）：规则见 src.parsing.one_box，与适配器方法 parse_one_box 相同。"""
+    return one_box(parse_boxes(text, width=width, height=height))
+
+
+# ---------------------------------------------------------------------------
 # 小型随机 Qwen3.5：CPU 测试与冒烟脚本 --tiny 的彩排（不下载权重）
 # ---------------------------------------------------------------------------
 
@@ -1269,6 +1314,7 @@ def make_tiny_adapter(
 
 __all__ = [
     "AdapterDeviceError",
+    "BOX_KEY",
     "GDNKernelError",
     "GDN_FUNCTIONS",
     "PIXELS_PER_LLM_TOKEN",
@@ -1279,6 +1325,9 @@ __all__ = [
     "kernel_implementation",
     "load_pinned_components",
     "make_tiny_adapter",
+    "native_box_to_xyxy",
+    "parse_boxes",
+    "parse_one_box",
     "tiny_config",
     "torch_gdn",
 ]

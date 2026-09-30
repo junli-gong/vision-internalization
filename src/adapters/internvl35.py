@@ -39,7 +39,8 @@ tokenizer / config 读取并断言，不写死 token id，不写死层号（简�
   i = 第 i 个 decoder 层之后；最后一个下标（num_layers()）是最终归一化之后的值。
 - vision_features = `multi_modal_projector` 的输出，就是前向时并入嵌入序列的那组向量，与第 0 层图像位置逐位相同。
 - 坐标（D13-4、§7.5）：`<box>[[x1, y1, x2, y2], …]</box>`，0–1000，x 在前，按原图宽高换算成内部的绝对像素 xyxy，
-  见 parse_boxes / parse_one_box。
+  见 parse_boxes / parse_one_box（模块级函数，也是适配器方法；结果类型在 src/parsing，DEV-0006）。label 取紧挨在
+  `<box>` 前面的 `<ref>…</ref>`。
 
 处理器的用法：本适配器只用处理器的三个部件——tokenizer、image_processor、chat_template——自己完成 `<IMG_CONTEXT>` 占位符的展开
 （与 `InternVLProcessor.replace_image_token` 相同：`<img>` + `<IMG_CONTEXT>`×(256·tile 数) + `</img>`）。原因：开发机没有
@@ -49,7 +50,6 @@ torchvision，`InternVLVideoProcessor` 构造不出来，官方处理器没法�
 
 from __future__ import annotations
 
-import enum
 import functools
 import hashlib
 import json
@@ -57,7 +57,7 @@ import platform
 import re
 import time
 from pathlib import Path
-from typing import Any, Iterable, NamedTuple, Sequence
+from typing import Any, Iterable, Sequence
 
 import numpy as np
 import torch
@@ -91,6 +91,7 @@ from src.adapters.qwen35 import (
 )
 from src.constants import NORM1000_SCALE
 from src.executors.geometry import check_box, norm1000_to_abs
+from src.parsing import BoxParse, OneBoxParse, ParseFailure, one_box
 
 # ---------------------------------------------------------------------------
 # InternVL3.5 家族事实（字符串来自 docs/model_notes.md §7.1–7.2；id 一律在 attach 时从 tokenizer 查）
@@ -842,6 +843,15 @@ class InternVL35Adapter(ModelAdapter):
         return int(self._model.config.text_config.hidden_size)
 
     # ------------------------------------------------------------------
+    # 输出解析（DEV-0006）
+    # ------------------------------------------------------------------
+
+    def parse_boxes(self, text: str, *, width: float, height: float) -> BoxParse:
+        """本家族的原生框 `<ref>…</ref><box>[[x1, y1, x2, y2], …]</box>`，规则见模块级的 parse_boxes（D19）。
+        不需要加载模型；parse_one_box 由基类在它之上给出。"""
+        return parse_boxes(text, width=width, height=height)  # 模块级函数（方法体里的名字按全局作用域查找）
+
+    # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
 
@@ -1095,33 +1105,30 @@ def _system_msg() -> dict[str, Any]:
 
 BOX_OPEN = "<box>"
 BOX_CLOSE = "</box>"
+REF_OPEN = "<ref>"
+REF_CLOSE = "</ref>"
 
-
-class BoxParseFailure(str, enum.Enum):
-    """框解析失败的原因（有限枚举，供统计解析失败率；简报 §8.1）。"""
-
-    NO_BOX = "no_box"  # 没有任何 <box>…</box>（包括只写了裸的 [[…]] 而没有标签）
-    UNBALANCED_TAGS = "unbalanced_tags"  # <box> 与 </box> 没有一开一闭地交替出现（缺闭合、顺序反、嵌套）
-    MALFORMED = "malformed"  # 标签内不是 [[x1, y1, x2, y2], …]：非整数、负号、个数 ≠ 4、单层列表、空列表、夹杂其他字符
-    OUT_OF_RANGE = "out_of_range"  # 有坐标大于 1000
-    INVERTED = "inverted"  # 有框 x2 < x1 或 y2 < y1
-    MULTIPLE_BOXES = "multiple_boxes"  # 只由 parse_one_box 给出：多于一个框，不猜用哪个（同 D10 对网格多块的规则）
-
-
-class BoxParse(NamedTuple):
-    boxes: tuple[tuple[float, float, float, float], ...] | None  # 绝对像素 xyxy，按出现顺序
-    failure: BoxParseFailure | None
-
-
-class OneBoxParse(NamedTuple):
-    box: tuple[float, float, float, float] | None
-    failure: BoxParseFailure | None
-
+# 失败原因与结果类型的定义在 src/parsing（DEV-0006）；这里的旧名字保持可导入。BoxParseFailure 是 ParseFailure 的别名，
+# 原有的 6 个取值（no_box、unbalanced_tags、malformed、out_of_range、inverted、multiple_boxes）不变。
+BoxParseFailure = ParseFailure
 
 _BOX_TAG_RE = re.compile(r"</?box>")
 _QUAD_NC = r"\[\s*[0-9]+\s*,\s*[0-9]+\s*,\s*[0-9]+\s*,\s*[0-9]+\s*\]"
 _BOX_LIST_RE = re.compile(rf"\s*\[\s*{_QUAD_NC}(?:\s*,\s*{_QUAD_NC})*\s*\]\s*")
 _QUAD_RE = re.compile(r"\[\s*([0-9]+)\s*,\s*([0-9]+)\s*,\s*([0-9]+)\s*,\s*([0-9]+)\s*\]")
+
+
+def _ref_label(text: str, box_open: int) -> str | None:
+    """紧挨在 text[box_open] 处的 <box> 前面的 `<ref>…</ref>` 的内容（原样，不去空白）；两者之间只允许空白。没有就是 None。"""
+    head = text[:box_open].rstrip()
+    if not head.endswith(REF_CLOSE):
+        return None
+    body_end = len(head) - len(REF_CLOSE)
+    start = head.rfind(REF_OPEN, 0, body_end)
+    if start < 0:
+        return None
+    label = head[start + len(REF_OPEN) : body_end]
+    return None if REF_CLOSE in label else label
 
 
 def parse_boxes(text: str, *, width: float, height: float) -> BoxParse:
@@ -1132,11 +1139,13 @@ def parse_boxes(text: str, *, width: float, height: float) -> BoxParse:
     width、height 是原图的宽高（像素）：归一化按原图算，与 tile 切法无关。换算 x = x_norm · W / 1000（norm1000_to_abs，不取整）。
 
     规则（不补齐、不截断、不猜）：
-    - 标签之外的文字（`<ref>…</ref>`、停止 token、说明文字）一律忽略；
+    - `<box>` 标签之外的文字（停止 token、说明文字）一律忽略；
     - 多个框：一个标签里的多个 [..] 与多个标签都接受，按出现顺序全部返回；只要一个框的场景（REC）用 parse_one_box；
     - 检查顺序与失败原因：没有标签 → NO_BOX；标签不成对 → UNBALANCED_TAGS；任一标签内容不是 [[四个非负整数], …] → MALFORMED；
       任一坐标 > 1000 → OUT_OF_RANGE；任一框 x2 < x1 或 y2 < y1 → INVERTED。任何一个框坏了整条判失败，不返回其余的框。
-    - 小数（如 24.5）与负数算格式损坏（MALFORMED），不是越界：原生格式是 0–1000 的整数。x1 == x2 的退化框照样返回。
+    - 小数（如 24.5）与负数算格式损坏（MALFORMED），不是越界：原生格式是 0–1000 的整数（D19）。x1 == x2 的退化框照样返回。
+    - label（DEV-0006）：紧挨在这个 `<box>` 前面的 `<ref>…</ref>` 的内容，中间只允许空白；没有就是 None。同一个标签里的
+      几个框共用这个 label。label 只是附带信息，不影响成功与否。
     """
     if not isinstance(text, str):
         raise TypeError(f"text 必须是 str，收到 {type(text).__name__}")
@@ -1144,31 +1153,30 @@ def parse_boxes(text: str, *, width: float, height: float) -> BoxParse:
         raise ValueError(f"原图宽高必须为正：W={width}, H={height}")
     tags = list(_BOX_TAG_RE.finditer(text))
     if not tags:
-        return BoxParse(None, BoxParseFailure.NO_BOX)
+        return BoxParse(None, None, BoxParseFailure.NO_BOX)
     if len(tags) % 2 != 0 or any(m.group() != (BOX_OPEN if k % 2 == 0 else BOX_CLOSE) for k, m in enumerate(tags)):
-        return BoxParse(None, BoxParseFailure.UNBALANCED_TAGS)
+        return BoxParse(None, None, BoxParseFailure.UNBALANCED_TAGS)
     quads: list[tuple[int, int, int, int]] = []
+    labels: list[str | None] = []
     for k in range(0, len(tags), 2):
         segment = text[tags[k].end() : tags[k + 1].start()]
         if not _BOX_LIST_RE.fullmatch(segment):
-            return BoxParse(None, BoxParseFailure.MALFORMED)
-        quads.extend(tuple(int(v) for v in m.groups()) for m in _QUAD_RE.finditer(segment))
+            return BoxParse(None, None, BoxParseFailure.MALFORMED)
+        found = [tuple(int(v) for v in m.groups()) for m in _QUAD_RE.finditer(segment)]
+        quads.extend(found)
+        labels.extend([_ref_label(text, tags[k].start())] * len(found))
     if any(v > NORM1000_SCALE for q in quads for v in q):
-        return BoxParse(None, BoxParseFailure.OUT_OF_RANGE)
+        return BoxParse(None, None, BoxParseFailure.OUT_OF_RANGE)
     if any(q[2] < q[0] or q[3] < q[1] for q in quads):
-        return BoxParse(None, BoxParseFailure.INVERTED)
+        return BoxParse(None, None, BoxParseFailure.INVERTED)
     boxes = tuple(check_box(norm1000_to_abs(list(q), width=width, height=height)) for q in quads)
-    return BoxParse(boxes, None)
+    return BoxParse(boxes, tuple(labels), None)
 
 
 def parse_one_box(text: str, *, width: float, height: float) -> OneBoxParse:
-    """只要一个框（如 RefCOCO 的 REC）：parse_boxes 失败就原样给出失败原因；框多于一个 → MULTIPLE_BOXES，不猜用哪个。"""
-    parsed = parse_boxes(text, width=width, height=height)
-    if parsed.failure is not None:
-        return OneBoxParse(None, parsed.failure)
-    if len(parsed.boxes) != 1:
-        return OneBoxParse(None, BoxParseFailure.MULTIPLE_BOXES)
-    return OneBoxParse(parsed.boxes[0], None)
+    """只要一个框（如 RefCOCO 的 REC）：parse_boxes 失败就原样给出失败原因；框多于一个 → MULTIPLE_BOXES，不猜用哪个
+    （规则见 src.parsing.one_box，与适配器方法 parse_one_box 相同）。"""
+    return one_box(parse_boxes(text, width=width, height=height))
 
 
 # ---------------------------------------------------------------------------

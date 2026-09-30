@@ -1291,7 +1291,7 @@ def test_parse_boxes_order_and_scale():
     ("<box>[[0, 50, 100, 5]]</box>", BoxParseFailure.INVERTED),
 ])
 def test_parse_boxes_failures(text, failure):
-    assert parse_boxes(text, width=640, height=480) == (None, failure)
+    assert parse_boxes(text, width=640, height=480) == (None, None, failure)  # DEV-0006：BoxParse 增加 labels 字段
     assert parse_one_box(text, width=640, height=480) == (None, failure)
 
 

@@ -37,6 +37,7 @@
 - 层号（base.py 的层号约定）：就是 HF `output_hidden_states` 元组的下标，共 num_layers()+1 个（E2B 为 36，§6.1）。
   0 = 视觉特征并入之后的嵌入输出，i = 第 i 个 decoder 层之后，最后一个下标取最终归一化之后的值。
 - 坐标（D13-4，§6.5）：`box_2d` 是 [y1, x1, y2, x2]，0–1000，**y 在前**；`box2d_to_xyxy` 换算成内部绝对像素 xyxy。
+  从回答里解析框见 parse_boxes / parse_one_box（模块级函数，也是适配器方法；通用 JSON 规则在 src/parsing，DEV-0006）。
 
 处理器的用法同 qwen35.py：本适配器只用 tokenizer、image_processor、chat_template 三个部件，自己完成图像占位符的展开与
 mm_token_type_ids（做法与 `Gemma4Processor` / `ProcessorMixin` 相同）。开发机没有 torchvision，`Gemma4Processor`
@@ -77,6 +78,7 @@ from src.adapters.base import (
 # （简报 §12：限制 logits 的实现处处一致）。二者目前定义在 qwen35.py；挪到公共模块要改 base.py，不在本任务范围内。
 from src.adapters.qwen35 import AdapterDeviceError, _AllowedTokensProcessor
 from src.executors.geometry import norm1000_to_abs
+from src.parsing import BoxParse, OneBoxParse, one_box, parse_json_boxes
 
 # ---------------------------------------------------------------------------
 # Gemma 4 家族事实（字符串来自 docs/model_notes.md §6.1–6.3 与固定 revision 的 tokenizer_config.json；
@@ -186,6 +188,27 @@ def box2d_to_xyxy(box_2d: Sequence[float] | np.ndarray, *, width: float, height:
         raise ValueError(f"box_2d 含非有限值：{box_2d!r}")
     xyxy_norm = arr[..., [1, 0, 3, 2]]
     return norm1000_to_abs(xyxy_norm, width=width, height=height)
+
+
+# 原生框的键：[y1, x1, y2, x2]，0–1000，y 在前（§6.5 官方文档与零样本实测；D13-4）
+BOX_KEY = "box_2d"
+
+
+def parse_boxes(text: str, *, width: float, height: float) -> BoxParse:
+    """解析 Gemma 4 的原生框，换算成内部绝对像素 xyxy（DEV-0006）。width、height 是原图的宽高（按原图归一化，§6.5）。
+
+    原生格式：JSON，形如 `[{"box_2d": [y1, x1, y2, x2], "label": "…"}, …]`，**y 在前**，0–1000，常包在 ```json 代码块里
+    （§6.5 的两条实测都是）。换算走 box2d_to_xyxy。接受单个对象与对象的列表，label 可缺，其他键忽略；另外接受裸的四元组
+    或它的列表，同样按 y 在前、0–1000 解释。其余规则与 Qwen 相同（src.parsing.parse_json_boxes 与 extract_json）：
+    没有 JSON → no_box；多个代码块或多个顶层 JSON → ambiguous；JSON 坏了、对象缺 box_2d、值不是 4 个有限数 → malformed；
+    坐标 < 0 或 > 1000 → out_of_range；y2 < y1 或 x2 < x1 → inverted；空列表 [] 成功、零个框。整数或小数都接受。
+    """
+    return parse_json_boxes(text, key=BOX_KEY, to_xyxy=box2d_to_xyxy, width=width, height=height)
+
+
+def parse_one_box(text: str, *, width: float, height: float) -> OneBoxParse:
+    """只要一个框（如 RefCOCO 的 REC）：规则见 src.parsing.one_box，与适配器方法 parse_one_box 相同。"""
+    return one_box(parse_boxes(text, width=width, height=height))
 
 
 class Gemma4Adapter(ModelAdapter):
@@ -906,6 +929,15 @@ class Gemma4Adapter(ModelAdapter):
     def hidden_size(self) -> int:
         self._require_loaded()
         return int(self._model.config.text_config.hidden_size)
+
+    # ------------------------------------------------------------------
+    # 输出解析（DEV-0006）
+    # ------------------------------------------------------------------
+
+    def parse_boxes(self, text: str, *, width: float, height: float) -> BoxParse:
+        """本家族的原生框（JSON 的 box_2d，0–1000，y 在前），规则见模块级的 parse_boxes。
+        不需要加载模型；parse_one_box 由基类在它之上给出。"""
+        return parse_boxes(text, width=width, height=height)  # 模块级函数（方法体里的名字按全局作用域查找）
 
     # ------------------------------------------------------------------
     # 内部
@@ -1640,6 +1672,7 @@ def smoke_check_7_thinking(ad: Gemma4Adapter, ctx: dict) -> dict:
 
 __all__ = [
     "AdapterDeviceError",
+    "BOX_KEY",
     "CHANNEL_CLOSE",
     "CHANNEL_OPEN",
     "Gemma4Adapter",
@@ -1652,6 +1685,8 @@ __all__ = [
     "grid_from_position_ids",
     "load_pinned_components",
     "make_tiny_adapter",
+    "parse_boxes",
+    "parse_one_box",
     "smoke_setup",
     "tiny_config",
 ]
