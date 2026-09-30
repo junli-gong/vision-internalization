@@ -16,7 +16,7 @@
 
 | DEV | 发出 | 合入 commit | 内容 | 状态 |
 |---|---|---|---|---|
-| 0003-a1 | 2026-09-30 | — | Qwen3.5 适配器在 CPU 上显式走 GDN 的 torch 实现（修 RUN-0003 的跨机器差异；模式 B，worktree agent） | 已派发 |
+| 0003-a1 | 2026-09-30 | 4ed6bc3 | Qwen3.5 适配器在 CPU 上显式走 GDN 的 torch 实现（修 RUN-0003 的跨机器差异；模式 B，worktree agent） | 已合入（main 433 passed，普通与服务器条件都通过） |
 | 0005 | 2026-09-30 | — | InternVL3.5 适配器（照 Qwen35Adapter；模式 B，worktree agent） | 已派发 |
 | 0004 | 2026-09-30 | 2463c02 | Gemma 4 适配器（照 Qwen35Adapter；另把 vision_features 改为抽象方法；模式 B，worktree agent） | 已合入（93 新测试；main 共 424 passed；两个家族的 --tiny 冒烟都通过） |
 | 0003 | 2026-09-30 | a4a60e8 | Qwen3.5 适配器 + base.py 接口补充 + G0 冒烟脚本（模式 B，worktree agent） | 已合入（69 新测试；main 共 312 passed；--tiny 冒烟通过） |
@@ -123,4 +123,6 @@
   - 另外，我的任务书把冒烟命令的参数写成 `--dtype bfloat16`，脚本只接受 `bf16`。服务器 CC 发现了，没有照抄执行。又是一次任务书里的命令没有对照脚本核对。
 - **处理**：派发 DEV-0003-a1，让适配器在 CPU 上用上下文管理器显式换成 torch 实现（GPU 上照旧走 fla），并在开发机上用"模拟装了 fla"的测试钉住。它合入后，发 RUN-0003 的补充任务重跑 §3 和 §4。两条教训已写进 skill lessons。
 - **DEV-0004 合入**（2463c02）：Gemma 4 适配器，偏离裁定见 D17。派发模板加了一条：临时文件放在 scratchpad 下以任务编号命名的子目录里。起因是并行的两个 agent 共用 scratchpad，发生过一次互相覆盖。
+- **DEV-0003-a1 合入**（4ed6bc3，D18）：修好 RUN-0003 暴露的跨机器差异。新增的 parity 脚本在开发机上模拟服务器的 fla 绑定，去掉修复就能复现服务器上全部 16 个失败。今后改动适配器或冒烟脚本的合入都要多跑这一遍。
+- **DEV-0005 第 1 轮**：已把最新的 main 合进它的分支。它在自己的 worktree 里解冒烟脚本的家族分派冲突（Gemma 接进它的 family_suite），并把思考段规则改成和 Gemma 一致：没写 `<think>` 就直接作答时取全文。
 

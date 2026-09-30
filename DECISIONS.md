@@ -265,3 +265,17 @@
    - (9) 从 qwen35 导入共用件：暂时接受，以后挪到公共模块。
    - (11) 查询位置的 PLE 身份用占位符自己的行：暂定接受，到 E6 用 Gemma 做 E3a 时再定。
 
+## D18 — DEV-0003-a1 合入：CPU 上 GDN 走 torch 实现，开发机能按服务器条件跑测试（2026-09-30）
+
+1. **合入**（4ed6bc3）：
+   - Qwen3.5 适配器在 CPU 设备上用 `torch_gdn()` 上下文管理器，把 transformers 在 import 时绑到 fla 的两个 GDN 函数换成 torch 原函数；GPU 上保持 fla。
+   - 冒烟检查 0 记录实际走的实现；检查 5 的 HF 原生参照也套同一个作用域。
+   - 合入后在干净的 worktree 里：普通 pytest 与 `scripts/pytest_server_parity.sh` 都是 433 passed；Qwen 与 Gemma 的 `--tiny` 冒烟都通过。
+   - 去掉这个修复，parity 脚本会复现 RUN-0003 服务器上的全部 16 个失败。
+2. **偏离全部接受**：
+   - 公开 `gdn_scope`、`torch_gdn`、`kernel_implementation` 等辅助件；
+   - 检查 0 的实现名要先穿过分派包装再读；检查 5 在函数内 import；
+   - 用 `VISINT_FAKE_FLA` 声明当前是服务器条件；
+   - 保留两份模拟 fla：进程内那份用来计数，打包的那份模拟 import 时的绑定，两者由一条测试保持一致。
+3. **新规矩**：凡是改动适配器或冒烟脚本的合入，除普通 pytest 外，还要跑一遍 `scripts/pytest_server_parity.sh`。它让开发机按服务器的可选内核绑定条件跑测试，挡住"开发机绿、服务器红"。新增一条绊线测试：假如服务器以后装了 causal-conv1d，这条测试会红，提醒 CPU 路径要同样处理。
+
