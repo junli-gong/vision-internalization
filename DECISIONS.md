@@ -462,3 +462,73 @@
    - 版本 1 没有产出过任何数据，直接作废。
 3. **过渡期**：DEV-0009 合入之前，服务器全量测试里 `test_synth_repro.py` 的两条钉住摘要失败是已知项。RUN 任务书要注明它们不算"停下"的条件。
 
+## D25 — DEV-0009（E5 生成器跨机器逐位复现，生成器版本 2）合入与偏离裁定（2026-09-30）
+
+1. **合入**（f9f90d0，无返工）：
+   - 自写整数光栅化：像素中心在内、奇偶规则、边界取 (lo, hi]，全程 int64，没有浮点路径；
+   - 确定的三角函数：decimal 40 位，与平台 libm、numpy 无关；
+   - 定点求平均：结果与求和顺序无关；
+   - pymunk 派生的量先量化，再用于判定和写进元数据；
+   - 盒子的质量与转动惯量精确计算。
+   - 钉住的摘要有 180 个：c、e、d 各 60 个。d 暂为 `pending_canonical`，由 RUN-0007 在服务器上填入规范值。
+   - 合入前在干净 worktree 里验证：877 passed + 1 skipped（普通与 server-parity 条件都是），开发机上 c、e 的摘要全部相同。
+2. **偏离全部接受**：
+   - 求平均用定点整数求和，不用 `math.fsum`：同样确定，而且更快；
+   - d 的重叠判定改为像素级；
+   - e 的物体间距改用 `shapely.distance ≤ 1`；
+   - c 的二分与非平凡预检仍用 GEOS 算的面积比。估计每次比较翻转的概率约 1e-14；真出现时，钉住的摘要会报出来。
+   - 新增 `CANONICAL_PLATFORM` 常量与 `scripts/synth_pin_digests.py`；
+   - `pending_canonical` 期间，d 比对不一致记为 xfail。
+3. **管理员的常量级收尾**：
+   - `requirements.txt` 里 pymunk 钉成 ==7.3.0（D24 要求固定版本），随 DEV-0008 的合并提交一起完成；
+   - `src/constants.py` 中 `POLYGON_RASTERIZER` 的注释补一句：E5 用自己的整数光栅化。只改注释。
+4. **归档说明**：RUN-0006 的探针脚本 `p10_synth_probe.py` 引用的测试常量已经删除，原样重跑会失败。它只作为那次运行的存档，核对工作由 `scripts/synth_pin_digests.py` 接替。
+5. **d 剩下的跨平台风险**：
+   - Chipmunk 的浮点行为；
+   - 坐标跨过 1/256 的量化边界；
+   - 基于 pymunk 输出的拒绝判定翻转后，随机流会随之改变。
+   
+   规范平台指服务器上这个 venv（包括 glibc 版本），d 的数据只在这里生成。
+
+## D26 — 健康检查（简报 §8.11）的题目与协议固定；DEV-0008 合入（2026-09-30）
+
+在看到任何分数之前固定。以后要改，先写新的 D 条目。
+
+1. **合入**（647b007，审查 1 轮）：
+   - 改动：`src/health/`、`configs/health_check_items.json`、`scripts/health_check.py`、`scripts/build_health_items.py`；
+   - 与 main 合并时，`requirements.txt` 两边都是在末尾追加，保留两边即可；
+   - 合入前验证：1030 passed + 11 skipped（普通与 server-parity 条件都是）。
+2. **题目**：
+   - 文件 `configs/health_check_items.json`，sha256 `0239675f…25df`。
+   - 组成：
+     - MMLU-Pro 100 题，按 14 个类别分层，每类 7 题，再补 2 题；
+     - GSM8K 50 题；
+     - IFEval 50 题。
+   - 抽样：种子 20260930，按 sha256 排序抽取，与随机数库的版本无关。
+   - 来源的 commit 与许可（MIT、MIT、Apache-2.0）记在 `src/health/protocol.py`。
+3. **协议**：
+   - **通用**：纯文本输入，关思考，显式 greedy（`do_sample=False`、`num_beams=1`、`repetition_penalty=1.0`、`no_repeat_ngram_size=0`）。
+   - **MMLU-Pro**：最多 32 个新 token，用 `parse_choice` 解析。
+   - **GSM8K**：最多 512 个新 token。
+     - 两个口径：strict 取 "####" 之后的数；flexible 取全文最后一个数。标题口径用 flexible。
+     - 按精确十进制比较。
+   - **IFEval**：最多 1024 个新 token。
+     - 用官方 checker：google-research commit `e6890f8…`，改了 4 行，其中把 absl 的 logging 换成标准库，只影响日志。
+     - 标题口径：prompt-level strict。另报 instruction-level 的 strict 与 loose。
+     - langdetect 种子固定为 0。
+   - **提示的首尾空白**：
+     - 提示去掉首尾空白，因为适配器会拒绝首尾带空白的指令。受影响的有 IFEval 1 题、MMLU-Pro 3 题。
+     - checker 拿到的仍是原始提示。
+   - **比较**：
+     - 标红规则照简报：合并后比基座低超过 5 个百分点。
+     - 并列报告按题配对的 bootstrap 95% CI，以及不一致题上的精确符号检验 p 值；两者不改变标红规则。
+     - 50 题的项，1 题就是 2 个点。
+4. **IFEval 评分暂缓**（N12，punkt_tab 许可不明）：
+   - 基座运行用 `--skip-ifeval-scoring`，只生成、保存原始输出；
+   - 答复后用 `--rescore` 离线评分，规则与一次跑完完全相同，已有测试证明逐字节一致。
+5. **接受的其他偏离**：
+   - `parquet_lite`：只用来构建题目文件，已与 HF datasets-server 逐行核对，0 处不一致；
+   - 离线重抽的复现方式；
+   - 43 KB 的 validation fixture（MIT）；
+   - 按家族构造适配器的代码在两个脚本里各有一份，以后统一放进 `src/adapters`。
+

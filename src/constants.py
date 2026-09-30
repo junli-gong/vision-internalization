@@ -23,8 +23,9 @@ PIXEL_CENTER_OFFSET = 0.5
 # 坐标为整数时两种取法结果相同。待管理员确认。
 BOX_RASTER_RULE = "pixel_center_in_(lo,hi]"
 
-# 多边形光栅化一律走 pycocotools，与 COCO/RefCOCO 的 GT 同一套规则。
+# 真实数据（COCO/RefCOCO 等）的多边形光栅化一律走 pycocotools，与 GT 同一套规则。
 # 依据：DEV-0001 任务书 §2。
+# 例外：E5 合成数据用 src/synth/raster.py 的整数光栅化（像素中心、奇偶规则、(lo, hi]），为的是跨平台逐位复现（D24、D25）。
 POLYGON_RASTERIZER = "pycocotools"
 
 # 0–1000 归一化坐标的满量程：x_norm = x / W * NORM1000_SCALE（浮点，不取整）。
