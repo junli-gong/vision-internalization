@@ -1,0 +1,4 @@
+提示词 `Please provide the bounding box coordinate of the region this sentence describes: <ref>{obj}</ref>`，出处：https://internvl.readthedocs.io/en/latest/get_started/chat_data_format.html (RefCOCO grounding example)；生成设置 {"do_sample": false, "max_new_tokens": 256, "thinking": "off (no R1 system prompt)"}。
+
+- `000000039769.jpg`（640×480，视觉 token 3328，tile 13），目标 "the cat on the left"，生成 29 token：`'<ref>the cat on the left</ref><box>[[24, 114, 492, 984]]</box><|im_end|>'`
+- `000000000139.jpg`（640×426，视觉 token 1792，tile 7），目标 "the television"，生成 26 token：`'<ref>the television</ref><box>[[16, 395, 224, 612]]</box><|im_end|>'`

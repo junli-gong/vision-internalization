@@ -169,3 +169,39 @@ GPU 利用率（nvidia-smi 每 500 ms 采样一次，窗口包含模型加载；
 | gemma infer | 43 | 100% | 41.9% | 36836 MiB | 774 W |
 | gemma lora | 26 | 99% | 21.1% | 51250 MiB | 745 W |
 
+
+### 8.2 InternVL3.5-2B-HF（`crop_to_patches=True, max_patches=4` → 2×2 tile + 缩略图 = 5 个 tile = 1280 视觉 token）
+
+1024×1024 的方图可选的 token 数只有 256（1 个 tile）、1280（4+1）和 2560（9+1）三档（§7.3），这里取最接近 1K 的 1280。
+
+| 测量 | batch | 峰值 allocated GiB | 峰值 reserved GiB | 备注 |
+|---|---|---|---|---|
+| 仅加载权重（bf16） | — | 4.376 | 4.67 | |
+| 推理前向，1280 视觉 token（seq 1297，{"crop_to_patches": true, "max_patches": 4}），logits_to_keep=1 | 1 | 4.567 | 4.674 | logits [1, 1, 151936]；墙钟 0.498 s |
+| 推理前向，1280 视觉 token（seq 1297，{"crop_to_patches": true, "max_patches": 4}），full_logits | 1 | 4.807 | 5.041 | logits [1, 1297, 151936]；墙钟 0.021 s |
+| 推理前向，1280 视觉 token（seq 1297，{"crop_to_patches": true, "max_patches": 4}），logits_to_keep=1 | 16 | 6.801 | 7.445 | logits [16, 1, 151936]；墙钟 0.271 s |
+| 推理前向，1280 视觉 token（seq 1297，{"crop_to_patches": true, "max_patches": 4}），full_logits | 16 | 10.629 | 13.318 | logits [16, 1297, 151936]；墙钟 0.218 s |
+| LoRA r=32（language_model 内全部 nn.Linear），梯度检查点，前向+反向第 1 次，全序列 LM loss（seq 1313） | 8 | 28.79 | 30.252 | 可训练参数 34,865,152；LoRA 模块 196；墙钟 2.83 s；loss 20.498777 |
+| LoRA r=32（language_model 内全部 nn.Linear），梯度检查点，前向+反向第 2 次，全序列 LM loss（seq 1313） | 8 | 28.821 | 30.293 | 可训练参数 34,865,152；LoRA 模块 196；墙钟 0.627 s；loss 20.498777 |
+| HF generate，greedy，思考关，max_new_tokens=64 | 16 | 7.936 | 8.553 | 3 次：18.806, 18.771, 18.888 样本/s（墙钟 0.851, 0.852, 0.847 s）；new_tokens 矩阵 [16, 64]；prompt 1297 token |
+
+- LoRA 作用于 `model.language_model` 内的全部 `nn.Linear`（按后缀计数：`{"down_proj": 28, "gate_proj": 28, "up_proj": 28, "k_proj": 28, "o_proj": 28, "q_proj": 28, "v_proj": 28}`）；不含 `multi_modal_projector` 与视觉塔。labels 为整条序列，只做前向加反向，没有 step，也没有保存。两次重复的 loss 逐位相同。
+- 第 1 次前向加反向包含 JIT/预热。
+
+GPU 利用率（`raw/p7_mem_nvsmi_internvl.csv`）：
+
+| 窗口 | 采样数 | util 最大 | util 均值 | nvidia-smi 显存最大 | 功耗最大 |
+|---|---|---|---|---|---|
+| internvl infer | 25 | 79% | 20.7% | 14440 MiB | 716 W |
+| internvl lora | 20 | 99% | 12.1% | 31890 MiB | 581 W |
+
+
+### 8.3 三家族对照（摘自 §7、§8.1、§8.2，数字原样）
+
+| 模型 | 视觉 token | 仅权重 GiB | 推理 bs16（logits_to_keep=1）峰值 alloc | LoRA r=32 bs8 峰值 alloc | generate bs16×64 样本/s |
+|---|---|---|---|---|---|
+| Qwen3.5-0.8B | 1024 | 1.589 | 4.055 | 29.814（LLM-only） | 16.886 / 16.807 / 16.934 |
+| Gemma 4 E2B-it | 1089 | 9.508 | 16.625 | 46.607 | 7.593 / 7.612 / 7.604 |
+| InternVL3.5-2B-HF | 1280 | 4.376 | 6.801 | 28.821 | 18.806 / 18.771 / 18.888 |
+
+视觉 token 数与序列长度在三个家族之间不同，上表只并列原始数字，不做换算。

@@ -1,0 +1,112 @@
+{
+ "structure": "| 项 | 值 |\n|---|---|\n| 加载类 / processor / image processor / tokenizer | InternVLForConditionalGeneration / InternVLProcessor / GotOcr2ImageProcessor / Qwen2Tokenizer |\n| attn_implementation | sdpa |\n| LLM 层数 | 28 |\n| 层类型计数 | full_attention=28 |\n| hidden size / intermediate | 2048 / 6144 |\n| Q 头 / KV 头 | 16 / 8 |\n| head_dim | 128 |\n| rope | {\"rope_theta\": 1000000, \"rope_type\": \"default\"} |\n| max_position_embeddings | 40960 |\n| 视觉编码器 层 / hidden / heads | 24 / 1024 / 16 |\n| patch_size / tile / downsample_ratio | [14, 14] / [448, 448] / 0.5（每 tile 256 token；每 token = tile 的 28×28 px） |\n| vision_feature_layer / projector act | -1 / gelu |\n| 参数量（加载后） | total=2,348,347,392, language_model=1,720,574,976, vision_tower=304,012,288, multi_modal_projector=12,595,200 |\n| config vocab / 嵌入行 / lm_head 行 | 151936 / 151936 / 151936 |\n| len(tokenizer) / 基础词表 | 151679 / 151643 |\n| 嵌入行 − len(tokenizer) | 257 |\n| lm_head 与嵌入同一存储 | False |\n| 嵌入：基础词表随机 2 万行 | n=20000，范数 0.3692–2.2132（均值 1.4829），全零行 0 |\n| 嵌入：超出 tokenizer 的行 | n=257，范数 0.3317–0.3700（均值 0.3509），全零行 0 |\n| `<unusedN>` 一类占位 token | 0 个 |\n| output_hidden_states | 29 个张量（= 层数+1：True），形状全同：True，例 [1, 3346, 2048] |",
+ "added_tokens": "| id | token | special | 出现在 chat template 里 | 嵌入范数 |\n|---|---|---|---|---|\n| 151643 | `<\\|endoftext\\|>` | True | False | 1.5922 |\n| 151644 | `<\\|im_start\\|>` | True | True | 0.5028 |\n| 151645 | `<\\|im_end\\|>` | True | True | 0.5325 |\n| 151646 | `<\\|object_ref_start\\|>` | True | False | 0.3700 |\n| 151647 | `<\\|object_ref_end\\|>` | True | False | 0.3700 |\n| 151648 | `<\\|box_start\\|>` | True | False | 0.3782 |\n| 151649 | `<\\|box_end\\|>` | True | False | 0.3829 |\n| 151650 | `<\\|quad_start\\|>` | True | False | 0.3700 |\n| 151651 | `<\\|quad_end\\|>` | True | False | 0.3700 |\n| 151652 | `<\\|vision_start\\|>` | True | False | 0.3700 |\n| 151653 | `<\\|vision_end\\|>` | True | False | 0.3701 |\n| 151654 | `<\\|vision_pad\\|>` | True | False | 0.3700 |\n| 151655 | `<\\|image_pad\\|>` | True | False | 0.3701 |\n| 151656 | `<\\|video_pad\\|>` | True | False | 0.3700 |\n| 151657 | `<tool_call>` | False | False | 0.4980 |\n| 151658 | `</tool_call>` | False | False | 0.4862 |\n| 151659 | `<\\|fim_prefix\\|>` | False | False | 0.3735 |\n| 151660 | `<\\|fim_middle\\|>` | False | False | 0.3735 |\n| 151661 | `<\\|fim_suffix\\|>` | False | False | 0.3699 |\n| 151662 | `<\\|fim_pad\\|>` | False | False | 0.3709 |\n| 151663 | `<\\|repo_name\\|>` | False | False | 0.3693 |\n| 151664 | `<\\|file_sep\\|>` | False | False | 0.3732 |\n| 151665 | `<tool_response>` | False | False | 0.3937 |\n| 151666 | `</tool_response>` | False | False | 0.3920 |\n| 151667 | `<think>` | False | False | 0.4814 |\n| 151668 | `</think>` | False | False | 0.5120 |\n| 151669 | `<img>` | True | False | 0.4583 |\n| 151670 | `</img>` | True | False | 0.4609 |\n| 151671 | `<IMG_CONTEXT>` | True | True | 0.3700 |\n| 151672 | `<quad>` | True | False | 0.3700 |\n| 151673 | `</quad>` | True | False | 0.3700 |\n| 151674 | `<ref>` | True | False | 0.4888 |\n| 151675 | `</ref>` | True | False | 0.4614 |\n| 151676 | `<box>` | True | False | 0.4639 |\n| 151677 | `</box>` | True | False | 0.4972 |\n| 151678 | `<video>` | True | True | 0.3700 |",
+ "new_token": "- `add_tokens(['<g0>'])` 返回 1，`add_tokens(['<g1>'], special_tokens=True)` 返回 1；id(`<g0>`)=151679，id(`<g1>`)=151680；len(tokenizer) 151679→151681；新 id < 嵌入行数：True；id 151679 原有嵌入范数 0.3700。\n- `resize_token_embeddings(len(tok))`：嵌入 151936→151681，lm_head→151681，config vocab→151681。\n\n| 输入 | ids | tokens |\n|---|---|---|\n| `'<g0>'` | [151679] | ['<g0>'] |\n| `'a<g0>b'` | [64, 151679, 65] | ['a', '<g0>', 'b'] |\n| `' <g0>'` | [220, 151679] | ['Ġ', '<g0>'] |\n| `'<g0><g0><g0>'` | [151679, 151679, 151679] | ['<g0>', '<g0>', '<g0>'] |\n| `'<g0>\\n<g1>'` | [151679, 198, 151680] | ['<g0>', 'Ċ', '<g1>'] |\n| `'x <g1> y'` | [87, 220, 151680, 379] | ['x', 'Ġ', '<g1>', 'Ġy'] |\n| `'<g1><g0>'` | [151680, 151679] | ['<g1>', '<g0>'] |\n| `'12<g0>34'` | [16, 17, 151679, 18, 19] | ['1', '2', '<g0>', '3', '4'] |",
+ "templates": "| 调用方式 | 生成提示（原样，截取末段） | 备注 |\n|---|---|---|\n| default(no kwarg) \\| text | `'<\\|im_start\\|>user\\nWhat is 2+3?<\\|im_end\\|>\\n<\\|im_start\\|>assistant\\n'` |  |\n| default(no kwarg) \\| image | `'<\\|im_start\\|>user\\n<IMG_CONTEXT>\\nDescribe the image.<\\|im_end\\|>\\n<\\|im_start\\|>assistant\\n'` |  |\n| enable_thinking=False \\| text | `'<\\|im_start\\|>user\\nWhat is 2+3?<\\|im_end\\|>\\n<\\|im_start\\|>assistant\\n'` | Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs` |\n| enable_thinking=False \\| image | `'<\\|im_start\\|>user\\n<IMG_CONTEXT>\\nDescribe the image.<\\|im_end\\|>\\n<\\|im_start\\|>assistant\\n'` | Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs` |\n| enable_thinking=True \\| text | `'<\\|im_start\\|>user\\nWhat is 2+3?<\\|im_end\\|>\\n<\\|im_start\\|>assistant\\n'` | Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs` |\n| enable_thinking=True \\| image | `'<\\|im_start\\|>user\\n<IMG_CONTEXT>\\nDescribe the image.<\\|im_end\\|>\\n<\\|im_start\\|>assistant\\n'` | Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs` |\n| chat_template_kwargs={enable_thinking:False} \\| text | `'<\\|im_start\\|>user\\nWhat is 2+3?<\\|im_end\\|>\\n<\\|im_start\\|>assistant\\n'` | Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs` |\n| chat_template_kwargs={enable_thinking:False} \\| image | `'<\\|im_start\\|>user\\n<IMG_CONTEXT>\\nDescribe the image.<\\|im_end\\|>\\n<\\|im_start\\|>assistant\\n'` | Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs` |\n| system=R1_SYSTEM_PROMPT (card thinking mode) \\| text | `'…he query. The final answer should be standalone and not reference the thinking section.<\\|im_end\\|>\\n<\\|im_start\\|>user\\nWhat is 2+3?<\\|im_end\\|>\\n<\\|im_start\\|>assistant\\n'` |  |\n| system=R1_SYSTEM_PROMPT (card thinking mode) \\| image | `'…nswer should be standalone and not reference the thinking section.<\\|im_end\\|>\\n<\\|im_start\\|>user\\n<IMG_CONTEXT>\\nDescribe the image.<\\|im_end\\|>\\n<\\|im_start\\|>assistant\\n'` |  |",
+ "full_off_render": "<|im_start|>user\n<IMG_CONTEXT>\nDescribe the image.<|im_end|>\n<|im_start|>assistant\n",
+ "genconfig": {
+  "bos_token_id": 151643,
+  "eos_token_id": 151645,
+  "_from_model_config": true,
+  "transformers_version": "5.17.0"
+ },
+ "eos": {
+  "151645": "<|im_end|>"
+ },
+ "config_eos": {
+  "top": null,
+  "text": 151645
+ },
+ "template_variables": [
+  "add_generation_prompt",
+  "messages"
+ ],
+ "image_tokens": "| 输入（W×H）与参数 | 视觉 token 数 | tile 数（pixel_values 第 0 维） | pixel_values 形状 |\n|---|---|---|---|\n| 448x448 default | 256 | 1 | [1, 3, 448, 448] |\n| 448x448 crop_to_patches=False max_patches=12 | 256 | 1 | [1, 3, 448, 448] |\n| 448x448 crop_to_patches=True max_patches=1 | 256 | 1 | [1, 3, 448, 448] |\n| 448x448 crop_to_patches=True max_patches=4 | 256 | 1 | [1, 3, 448, 448] |\n| 448x448 crop_to_patches=True max_patches=6 | 256 | 1 | [1, 3, 448, 448] |\n| 448x448 crop_to_patches=True max_patches=12 | 256 | 1 | [1, 3, 448, 448] |\n| 640x480 default | 3328 | 13 | [13, 3, 448, 448] |\n| 640x480 crop_to_patches=False max_patches=12 | 256 | 1 | [1, 3, 448, 448] |\n| 640x480 crop_to_patches=True max_patches=1 | 256 | 1 | [1, 3, 448, 448] |\n| 640x480 crop_to_patches=True max_patches=4 | 256 | 1 | [1, 3, 448, 448] |\n| 640x480 crop_to_patches=True max_patches=6 | 1792 | 7 | [7, 3, 448, 448] |\n| 640x480 crop_to_patches=True max_patches=12 | 3328 | 13 | [13, 3, 448, 448] |\n| 1024x768 default | 3328 | 13 | [13, 3, 448, 448] |\n| 1024x768 crop_to_patches=False max_patches=12 | 256 | 1 | [1, 3, 448, 448] |\n| 1024x768 crop_to_patches=True max_patches=1 | 256 | 1 | [1, 3, 448, 448] |\n| 1024x768 crop_to_patches=True max_patches=4 | 1280 | 5 | [5, 3, 448, 448] |\n| 1024x768 crop_to_patches=True max_patches=6 | 1792 | 7 | [7, 3, 448, 448] |\n| 1024x768 crop_to_patches=True max_patches=12 | 3328 | 13 | [13, 3, 448, 448] |\n| 1024x1024 default | 2560 | 10 | [10, 3, 448, 448] |\n| 1024x1024 crop_to_patches=False max_patches=12 | 256 | 1 | [1, 3, 448, 448] |\n| 1024x1024 crop_to_patches=True max_patches=1 | 256 | 1 | [1, 3, 448, 448] |\n| 1024x1024 crop_to_patches=True max_patches=4 | 1280 | 5 | [5, 3, 448, 448] |\n| 1024x1024 crop_to_patches=True max_patches=6 | 1280 | 5 | [5, 3, 448, 448] |\n| 1024x1024 crop_to_patches=True max_patches=12 | 2560 | 10 | [10, 3, 448, 448] |\n| 500x333 default | 1792 | 7 | [7, 3, 448, 448] |\n| 500x333 crop_to_patches=False max_patches=12 | 256 | 1 | [1, 3, 448, 448] |\n| 500x333 crop_to_patches=True max_patches=1 | 256 | 1 | [1, 3, 448, 448] |\n| 500x333 crop_to_patches=True max_patches=4 | 768 | 3 | [3, 3, 448, 448] |\n| 500x333 crop_to_patches=True max_patches=6 | 1792 | 7 | [7, 3, 448, 448] |\n| 500x333 crop_to_patches=True max_patches=12 | 1792 | 7 | [7, 3, 448, 448] |\n| 2000x300 default | 2048 | 8 | [8, 3, 448, 448] |\n| 2000x300 crop_to_patches=False max_patches=12 | 256 | 1 | [1, 3, 448, 448] |\n| 2000x300 crop_to_patches=True max_patches=1 | 256 | 1 | [1, 3, 448, 448] |\n| 2000x300 crop_to_patches=True max_patches=4 | 1280 | 5 | [5, 3, 448, 448] |\n| 2000x300 crop_to_patches=True max_patches=6 | 1792 | 7 | [7, 3, 448, 448] |\n| 2000x300 crop_to_patches=True max_patches=12 | 2048 | 8 | [8, 3, 448, 448] |",
+ "image_processor_attrs": {
+  "size": "SizeDict(height=448, width=448, longest_edge=None, shortest_edge=None, max_height=None, max_width=None, min_pixels=None, max_pixels=None)",
+  "max_soft_tokens": null,
+  "patch_size": null,
+  "pooling_kernel_size": null,
+  "image_seq_length": null,
+  "crop_to_patches": false,
+  "min_patches": 1,
+  "max_patches": 12,
+  "do_resize": true,
+  "resample": 3
+ },
+ "processor_defaults": {
+  "InternVLProcessorKwargs": {
+   "text_kwargs": {
+    "padding_side": "left",
+    "return_mm_token_type_ids": false
+   },
+   "images_kwargs": {
+    "crop_to_patches": true
+   },
+   "videos_kwargs": {
+    "return_tensors": "pt"
+   }
+  }
+ },
+ "two_images": {
+  "template_text": "<|im_start|>user\n<IMG_CONTEXT>\n<IMG_CONTEXT>\nCompare.<|im_end|>\n<|im_start|>assistant\n",
+  "token_rle": [
+   "'<|im_start|>'",
+   "'user'",
+   "'Ċ'",
+   "'<img>'",
+   "'<IMG_CONTEXT>'x256",
+   "'</img>'",
+   "'Ċ'",
+   "'<img>'",
+   "'<IMG_CONTEXT>'x3328",
+   "'</img>'",
+   "'Ċ'",
+   "'Compare'",
+   "'.'",
+   "'<|im_end|>'",
+   "'Ċ'",
+   "'<|im_start|>'",
+   "'assistant'",
+   "'Ċ'"
+  ],
+  "mm_token_type_ids_rle": null,
+  "keys": [
+   "input_ids",
+   "attention_mask",
+   "pixel_values"
+  ],
+  "pixel_values_shape": [
+   14,
+   3,
+   448,
+   448
+  ]
+ },
+ "positions": "position_ids 在 rotary 处的形状 [1, 3346]，等于 0..L-1：True（seq_len 3346）。\n\n| 段 | token 下标 | 个数 | 开头 token | 前 5 个 position | 后 3 个 position |\n|---|---|---|---|---|---|\n| text | 0–7 | 8 | ['<\\|im_start\\|>', 'user', 'Ċ'] | [[0, 1, 2, 3, 4]] | [[5, 6, 7]] |\n| image | 8–3335 | 3328 | ['<IMG_CONTEXT>', '<IMG_CONTEXT>', '<IMG_CONTEXT>'] | [[8, 9, 10, 11, 12]] | [[3333, 3334, 3335]] |\n| text | 3336–3345 | 10 | ['</img>', 'Ċ', 'Answer'] | [[3336, 3337, 3338, 3339, 3340]] | [[3343, 3344, 3345]] |",
+ "positions_text": "<|im_start|>user\nFind the cat.<IMG_CONTEXT>\nAnswer briefly.<|im_end|>\n<|im_start|>assistant\n",
+ "box": "提示词 `Please provide the bounding box coordinate of the region this sentence describes: <ref>{obj}</ref>`，出处：https://internvl.readthedocs.io/en/latest/get_started/chat_data_format.html (RefCOCO grounding example)；生成设置 {\"do_sample\": false, \"max_new_tokens\": 256, \"thinking\": \"off (no R1 system prompt)\"}。\n\n- `000000039769.jpg`（640×480，视觉 token 3328，tile 13），目标 \"the cat on the left\"，生成 29 token：`'<ref>the cat on the left</ref><box>[[24, 114, 492, 984]]</box><|im_end|>'`\n- `000000000139.jpg`（640×426，视觉 token 1792，tile 7），目标 \"the television\"，生成 26 token：`'<ref>the television</ref><box>[[16, 395, 224, 612]]</box><|im_end|>'`",
+ "taskmod": "指令 A=`Describe the cat.`，B=`Describe the sofa.`（token 长度 [4, 4]），bf16，attn=sdpa，图像 token 3328 个，seq_len 3343。\n\n| 层 | 图在前：torch.equal | 图在前：max\\|Δ\\| | 指令在前：torch.equal | 指令在前：max\\|Δ\\| | 指令在前：cos（展平） | 指令在前：逐 token cos 最小 | 指令在前：变化 token 数 |\n|---|---|---|---|---|---|---|---|\n| 0 | True | 0 | True | 0 | 1.000000 | 1.000000 | 0 |\n| 1 | True | 0 | False | 0.9375 | 0.999980 | 0.980537 | 3328 |\n| 2 | True | 0 | False | 0.75 | 0.999939 | 0.985488 | 3328 |\n| 3 | True | 0 | False | 0.9375 | 0.999916 | 0.989138 | 3328 |\n| 4 | True | 0 | False | 1.125 | 0.999899 | 0.988104 | 3328 |\n| 5 | True | 0 | False | 1.875 | 0.999876 | 0.979091 | 3328 |\n| 6 | True | 0 | False | 2.75 | 0.999838 | 0.978865 | 3328 |\n| 7 | True | 0 | False | 2.375 | 0.999239 | 0.937268 | 3328 |\n| 8 | True | 0 | False | 3.75 | 0.998982 | 0.925068 | 3328 |\n| 9 | True | 0 | False | 5.75 | 0.998450 | 0.908080 | 3328 |\n| 10 | True | 0 | False | 8.375 | 0.997642 | 0.853227 | 3328 |\n| 11 | True | 0 | False | 19 | 0.997102 | 0.799944 | 3328 |\n| 12 | True | 0 | False | 29.25 | 0.995820 | 0.694711 | 3328 |\n| 13 | True | 0 | False | 42.12 | 0.993327 | 0.577459 | 3328 |\n| 14 | True | 0 | False | 46.44 | 0.990494 | 0.575305 | 3328 |\n| 15 | True | 0 | False | 21.78 | 0.987283 | 0.624179 | 3328 |\n| 16 | True | 0 | False | 41 | 0.985572 | 0.627971 | 3328 |\n| 17 | True | 0 | False | 61 | 0.985195 | 0.597837 | 3328 |\n| 18 | True | 0 | False | 68.5 | 0.980898 | 0.573461 | 3328 |\n| 19 | True | 0 | False | 93 | 0.981544 | 0.578512 | 3328 |\n| 20 | True | 0 | False | 120 | 0.981078 | 0.530625 | 3328 |\n| 21 | True | 0 | False | 120 | 0.980308 | 0.477767 | 3328 |\n| 22 | True | 0 | False | 128 | 0.981053 | 0.489532 | 3328 |\n| 23 | True | 0 | False | 132 | 0.981338 | 0.512259 | 3328 |\n| 24 | True | 0 | False | 170 | 0.980924 | 0.487121 | 3328 |\n| 25 | True | 0 | False | 232 | 0.982208 | 0.503330 | 3328 |\n| 26 | True | 0 | False | 280 | 0.984494 | 0.519711 | 3328 |\n| 27 | True | 0 | False | 380 | 0.988376 | 0.621919 | 3328 |\n| 28 | True | 0 | False | 43.27 | 0.967872 | 0.186147 | 3328 |\n\n图在前：29/29 层逐位相同；指令在前：1/29 层逐位相同。",
+ "taskmod_summary": {
+  "image_first_equal": [
+   29,
+   29
+  ],
+  "instr_first_equal": [
+   1,
+   29
+  ],
+  "last_cos_flat": 0.9678722023963928,
+  "last_cos_min": 0.18614690005779266
+ },
+ "mem": "| 测量 | batch | 峰值 allocated GiB | 峰值 reserved GiB | 备注 |\n|---|---|---|---|---|\n| 仅加载权重（bf16） | — | 4.376 | 4.67 | |\n| 推理前向，1280 视觉 token（seq 1297，{\"crop_to_patches\": true, \"max_patches\": 4}），logits_to_keep=1 | 1 | 4.567 | 4.674 | logits [1, 1, 151936]；墙钟 0.498 s |\n| 推理前向，1280 视觉 token（seq 1297，{\"crop_to_patches\": true, \"max_patches\": 4}），full_logits | 1 | 4.807 | 5.041 | logits [1, 1297, 151936]；墙钟 0.021 s |\n| 推理前向，1280 视觉 token（seq 1297，{\"crop_to_patches\": true, \"max_patches\": 4}），logits_to_keep=1 | 16 | 6.801 | 7.445 | logits [16, 1, 151936]；墙钟 0.271 s |\n| 推理前向，1280 视觉 token（seq 1297，{\"crop_to_patches\": true, \"max_patches\": 4}），full_logits | 16 | 10.629 | 13.318 | logits [16, 1297, 151936]；墙钟 0.218 s |\n| LoRA r=32（language_model 内全部 nn.Linear），梯度检查点，前向+反向第 1 次，全序列 LM loss（seq 1313） | 8 | 28.79 | 30.252 | 可训练参数 34,865,152；LoRA 模块 196；墙钟 2.83 s；loss 20.498777 |\n| LoRA r=32（language_model 内全部 nn.Linear），梯度检查点，前向+反向第 2 次，全序列 LM loss（seq 1313） | 8 | 28.821 | 30.293 | 可训练参数 34,865,152；LoRA 模块 196；墙钟 0.627 s；loss 20.498777 |\n| HF generate，greedy，思考关，max_new_tokens=64 | 16 | 7.936 | 8.553 | 3 次：18.806, 18.771, 18.888 样本/s（墙钟 0.851, 0.852, 0.847 s）；new_tokens 矩阵 [16, 64]；prompt 1297 token |",
+ "lora_targets": {
+  "down_proj": 28,
+  "gate_proj": 28,
+  "up_proj": 28,
+  "k_proj": 28,
+  "o_proj": 28,
+  "q_proj": 28,
+  "v_proj": 28
+ }
+}

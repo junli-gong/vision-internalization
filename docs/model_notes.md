@@ -824,3 +824,290 @@ COCO val2017 GT（与 RUN-0001 相同的两张图与目标），同时列出两�
 | 35 | True | 0 | False | 61.5 | 0.951982 | 0.564533 | 266 |
 
 图在前：36/36 层逐位相同；指令在前：1/36 层逐位相同。
+
+
+---
+
+## 7. InternVL3.5-2B-HF 事实探针（RUN-0002；`OpenGVLab/InternVL3_5-2B-HF` @ `3f301ffcf3dcbb47893afae6650ea3e78d96fb6d`）
+
+条件同 §6。InternVL 的模板没有思考开关；"关闭思考"就是不加 R1 system prompt。原始 JSON 在 `raw/internvl3.5-2b-hf/`。
+
+### 7.1 结构
+
+| 项 | 值 |
+|---|---|
+| 加载类 / processor / image processor / tokenizer | InternVLForConditionalGeneration / InternVLProcessor / GotOcr2ImageProcessor / Qwen2Tokenizer |
+| attn_implementation | sdpa |
+| LLM 层数 | 28 |
+| 层类型计数 | full_attention=28 |
+| hidden size / intermediate | 2048 / 6144 |
+| Q 头 / KV 头 | 16 / 8 |
+| head_dim | 128 |
+| rope | {"rope_theta": 1000000, "rope_type": "default"} |
+| max_position_embeddings | 40960 |
+| 视觉编码器 层 / hidden / heads | 24 / 1024 / 16 |
+| patch_size / tile / downsample_ratio | [14, 14] / [448, 448] / 0.5（每 tile 256 token；每 token = tile 的 28×28 px） |
+| vision_feature_layer / projector act | -1 / gelu |
+| 参数量（加载后） | total=2,348,347,392, language_model=1,720,574,976, vision_tower=304,012,288, multi_modal_projector=12,595,200 |
+| config vocab / 嵌入行 / lm_head 行 | 151936 / 151936 / 151936 |
+| len(tokenizer) / 基础词表 | 151679 / 151643 |
+| 嵌入行 − len(tokenizer) | 257 |
+| lm_head 与嵌入同一存储 | False |
+| 嵌入：基础词表随机 2 万行 | n=20000，范数 0.3692–2.2132（均值 1.4829），全零行 0 |
+| 嵌入：超出 tokenizer 的行 | n=257，范数 0.3317–0.3700（均值 0.3509），全零行 0 |
+| `<unusedN>` 一类占位 token | 0 个 |
+| output_hidden_states | 29 个张量（= 层数+1：True），形状全同：True，例 [1, 3346, 2048] |
+
+- LLM 是 Qwen3 结构（`Qwen3Attention`，28 层全注意力，没有 sliding/KV 共享），视觉编码器为 InternViT-300M，经 pixel shuffle（downsample 0.5）与 MLP 投影接入 LLM。
+- 加载时的原样日志："The tied weights mapping and config for this model specifies to tie model.language_model.embed_tokens.weight to lm_head.weight, but both are present in the checkpoints with different values, so we will NOT tie them. You should update the config with `tie_word_embeddings=False` to silence this warning."。即实际不共享（上表"lm_head 与嵌入同一存储"为 False），config 的 `tie_word_embeddings`=False。
+
+**tokenizer 里的 added tokens**（36 个，id 151643–151678；没有 `<unusedN>` 一类占位 token）：
+
+| id | token | special | 出现在 chat template 里 | 嵌入范数 |
+|---|---|---|---|---|
+| 151643 | `<\|endoftext\|>` | True | False | 1.5922 |
+| 151644 | `<\|im_start\|>` | True | True | 0.5028 |
+| 151645 | `<\|im_end\|>` | True | True | 0.5325 |
+| 151646 | `<\|object_ref_start\|>` | True | False | 0.3700 |
+| 151647 | `<\|object_ref_end\|>` | True | False | 0.3700 |
+| 151648 | `<\|box_start\|>` | True | False | 0.3782 |
+| 151649 | `<\|box_end\|>` | True | False | 0.3829 |
+| 151650 | `<\|quad_start\|>` | True | False | 0.3700 |
+| 151651 | `<\|quad_end\|>` | True | False | 0.3700 |
+| 151652 | `<\|vision_start\|>` | True | False | 0.3700 |
+| 151653 | `<\|vision_end\|>` | True | False | 0.3701 |
+| 151654 | `<\|vision_pad\|>` | True | False | 0.3700 |
+| 151655 | `<\|image_pad\|>` | True | False | 0.3701 |
+| 151656 | `<\|video_pad\|>` | True | False | 0.3700 |
+| 151657 | `<tool_call>` | False | False | 0.4980 |
+| 151658 | `</tool_call>` | False | False | 0.4862 |
+| 151659 | `<\|fim_prefix\|>` | False | False | 0.3735 |
+| 151660 | `<\|fim_middle\|>` | False | False | 0.3735 |
+| 151661 | `<\|fim_suffix\|>` | False | False | 0.3699 |
+| 151662 | `<\|fim_pad\|>` | False | False | 0.3709 |
+| 151663 | `<\|repo_name\|>` | False | False | 0.3693 |
+| 151664 | `<\|file_sep\|>` | False | False | 0.3732 |
+| 151665 | `<tool_response>` | False | False | 0.3937 |
+| 151666 | `</tool_response>` | False | False | 0.3920 |
+| 151667 | `<think>` | False | False | 0.4814 |
+| 151668 | `</think>` | False | False | 0.5120 |
+| 151669 | `<img>` | True | False | 0.4583 |
+| 151670 | `</img>` | True | False | 0.4609 |
+| 151671 | `<IMG_CONTEXT>` | True | True | 0.3700 |
+| 151672 | `<quad>` | True | False | 0.3700 |
+| 151673 | `</quad>` | True | False | 0.3700 |
+| 151674 | `<ref>` | True | False | 0.4888 |
+| 151675 | `</ref>` | True | False | 0.4614 |
+| 151676 | `<box>` | True | False | 0.4639 |
+| 151677 | `</box>` | True | False | 0.4972 |
+| 151678 | `<video>` | True | True | 0.3700 |
+
+**新增 token `<g0>`：**
+
+- `add_tokens(['<g0>'])` 返回 1，`add_tokens(['<g1>'], special_tokens=True)` 返回 1；id(`<g0>`)=151679，id(`<g1>`)=151680；len(tokenizer) 151679→151681；新 id < 嵌入行数：True；id 151679 原有嵌入范数 0.3700。
+- `resize_token_embeddings(len(tok))`：嵌入 151936→151681，lm_head→151681，config vocab→151681。
+
+| 输入 | ids | tokens |
+|---|---|---|
+| `'<g0>'` | [151679] | ['<g0>'] |
+| `'a<g0>b'` | [64, 151679, 65] | ['a', '<g0>', 'b'] |
+| `' <g0>'` | [220, 151679] | ['Ġ', '<g0>'] |
+| `'<g0><g0><g0>'` | [151679, 151679, 151679] | ['<g0>', '<g0>', '<g0>'] |
+| `'<g0>\n<g1>'` | [151679, 198, 151680] | ['<g0>', 'Ċ', '<g1>'] |
+| `'x <g1> y'` | [87, 220, 151680, 379] | ['x', 'Ġ', '<g1>', 'Ġy'] |
+| `'<g1><g0>'` | [151680, 151679] | ['<g1>', '<g0>'] |
+| `'12<g0>34'` | [16, 17, 151679, 18, 19] | ['1', '2', '<g0>', '3', '4'] |
+
+- 嵌入 151936 行 = len(tokenizer) 151679 + **257 个预留行**（151679–151935）。新 id 从 151679 起落在预留行里。
+- **`resize_token_embeddings(len(tok))` 会把嵌入从 151936 缩到 151681**，与 Qwen3.5 相同（Qwen 是 248320→248079）。
+
+### 7.2 聊天模板与思考开关
+
+- 模板（`chat_template.jinja`）只用 `messages` 和 `add_generation_prompt` 两个变量，**没有 `enable_thinking`**。传 `enable_thinking=` 或 `chat_template_kwargs=` 都会被 processor 当作调用参数，打印 warning 并且不起作用。模板里也**没有默认 system prompt**。
+- 思考模式：由 system prompt 开启。card 原文（[card](https://huggingface.co/OpenGVLab/InternVL3_5-2B-HF/blob/3f301ffcf3dcbb47893afae6650ea3e78d96fb6d/README.md)）："To enable thinking mode, please set the system prompt to our Thinking System Prompt. When enabling Thinking mode, we recommend setting `do_sample=True` and `temperature=0.6` to mitigate undesired repetition."（R1_SYSTEM_PROMPT 全文见 `raw/internvl3.5-2b-hf/facts.json`，渲染结果见下表最后两行）。
+
+| 调用方式 | 生成提示（原样，截取末段） | 备注 |
+|---|---|---|
+| default(no kwarg) \| text | `'<\|im_start\|>user\nWhat is 2+3?<\|im_end\|>\n<\|im_start\|>assistant\n'` |  |
+| default(no kwarg) \| image | `'<\|im_start\|>user\n<IMG_CONTEXT>\nDescribe the image.<\|im_end\|>\n<\|im_start\|>assistant\n'` |  |
+| enable_thinking=False \| text | `'<\|im_start\|>user\nWhat is 2+3?<\|im_end\|>\n<\|im_start\|>assistant\n'` | Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs` |
+| enable_thinking=False \| image | `'<\|im_start\|>user\n<IMG_CONTEXT>\nDescribe the image.<\|im_end\|>\n<\|im_start\|>assistant\n'` | Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs` |
+| enable_thinking=True \| text | `'<\|im_start\|>user\nWhat is 2+3?<\|im_end\|>\n<\|im_start\|>assistant\n'` | Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs` |
+| enable_thinking=True \| image | `'<\|im_start\|>user\n<IMG_CONTEXT>\nDescribe the image.<\|im_end\|>\n<\|im_start\|>assistant\n'` | Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs` |
+| chat_template_kwargs={enable_thinking:False} \| text | `'<\|im_start\|>user\nWhat is 2+3?<\|im_end\|>\n<\|im_start\|>assistant\n'` | Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs` |
+| chat_template_kwargs={enable_thinking:False} \| image | `'<\|im_start\|>user\n<IMG_CONTEXT>\nDescribe the image.<\|im_end\|>\n<\|im_start\|>assistant\n'` | Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs` |
+| system=R1_SYSTEM_PROMPT (card thinking mode) \| text | `'…he query. The final answer should be standalone and not reference the thinking section.<\|im_end\|>\n<\|im_start\|>user\nWhat is 2+3?<\|im_end\|>\n<\|im_start\|>assistant\n'` |  |
+| system=R1_SYSTEM_PROMPT (card thinking mode) \| image | `'…nswer should be standalone and not reference the thinking section.<\|im_end\|>\n<\|im_start\|>user\n<IMG_CONTEXT>\nDescribe the image.<\|im_end\|>\n<\|im_start\|>assistant\n'` |  |
+
+**不开思考时，带图消息渲染出的完整文本（原样）：**
+
+```
+<|im_start|>user
+<IMG_CONTEXT>
+Describe the image.<|im_end|>
+<|im_start|>assistant
+
+```
+
+processor 会把 `<IMG_CONTEXT>` 展开成 `<img>` + 256×(tile 数)×`<IMG_CONTEXT>` + `</img>`（§7.3）。
+
+- `generation_config`：`{"bos_token_id": 151643, "eos_token_id": 151645, "_from_model_config": true, "transformers_version": "5.17.0"}`，即没有采样参数，默认 greedy。eos 为 {'151645': '<|im_end|>'}；§7.5 实测生成在 `<|im_end|>` 停止。
+- card 里其他采样示例（原文，只列出）：LMDeploy 示例 `GenerationConfig(top_k=50, top_p=0.95, temperature=0.6, max_new_tokens=8192)`；OpenAI 兼容服务示例 `temperature=0.8, top_p=0.8`。card 没有给非思考模式的推荐参数。
+
+### 7.3 图像 token 化
+
+- 参数（processor 调用时的 kwarg）：`crop_to_patches`（是否动态切 tile）、`max_patches` / `min_patches`（tile 数上下限），以及 `size`（tile 边长，默认 448）。
+- **两处默认值相反，实际生效的是 processor 的**：
+  - `preprocessor_config.json` 写的是 `crop_to_patches: false`，`max_patches: 12`；
+  - `InternVLProcessorKwargs._defaults` 为 `{"crop_to_patches": true}`，实测不传参时按 **crop_to_patches=True** 执行（见下表的 default 行）。
+- 规则：
+  - 每个 tile 缩放到 448×448，产生 256 个 token，每个 token 对应 tile 里 28×28 px；
+  - tile 网格由 `get_optimal_tiled_canvas` 选出，取最接近原图宽高比、且 tile 数 ≤ max_patches 的 cols×rows；
+  - tile 数大于 1 时再加一张整图缩略图（thumbnail）；
+  - `crop_to_patches=False` 时整图直接缩放到 448×448，只有 1 个 tile。
+- 输入为合成 RGB 图：
+
+| 输入（W×H）与参数 | 视觉 token 数 | tile 数（pixel_values 第 0 维） | pixel_values 形状 |
+|---|---|---|---|
+| 448x448 default | 256 | 1 | [1, 3, 448, 448] |
+| 448x448 crop_to_patches=False max_patches=12 | 256 | 1 | [1, 3, 448, 448] |
+| 448x448 crop_to_patches=True max_patches=1 | 256 | 1 | [1, 3, 448, 448] |
+| 448x448 crop_to_patches=True max_patches=4 | 256 | 1 | [1, 3, 448, 448] |
+| 448x448 crop_to_patches=True max_patches=6 | 256 | 1 | [1, 3, 448, 448] |
+| 448x448 crop_to_patches=True max_patches=12 | 256 | 1 | [1, 3, 448, 448] |
+| 640x480 default | 3328 | 13 | [13, 3, 448, 448] |
+| 640x480 crop_to_patches=False max_patches=12 | 256 | 1 | [1, 3, 448, 448] |
+| 640x480 crop_to_patches=True max_patches=1 | 256 | 1 | [1, 3, 448, 448] |
+| 640x480 crop_to_patches=True max_patches=4 | 256 | 1 | [1, 3, 448, 448] |
+| 640x480 crop_to_patches=True max_patches=6 | 1792 | 7 | [7, 3, 448, 448] |
+| 640x480 crop_to_patches=True max_patches=12 | 3328 | 13 | [13, 3, 448, 448] |
+| 1024x768 default | 3328 | 13 | [13, 3, 448, 448] |
+| 1024x768 crop_to_patches=False max_patches=12 | 256 | 1 | [1, 3, 448, 448] |
+| 1024x768 crop_to_patches=True max_patches=1 | 256 | 1 | [1, 3, 448, 448] |
+| 1024x768 crop_to_patches=True max_patches=4 | 1280 | 5 | [5, 3, 448, 448] |
+| 1024x768 crop_to_patches=True max_patches=6 | 1792 | 7 | [7, 3, 448, 448] |
+| 1024x768 crop_to_patches=True max_patches=12 | 3328 | 13 | [13, 3, 448, 448] |
+| 1024x1024 default | 2560 | 10 | [10, 3, 448, 448] |
+| 1024x1024 crop_to_patches=False max_patches=12 | 256 | 1 | [1, 3, 448, 448] |
+| 1024x1024 crop_to_patches=True max_patches=1 | 256 | 1 | [1, 3, 448, 448] |
+| 1024x1024 crop_to_patches=True max_patches=4 | 1280 | 5 | [5, 3, 448, 448] |
+| 1024x1024 crop_to_patches=True max_patches=6 | 1280 | 5 | [5, 3, 448, 448] |
+| 1024x1024 crop_to_patches=True max_patches=12 | 2560 | 10 | [10, 3, 448, 448] |
+| 500x333 default | 1792 | 7 | [7, 3, 448, 448] |
+| 500x333 crop_to_patches=False max_patches=12 | 256 | 1 | [1, 3, 448, 448] |
+| 500x333 crop_to_patches=True max_patches=1 | 256 | 1 | [1, 3, 448, 448] |
+| 500x333 crop_to_patches=True max_patches=4 | 768 | 3 | [3, 3, 448, 448] |
+| 500x333 crop_to_patches=True max_patches=6 | 1792 | 7 | [7, 3, 448, 448] |
+| 500x333 crop_to_patches=True max_patches=12 | 1792 | 7 | [7, 3, 448, 448] |
+| 2000x300 default | 2048 | 8 | [8, 3, 448, 448] |
+| 2000x300 crop_to_patches=False max_patches=12 | 256 | 1 | [1, 3, 448, 448] |
+| 2000x300 crop_to_patches=True max_patches=1 | 256 | 1 | [1, 3, 448, 448] |
+| 2000x300 crop_to_patches=True max_patches=4 | 1280 | 5 | [5, 3, 448, 448] |
+| 2000x300 crop_to_patches=True max_patches=6 | 1792 | 7 | [7, 3, 448, 448] |
+| 2000x300 crop_to_patches=True max_patches=12 | 2048 | 8 | [8, 3, 448, 448] |
+
+tile 网格（直接调用 `get_optimal_tiled_canvas`，与上表逐项吻合；`raw/internvl3.5-2b-hf/tile_grids.txt`）：
+
+```
+(original_image_size: tuple[int, int], target_tile_size: tuple[int, int], min_image_tiles: int, max_image_tiles: int) -> tuple[int, int]
+448x448 max_patches=4: canvas cols x rows = 1 x 1 -> 1 tiles + thumbnail=False -> 1 tiles, 256 tokens; tiled canvas px (w,h) = (448,448)
+448x448 max_patches=6: canvas cols x rows = 1 x 1 -> 1 tiles + thumbnail=False -> 1 tiles, 256 tokens; tiled canvas px (w,h) = (448,448)
+448x448 max_patches=12: canvas cols x rows = 1 x 1 -> 1 tiles + thumbnail=False -> 1 tiles, 256 tokens; tiled canvas px (w,h) = (448,448)
+640x480 max_patches=4: canvas cols x rows = 1 x 1 -> 1 tiles + thumbnail=False -> 1 tiles, 256 tokens; tiled canvas px (w,h) = (448,448)
+640x480 max_patches=6: canvas cols x rows = 3 x 2 -> 6 tiles + thumbnail=True -> 7 tiles, 1792 tokens; tiled canvas px (w,h) = (1344,896)
+640x480 max_patches=12: canvas cols x rows = 4 x 3 -> 12 tiles + thumbnail=True -> 13 tiles, 3328 tokens; tiled canvas px (w,h) = (1792,1344)
+1024x768 max_patches=4: canvas cols x rows = 2 x 2 -> 4 tiles + thumbnail=True -> 5 tiles, 1280 tokens; tiled canvas px (w,h) = (896,896)
+1024x768 max_patches=6: canvas cols x rows = 3 x 2 -> 6 tiles + thumbnail=True -> 7 tiles, 1792 tokens; tiled canvas px (w,h) = (1344,896)
+1024x768 max_patches=12: canvas cols x rows = 4 x 3 -> 12 tiles + thumbnail=True -> 13 tiles, 3328 tokens; tiled canvas px (w,h) = (1792,1344)
+1024x1024 max_patches=4: canvas cols x rows = 2 x 2 -> 4 tiles + thumbnail=True -> 5 tiles, 1280 tokens; tiled canvas px (w,h) = (896,896)
+1024x1024 max_patches=6: canvas cols x rows = 2 x 2 -> 4 tiles + thumbnail=True -> 5 tiles, 1280 tokens; tiled canvas px (w,h) = (896,896)
+1024x1024 max_patches=12: canvas cols x rows = 3 x 3 -> 9 tiles + thumbnail=True -> 10 tiles, 2560 tokens; tiled canvas px (w,h) = (1344,1344)
+500x333 max_patches=4: canvas cols x rows = 2 x 1 -> 2 tiles + thumbnail=True -> 3 tiles, 768 tokens; tiled canvas px (w,h) = (896,448)
+500x333 max_patches=6: canvas cols x rows = 3 x 2 -> 6 tiles + thumbnail=True -> 7 tiles, 1792 tokens; tiled canvas px (w,h) = (1344,896)
+500x333 max_patches=12: canvas cols x rows = 3 x 2 -> 6 tiles + thumbnail=True -> 7 tiles, 1792 tokens; tiled canvas px (w,h) = (1344,896)
+2000x300 max_patches=4: canvas cols x rows = 4 x 1 -> 4 tiles + thumbnail=True -> 5 tiles, 1280 tokens; tiled canvas px (w,h) = (1792,448)
+2000x300 max_patches=6: canvas cols x rows = 6 x 1 -> 6 tiles + thumbnail=True -> 7 tiles, 1792 tokens; tiled canvas px (w,h) = (2688,448)
+2000x300 max_patches=12: canvas cols x rows = 7 x 1 -> 7 tiles + thumbnail=True -> 8 tiles, 2048 tokens; tiled canvas px (w,h) = (3136,448)
+```
+
+- **两张图同时输入**（448×448 与 640×480，默认设置）：
+  - 模板：`'<|im_start|>user\n<IMG_CONTEXT>\n<IMG_CONTEXT>\nCompare.<|im_end|>\n<|im_start|>assistant\n'`
+  - token 序列（游程编码）：`'<|im_start|>' 'user' 'Ċ' '<img>' '<IMG_CONTEXT>'x256 '</img>' 'Ċ' '<img>' '<IMG_CONTEXT>'x3328 '</img>' 'Ċ' 'Compare' '.' '<|im_end|>' 'Ċ' '<|im_start|>' 'assistant' 'Ċ'`
+  - processor 输出的键：`['input_ids', 'attention_mask', 'pixel_values']`（没有 `mm_token_type_ids`）
+  - `pixel_values` 形状：[14, 3, 448, 448]
+  - 所有 tile 在第 0 维拼接，每张图是一段 `<img>`…`</img>`，后面跟一个 `\n`。
+
+### 7.4 位置编码
+
+- 一维：`position_ids` = 0..L−1，图像 token 逐个加 1，没有二维成分（Qwen3 RoPE，θ=1e6）。
+- 最小例子"指令 + 图（448×320，默认设置下切成 12+1 个 tile）+ 文本"，模板 `'<|im_start|>user\nFind the cat.<IMG_CONTEXT>\nAnswer briefly.<|im_end|>\n<|im_start|>assistant\n'`：
+
+position_ids 在 rotary 处的形状 [1, 3346]，等于 0..L-1：True（seq_len 3346）。
+
+| 段 | token 下标 | 个数 | 开头 token | 前 5 个 position | 后 3 个 position |
+|---|---|---|---|---|---|
+| text | 0–7 | 8 | ['<\|im_start\|>', 'user', 'Ċ'] | [[0, 1, 2, 3, 4]] | [[5, 6, 7]] |
+| image | 8–3335 | 3328 | ['<IMG_CONTEXT>', '<IMG_CONTEXT>', '<IMG_CONTEXT>'] | [[8, 9, 10, 11, 12]] | [[3333, 3334, 3335]] |
+| text | 3336–3345 | 10 | ['</img>', 'Ċ', 'Answer'] | [[3336, 3337, 3338, 3339, 3340]] | [[3343, 3344, 3345]] |
+
+### 7.5 原生坐标格式
+
+**文档**（[InternVL docs: Chat Data Format](https://internvl.readthedocs.io/en/latest/get_started/chat_data_format.html)；原始 HTML 与抽出的文本在 `raw/docs_evidence/`）：
+- 原文："For grounding or detection data, we normalize each coordinate box to the range [0, 1000] using the width and height of the image, and round the normalized coordinates to integers"。示例函数为 `x1, y1, x2, y2 = box` → `round((x1 / image_width) * 1000)` 等。即 **x 在前**，[x1, y1, x2, y2]，量程 0–1000。
+- 原文："We organize the model's responses in the following format: <ref>class name</ref><box>[[x1, y1, x2, y2], ...]</box>"。
+- RefCOCO 示例（原文）：`"<image>\nPlease provide the bounding box coordinate of the region this sentence describes: <ref>the lady with the blue shirt</ref>"` → `"<ref>the lady with the blue shirt</ref><box>[[243, 469, 558, 746]]</box>"`。
+- model card 只有 "Visual Grounding" 的成绩图，没有格式说明。
+
+**零样本实测**（每张图一次，固定提示，不调；图在文字之前；默认 tile 设置）：
+
+提示词 `Please provide the bounding box coordinate of the region this sentence describes: <ref>{obj}</ref>`，出处：https://internvl.readthedocs.io/en/latest/get_started/chat_data_format.html (RefCOCO grounding example)；生成设置 {"do_sample": false, "max_new_tokens": 256, "thinking": "off (no R1 system prompt)"}。
+
+- `000000039769.jpg`（640×480，视觉 token 3328，tile 13），目标 "the cat on the left"，生成 29 token：`'<ref>the cat on the left</ref><box>[[24, 114, 492, 984]]</box><|im_end|>'`
+- `000000000139.jpg`（640×426，视觉 token 1792，tile 7），目标 "the television"，生成 26 token：`'<ref>the television</ref><box>[[16, 395, 224, 612]]</box><|im_end|>'`
+
+COCO val2017 GT（同 RUN-0001）：
+
+| 图 | 物体 | GT xyxy（像素） | GT ×1000，x 先 [x1,y1,x2,y2] |
+|---|---|---|---|
+| 000000039769.jpg (640×480) | cat | [17.5, 54.4, 318.8, 469.4] | [27, 113, 498, 978] |
+| 000000039769.jpg (640×480) | cat | [347.5, 25.6, 640.0, 369.4] | [543, 53, 1000, 770] |
+| 000000000139.jpg (640×426) | tv | [7.0, 167.8, 156.3, 262.6] | [11, 394, 244, 617] |
+| 000000000139.jpg (640×426) | tv | [557.2, 209.2, 638.6, 287.9] | [871, 491, 998, 676] |
+
+### 7.6 任务调制仪器（D1）
+
+指令 A=`Describe the cat.`，B=`Describe the sofa.`（token 长度 [4, 4]），bf16，attn=sdpa，图像 token 3328 个，seq_len 3343。
+
+| 层 | 图在前：torch.equal | 图在前：max\|Δ\| | 指令在前：torch.equal | 指令在前：max\|Δ\| | 指令在前：cos（展平） | 指令在前：逐 token cos 最小 | 指令在前：变化 token 数 |
+|---|---|---|---|---|---|---|---|
+| 0 | True | 0 | True | 0 | 1.000000 | 1.000000 | 0 |
+| 1 | True | 0 | False | 0.9375 | 0.999980 | 0.980537 | 3328 |
+| 2 | True | 0 | False | 0.75 | 0.999939 | 0.985488 | 3328 |
+| 3 | True | 0 | False | 0.9375 | 0.999916 | 0.989138 | 3328 |
+| 4 | True | 0 | False | 1.125 | 0.999899 | 0.988104 | 3328 |
+| 5 | True | 0 | False | 1.875 | 0.999876 | 0.979091 | 3328 |
+| 6 | True | 0 | False | 2.75 | 0.999838 | 0.978865 | 3328 |
+| 7 | True | 0 | False | 2.375 | 0.999239 | 0.937268 | 3328 |
+| 8 | True | 0 | False | 3.75 | 0.998982 | 0.925068 | 3328 |
+| 9 | True | 0 | False | 5.75 | 0.998450 | 0.908080 | 3328 |
+| 10 | True | 0 | False | 8.375 | 0.997642 | 0.853227 | 3328 |
+| 11 | True | 0 | False | 19 | 0.997102 | 0.799944 | 3328 |
+| 12 | True | 0 | False | 29.25 | 0.995820 | 0.694711 | 3328 |
+| 13 | True | 0 | False | 42.12 | 0.993327 | 0.577459 | 3328 |
+| 14 | True | 0 | False | 46.44 | 0.990494 | 0.575305 | 3328 |
+| 15 | True | 0 | False | 21.78 | 0.987283 | 0.624179 | 3328 |
+| 16 | True | 0 | False | 41 | 0.985572 | 0.627971 | 3328 |
+| 17 | True | 0 | False | 61 | 0.985195 | 0.597837 | 3328 |
+| 18 | True | 0 | False | 68.5 | 0.980898 | 0.573461 | 3328 |
+| 19 | True | 0 | False | 93 | 0.981544 | 0.578512 | 3328 |
+| 20 | True | 0 | False | 120 | 0.981078 | 0.530625 | 3328 |
+| 21 | True | 0 | False | 120 | 0.980308 | 0.477767 | 3328 |
+| 22 | True | 0 | False | 128 | 0.981053 | 0.489532 | 3328 |
+| 23 | True | 0 | False | 132 | 0.981338 | 0.512259 | 3328 |
+| 24 | True | 0 | False | 170 | 0.980924 | 0.487121 | 3328 |
+| 25 | True | 0 | False | 232 | 0.982208 | 0.503330 | 3328 |
+| 26 | True | 0 | False | 280 | 0.984494 | 0.519711 | 3328 |
+| 27 | True | 0 | False | 380 | 0.988376 | 0.621919 | 3328 |
+| 28 | True | 0 | False | 43.27 | 0.967872 | 0.186147 | 3328 |
+
+图在前：29/29 层逐位相同；指令在前：1/29 层逐位相同。
