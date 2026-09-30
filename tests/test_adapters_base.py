@@ -31,6 +31,9 @@ class _Dummy(ModelAdapter):
     def hidden_states(self, inputs, layers):
         return HiddenStates(tuple(layers), {l: None for l in layers})
 
+    def vision_features(self, inputs):
+        return None
+
     def inject_query_tokens(self, n, position_mode):
         pass
 
@@ -93,6 +96,25 @@ def test_subclass_cannot_default_layers():
 def test_abstract_base_not_instantiable():
     with pytest.raises(TypeError):
         ModelAdapter()
+
+
+def test_vision_features_is_abstract():
+    """D15-2：vision_features 是抽象方法，子类不实现就不能实例化。"""
+    assert "vision_features" in ModelAdapter.__abstractmethods__
+
+    class _NoVision(ModelAdapter):
+        load = _Dummy.load
+        build_inputs = _Dummy.build_inputs
+        generate = _Dummy.generate
+        hidden_states = _Dummy.hidden_states
+        inject_query_tokens = _Dummy.inject_query_tokens
+        add_grid_tokens = _Dummy.add_grid_tokens
+        num_layers = _Dummy.num_layers
+        hidden_size = _Dummy.hidden_size
+
+    with pytest.raises(TypeError, match="vision_features"):
+        _NoVision()
+    assert _Dummy().vision_features(_inputs()) is None
 
 
 def test_model_inputs_validation():

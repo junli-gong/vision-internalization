@@ -232,16 +232,13 @@ class ModelAdapter(abc.ABC):
         输入嵌入替换成它，E3a 的可学习查询 token 从这里进；inputs 里必须有查询 token，个数一致。
         """
 
+    @abc.abstractmethod
     def vision_features(self, inputs: ModelInputs) -> Any:
-        """进入 LLM 之前、经过投影/合并之后的视觉 token（D10，DEV-0003）。
+        """进入 LLM 之前、经过投影/合并之后的视觉 token（D10，DEV-0003；D15-2 起为抽象方法）。
 
         形状 [n_image_tokens, hidden_size]，多图按 inputs.images 的顺序拼接。E2 的参考线、E3a 的 C2 对照用它。
         各家族在适配器里写明它与 hidden_states(inputs, [0]) 在图像位置上的关系（Qwen3.5 要求逐位相同）。
-
-        注意：任务书要求这是抽象方法。tests/test_adapters_base.py 里的测试替身没有实现它，而那个文件不在
-        DEV-0003 的改动范围内，所以这里暂用"默认抛 NotImplementedError"的普通方法，待管理员裁定。
         """
-        raise NotImplementedError(f"{type(self).__name__} 没有实现 vision_features")
 
     @abc.abstractmethod
     def inject_query_tokens(self, n: int, position_mode: PositionMode) -> None:
