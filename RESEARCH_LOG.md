@@ -8,6 +8,7 @@
 
 | RUN | 发出 | 校验 commit | 内容 | 状态 | 一句话结论 | Report |
 |---|---|---|---|---|---|---|
+| 0004 | 2026-09-30 | b4b4810 | G0 冒烟（三家族）：服务器全量测试 + Qwen3.5-0.8B / Gemma 4 E2B-it / InternVL3.5-2B-HF 真实权重冒烟 + Qwen3.5-4B（取代 RUN-0003 §3–4） | 已发（值守自动接单） | — | — |
 | 0003 | 2026-09-30 | a4a60e8 | G0 冒烟（Qwen3.5）：服务器全量测试（312）+ 0.8B 与 4B 真实权重冒烟 | **停在 §3**（37a29bd）：服务器上 16 failed，开发机绿、服务器红；冒烟未跑 | 服务器装了 fla，transformers 在 import 时把 GDN 绑到 Triton，CPU 小模型走进 GPU 内核；屏蔽 fla 后 311+1 与开发机一致 | [0003](reports/0003-g0-smoke-qwen.md) |
 | 0002 | 2026-09-30 | 见任务书 | Phase 0：Gemma 4 E2B-it 与 InternVL3.5-2B-HF 事实探针（结构、模板、图像 token、位置、坐标、任务调制仪器、显存） | 完成（aa87b10、dc11314；服务器值守自动接单） | 三家族 D1 仪器全部成立（图在前逐位相同）；坐标轴序不同（Gemma y 在前）；Gemma 无预留行（复用 unusedN）；InternVL 处理器默认值与配置矛盾 | [0002](reports/0002-family-probe.md) |
 | 0001 | 2026-09-29 | 见任务书 | Phase 0：环境、Qwen3.5 事实探针、模型登记、数据源体积与 schema（磁盘受限版） | 完成（45ce09b、27b00a5、8c010e4） | 仪器（图在前逐位相同）在 0.8B/9B 上成立；原生坐标 0–1000；数据源全部定位，许可与去重问题上报（N10、D11） | [0001](reports/0001-phase0-env.md) |
@@ -17,7 +18,7 @@
 | DEV | 发出 | 合入 commit | 内容 | 状态 |
 |---|---|---|---|---|
 | 0003-a1 | 2026-09-30 | 4ed6bc3 | Qwen3.5 适配器在 CPU 上显式走 GDN 的 torch 实现（修 RUN-0003 的跨机器差异；模式 B，worktree agent） | 已合入（main 433 passed，普通与服务器条件都通过） |
-| 0005 | 2026-09-30 | — | InternVL3.5 适配器（照 Qwen35Adapter；模式 B，worktree agent） | 已派发 |
+| 0005 | 2026-09-30 | 00419da | InternVL3.5 适配器（照 Qwen35Adapter；模式 B，worktree agent） | 已合入（第 1 轮解冲突与思考规则；main 559 passed，普通/服务器条件都通过；三家族 --tiny 冒烟都通过） |
 | 0004 | 2026-09-30 | 2463c02 | Gemma 4 适配器（照 Qwen35Adapter；另把 vision_features 改为抽象方法；模式 B，worktree agent） | 已合入（93 新测试；main 共 424 passed；两个家族的 --tiny 冒烟都通过） |
 | 0003 | 2026-09-30 | a4a60e8 | Qwen3.5 适配器 + base.py 接口补充 + G0 冒烟脚本（模式 B，worktree agent） | 已合入（69 新测试；main 共 312 passed；--tiny 冒烟通过） |
 | 0002 | 2026-09-30 | b545838（+80c60e8 集成修正） | E3 执行器（叠加、分块、引导滤波/JBU、熵选区）+ mask 加噪（模式 B，worktree agent） | 已合入（91 新测试；main 共 243 passed） |
@@ -125,4 +126,16 @@
 - **DEV-0004 合入**（2463c02）：Gemma 4 适配器，偏离裁定见 D17。派发模板加了一条：临时文件放在 scratchpad 下以任务编号命名的子目录里。起因是并行的两个 agent 共用 scratchpad，发生过一次互相覆盖。
 - **DEV-0003-a1 合入**（4ed6bc3，D18）：修好 RUN-0003 暴露的跨机器差异。新增的 parity 脚本在开发机上模拟服务器的 fla 绑定，去掉修复就能复现服务器上全部 16 个失败。今后改动适配器或冒烟脚本的合入都要多跑这一遍。
 - **DEV-0005 第 1 轮**：已把最新的 main 合进它的分支。它在自己的 worktree 里解冒烟脚本的家族分派冲突（Gemma 接进它的 family_suite），并把思考段规则改成和 Gemma 一致：没写 `<think>` 就直接作答时取全文。
+- **三家族适配器全部合入**：Qwen3.5、Gemma 4、InternVL3.5，main 共 559 passed。D19 为 DEV-0005 的裁定，并统一了思考段判定规则。
+- **发出 RUN-0004**，取代 RUN-0003 的 §3–4。命令已对照最终版冒烟脚本的 argparse 核对过。**管理员预测**：
+  - (a) 服务器 558 passed + 1 skipped（cv2）；
+  - (b) 四份冒烟 all_ok=True；
+  - (c) 检查 1 与官方 processor 逐项相等；
+  - (d) 检查 2 图在前各层逐位相同（0.8B 25/25、Gemma 36/36、InternVL 29/29、4B 33/33），指令在前只有第 0 层相同；
+  - (e) Qwen-0.8B 指令在前的逐层 max|Δ| 与 model_notes §5.7 的表逐项相同；
+  - (f) grid token 的 id：Qwen 248077/248078，Gemma 6/7（`<unused0>`、`<unused1>`），InternVL 151679/151680；
+  - (g) 4B 的 lm_head 共享；
+  - (h) 各家族 vision_features 与第 0 层逐位相同；
+  - (i) Qwen 在 GPU 上检查 0 记录的 GDN 实现是 fla，switched_to_torch=False；
+  - (j) InternVL 在 2048 个思考 token 内出现闭合的思考段；Gemma 的思考段在真实权重上闭合，格式与 tokenizer_config 一致。
 

@@ -19,6 +19,9 @@
 - **台账/文档的脚本编辑必须带命中断言** — `str.replace` 静默未命中让两行台账丢失，后续编辑连锁失效。
 - **heredoc 里含中文引号的 python 用三引号** — 一次 SyntaxError 让三处编辑全部没应用而 commit 照推。
 - **任务书里"与 X 完全对齐"之类的定量主张先算再写** — 一次注释里的对齐声明与实际相差 155 倍。
+- **zsh 里不要用字符串变量拼命令参数** — `for m in "" "--model x"; do cmd $m; done` 在 zsh 里 `$m` 不分词，
+  `--model x` 被当成一个参数，argparse 报错退出码 2，被误判为"冒烟失败"。用数组，或者把参数直接写出来；
+  判定失败之前先看落盘的错误信息。
 - **任务书里的命令逐字对照脚本的参数定义** — 写了 `--dtype bfloat16`，脚本的 argparse 只接受 `bf16`；
   服务器照抄就会在参数解析时失败。写命令前先看一遍 `--help` 或 argparse 的 choices。
 - **任务书里的 shell 片段每行只写一个 export** — `export ROOT=/a PROJ=$ROOT/b` 这一行里 `$ROOT` 在赋值前

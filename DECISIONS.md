@@ -279,3 +279,24 @@
    - 保留两份模拟 fla：进程内那份用来计数，打包的那份模拟 import 时的绑定，两者由一条测试保持一致。
 3. **新规矩**：凡是改动适配器或冒烟脚本的合入，除普通 pytest 外，还要跑一遍 `scripts/pytest_server_parity.sh`。它让开发机按服务器的可选内核绑定条件跑测试，挡住"开发机绿、服务器红"。新增一条绊线测试：假如服务器以后装了 causal-conv1d，这条测试会红，提醒 CPU 路径要同样处理。
 
+## D19 — DEV-0005（InternVL3.5 适配器）合入；思考段判定规则统一（2026-09-30）
+
+1. **合入**（00419da）：
+   - 管理员读了模块说明和核心代码：思考 system 轮、剥离规则、单 tile 守卫、输入嵌入、扩表与均值初始化。
+   - 冒烟脚本的家族分派冲突按 manager.md §7.2 的协议，交回开发 agent 在它的 worktree 里解决（第 1 轮）。
+   - 合入后在干净 worktree 里：普通条件与 server-parity 条件都是 559 passed；三个家族的 `--tiny` 冒烟都通过。
+2. **偏离裁定**：
+   - grid2d 对一维位置的家族报错，与 D17 一致；
+   - 多 tile 时 grid_hw = (16n, 16) 是 tile 纵向堆叠、不是整图网格，探针与查询相关的方法只接受单 tile；
+   - R1 system prompt 逐字取自固定 revision 的 model card，并有测试比对；
+   - `min_patches`、`size` 也一律显式传入；
+   - lm_head 是否共享以运行时为准：2B 的 config 顶层写共享、text_config 写不共享，运行时实际不共享；
+   - 框解析"不猜"：任何一个框坏了，整条判失败；
+   - `ctx["checks"]` 与 `base_context`；
+   - 以上全部接受。
+3. **思考段判定统一**：
+   - Gemma 与 InternVL 看输出本身：最后一个思考段开头之后没有结束标记，才算 unclosed；没写思考段就直接作答，取全文。
+   - Qwen 的思考段开头由提示预填，所以开启思考时输出里没有 `</think>`，即为 unclosed。
+   - base.py 的 docstring 已按此改写（b4b4810，只改文档）。
+4. **管理员自己的失误，记录在案**：验证时用 zsh 循环 `for m in "" "--model x"; do ... $m ...` 拼参数，zsh 不对未加引号的变量做分词，两条冒烟被误判为失败（退出码 2），直接运行后都通过。已写进 skill lessons。
+
