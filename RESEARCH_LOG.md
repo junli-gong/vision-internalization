@@ -8,7 +8,8 @@
 
 | RUN | 发出 | 校验 commit | 内容 | 状态 | 一句话结论 | Report |
 |---|---|---|---|---|---|---|
-| 0001 | 2026-09-29 | 见任务书 | Phase 0：环境、Qwen3.5 事实探针、模型登记、数据源体积与 schema（磁盘受限版） | 已发 | — | — |
+| 0002 | 2026-09-30 | 见任务书 | Phase 0：Gemma 4 E2B-it 与 InternVL3.5-2B-HF 事实探针（结构、模板、图像 token、位置、坐标、任务调制仪器、显存） | 已发（等服务器进入值守后自动接单） | — | — |
+| 0001 | 2026-09-29 | 见任务书 | Phase 0：环境、Qwen3.5 事实探针、模型登记、数据源体积与 schema（磁盘受限版） | 第 1、2 批已回（45ce09b、27b00a5），第 3 批（数据源 + report）未回 | 仪器（图在前逐位相同）在 0.8B/9B 上成立；原生坐标 0–1000；transformers 5.17.0 可用 | — |
 
 ### 开发（DEV）
 
@@ -58,3 +59,19 @@
 - 跨会话直连验证可用：DEV-0001 的完成总结由开发 CC 通过 SendMessage 直接发给管理员，未经用户转交。
 - 仍需用户转交最后一次：让服务器 CC 在 RUN-0001 完成后按 `prompts/server/STANDBY.md` 进入值守。
 - 下一步：审查 DEV-0001 → 合入 → 挂结果监听 → RUN-0001 回来后写 DEV-0003（Qwen3.5 适配器），DEV-0002（E3 执行器与加噪）可先派发。
+
+### 2026-09-30（管理员）
+
+- **RUN-0001 第 1、2 批回来**（`docs/env_report.md`、`docs/model_notes.md` §1–5）。对照发出前的预测：
+  - (a) 兑现：(10, 0)。
+  - (b) 兑现：transformers 5.17.0 release 已含 qwen3_5。
+  - (c) 半兑现：fla chunk 内核 fp32 相对 fp64 的最大误差 1.1e-4，略超 1e-4；fla/transformers 的另外几种实现彼此只差约 1e-7。bf16 下相对误差 3e-3，比预测的小。机制猜测（未验证）：Triton 的 chunk 内核在 fp32 下用了 TF32 矩阵乘。整模型 bf16 logits 的最大差 1.28，argmax 309/321 一致；fp32 下 321/321 一致。
+  - (d) 兑现：图在前 25/25（0.8B）和 33/33（9B）层逐位相同；指令在前只有第 0 层相同。D1 仪器成立。
+  - (e) 兑现（实测）：零样本输出与 GT×1000/(W,H) 吻合。Qwen3.5 文档里没找到对坐标格式的说明。
+  - (f) 兑现，但有陷阱：243 个预留行可直接用；`resize_token_embeddings(len(tok))` 会把嵌入缩行，已写进 D9。
+  - (g) 未兑现：vLLM nightly 声明 torch==2.13.0，不会另装 torch，下载 1.16 GB，但会把 numpy 从 2.5.2 降到 2.3.5；SGLang 会把 transformers 降到 5.12.1。
+  - (h) 半兑现：9B 的 LoRA r=32、batch 8 峰值 50.2 GiB，在预测区间内；9B 推理 batch 1 只有 17.8 GiB，低于预测的 20–25。
+- **我自己的任务书写错一处**：RUN-0001 §3 把 `export ROOT=... PROJ=$ROOT/...` 写在同一行，`$ROOT` 在赋值之前就被展开，PROJ 成了 `/vision-internalization`。服务器 CC 发现后改成每行一个 export。STANDBY.md 已修（fe27b82），规则写进 skill 的 lessons。已发出的 RUN-0001 不改写。
+- **D9**：三家族都用最终后训练版（Gemma `-it`、InternVL `-HF`），revision 固定；Qwen 新 token 复用预留行、禁止 resize、用均值初始化；思考开关直接作为 apply_chat_template 的关键字参数传。
+- **发出 RUN-0002**：Gemma 4 E2B-it 与 InternVL3.5-2B-HF 的事实探针，为三家族适配器和 G0 冒烟做准备。会先删掉内存盘上的 9B，占用保持在 25 GB 以内。
+- **DEV-0001 审查中**：自己复跑 113 passed、import 与彩排一致、范围干净；独立审查 agent 在跑（仪器代码，按 manager.md §7.2）。

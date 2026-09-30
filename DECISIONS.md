@@ -81,3 +81,18 @@
    - 服务器值守失联。
 
 **理由**：管理员与开发同机，人工转交是瓶颈；用户要求"不在电脑前实验也不断"。独立审查仍然成立：写代码的 agent 和审查的管理员是两个上下文，仪器代码还多一道独立审查。
+
+## D9 — 模型变体、revision 固定与新增 token 的约定（2026-09-30，依据 RUN-0001 的 model_notes）
+
+1. **变体**：
+   - Qwen3.5 用后训练版 `Qwen/Qwen3.5-{0.8B,2B,4B,9B}`。
+   - Gemma 4 用指令版 `google/gemma-4-{E2B,E4B}-it`，不用预训练版和 `-it-assistant`（MTP 草稿头）。
+   - InternVL3.5 用 `OpenGVLab/InternVL3_5-{2B,4B}-HF`：最终阶段权重（CPT+SFT+CascadeRL），transformers 原生格式，不需要 `trust_remote_code`。8B 暂不用。
+   - **理由**：三家族都取"最终后训练版"，口径一致；HF 原生格式让适配器不依赖远程代码。
+2. **revision 固定**为 `docs/model_notes.md` §2 登记的 sha。下载与加载一律带 `revision=`；换 revision 要新开 D 条。
+3. **Qwen3.5 新增 token**：
+   - 复用嵌入里超出 tokenizer 的 243 个预留行（id 248077–248319，`add_tokens` 自然落在这里）。
+   - **禁止调用 `resize_token_embeddings(len(tokenizer))`**：它会把 248320 行缩成 len(tokenizer)，已实测。
+   - 按简报 §5.2，新 token 的嵌入行初始化为基础词表嵌入的均值。4B/9B 的 lm_head 与嵌入不共享，也用 lm_head 基础行的均值初始化对应行。预留行原有的值不用。
+4. **思考开关**：Qwen3.5 的 0.8B/2B 模板默认关闭思考，4B/9B 默认开启。简报说"默认开启"与此不完全一致。按 D1，每次调用都显式传 `enable_thinking`，并直接作为 `apply_chat_template` 的关键字参数传入；`chat_template_kwargs` 在 transformers 里不生效，已实测。
+5. **内存盘上的权重可以随时删**。9B 重新下载实测约 34 秒，D6 的 25 GB 上限不变：放不下时，先删眼下不用的模型。
