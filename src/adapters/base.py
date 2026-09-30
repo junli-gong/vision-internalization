@@ -90,7 +90,9 @@ class GenerationResult:
 
     text：剥离思考段之后的最终回答（各家族的剥离规则写在适配器里），解析器只看它（D10）。
     raw_text：完整解码结果，含思考段与特殊 token。适配器必须填写；默认 None 只为兼容旧的构造方式。
-    thinking_unclosed：开启了思考、却没有生成思考段的结束标记（例如 max_new_tokens 用完）。此时 text 为空串。
+    thinking_unclosed：输出里的思考段开了却没有闭合（例如 max_new_tokens 用完）。此时 text 为空串。
+        各家族的判定规则写在适配器里（D19）：Qwen3.5 的思考段开头由提示预填，开启思考时输出里没有 `</think>` 即为未闭合；
+        Gemma 4 与 InternVL3.5 看输出本身，最后一个思考段开头之后没有结束标记才算未闭合，没写思考段就直接作答取全文。
     """
 
     text: str
