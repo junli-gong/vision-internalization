@@ -206,8 +206,8 @@ def _scene(seed=0):
 
 
 def _iou(a, b):
-    i, u = mask_inter_union(a, b)
-    return i / u
+    s = mask_inter_union(a, b)  # addendum-1 起返回 MaskStats(inter, union, failed)
+    return s.inter / s.union
 
 
 def rehearse_e3(seed: int = 0) -> dict:
