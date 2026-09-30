@@ -1,4 +1,7 @@
-"""E5 合成数据框架：种子与划分、形状族、光栅化、场景规格、渲染与目标对齐、导出、数据集接口。"""
+"""E5 合成数据框架：种子与划分、形状族（含钉住的单位形状）、场景规格、渲染与目标对齐、导出、数据集接口。
+
+光栅化规则的测试在 tests/test_synth_raster.py，确定的三角函数在 tests/test_synth_dmath.py。
+"""
 
 import hashlib
 import math
@@ -9,7 +12,6 @@ import shapely
 from PIL import Image
 
 from src.constants import GRID_SIZE_E3B
-from src.executors.raster import polygons_to_mask
 from src.grid.codec import mask_to_grid
 from src.synth import SynthDataset, generate, num_bins
 from src.synth import shapes as S
@@ -169,14 +171,20 @@ def test_rotation_convention_is_clockwise_on_screen():
     assert np.count_nonzero(cols9 < 80) > np.count_nonzero(cols9 > 80)  # 仍是左半多
 
 
-def test_rasterize_window_equals_full_canvas():
-    rng = np.random.default_rng(3)
-    for k in range(60):
-        fam = SHAPE_FAMILIES[k % len(SHAPE_FAMILIES)]
-        v = int(rng.integers(len(S.VARIANTS[fam])))
-        cx, cy = rng.uniform(-20, W + 20), rng.uniform(-20, H + 20)  # 含部分在画布外的情形
-        p = S.pose_polygon(fam, v, cx, cy, rng.uniform(5, 50), rng.uniform(0, 360))
-        assert np.array_equal(S.rasterize(p, H, W), polygons_to_mask([p.reshape(-1)], H, W)), k
+def test_unit_polygons_are_pinned():
+    """单位形状在 decimal 里构造（DEV-0009），与平台无关。在开发机上红 = 单位形状变了（生成器版本要加一）；
+    只在服务器上红 = 跨平台不能逐位复现，上报管理员。"""
+    h = hashlib.sha256()
+    for f in SHAPE_FAMILIES:
+        for v in S.VARIANTS[f]:
+            p = S.unit_polygon(f, v.index)
+            assert np.array_equal(p * 2**24, np.round(p * 2**24))  # 在 UNIT_SHAPE_QUANTUM 网格上
+            h.update(f"{f}:{v.index}:{p.shape}".encode())
+            h.update(p.tobytes())
+    assert h.hexdigest() == PINNED_UNIT_POLYGONS
+
+
+PINNED_UNIT_POLYGONS = "24df3d3725315d776898a21a71b9695fd9971235c8ef153714df95be21746268"  # 开发机 arm64 macOS，DEV-0009
 
 
 def test_quantization_puts_vertices_on_the_grid():

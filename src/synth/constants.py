@@ -1,11 +1,13 @@
 """E5 合成数据生成器（简报 §7.4、§8.8）的约定：只在这里定义，src/synth 的其余模块与测试一律 import。
 
-跨模块约定（默认网格边长、mask → 网格规则、光栅化规则）仍然来自 src/constants.py、src/grid/codec.py、
-src/executors/raster.py，这里不重述。
+跨模块约定（默认网格边长、mask → 网格规则、像素中心与框的边界归属）仍然来自 src/constants.py、
+src/grid/codec.py，这里不重述。多边形光栅化是例外：E5 合成数据用 src/synth/raster.py 的精确整数规则（DEV-0009、D24），
+不走 src/executors/raster.py 的 pycocotools（后者仍用于对齐 COCO/RefCOCO 真值）。
 
-本文件的数值都是 DEV-0007 的暂定默认值，最终以 E5 预注册为准，由项目负责人确认。
-改动任何一个会改变生成结果的数值，都必须同时把 SYNTH_GENERATOR_VERSION 加一，并更新
-tests/test_synth_repro.py 里钉住的样本摘要（样本 = 纯函数(任务, 划分, 序号, 生成器版本)）。
+本文件的数值都是 DEV-0007 的暂定默认值（DEV-0009 只加了确定性相关的几项），最终以 E5 预注册为准，由项目负责人确认。
+改动任何一个会改变生成结果的数值，都必须同时把 SYNTH_GENERATOR_VERSION 加一，并重新钉住
+tests/data/synth_digests_v2.json 里的样本摘要（样本 = 纯函数(任务, 划分, 序号, 生成器版本)；
+核对规则见 tests/test_synth_repro.py，重新生成用 scripts/synth_pin_digests.py）。
 """
 
 from __future__ import annotations
@@ -15,7 +17,8 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 
 # 生成器版本：进入每个样本的种子，也写进样本元数据。
-SYNTH_GENERATOR_VERSION = 1
+# 1：DEV-0007（作废，没有产出过数据，D24）；2：DEV-0009，跨机器逐位复现的修复。
+SYNTH_GENERATOR_VERSION = 2
 
 # 种子树的根，固定不变；与版本一起进入 numpy.random.SeedSequence 的 entropy。
 SYNTH_SEED_ROOT = 20260930
@@ -35,6 +38,10 @@ SCENE_SEED_STRIDE = 1 << 48
 # 单个样本最多尝试的次数（拒绝采样）；超过即抛 SynthGenerationError，不静默降级。
 MAX_ATTEMPTS = 400
 
+# d（短时物理）的规范平台（D24）：(platform.machine(), platform.system())。d 的数据只在这里生成，
+# 钉住的 d 摘要也只在这里比对。c、e 在任何平台上都必须逐位相同。
+CANONICAL_PLATFORM = ("x86_64", "Linux")
+
 # ---------------------------------------------------------------------------
 # 物体身份与划分
 # ---------------------------------------------------------------------------
@@ -51,11 +58,16 @@ IDENTITY_SPLIT_SALT = "visint-e5-identity-split-v1"
 CANVAS_HW = (512, 512)  # (H, W)，RGB
 CANVAS_MARGIN_PX = 2.0  # 物体离画布边缘至少这么远（c、e 的全部物体，d 的全部帧）
 
-COORD_QUANTUM = 1.0 / 256  # 画布上的顶点坐标、中心、半径量化到 1/256 px
+COORD_QUANTUM = 1.0 / 256  # 画布上的顶点坐标、中心、半径量化到 1/256 px（raster.py 的整数单位由它导出）
 UNIT_SHAPE_QUANTUM = 2.0**-24  # 单位形状（外接半径 1）的顶点量化步长
-TRIG_QUANTUM = 2.0**-40  # 旋转用的 cos、sin 量化步长
+TRIG_QUANTUM = 2.0**-40  # 旋转与方向用的 cos、sin 量化步长（dmath.rot_cs）
 ANGLE_QUANTUM_DEG = 1.0 / 256  # c、d 的连续角度量化步长（度）
 CURVE_SEGMENTS = 128  # 整圆的折线段数；圆弧按角度比例
+# 确定的三角函数（dmath.py）：decimal 的有效位数。结果误差 ~1e-38，远小于 TRIG_QUANTUM。
+DEC_PREC = 40
+# 会影响分档、拒绝或写进元数据的平均值（e 的平均位移），逐项量化到这个步长（像素）后精确求和（dmath.fixed_point_mean）。
+# e 的单项位移 < 2^11 px、项数 < 2^17：项数 × 单项 / 步长 < 2^52，部分和都是精确整数。
+MEAN_TERM_QUANTUM = 2.0**-24
 
 # ---------------------------------------------------------------------------
 # 形状族与变体（形状参数离散化；单位形状的定义见 shapes.py）
@@ -155,8 +167,8 @@ PHYSICS_DENSITY = 1.0e-3  # 质量 = 面积(px²) × 密度；只影响相对质
 # 合理性检查的容差（生成时作为拒绝条件，测试里也用）
 PHYSICS_REST_TOL_PX = 0.5  # 未被碰到的静止物体，k 步内位移上限
 PHYSICS_REST_TOL_DEG = 0.5  # 同上，转角上限
-PHYSICS_PENETRATION_TOL_PX = 2.0  # 任一接触点的穿透深度上限（pymunk 接触距离的负值）
-PHYSICS_OVERLAP_TOL = 0.01  # 第 k 步两两多边形重叠面积 / 较小者面积 的上限
+PHYSICS_PENETRATION_TOL_PX = 2.0  # 任一接触点的穿透深度上限（pymunk 接触距离的负值，先量化到 COORD_QUANTUM）
+PHYSICS_OVERLAP_TOL = 0.01  # 第 k 步两两 mask 的公共像素数 / 较小者像素数 的上限（第 0 步要求没有公共像素）
 PHYSICS_SUPPORT_TOL_PX = 1.5  # "落在地面上"：最低点离地面上表面的距离上限
 
 # ---------------------------------------------------------------------------

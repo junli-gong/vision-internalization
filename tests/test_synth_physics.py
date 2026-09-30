@@ -1,15 +1,18 @@
 """d 短时物理：步数分档、pymunk 确定性、合理性（静止保持静止、放下的物体落地、无明显穿透）、
-碰撞形状与渲染一致、匀速外推基线、速度。"""
+碰撞形状与渲染一致、精确的质量与转动惯量、出 pymunk 的量先量化、匀速外推基线、速度。"""
 
 import math
 import time
 
 import numpy as np
 import pymunk
+import shapely
 
 from src.synth import generate
 from src.synth import shapes as S
 from src.synth.constants import (
+    COORD_QUANTUM,
+    PHYSICS_DENSITY,
     PHYSICS_K_BINS,
     PHYSICS_OVERLAP_TOL,
     PHYSICS_PENETRATION_TOL_PX,
@@ -18,8 +21,8 @@ from src.synth.constants import (
     PHYSICS_STEP_SECONDS,
     PHYSICS_SUPPORT_TOL_PX,
 )
-from src.synth.physics import Simulation, ground_y, max_overlap_fraction
-from src.synth.scene import Background, Ground, ObjectSpec, SceneSpec
+from src.synth.physics import Simulation, ground_y, max_overlap_fraction, poly_mass_moment
+from src.synth.scene import Background, Ground, ObjectSpec, SceneSpec, object_masks
 
 H, W = 480, 600
 BG = Background("solid", (236, 236, 236), (236, 236, 236))
@@ -144,6 +147,46 @@ def test_collision_shapes_match_rendered_polygons():
             # pymunk 可能重排顶点：逐点找最近的渲染顶点
             d = np.sqrt(((world[:, None, :] - poly[None, :, :]) ** 2).sum(-1)).min(axis=1)
             assert d.max() < 0.01, d.max()
+
+
+def test_box_mass_and_moment_are_exact():
+    """poly_mass_moment 与 shapely 的面积、pymunk 自己的 moment_for_poly 在 1e-12 相对误差内一致；顶点是精确的乘积。"""
+    rng = np.random.default_rng(0)
+    for var in RECT:
+        u = S.unit_polygon("rectangle", var)
+        for _ in range(5):
+            r = S.qcoord(rng.uniform(0.06, 0.12) * 512)
+            verts, mass, moment = poly_mass_moment(u, r)
+            assert np.array_equal(np.array(verts), u * r)
+            area = shapely.polygons(np.array(verts)).area
+            assert abs(mass - PHYSICS_DENSITY * area) <= 1e-12 * mass
+            ref = pymunk.moment_for_poly(mass, verts)
+            assert abs(moment - ref) <= 1e-12 * ref
+
+
+def test_quantities_from_pymunk_are_quantized_and_overlap_is_a_pixel_ratio():
+    for i in range(12):
+        s = generate("physics", "val", 300 + i)
+        pen = s.meta["max_penetration_px"]
+        assert pen / COORD_QUANTUM == round(pen / COORD_QUANTUM)
+        for p in s.meta["final_poses"]:
+            assert p["cx"] / COORD_QUANTUM == round(p["cx"] / COORD_QUANTUM)
+            assert p["cy"] / COORD_QUANTUM == round(p["cy"] / COORD_QUANTUM)
+            assert p["angle"] * 256 == round(p["angle"] * 256)
+        final = SceneSpec.from_dict(s.meta["scene"])
+        final = SceneSpec(final.height, final.width, final.background,
+                          tuple(o.moved(cx=p["cx"], cy=p["cy"], angle=p["angle"]) for o, p in zip(final.objects, s.meta["final_poses"])),
+                          final.ground)
+        assert np.array_equal(object_masks(final), s.object_masks)
+        # 与逐对精确计数的最大值相同
+        m = s.object_masks
+        want = 0.0
+        for a in range(len(m)):
+            for b in range(a + 1, len(m)):
+                inter = int(np.count_nonzero(m[a] & m[b]))
+                if inter:
+                    want = max(want, inter / min(int(m[a].sum()), int(m[b].sum())))
+        assert s.meta["max_overlap_fraction"] == want == max_overlap_fraction(final)
 
 
 def test_const_velocity_baseline_is_an_exact_integer_shift():
