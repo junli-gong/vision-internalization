@@ -38,3 +38,12 @@
 - **下一步**
   - RUN-0001 与 DEV-0001 并行。
   - N1 答复后决定数据落地规模；RUN-0001 回来后写 DEV-0003（Qwen3.5 适配器）。
+- **RUN-0001 的管理员预测**（发出前写；结果回来后逐条标注兑现与否）
+  - (a) `get_device_capability()` = (10, 0)，现有 torch 2.13.0+cu130 可用。
+  - (b) transformers 最新 release 已支持 Qwen3.5，不必装 main。
+  - (c) Gated DeltaNet：fla 与 torch 实现的差距，fp32 最大绝对误差 ≤ 1e-4，bf16 相对误差在 1e-2 量级。
+  - (d) 5.7：图在前时各层逐位相同；指令在前时第 0 层相同、之后各层不同。
+  - (e) Qwen3.5 的原生定位坐标是 0–1000 归一化，与 Qwen3-VL 相同。
+  - (f) 嵌入行数大于 tokenizer 词表，有预留行，新增网格 token 可以直接复用。
+  - (g) vLLM nightly 的 dry-run 会另装一个不同于 2.13.0 的 torch，额外占 2 GB 以上。
+  - (h) 9B 显存：bf16 推理 batch 1 的峰值约 20–25 GB；LoRA r=32、batch 8 的峰值约 40–60 GB（简报估算）。
