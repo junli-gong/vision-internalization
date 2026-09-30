@@ -295,4 +295,9 @@
   - (c) d 的 60 个摘要与开发机也全部相同：量化挡住了 Chipmunk 的末位差异（把握约七成）；
   - (d) MMLU-Pro 随 Qwen 尺寸单调上升，9B ≥ 50%；GSM8K flexible 上 Qwen-4B、9B ≥ 80%；Gemma E4B 高于 E2B；每个模型的 MMLU-Pro 解析失败率 ≤ 10%；
   - (e) 每个模型 ≤ 45 分钟，总计 ≤ 6 小时。
+- **RUN-0007 第 1 批**（d067563）：
+  - 服务器全量测试 1030 passed + 11 skipped，全绿。
+  - E5 v2 的 180 个摘要跨机器全部相同：c 60/60、d 60/60、e 60/60。
+  - 预测对照：(b) 兑现；(c) 兑现，d 的 60 个也全部相同，说明量化挡住了 Chipmunk 的末位差异。
+  - 管理员把服务器写出的规范清单复制回 `tests/data/synth_digests_v2.json`（常量级修改）：d 的摘要与占位值逐个相同，状态改为 canonical，并记下规范平台 x86_64 Linux、glibc 2.35、pymunk 7.3.0。开发机上复跑 `test_synth_repro.py`：13 passed + 1 skipped（非规范平台）。
 
