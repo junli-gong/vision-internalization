@@ -62,6 +62,7 @@ from src.synth.sample import (
 from src.synth.scene import Background, ObjectSpec, SceneSpec, object_masks
 from src.synth.seeding import coin, pick, randint, uniform
 from src.synth.shapes import appearance, describe, polygon_inside, qcoord, rasterize, rot_cs, sample_identity, variant
+from src.synth.shapes import max_equivalent_rotation as _max_rotation  # 约定只在 shapes.py 定义（a 也用）
 
 CONVENTION = (
     "Coordinates are fractions of the canvas width and height, from (0, 0) at the top-left corner to (1, 1) at the "
@@ -76,13 +77,6 @@ TEMPLATES = (
     "Picture a blank canvas. {conv} On it are {objects}. {transform} Show the {target} in its new position.",
     "{conv} Imagine {objects}. {transform} Which pixels does the {target} cover afterwards?",
 )
-
-
-def _max_rotation(period: float) -> int:
-    """|θ| 的上限（整数度）：无对称 180；n 重对称取半周期；圆 0。"""
-    if period == 0.0:
-        return 0
-    return int(math.floor(min(180.0, period / 2.0)))
 
 
 def _object_phrase(o: ObjectSpec, x_h: int, y_h: int, r_h: int, a_deg: int) -> str:

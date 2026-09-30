@@ -369,9 +369,18 @@ def test_dataset_class_matches_generate():
 
 def test_export_roundtrip(tmp_path):
     samples = [generate("occlusion", "train", 1), generate("imagery", "train", 2), generate("physics", "train", 3)]
+    samples += [generate("rotation3d", "train", 4), generate("viewpoint", "train", 5)]  # 带 extras（深度图、ID 图）
     manifest = export_samples(samples, tmp_path)
     rows = load_manifest(manifest)
-    assert [r["stem"] for r in rows] == ["occlusion_train_000000001", "imagery_train_000000002", "physics_train_000000003"]
+    assert [r["stem"] for r in rows] == [
+        "occlusion_train_000000001",
+        "imagery_train_000000002",
+        "physics_train_000000003",
+        "rotation3d_train_000000004",
+        "viewpoint_train_000000005",
+    ]
+    assert "extra_depth" in sample_arrays(samples[3]) and "extra_id_map" in sample_arrays(samples[4])
+    assert not any(k.startswith("extra_") for k in sample_arrays(samples[0]))
     for s, r in zip(samples, rows):
         assert r["digest"] == s.digest() and r["instruction"] == s.instruction and r["meta"]["index"] == s.index
         z = np.load(tmp_path / r["arrays"])

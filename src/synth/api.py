@@ -7,8 +7,9 @@ cfg（全部可选）
 - canvas_hw：(H, W)，默认 CANVAS_HW = (512, 512)。
 - grid_size：网格边长 N，默认 src.constants.GRID_SIZE_E3B。
 - holdout_family：留出形状族（整族只进 test），默认 None；三个划分必须传同一个值。
+  c、d、e 取 2D 形状族（SHAPE_FAMILIES），a、b 取 3D 实体族（SOLID_FAMILIES）。
 
-样本 = 纯函数(任务, 划分, 序号, 生成器版本, cfg)：随机数只来自 seeding.sample_rng(任务, 划分, 序号)，
+样本 = 纯函数(任务, 划分, 序号, 该任务的生成器版本, cfg)：随机数只来自 seeding.sample_rng(任务, 划分, 序号)，
 cfg 不进种子（同一序号换档位得到同一随机流下的另一个样本）。
 """
 
@@ -18,13 +19,36 @@ import importlib
 from collections.abc import Iterator
 
 from src.constants import GRID_SIZE_E3B
-from src.synth.constants import CANVAS_HW, IMAGERY_BINS, OCCLUSION_BINS, PHYSICS_K_BINS, SYNTH_GENERATOR_VERSION
+from src.synth.constants import (
+    CANVAS_HW,
+    IMAGERY_BINS,
+    OCCLUSION_BINS,
+    PHYSICS_K_BINS,
+    ROT3D_BINS,
+    SOLID_FAMILIES,
+    VIEW_ORBIT_BINS,
+)
 from src.synth.sample import GenContext, Sample
-from src.synth.seeding import canonical_task, check_index, check_split, sample_rng, scene_seed
+from src.synth.seeding import canonical_task, check_index, check_split, sample_rng, scene_seed, task_version
 from src.synth.shapes import SHAPE_FAMILIES
 
-_TASK_MODULES = {"occlusion": "src.synth.occlusion", "physics": "src.synth.physics", "imagery": "src.synth.imagery"}
-TASK_BINS = {"occlusion": OCCLUSION_BINS, "physics": PHYSICS_K_BINS, "imagery": IMAGERY_BINS}
+_TASK_MODULES = {
+    "occlusion": "src.synth.occlusion",
+    "physics": "src.synth.physics",
+    "imagery": "src.synth.imagery",
+    "rotation3d": "src.synth.rotation3d",
+    "viewpoint": "src.synth.viewpoint",
+}
+# b 的第 k 档 = 环绕角的第 k 档或平移量的第 k 档（VIEW_SHIFT_BINS_CM），档数相同；这里列环绕角
+TASK_BINS = {
+    "occlusion": OCCLUSION_BINS,
+    "physics": PHYSICS_K_BINS,
+    "imagery": IMAGERY_BINS,
+    "rotation3d": ROT3D_BINS,
+    "viewpoint": VIEW_ORBIT_BINS,
+}
+# 留出族的取值范围：3D 任务用实体族，其余用 2D 形状族
+_HOLDOUT_FAMILIES = {"rotation3d": SOLID_FAMILIES, "viewpoint": SOLID_FAMILIES}
 
 
 def num_bins(task: str) -> int:
@@ -53,8 +77,8 @@ def generate(
         raise ValueError(f"画布太小：{canvas_hw}")
     if not 1 <= int(grid_size) <= min(h, w):
         raise ValueError(f"grid_size={grid_size} 必须在 [1, min(H, W)] 内")
-    if holdout_family is not None and holdout_family not in SHAPE_FAMILIES:
-        raise ValueError(f"未知的留出形状族 {holdout_family!r}")
+    if holdout_family is not None and holdout_family not in _HOLDOUT_FAMILIES.get(t, SHAPE_FAMILIES):
+        raise ValueError(f"未知的留出形状族 {holdout_family!r}（任务 {t}）")
     ctx = GenContext(
         task=t,
         split=split,
@@ -66,7 +90,7 @@ def generate(
         grid_size=int(grid_size),
         holdout_family=holdout_family,
         scene_seed=scene_seed(split, i),
-        version=SYNTH_GENERATOR_VERSION,
+        version=task_version(t),
     )
     return importlib.import_module(_TASK_MODULES[t]).generate(ctx)
 
