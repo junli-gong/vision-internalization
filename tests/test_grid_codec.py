@@ -86,6 +86,16 @@ def test_depth_bins_roundtrip_centers_and_clipping():
     assert np.max(np.abs(np.log(bins_to_depth(depth_to_bins(d)) / d))) <= half + 1e-12
 
 
+def test_all_65_edges_binned_consistently():
+    """addendum-1 第 11 条：每条边界 edge_k 归入档 k（最后一条 D_MAX 归入最后一档），不受 log 浮点误差影响。"""
+    e = depth_bin_edges()
+    assert e[0] == D_MIN and e[-1] == D_MAX
+    assert depth_to_bins(e).tolist() == list(range(DEPTH_NUM_BINS)) + [DEPTH_NUM_BINS - 1]
+    # 边界下方紧邻的值归入前一档
+    below = np.nextafter(e[1:-1], 0)
+    assert depth_to_bins(below).tolist() == list(range(DEPTH_NUM_BINS - 1))
+
+
 def test_depth_bins_reject_invalid():
     for bad in (0.0, -1.0, np.nan, np.inf):
         with pytest.raises(ValueError):
@@ -164,3 +174,71 @@ def test_failure_enum_is_finite_and_stringy():
         "wrong_row_count",
         "wrong_col_count",
     }
+
+
+# ---------------------------------------------------------------- 二值输入（M3）
+
+
+def test_codec_rejects_non_binary():
+    from src.grid.codec import as_binary_mask
+
+    with pytest.raises(ValueError, match="0/1"):
+        grid_to_mask(np.array([[0, 3], [7, 0]]), 4, 4)  # 审查复现：类别网格曾被当成二值
+    with pytest.raises(ValueError, match="dtype"):
+        mask_to_grid(np.full((8, 8), 0.9), 2)
+    with pytest.raises(ValueError, match="dtype"):
+        grid_to_text(np.eye(3))  # 浮点即使只含 0/1 也拒绝
+    assert as_binary_mask(np.array([[0, 1]], np.int8)).dtype == bool
+    assert np.array_equal(grid_to_mask(np.array([[1, 0], [0, 1]], np.uint8), 4, 4), np.kron(np.eye(2), np.ones((2, 2))).astype(bool))
+
+
+# ---------------------------------------------------------------- 污染行（M1）
+
+N16 = 16
+
+
+def _rows(k, seed=1):
+    rng = np.random.default_rng(seed)
+    return ["".join(rng.choice(["0", "1"], N16)) for _ in range(k)]
+
+
+def test_m1_annotated_extra_row_fails_as_illegal_char():
+    rows = _rows(17)
+    # 17 行，第一行带行内注释：以前注释行被当分隔符、剩下 16 行解析"成功"
+    text_a = rows[0] + "  <- top row\n" + "\n".join(rows[1:])
+    assert parse_grid_text(text_a, N16).failure is GridParseFailure.ILLEGAL_CHAR
+    text_b = "\n".join(rows[:16]) + "\n" + rows[16] + " (bottom)"
+    assert parse_grid_text(text_b, N16).failure is GridParseFailure.ILLEGAL_CHAR
+
+
+def test_m1_extra_plain_row_fails_as_wrong_row_count():
+    assert parse_grid_text("\n".join(_rows(17)), N16).failure is GridParseFailure.WRONG_ROW_COUNT
+
+
+def test_m1_letter_typo_inside_row_is_illegal_char():
+    rows = _rows(16)
+    rows[7] = rows[7][:5] + "l" + rows[7][6:]
+    assert parse_grid_text("\n".join(rows), N16).failure is GridParseFailure.ILLEGAL_CHAR
+
+
+def test_m1_header_line_right_before_grid_still_parses():
+    rows = _rows(16, seed=3)
+    for header in ("Here is the 16x16 grid:", "Answer (1 = object):", "Grid 16 by 16, row 1 first"):
+        p = parse_grid_text(header + "\n" + "\n".join(rows) + "\nDone.", N16)
+        assert p.failure is None, header
+        assert "".join(map(str, p.grid[0])) == rows[0]
+
+
+def test_m1_thinking_draft_is_not_parser_business():
+    """思考段里的草稿网格：解析器不剥离 <think>（由适配器负责，D10），看到两个块就判 MULTIPLE_BLOCKS，不猜。"""
+    rows = _rows(17)
+    text = "<think>\nDraft:\n" + "\n".join(rows[:16]) + "\n</think>\n" + "\n".join(rows[1:17])
+    assert parse_grid_text(text, N16).failure is GridParseFailure.MULTIPLE_BLOCKS
+    # 行间空一行：两个以上块，也不猜
+    assert parse_grid_text("\n\n".join(rows[:16]), N16).failure is GridParseFailure.MULTIPLE_BLOCKS
+
+
+def test_m1_all_rows_bracketed_is_illegal_char_not_no_grid():
+    rows = _rows(4)
+    text = "\n".join("[" + ",".join(r[:4]) + "]" for r in rows)
+    assert parse_grid_text(text, 4).failure is GridParseFailure.ILLEGAL_CHAR

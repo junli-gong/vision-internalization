@@ -11,6 +11,8 @@ from typing import Hashable, Sequence
 _LETTER_ALONE = re.compile(r"[\(\[]?\s*([A-Za-z])\s*[\)\]]?\s*[.:]?")
 _LETTER_BRACKETED_PREFIX = re.compile(r"[\(\[]\s*([A-Za-z])\s*[\)\]]\s")
 _LETTER_DELIM_PREFIX = re.compile(r"([A-Za-z])[.:)]\s")
+# 余下文本里的选项标记："(B)"/"[b]"（不分大小写），或独立的大写字母后接 . ) :（如 "B."、"C)"、"D:"）
+_OPTION_MARKER = re.compile(r"[\(\[]\s*([A-Za-z])\s*[\)\]]|(?<![A-Za-z])([A-Z])[.:)](?=\s|$)")
 
 
 def _accuracy(correct: Sequence[bool]) -> float | None:
@@ -47,15 +49,23 @@ def normalize_choice(answer: str | None) -> str | None:
     """把多选题回答规范化成单个大写字母；认不出返回 None。
 
     接受："A"、"a"、"(A)"、"[b]"、"A."、"A:"、"A)"，以及带选项正文的 "(A) cat"、"A. cat"、"A) cat"。
+    前缀形式只在余下文本里不再出现其他选项的标记（"(B)"、"B."、"B)"、"B:"）时才接受，
+    否则是含糊回答，返回 None：如 "(A) or (B)"、"A. No, the answer is B."、"A) and C) are both right"。
     不从长段自由文本里抽字母（那是解析器的事），例如 "The answer is A" 返回 None。
     """
     if answer is None:
         return None
     s = answer.strip()
-    for pat, full in ((_LETTER_ALONE, True), (_LETTER_BRACKETED_PREFIX, False), (_LETTER_DELIM_PREFIX, False)):
-        m = pat.fullmatch(s) if full else pat.match(s)
+    m = _LETTER_ALONE.fullmatch(s)
+    if m:
+        return m.group(1).upper()
+    for pat in (_LETTER_BRACKETED_PREFIX, _LETTER_DELIM_PREFIX):
+        m = pat.match(s)
         if m:
-            return m.group(1).upper()
+            letter = m.group(1).upper()
+            rest = s[m.end():]
+            others = {(a or b).upper() for a, b in _OPTION_MARKER.findall(rest)} - {letter}
+            return None if others else letter
     return None
 
 

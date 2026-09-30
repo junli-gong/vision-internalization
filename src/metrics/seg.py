@@ -1,67 +1,96 @@
 """分割指标：cIoU、gIoU、Boundary IoU、mIoU。
 
-mask 输入可以是 bool 或 0/1 整数数组，形状 (H, W)，预测与 GT 形状必须相同。
+mask 输入只接受 bool 或取值在 {0, 1} 的整数数组（src.grid.codec.as_binary_mask），形状 (H, W)，
+预测与 GT 形状必须相同。预测为 None 表示解析失败：该样本 IoU 记 0，cIoU 累计 (0, |GT|)，
+GT 为空时也记 0（D10）；预测是真实的空 mask 且 GT 也为空时，按空并集约定记 1.0。
 """
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from typing import Iterable, NamedTuple, Sequence
 
 import numpy as np
 from scipy import ndimage
 
-from src.constants import ADE_IGNORE_INDEX, BOUNDARY_IOU_DILATION_RATIO
+from src.constants import (
+    ADE_IGNORE_INDEX,
+    ADE_NUM_CLASSES,
+    ADE_REDUCE_ZERO_LABEL,
+    BOUNDARY_IOU_DILATION_RATIO,
+)
+from src.grid.codec import as_binary_mask
+
+
+class MaskStats(NamedTuple):
+    """单样本前景的交、并像素数；failed=True 表示预测解析失败（预测为 None）。"""
+
+    inter: int
+    union: int
+    failed: bool = False
 
 
 def _pair(pred: np.ndarray, gt: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    p = np.asarray(pred).astype(bool)
-    g = np.asarray(gt).astype(bool)
+    p = as_binary_mask(pred, "pred")
+    g = as_binary_mask(gt, "gt")
     if p.shape != g.shape or p.ndim != 2:
         raise ValueError(f"pred 形状 {p.shape} 与 gt 形状 {g.shape} 不一致或不是二维")
     return p, g
 
 
-def mask_inter_union(pred: np.ndarray, gt: np.ndarray) -> tuple[int, int]:
-    """单样本前景的 (交, 并) 像素数。"""
+def mask_inter_union(pred: np.ndarray | None, gt: np.ndarray) -> MaskStats:
+    """单样本前景的 (交, 并, failed)。pred 为 None 时返回 (0, |GT|, True)。"""
+    if pred is None:
+        g = as_binary_mask(gt, "gt")
+        if g.ndim != 2:
+            raise ValueError(f"gt 必须是二维，收到形状 {g.shape}")
+        return MaskStats(0, int(np.count_nonzero(g)), True)
     p, g = _pair(pred, gt)
-    return int(np.count_nonzero(p & g)), int(np.count_nonzero(p | g))
+    return MaskStats(int(np.count_nonzero(p & g)), int(np.count_nonzero(p | g)))
 
 
-def sample_iou(inter: int, union: int) -> float:
-    """单样本 IoU；并集为 0（预测与 GT 都为空）时记 1.0。
+def _unpack(s: Sequence) -> tuple[int, int, bool]:
+    if len(s) == 2:
+        return int(s[0]), int(s[1]), False
+    return int(s[0]), int(s[1]), bool(s[2])
+
+
+def sample_iou(inter: int, union: int, failed: bool = False) -> float:
+    """单样本 IoU。解析失败记 0.0；否则并集为 0（预测与 GT 都为空）时记 1.0。
 
     对齐 dvlab-research/LISA train_ds.py validate() 的 `acc_iou[union_i == 0] += 1.0  # no-object target`。
     LISA 用 inter / (union + 1e-5)；这里精确相除，差别 ≤ 1e-5 / union（union ≥ 1 像素时可忽略）。
     """
+    if failed:
+        return 0.0
     if union == 0:
         return 1.0
     return inter / union
 
 
-def ciou(stats: Sequence[tuple[int, int]]) -> float | None:
+def ciou(stats: Sequence[Sequence]) -> float | None:
     """cIoU = 累计交 / 累计并。空集合或累计并为 0 时返回 None。
 
     对齐 dvlab-research/LISA train_ds.py validate()：`intersection_meter.sum / (union_meter.sum + 1e-10)`
     的前景类（iou_class[1]）；这里不加 1e-10。
-    stats：每个样本的 (交, 并)，来自 mask_inter_union。
+    stats：每个样本的 MaskStats 或 (交, 并)，来自 mask_inter_union。解析失败的样本按 (0, |GT|) 计入。
     """
     if len(stats) == 0:
         return None
-    total_i = sum(i for i, _ in stats)
-    total_u = sum(u for _, u in stats)
+    parts = [_unpack(s) for s in stats]
+    total_u = sum(u for _, u, _ in parts)
     if total_u == 0:
         return None
-    return total_i / total_u
+    return sum(i for i, _, _ in parts) / total_u
 
 
-def giou(stats: Sequence[tuple[int, int]]) -> float | None:
-    """gIoU = 逐样本 IoU 的平均（并集为 0 的样本记 1.0，见 sample_iou）。空集合返回 None。
+def giou(stats: Sequence[Sequence]) -> float | None:
+    """gIoU = 逐样本 IoU 的平均（见 sample_iou：解析失败记 0，空并集记 1.0）。空集合返回 None。
 
     对齐 dvlab-research/LISA train_ds.py validate() 的 `acc_iou_meter.avg[1]`。
     """
     if len(stats) == 0:
         return None
-    return float(np.mean([sample_iou(i, u) for i, u in stats]))
+    return float(np.mean([sample_iou(*_unpack(s)) for s in stats]))
 
 
 def mask_to_boundary(mask: np.ndarray, dilation_ratio: float = BOUNDARY_IOU_DILATION_RATIO) -> np.ndarray:
@@ -75,7 +104,7 @@ def mask_to_boundary(mask: np.ndarray, dilation_ratio: float = BOUNDARY_IOU_DILA
     binary_erosion(border_value=0)（图外全为 0，最近的图外零点必在那一圈上）。测试里与朴素实现
     （以及装了 opencv 时的 cv2）逐位对照。
     """
-    m = np.asarray(mask).astype(bool)
+    m = as_binary_mask(mask)
     if m.ndim != 2:
         raise ValueError(f"mask 必须是二维，收到形状 {m.shape}")
     h, w = m.shape
@@ -86,14 +115,18 @@ def mask_to_boundary(mask: np.ndarray, dilation_ratio: float = BOUNDARY_IOU_DILA
     return m & ~eroded
 
 
-def boundary_iou(pred: np.ndarray, gt: np.ndarray, dilation_ratio: float = BOUNDARY_IOU_DILATION_RATIO) -> float:
+def boundary_iou(pred: np.ndarray | None, gt: np.ndarray, dilation_ratio: float = BOUNDARY_IOU_DILATION_RATIO) -> float:
     """单样本 Boundary IoU = |B(gt) ∩ B(pred)| / |B(gt) ∪ B(pred)|。
 
     边界带用 bowenc0221/boundary-iou-api 的 mask_to_boundary（见上）；IoU 按 Cheng et al. 2021
     (arXiv:2103.16562) 的定义在两个边界带之间计算。该仓库没有单样本 boundary_iou 函数（它的
     Boundary AP 走 COCOeval），所以这一步没有逐函数的官方对照。
-    两个边界带都为空（两个 mask 都为空）时是 0/0；这里记 1.0，与 gIoU 的空并集约定一致（待裁）。
+    两个边界带都为空（两个 mask 都为空）时是 0/0；这里记 1.0，与 gIoU 的空并集约定一致（D10(3)）。
+    pred 为 None（解析失败）时记 0.0，GT 为空也一样。
     """
+    if pred is None:
+        as_binary_mask(gt, "gt")
+        return 0.0
     p, g = _pair(pred, gt)
     bp = mask_to_boundary(p, dilation_ratio)
     bg = mask_to_boundary(g, dilation_ratio)
@@ -129,17 +162,26 @@ def reduce_zero_label(label: np.ndarray) -> np.ndarray:
     return out
 
 
-def intersect_and_union(pred: np.ndarray, label: np.ndarray, num_classes: int, ignore_index: int = ADE_IGNORE_INDEX) -> tuple[np.ndarray, np.ndarray]:
+def intersect_and_union(
+    pred: np.ndarray,
+    label: np.ndarray,
+    num_classes: int = ADE_NUM_CLASSES,
+    ignore_index: int = ADE_IGNORE_INDEX,
+    reduce_zero: bool = ADE_REDUCE_ZERO_LABEL,
+) -> tuple[np.ndarray, np.ndarray]:
     """单张图逐类的 (交, 并) 像素数，形状各为 (num_classes,)。
 
-    对齐 open-mmlab/mmsegmentation mmseg/evaluation/metrics/iou_metric.py IoUMetric.intersect_and_union：
+    label 是原始标注；reduce_zero=True 时先做 reduce_zero_label（ADE20K 默认，对齐 mmseg ADE20KDataset）。
+    之后对齐 open-mmlab/mmsegmentation mmseg/evaluation/metrics/iou_metric.py IoUMetric.intersect_and_union：
     去掉 label == ignore_index 的像素；histc 只统计 [0, num_classes-1] 内的值（越界预测不计入任何类）；
-    并 = 预测面积 + 标签面积 - 交。label 应已做过 reduce_zero_label。
+    并 = 预测面积 + 标签面积 - 交。
     """
     p = np.asarray(pred).astype(np.int64)
     lab = np.asarray(label).astype(np.int64)
     if p.shape != lab.shape:
         raise ValueError(f"pred 形状 {p.shape} 与 label 形状 {lab.shape} 不一致")
+    if reduce_zero:
+        lab = reduce_zero_label(lab)
     keep = lab != ignore_index
     p, lab = p[keep], lab[keep]
 
@@ -153,19 +195,27 @@ def intersect_and_union(pred: np.ndarray, label: np.ndarray, num_classes: int, i
     return area_inter, area_pred + area_label - area_inter
 
 
-def mean_iou(per_image: Iterable[tuple[np.ndarray, np.ndarray]]) -> float | None:
-    """mIoU：按类在整个数据集上累计交与并，IoU = 累计交 / 累计并，并集为 0 的类不计（nanmean）。
+def miou_from_totals(total_inter: np.ndarray, total_union: np.ndarray) -> float | None:
+    """由逐类累计的交、并算 mIoU：IoU = 交 / 并，并集为 0 的类不计（nanmean）。所有类并集都为 0 时返回 None。
 
     对齐 open-mmlab/mmsegmentation mmseg/evaluation/metrics/iou_metric.py
     IoUMetric.total_area_to_metrics 的 `iou = total_area_intersect / total_area_union` 与 np.nanmean。
+    交为 0、并 > 0 的类计 IoU = 0，不剔除。
+    """
+    ti = np.asarray(total_inter, dtype=np.float64)
+    tu = np.asarray(total_union, dtype=np.float64)
+    valid = tu > 0
+    if not np.any(valid):
+        return None
+    return float(np.mean(ti[valid] / tu[valid]))
+
+
+def mean_iou(per_image: Iterable[tuple[np.ndarray, np.ndarray]]) -> float | None:
+    """mIoU：按类在整个数据集上累计交与并，再用 miou_from_totals。
+
     per_image：每张图 intersect_and_union 的结果。空集合或所有类并集都为 0 时返回 None。
     """
     items = list(per_image)
     if not items:
         return None
-    total_i = np.sum([i for i, _ in items], axis=0).astype(np.float64)
-    total_u = np.sum([u for _, u in items], axis=0).astype(np.float64)
-    valid = total_u > 0
-    if not np.any(valid):
-        return None
-    return float(np.mean(total_i[valid] / total_u[valid]))
+    return miou_from_totals(np.sum([i for i, _ in items], axis=0), np.sum([u for _, u in items], axis=0))

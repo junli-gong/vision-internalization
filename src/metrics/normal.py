@@ -10,11 +10,12 @@ import numpy as np
 NORMAL_ANGLE_THRESHOLDS = (11.25, 22.5, 30.0)
 
 
-def normal_angular_errors(pred: np.ndarray, gt: np.ndarray, valid: np.ndarray | None = None) -> np.ndarray:
+def normal_angular_errors(pred: np.ndarray, gt: np.ndarray, valid: np.ndarray) -> np.ndarray:
     """逐像素角误差（度），返回有效像素上的一维数组。
 
     pred、gt 形状 (H, W, 3)。两者先单位化，点积裁剪到 [-1, 1] 后取 arccos。
-    GT 无效像素：范数为 0 或含非有限值；另可用 valid (H, W) 进一步掩掉。
+    valid (H, W) 必填：数据集的无效像素约定各不相同（如 uint8 映射到 [-1,1] 后无效像素成了 (-1,-1,-1)），
+    由调用方按数据集显式给出，这里不推断。GT 范数为 0 或含非有限值的像素另外叠加掩掉。
     预测范数为 0 或含非有限值的像素记 90°（与任何单位向量的点积按 0 处理），不丢弃——丢弃会让坏预测变好看。
     """
     p = np.asarray(pred, dtype=np.float64)
@@ -23,11 +24,12 @@ def normal_angular_errors(pred: np.ndarray, gt: np.ndarray, valid: np.ndarray | 
         raise ValueError(f"pred {p.shape} 与 gt {g.shape} 必须同为 (H, W, 3)")
     g_norm = np.linalg.norm(g, axis=-1)
     mask = np.isfinite(g_norm) & (g_norm > 0)
-    if valid is not None:
-        v = np.asarray(valid).astype(bool)
-        if v.shape != p.shape[:2]:
-            raise ValueError(f"valid 形状 {v.shape} 与 {p.shape[:2]} 不一致")
-        mask &= v
+    v = np.asarray(valid)
+    if v.dtype != np.bool_:
+        raise ValueError(f"valid 必须是 bool 数组，收到 dtype {v.dtype}")
+    if v.shape != p.shape[:2]:
+        raise ValueError(f"valid 形状 {v.shape} 与 {p.shape[:2]} 不一致")
+    mask &= v
     pv, gv = p[mask], g[mask] / g_norm[mask][:, None]
     p_norm = np.linalg.norm(pv, axis=-1)
     ok = np.isfinite(p_norm) & (p_norm > 0)

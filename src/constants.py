@@ -71,12 +71,11 @@ NYU_EVAL_HW = (480, 640)
 NYU_EIGEN_CROP = (45, 471, 41, 601)  # (row_start, row_end, col_start, col_end)，半开
 
 # 有效 GT 深度区间 (NYU_DEPTH_MIN, NYU_DEPTH_MAX]；预测先裁剪到 [NYU_DEPTH_MIN, NYU_DEPTH_MAX]。
-# 依据：DEV-0001 任务书 §2 写的是 (1e-3, 10.0]。
-# 注意：BTS/AdaBins 的实现是 gt > 1e-3 且 gt < 10（上端开区间），与任务书不同，已上报待裁；
-# 切换只需改 NYU_DEPTH_MAX_INCLUSIVE。
+# 依据：cleinc/bts pytorch/bts_eval.py 的 gt > min_depth_eval 且 gt < max_depth_eval（两端都开，AdaBins 相同）；
+# D10(1) 裁定上端取开区间，对齐官方评测（取代任务书最初写的闭区间）。
 NYU_DEPTH_MIN = 1e-3
 NYU_DEPTH_MAX = 10.0
-NYU_DEPTH_MAX_INCLUSIVE = True
+NYU_DEPTH_MAX_INCLUSIVE = False
 
 # ---------------------------------------------------------------------------
 # 分割指标
@@ -93,6 +92,14 @@ BOX_ACC_IOU_THRESHOLD = 0.5
 ADE_NUM_CLASSES = 150
 ADE_REDUCE_ZERO_LABEL = True
 ADE_IGNORE_INDEX = 255
+
+# 开放词汇检测：预测全部没有分数时，AP 取 K 次随机打破平局（图内与跨图一起随机置换）的平均，固定种子。
+# 依据：DEV-0001 addendum-1 第 3 条、D10(5)；K 取 20 是暂定（独立审查实测编号置换下 AP50 的标准差约 0.005，
+# 20 次平均的蒙特卡洛误差约 0.001）。
+DETECTION_TIEBREAK_K = 20
+DETECTION_TIEBREAK_SEED = 20260930
+# 单一工作点 P/R/F1 的 IoU 阈值。依据：addendum-1 第 3 条"IoU=0.5 下的 P、R、F1"。
+DETECTION_OPERATING_IOU = 0.5
 
 # ---------------------------------------------------------------------------
 # 统计
