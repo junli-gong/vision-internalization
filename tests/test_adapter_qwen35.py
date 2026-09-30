@@ -454,8 +454,8 @@ def test_vision_features_is_overridden_and_base_default_raises():
         def num_layers(self): return 1
         def hidden_size(self): return 1
 
-    with pytest.raises(NotImplementedError):
-        _Min().vision_features(None)
+    with pytest.raises(TypeError, match="vision_features"):  # D15-2：DEV-0004 起 vision_features 是抽象方法
+        _Min()
     sig = inspect.signature(ModelAdapter.hidden_states)
     assert sig.parameters["query_embeds"].kind is inspect.Parameter.KEYWORD_ONLY
     assert sig.parameters["query_embeds"].default is None

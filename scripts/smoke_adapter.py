@@ -21,6 +21,10 @@
   7 思考开启时 text 不含思考段、raw_text 含思考段（未闭合时 text 为空并标记）
   8 设备审计：参数与 buffer 全在目标设备；一次前向加一次生成里，每个子模块的张量输入都在目标设备
 执行顺序：0 1 2 5 6 7 3 4 8（会加 token / 注入查询的 3、4 放在后面；8 最后）。
+
+Gemma 4（DEV-0004）：--model gemma-4-e2b-it；开发机彩排 --model gemma-4-e2b-it --tiny（--tiny 时 --model 选家族与
+小模型 config 的来源，不给 --model 即 Qwen3.5）。按家族分派只在 setup() 里一处：Gemma 的构造与 0、1、3–7 项检查在
+src/adapters/gemma4.py（smoke_setup），2、8 两项沿用本脚本的通用实现；编号与含义同上，Gemma 的差异写在那里。
 """
 
 from __future__ import annotations
@@ -81,9 +85,7 @@ def parse_args(argv=None):
     p.add_argument("--max-new-tokens", type=int, default=8, help="检查 1、3、7（关思考对照）的生成长度")
     p.add_argument("--think-max-new-tokens", type=int, help="检查 7 的思考生成长度；默认真模型 512、--tiny 16")
     args = p.parse_args(argv)
-    if args.tiny:
-        if args.model:
-            p.error("--tiny 与 --model 不能同时给")
+    if args.tiny:  # --model 可省略（即 Qwen3.5）；给了就按它的家族彩排（DEV-0004）
         args.device = args.device or "cpu"
         args.dtype = args.dtype or "fp32"
         args.think_max_new_tokens = args.think_max_new_tokens or 16
@@ -121,6 +123,12 @@ def setup(args):
         img = synthetic_image()
         image_info = {"path": None, "synthetic": True, "size_wh": list(img.size)}
     img2 = ImageOps.mirror(img)  # 多图检查用的第二张：左右翻转，内容不同
+    ctx = {"img": img, "img2": img2, "image_info": image_info, "args": args}
+    if args.model and registry.get_model(args.model).family == registry.FAMILY_GEMMA4:
+        # 按家族分派（唯一一处）：Gemma 4 的构造与检查项在 src/adapters/gemma4.py，ctx["checks"] 是它的检查表
+        from src.adapters import gemma4
+
+        return gemma4.smoke_setup(args, dtype, ctx, sys.modules[__name__])
     if args.tiny:
         comps = qwen35.load_pinned_components()
         model = qwen35.build_tiny_model(comps[0], tie_word_embeddings=True, dtype=dtype)
@@ -128,7 +136,7 @@ def setup(args):
     else:
         ad = qwen35.Qwen35Adapter(device=args.device, image_size=hw)
         ad.load(args.model, dtype)
-    return ad, {"img": img, "img2": img2, "image_info": image_info, "args": args}
+    return ad, ctx
 
 
 def _layers(ad):
@@ -499,7 +507,7 @@ def main(argv=None) -> int:
     for name in RUN_ORDER:
         t0 = time.perf_counter()
         try:
-            r = CHECKS[name](ad, ctx)
+            r = ctx.get("checks", CHECKS)[name](ad, ctx)
         except Exception as e:  # noqa: BLE001 — 单项失败不影响其他项，全部落盘后再判
             r = {"ok": False, "error": repr(e), "traceback": traceback.format_exc()[-4000:]}
         r["wall_time_s"] = round(time.perf_counter() - t0, 3)
