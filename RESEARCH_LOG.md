@@ -16,6 +16,8 @@
 
 | DEV | 发出 | 合入 commit | 内容 | 状态 |
 |---|---|---|---|---|
+| 0005 | 2026-09-30 | — | InternVL3.5 适配器（照 Qwen35Adapter；模式 B，worktree agent） | 已派发 |
+| 0004 | 2026-09-30 | — | Gemma 4 适配器（照 Qwen35Adapter；另把 vision_features 改为抽象方法；模式 B，worktree agent） | 已派发 |
 | 0003 | 2026-09-30 | a4a60e8 | Qwen3.5 适配器 + base.py 接口补充 + G0 冒烟脚本（模式 B，worktree agent） | 已合入（69 新测试；main 共 312 passed；--tiny 冒烟通过） |
 | 0002 | 2026-09-30 | b545838（+80c60e8 集成修正） | E3 执行器（叠加、分块、引导滤波/JBU、熵选区）+ mask 加噪（模式 B，worktree agent） | 已合入（91 新测试；main 共 243 passed） |
 | 0001-a2 | 2026-09-30 | — | 复核发现的新问题：N1 reduce_zero 必填、N2 选项标记收窄、N3 bootstrap 检查 id、N4 网格解析规则、N7 防转置、N8 检测逐图计数与 F1 配对（第 2 轮，最后一轮） | 已发 |
