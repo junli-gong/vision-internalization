@@ -550,3 +550,277 @@ COCO val2017 GT（取自官方 `instances_val2017.json`，经 HTTP Range 从 `an
 
 图在前：25/25 层逐位相同；指令在前：1/25 层逐位相同。
 
+
+
+---
+
+## 6. Gemma 4 E2B-it 事实探针（RUN-0002；`google/gemma-4-E2B-it` @ `3e22461f65e89153144f8adb70e3b8c2cc9845a7`）
+
+运行环境同 env_report（transformers 5.17.0，torch 2.13.0+cu130，B200）。权重在 `/dev/shm/visint/hf-hub`。生成一律 greedy，显式传 `enable_thinking=False`。脚本在 `experiments/P0/0002_family_probe/probe_scripts/`，原始 JSON 在 `raw/gemma4-e2b-it/`。表格格式尽量与 §5（Qwen3.5）一致。
+
+### 6.1 结构
+
+| 项 | 值 |
+|---|---|
+| 加载类 / processor / image processor / tokenizer | Gemma4ForConditionalGeneration / Gemma4Processor / Gemma4ImageProcessor / GemmaTokenizer |
+| attn_implementation | sdpa |
+| LLM 层数 | 35 |
+| 层类型计数 | full_attention=7, sliding_attention=28 |
+| 全注意力层下标（0 起） | [4, 9, 14, 19, 24, 29, 34] |
+| hidden size / intermediate | 1536 / 6144 |
+| Q 头 / KV 头 | 8 / 1 |
+| head_dim（按层类型） | full_attention=512, sliding_attention=256 |
+| sliding_window | 512 |
+| num_kv_shared_layers | 20：第 15–34 层不带 k_proj/v_proj，复用 KV；来源层（store_full_length_kv）：{'sliding_attention': 13, 'full_attention': 14} |
+| MLP intermediate（非共享 / 共享层） | 非共享=6144, 共享=12288（use_double_wide_mlp=True） |
+| hidden_size_per_layer_input（PLE） | 256；embed_tokens_per_layer 形状 [262144, 8960] |
+| use_bidirectional_attention | None |
+| final_logit_softcapping | 30.0 |
+| rope | {"full_attention": {"partial_rotary_factor": 0.25, "rope_theta": 1000000.0, "rope_type": "proportional"}, "sliding_attention": {"rope_theta": 10000.0, "rope_type": "default"}} |
+| 视觉编码器 层 / hidden / heads | 16 / 768 / 12 |
+| patch_size / pooling_kernel_size | 16 / 3（每个 LLM 视觉 token = 缩放后图像的 48×48 px） |
+| 参数量（加载后） | total=5,104,297,504, language_model=4,628,569,344, vision_tower=167,364,608, audio_tower=304,824,608, embed_vision=1,179,648, embed_audio=2,359,296 |
+| config vocab / 嵌入行 / lm_head 行 | 262144 / 262144 / 262144 |
+| len(tokenizer) / 基础词表 | 262144 / 262144 |
+| 嵌入行 − len(tokenizer) | 0 |
+| lm_head 与嵌入同一存储 | True |
+| 嵌入类 / embed_scale | Gemma4TextScaledWordEmbedding / tensor(39.2500, device='cuda:0', dtype=torch.bfloat16) |
+| 嵌入：基础词表随机 2 万行 | n=20000，范数 0.8757–1.5417（均值 1.1936），全零行 0 |
+| 嵌入：超出 tokenizer 的行 | — |
+| `<unusedN>` 一类占位 token | 6227 个，id 6–262143（不连续），首 [['<unused0>', 6], ['<unused1>', 7], ['<unused2>', 8]]，末 [['<unused6225>', 262142], ['<unused6226>', 262143]]；嵌入 n=6227，范数 0.8757–1.4897（均值 1.0344），全零行 0 |
+| output_hidden_states | 36 个张量（= 层数+1：True），形状全同：True，例 [1, 284, 1536] |
+
+- **`num_kv_shared_layers` 的含义**（transformers 5.17 `modeling_gemma4.Gemma4TextAttention` 源码与实测一致）：
+  - 从第 `num_hidden_layers − num_kv_shared_layers` = 15 层起，后 20 层（15–34）**没有** k_proj、v_proj、k_norm、v_norm，checkpoint 里对应的权重在加载时被忽略（`_keys_to_ignore_on_load_unexpected`）。
+  - 这 20 层直接复用"最后一个非共享的同类型层"的 K/V：sliding 层复用第 13 层，full 层复用第 14 层（源码注释："For layers with shared KV (from kv sharing point onwards), we reuse the same keys/values states as the last non-sharing layer."）。
+  - 这 20 层的 MLP 宽度加倍（12288，`use_double_wide_mlp`）。
+- **注意力掩码**：`use_bidirectional_attention=None`（源码注释："Smaller Gemma models (use_bidirectional_attention=None)"），因此图像 token 之间也是纯因果注意力，没有块内双向。sliding 层另加 512 的滑动窗口。
+- **PLE（per-layer embedding，`hidden_size_per_layer_input`=256）**：
+  - 每层多一个输入 `per_layer_input`。它由两部分组成：`embed_tokens_per_layer(input_ids)`（形状 [262144, 35×256]），以及 `per_layer_model_projection(inputs_embeds)`。
+  - 在图像 token 位置，前一部分用的是 pad token（id 0）及其嵌入：多模态 forward 里 `llm_input_ids = torch.where(multimodal_mask, pad_token_id, input_ids)`。
+  - `output_hidden_states` 返回 36 个张量（= 35 层 + 1，均为 [B, L, 1536]），PLE 不单独返回。见上表最后一行。
+
+**tokenizer 里的特殊 token**（`added_tokens_decoder` 共 24 个；`<unusedN>` 不在其中，是普通词表项）：
+
+| id | token | special | 出现在 chat template 里 | 嵌入范数 |
+|---|---|---|---|---|
+| 0 | `<pad>` | True | False | 1.0323 |
+| 1 | `<eos>` | True | False | 1.1426 |
+| 2 | `<bos>` | True | False | 1.4581 |
+| 3 | `<unk>` | True | False | 1.0323 |
+| 4 | `<mask>` | True | False | 1.3357 |
+| 46 | `<\|tool>` | True | True | 1.4066 |
+| 47 | `<tool\|>` | True | True | 1.4571 |
+| 48 | `<\|tool_call>` | True | True | 1.2655 |
+| 49 | `<tool_call\|>` | True | True | 1.3913 |
+| 50 | `<\|tool_response>` | True | True | 1.2971 |
+| 51 | `<tool_response\|>` | True | True | 1.4272 |
+| 52 | `<\|"\|>` | True | True | 1.1755 |
+| 98 | `<\|think\|>` | True | True | 1.4026 |
+| 100 | `<\|channel>` | True | True | 1.3211 |
+| 101 | `<channel\|>` | True | True | 1.2649 |
+| 105 | `<\|turn>` | True | True | 1.3342 |
+| 106 | `<turn\|>` | True | True | 1.1754 |
+| 255999 | `<\|image>` | True | False | 1.4333 |
+| 256000 | `<\|audio>` | True | False | 1.4291 |
+| 258880 | `<\|image\|>` | True | True | 1.0319 |
+| 258881 | `<\|audio\|>` | True | True | 1.0316 |
+| 258882 | `<image\|>` | True | False | 1.0318 |
+| 258883 | `<audio\|>` | True | False | 1.0336 |
+| 258884 | `<\|video\|>` | True | True | 1.0324 |
+
+- **`<unusedN>` 占位 token**：共 6227 个，id 分布在 6 段：(6–45)、(53–97)、(99)、(102–104)、(256001–258879)、(258885–262143)。它们是普通词表项，**直接写 `<unused0>` 会被切成 `['<', 'unused', '0', '>']`**。先 `add_tokens(['<unused0>', ...])` 注册后，才成为单个 token，id 是原有的 6、7…，len(tokenizer) 不变，也不需要 resize（`raw/gemma4-e2b-it/unused_tokenization.txt`）。这些行的嵌入范数为 0.876–1.490，基础词表随机抽样为 0.876–1.542。
+
+**新增 token `<g0>`：**
+
+- `add_tokens(['<g0>'])` 返回 1，`add_tokens(['<g1>'], special_tokens=True)` 返回 1；id(`<g0>`)=262144，id(`<g1>`)=262145；len(tokenizer) 262144→262146；新 id < 嵌入行数：False。
+- `resize_token_embeddings(len(tok))`：嵌入 262144→262146，lm_head→262146，config vocab→262146；PLE `embed_tokens_per_layer` [262144, 8960]→[262146, 8960]。
+
+| 输入 | ids | tokens |
+|---|---|---|
+| `'<g0>'` | [262144] | ['<g0>'] |
+| `'a<g0>b'` | [236746, 262144, 236763] | ['a', '<g0>', 'b'] |
+| `' <g0>'` | [236743, 262144] | ['▁', '<g0>'] |
+| `'<g0><g0><g0>'` | [262144, 262144, 262144] | ['<g0>', '<g0>', '<g0>'] |
+| `'<g0>\n<g1>'` | [262144, 107, 262145] | ['<g0>', '\n', '<g1>'] |
+| `'x <g1> y'` | [236781, 236743, 262145, 570] | ['x', '▁', '<g1>', '▁y'] |
+| `'<g1><g0>'` | [262145, 262144] | ['<g1>', '<g0>'] |
+| `'12<g0>34'` | [236770, 236778, 262144, 236800, 236812] | ['1', '2', '<g0>', '3', '4'] |
+
+- Gemma 的嵌入行数恰好等于 len(tokenizer)（262144），**没有超出 tokenizer 的预留行**。新 token 的 id 从 262144 起，`resize_token_embeddings` 会**扩展**嵌入（不会像 Qwen 那样缩行），同时扩展 PLE 的 `embed_tokens_per_layer`。
+- 另一条路是复用 `<unusedN>`（先注册，见上文），不需要 resize。
+
+### 6.2 聊天模板与思考开关
+
+- 开关：`apply_chat_template(..., enable_thinking=False|True)`。模板里的变量为 `enable_thinking | default(false)`，**默认关闭**。开启时，模板在最前面插入一个 system 轮 `<|turn>system\n<|think|>\n<turn|>\n`。`chat_template_kwargs=` 与 Qwen 一样**不生效**，并有 warning。模板变量的完整列表：`['add_generation_prompt', 'bos_token', 'captured_content', 'continue_same_model_turn', 'continues_into_next', 'enable_thinking', 'follow', 'has_content', 'messages', 'next_nt', 'ns_args', 'ns_items', 'ns_tname', 'ns_tool_scan', 'ns_tr_out', 'ns_txt', 'preserve_thinking', 'response_declaration', 'role', 'thinking_gate', 'thinking_text', 'tool_body', 'tools']`。
+
+| 调用方式 | 生成提示（原样，截取末段） | 备注 |
+|---|---|---|
+| default(no kwarg) \| text | `'<bos><\|turn>user\nWhat is 2+3?<turn\|>\n<\|turn>model\n'` |  |
+| default(no kwarg) \| image | `'<bos><\|turn>user\n<\|image\|>Describe the image.<turn\|>\n<\|turn>model\n'` |  |
+| enable_thinking=False \| text | `'<bos><\|turn>user\nWhat is 2+3?<turn\|>\n<\|turn>model\n'` |  |
+| enable_thinking=False \| image | `'<bos><\|turn>user\n<\|image\|>Describe the image.<turn\|>\n<\|turn>model\n'` |  |
+| enable_thinking=True \| text | `'<bos><\|turn>system\n<\|think\|>\n<turn\|>\n<\|turn>user\nWhat is 2+3?<turn\|>\n<\|turn>model\n'` |  |
+| enable_thinking=True \| image | `'<bos><\|turn>system\n<\|think\|>\n<turn\|>\n<\|turn>user\n<\|image\|>Describe the image.<turn\|>\n<\|turn>model\n'` |  |
+| chat_template_kwargs={enable_thinking:False} \| text | `'<bos><\|turn>user\nWhat is 2+3?<turn\|>\n<\|turn>model\n'` | Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs` |
+| chat_template_kwargs={enable_thinking:False} \| image | `'<bos><\|turn>user\n<\|image\|>Describe the image.<turn\|>\n<\|turn>model\n'` | Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs` |
+
+**关闭思考时，带图消息渲染出的完整文本（原样）：**
+
+```
+<bos><|turn>user
+<|image|>Describe the image.<turn|>
+<|turn>model
+
+```
+
+processor 会把 `<|image|>` 展开成 `<|image>` + N×`<|image|>` + `<image|>`（§6.3）。
+
+- `generation_config`（仓库里有 `generation_config.json`）：`{"do_sample": true, "temperature": 1.0, "top_k": 64, "top_p": 0.95, "pad_token_id": 0, "bos_token_id": 2, "eos_token_id": [1, 106, 50], "transformers_version": "5.17.0"}`。**默认是采样**（do_sample=true），所以每次调用都要显式设 greedy。
+- 停止 token：generation_config 的 eos 为 {'1': '<eos>', '106': '<turn|>', '50': '<|tool_response>'}；config 顶层 eos 为 [1, 106]，text_config 为 1。§6.5 实测生成在 `<turn|>`（106）停止。
+- model card 原文（[card](https://huggingface.co/google/gemma-4-E2B-it/blob/3e22461f65e89153144f8adb70e3b8c2cc9845a7/README.md)）：
+  > Use the following standardized sampling configuration across all use cases:
+  > * `temperature=1.0`
+  > * `top_p=0.95`
+  > * `top_k=64`
+
+  > **Trigger Thinking:** Thinking is enabled by including the `<|think|>` token at the start of the system prompt. To disable thinking, remove the token.
+  > **Disabled Thinking Behavior:** For all models except for the E2B and E4B variants, if thinking is disabled, the model will still generate the tags but with an empty thought block
+
+### 6.3 图像 token 化
+
+- **固定视觉 token 数的参数名**：`max_soft_tokens`。直接作为 processor 调用的 kwarg 传入，或放进 `images_kwargs={'max_soft_tokens': N}`，两种写法结果相同。也可以设 `processor.image_processor.max_soft_tokens = N`（官方示例的写法：`vqa_pipe.image_processor.max_soft_tokens = 70`）。
+- 可选档位只有 **70 / 140 / 280 / 560 / 1120**（源码 `_SUPPORTED_SOFT_TOKENS`；官方文档原文："The user can decide between budget sizes of 70, 140, 280, 560, or 1120 tokens. Depending on the budget, the input is resized."）。默认 280。
+- 缩放规则（`get_aspect_ratio_preserving_size`）：
+  - 保持宽高比；
+  - 目标 patch 数不超过 `max_soft_tokens × 9`，高、宽都取 48（patch 16 × pool 3）的倍数，向下取整；
+  - 小图会被**放大**，例如 448×448 在默认档位下被放到 768×768。
+- 实际 token 数 = (h/48)·(w/48)，**小于或等于**档位。`pixel_values` 固定补到 `max_soft_tokens×9` 个 patch，补位的 patch 位置为 (-1, -1)。
+- 下表的输入为合成 RGB 图，"(h, w)" 由 `image_position_ids` 推出：第 0 维是列（x），第 1 维是行（y）。
+
+| 输入（W×H）与参数 | 视觉 token 数 | 缩放后 (h, w) px | LLM 网格 (h, w) | pixel_values 形状（含 -1 填充的 patch） | 有效 patch / 填充 patch |
+|---|---|---|---|---|---|
+| 448x448 default | 256 | (768, 768) | (16, 16) | [1, 2520, 768] | 2304 / 216 |
+| 448x448 max_soft_tokens=70 | 64 | (384, 384) | (8, 8) | [1, 630, 768] | 576 / 54 |
+| 448x448 max_soft_tokens=140 | 121 | (528, 528) | (11, 11) | [1, 1260, 768] | 1089 / 171 |
+| 448x448 max_soft_tokens=280 | 256 | (768, 768) | (16, 16) | [1, 2520, 768] | 2304 / 216 |
+| 448x448 max_soft_tokens=560 | 529 | (1104, 1104) | (23, 23) | [1, 5040, 768] | 4761 / 279 |
+| 448x448 max_soft_tokens=1120 | 1089 | (1584, 1584) | (33, 33) | [1, 10080, 768] | 9801 / 279 |
+| 640x480 default | 266 | (672, 912) | (14, 19) | [1, 2520, 768] | 2394 / 126 |
+| 640x480 max_soft_tokens=70 | 63 | (336, 432) | (7, 9) | [1, 630, 768] | 567 / 63 |
+| 640x480 max_soft_tokens=140 | 130 | (480, 624) | (10, 13) | [1, 1260, 768] | 1170 / 90 |
+| 640x480 max_soft_tokens=280 | 266 | (672, 912) | (14, 19) | [1, 2520, 768] | 2394 / 126 |
+| 640x480 max_soft_tokens=560 | 540 | (960, 1296) | (20, 27) | [1, 5040, 768] | 4860 / 180 |
+| 640x480 max_soft_tokens=1120 | 1064 | (1344, 1824) | (28, 38) | [1, 10080, 768] | 9576 / 504 |
+| 1024x768 default | 266 | (672, 912) | (14, 19) | [1, 2520, 768] | 2394 / 126 |
+| 1024x768 max_soft_tokens=70 | 63 | (336, 432) | (7, 9) | [1, 630, 768] | 567 / 63 |
+| 1024x768 max_soft_tokens=140 | 130 | (480, 624) | (10, 13) | [1, 1260, 768] | 1170 / 90 |
+| 1024x768 max_soft_tokens=280 | 266 | (672, 912) | (14, 19) | [1, 2520, 768] | 2394 / 126 |
+| 1024x768 max_soft_tokens=560 | 540 | (960, 1296) | (20, 27) | [1, 5040, 768] | 4860 / 180 |
+| 1024x768 max_soft_tokens=1120 | 1064 | (1344, 1824) | (28, 38) | [1, 10080, 768] | 9576 / 504 |
+| 1024x1024 default | 256 | (768, 768) | (16, 16) | [1, 2520, 768] | 2304 / 216 |
+| 1024x1024 max_soft_tokens=70 | 64 | (384, 384) | (8, 8) | [1, 630, 768] | 576 / 54 |
+| 1024x1024 max_soft_tokens=140 | 121 | (528, 528) | (11, 11) | [1, 1260, 768] | 1089 / 171 |
+| 1024x1024 max_soft_tokens=280 | 256 | (768, 768) | (16, 16) | [1, 2520, 768] | 2304 / 216 |
+| 1024x1024 max_soft_tokens=560 | 529 | (1104, 1104) | (23, 23) | [1, 5040, 768] | 4761 / 279 |
+| 1024x1024 max_soft_tokens=1120 | 1089 | (1584, 1584) | (33, 33) | [1, 10080, 768] | 9801 / 279 |
+| 640x480 images_kwargs={max_soft_tokens:70} | 63 | (336, 432) | (7, 9) | [1, 630, 768] | 567 / 63 |
+| 500x333 default | 260 | (624, 960) | (13, 20) | [1, 2520, 768] | 2340 / 180 |
+| 2000x300 default | 258 | (288, 2064) | (6, 43) | [1, 2520, 768] | 2322 / 198 |
+
+- **两张图同时输入**（448×448 与 640×480）：
+  - 模板：`'<bos><|turn>user\n<|image|><|image|>Compare.<turn|>\n<|turn>model\n'`
+  - token 序列（游程编码）：`'<bos>' '<|turn>' 'user' '\n' '<|image>' '<|image|>'x256 '<image|>' '<|image>' '<|image|>'x266 '<image|>' 'Compare' '.' '<turn|>' '\n' '<|turn>' 'model' '\n'`
+  - `mm_token_type_ids`：`0x5 1x256 0x2 1x266 0x8`
+  - processor 输出的键：`['input_ids', 'attention_mask', 'mm_token_type_ids', 'pixel_values', 'image_position_ids']`
+  - 每张图是一段 `<|image>`…`<image|>`，两段按顺序直接相连，中间没有换行。
+
+### 6.4 位置编码
+
+- LLM 的位置是**一维**的：`position_ids` = 0..L−1（不传时 `Gemma4Model.forward` 用 `arange` 生成），图像 token 和文本一样逐个加 1，没有二维成分。rotary 按层类型分两套：full 层 `proportional`，θ=1e6，partial_rotary_factor 0.25；sliding 层 `default`，θ=1e4。
+- 二维位置只出现在视觉编码器内部：processor 输出 `image_position_ids`（每个 patch 的 (x, y)）。
+- 最小例子"指令 + 图（448×320 合成图）+ 文本"，模板 `'<bos><|turn>user\nFind the cat.<|image|>Answer briefly.<turn|>\n<|turn>model\n'`：
+
+position_ids 在 rotary 处的形状 [1, 284]，等于 0..L-1：True（seq_len 284）。
+
+| 段 | token 下标 | 个数 | 开头 token | 前 5 个 position | 后 3 个 position |
+|---|---|---|---|---|---|
+| text | 0–8 | 9 | ['<bos>', '<\|turn>', 'user'] | [[0, 1, 2, 3, 4]] | [[6, 7, 8]] |
+| image | 9–274 | 266 | ['<\|image\|>', '<\|image\|>', '<\|image\|>'] | [[9, 10, 11, 12, 13]] | [[272, 273, 274]] |
+| text | 275–283 | 9 | ['<image\|>', 'Answer', '▁briefly'] | [[275, 276, 277, 278, 279]] | [[281, 282, 283]] |
+
+视觉编码器的 `image_position_ids`（processor 输出，二维 patch 坐标）：形状 [1, 2520, 2]，有效 2394、填充(-1) 126；前 6 个 [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [5, 0]]，末 3 个 [[54, 41], [55, 41], [56, 41]]；第 0 维最大 56，第 1 维最大 41。
+
+### 6.5 原生坐标格式
+
+**文档**（[Gemma docs: Image understanding](https://ai.google.dev/gemma/docs/capabilities/vision/image)；原始 HTML 与抽出的文本在 `raw/docs_evidence/`）：
+- 原文："Bounding box coordinates are expressed as normalized values relative to a 1000x1000 grid. You need to descale these coordinates based on your original image size."
+- 官方示例的解析代码（原样）：`y1, x1, y2, x2 = [int(coord)/1000 for coord in coordinates]`，`y1, x1, y2, x2 = map(round, (y1*height, x1*width, y2*height, x2*width))`。即字段 `box_2d`，**y 在前**（[y1, x1, y2, x2]），量程 0–1000。
+- 示例提示词有两句：`"detect person and cat"`，以及 token 预算一节的 `"detect person and car, output only ```json"`。
+- model card 只写了 "Object detection … and pointing"，没有给坐标格式。
+
+**零样本实测**（每张图一次，固定提示，不调；图在文字之前）：
+
+提示词 `detect {obj}`，出处：https://ai.google.dev/gemma/docs/capabilities/vision/image (object detection example text "detect person and cat")；生成设置 {"do_sample": false, "max_new_tokens": 256, "enable_thinking": false}。
+
+- `000000039769.jpg`（640×480，视觉 token 266），目标 "the cat on the left"，生成 46 token：`'```json\n[\n  {"box_2d": [107, 13, 987, 496], "label": "the cat on the left"}\n]\n```<turn|>'`
+- `000000000139.jpg`（640×426，视觉 token 260），目标 "the television"，生成 43 token：`'```json\n[\n  {"box_2d": [394, 13, 621, 244], "label": "the television"}\n]\n```<turn|>'`
+
+COCO val2017 GT（与 RUN-0001 相同的两张图与目标），同时列出两种轴序的 ×1000 换算：
+
+| 图 | 物体 | GT xyxy（像素） | GT ×1000，x 先 [x1,y1,x2,y2] | GT ×1000，y 先 [y1,x1,y2,x2] |
+|---|---|---|---|---|
+| 000000039769.jpg (640×480) | cat | [17.5, 54.4, 318.8, 469.4] | [27, 113, 498, 978] | [113, 27, 978, 498] |
+| 000000039769.jpg (640×480) | cat | [347.5, 25.6, 640.0, 369.4] | [543, 53, 1000, 770] | [53, 543, 770, 1000] |
+| 000000000139.jpg (640×426) | tv | [7.0, 167.8, 156.3, 262.6] | [11, 394, 244, 617] | [394, 11, 617, 244] |
+| 000000000139.jpg (640×426) | tv | [557.2, 209.2, 638.6, 287.9] | [871, 491, 998, 676] | [491, 871, 676, 998] |
+
+### 6.6 任务调制仪器（D1）
+
+- 结构事实（只陈述）：sliding_window 512；20 个 KV 共享层；use_bidirectional_attention=None。
+- card 原文："For optimal performance with multimodal inputs, place: Image content **before** the text in your prompt."
+
+两种顺序都跑了：
+
+指令 A=`Describe the cat.`，B=`Describe the sofa.`（token 长度 [4, 4]），bf16，attn=sdpa，图像 token 266 个，seq_len 281。
+
+| 层 | 图在前：torch.equal | 图在前：max\|Δ\| | 指令在前：torch.equal | 指令在前：max\|Δ\| | 指令在前：cos（展平） | 指令在前：逐 token cos 最小 | 指令在前：变化 token 数 |
+|---|---|---|---|---|---|---|---|
+| 0 | True | 0 | True | 0 | 1.000000 | 1.000000 | 0 |
+| 1 | True | 0 | False | 0.875 | 0.999914 | 0.995384 | 266 |
+| 2 | True | 0 | False | 0.9756 | 0.999736 | 0.996253 | 266 |
+| 3 | True | 0 | False | 0.918 | 0.999215 | 0.985043 | 266 |
+| 4 | True | 0 | False | 1.75 | 0.999704 | 0.993057 | 266 |
+| 5 | True | 0 | False | 1.5 | 0.999742 | 0.997669 | 266 |
+| 6 | True | 0 | False | 2.25 | 0.999166 | 0.988452 | 266 |
+| 7 | True | 0 | False | 2 | 0.999102 | 0.987906 | 266 |
+| 8 | True | 0 | False | 2.32 | 0.997885 | 0.927588 | 266 |
+| 9 | True | 0 | False | 2.32 | 0.997523 | 0.930171 | 266 |
+| 10 | True | 0 | False | 9.75 | 0.992571 | 0.820388 | 266 |
+| 11 | True | 0 | False | 10.38 | 0.989274 | 0.757673 | 266 |
+| 12 | True | 0 | False | 5.789 | 0.983735 | 0.544274 | 266 |
+| 13 | True | 0 | False | 9.5 | 0.989063 | 0.544838 | 266 |
+| 14 | True | 0 | False | 3.742 | 0.986218 | 0.527346 | 266 |
+| 15 | True | 0 | False | 4.75 | 0.993995 | 0.949693 | 266 |
+| 16 | True | 0 | False | 8.5 | 0.990958 | 0.930530 | 266 |
+| 17 | True | 0 | False | 9.5 | 0.980894 | 0.903428 | 266 |
+| 18 | True | 0 | False | 8.75 | 0.978886 | 0.915386 | 266 |
+| 19 | True | 0 | False | 6.25 | 0.985670 | 0.928499 | 266 |
+| 20 | True | 0 | False | 4.375 | 0.976339 | 0.886271 | 266 |
+| 21 | True | 0 | False | 8.25 | 0.976534 | 0.881791 | 266 |
+| 22 | True | 0 | False | 9.75 | 0.979742 | 0.886015 | 266 |
+| 23 | True | 0 | False | 5.75 | 0.983058 | 0.896573 | 266 |
+| 24 | True | 0 | False | 6.125 | 0.980636 | 0.812623 | 266 |
+| 25 | True | 0 | False | 7.25 | 0.984101 | 0.789168 | 266 |
+| 26 | True | 0 | False | 9.5 | 0.978193 | 0.803123 | 266 |
+| 27 | True | 0 | False | 10.5 | 0.981822 | 0.832220 | 266 |
+| 28 | True | 0 | False | 12 | 0.987387 | 0.879385 | 266 |
+| 29 | True | 0 | False | 16 | 0.992175 | 0.910080 | 266 |
+| 30 | True | 0 | False | 18 | 0.990499 | 0.904712 | 266 |
+| 31 | True | 0 | False | 16.25 | 0.990103 | 0.902039 | 266 |
+| 32 | True | 0 | False | 14.75 | 0.989253 | 0.876286 | 266 |
+| 33 | True | 0 | False | 13.25 | 0.987444 | 0.849195 | 266 |
+| 34 | True | 0 | False | 8 | 0.987103 | 0.833048 | 266 |
+| 35 | True | 0 | False | 61.5 | 0.951982 | 0.564533 | 266 |
+
+图在前：36/36 层逐位相同；指令在前：1/36 层逐位相同。

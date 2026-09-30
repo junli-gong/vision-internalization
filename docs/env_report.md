@@ -140,3 +140,32 @@ GPU 利用率（nvidia-smi 每 500 ms 采样一次，每个窗口包含模型加
 | 0.8B lora | 99% | 18.5% | 40716 MiB | 582 W |
 | 9B infer | 100% | 33.4% | 30906 MiB | 813 W |
 | 9B lora | 99% | 17.9% | 62264 MiB | 882 W |
+
+## 8. 另两个家族的显存与吞吐（RUN-0002 §3.7；只测 bf16）
+
+条件与 §7 相同：B200，sdpa，transformers 5.17.0，peft 0.21.1；输入是两张 COCO val2017 图，缩放到 1024×1024；提示 "Describe the image in detail."，关闭思考。峰值指 `torch.cuda.max_memory_allocated/reserved`，每项测量前都 reset。视觉 token 数取该家族最接近 1K 的档位。
+
+### 8.1 Gemma 4 E2B-it（`max_soft_tokens=1120` → 1089 视觉 token）
+
+| 测量 | batch | 峰值 allocated GiB | 峰值 reserved GiB | 备注 |
+|---|---|---|---|---|
+| 仅加载权重（bf16） | — | 9.508 | 9.602 | |
+| 推理前向，1089 视觉 token（seq 1106，{"max_soft_tokens": 1120}），logits_to_keep=1 | 1 | 10.011 | 10.123 | logits [1, 1, 262144]；墙钟 0.584 s |
+| 推理前向，1089 视觉 token（seq 1106，{"max_soft_tokens": 1120}），full_logits | 1 | 10.686 | 11.205 | logits [1, 1106, 262144]；墙钟 0.079 s |
+| 推理前向，1089 视觉 token（seq 1106，{"max_soft_tokens": 1120}），logits_to_keep=1 | 16 | 16.625 | 17.912 | logits [16, 1, 262144]；墙钟 0.92 s |
+| 推理前向，1089 视觉 token（seq 1106，{"max_soft_tokens": 1120}），full_logits | 16 | 27.414 | 35.193 | logits [16, 1106, 262144]；墙钟 0.922 s |
+| LoRA r=32（language_model 内全部 nn.Linear），梯度检查点，前向+反向第 1 次，全序列 LM loss（seq 1122） | 8 | 46.576 | 49.029 | 可训练参数 52,666,368；LoRA 模块 276；墙钟 1.722 s；loss 20.829252 |
+| LoRA r=32（language_model 内全部 nn.Linear），梯度检查点，前向+反向第 2 次，全序列 LM loss（seq 1122） | 8 | 46.607 | 49.207 | 可训练参数 52,666,368；LoRA 模块 276；墙钟 1.222 s；loss 20.829252 |
+| HF generate，greedy，思考关，max_new_tokens=64 | 16 | 16.626 | 17.883 | 3 次：7.593, 7.612, 7.604 样本/s（墙钟 2.107, 2.102, 2.104 s）；new_tokens 矩阵 [16, 64]；prompt 1106 token |
+
+- LoRA 作用于 `model.language_model` 内的全部 `nn.Linear`（按后缀计数：`{"down_proj": 35, "gate_proj": 35, "up_proj": 35, "per_layer_input_gate": 35, "per_layer_projection": 35, "k_proj": 15, "o_proj": 35, "q_proj": 35, "v_proj": 15, "per_layer_model_projection": 1}`）。k_proj 与 v_proj 只有 15 个，因为第 15–34 层是 KV 共享层，没有这两个投影。PLE 的 `per_layer_input_gate`、`per_layer_projection`、`per_layer_model_projection` 也包含在内。
+- labels 为整条序列，含 1089 个图像 token 与模板 token；HF 默认 CE，不分块。只做前向加反向，没有优化器 step，也没有保存。两次重复的 loss 逐位相同，因为 LoRA 的 B 初始化为 0。
+- 第 1 次前向加反向包含 JIT/预热。
+
+GPU 利用率（nvidia-smi 每 500 ms 采样一次，窗口包含模型加载；`raw/p7_mem_nvsmi_gemma.csv`）：
+
+| 窗口 | 采样数 | util 最大 | util 均值 | nvidia-smi 显存最大 | 功耗最大 |
+|---|---|---|---|---|---|
+| gemma infer | 43 | 100% | 41.9% | 36836 MiB | 774 W |
+| gemma lora | 26 | 99% | 21.1% | 51250 MiB | 745 W |
+
