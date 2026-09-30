@@ -232,3 +232,20 @@
    - 已有 token 的行（id < 原 len(tokenizer)）逐位不变；
    - 新 token 的行不论来自预留行还是扩出来的行，一律写成基础词表行的精确均值。
 
+## D16 — DEV-0001 addendum-2 合入，DEV-0001 结案（2026-09-30）
+
+1. **合入**：addendum-2 合入，是第 2 轮、也是最后一轮返工。
+   - 管理员读完 diff，全仓库 331 passed。
+   - 开发在新代码上重跑了独立审查的复核脚本；61 个变异全部被抓住，其中本轮新增 15 个，前两轮的 46 个仍被抓住。
+   - 已到返工上限，不再加独立审查轮次。以后在这些函数上发现问题，一律开新任务。
+2. **7 条偏离全部接受**：
+   - (1) "answer is X" 中 X 的认定规则：偏向接受前缀答案；
+   - (2) `multiple_choice_accuracy` 改为返回 `MultipleChoiceResult(accuracy, none_rate, n)`，报告要分系统列出 None 率；
+   - (3) `f1_statistic` 放在 stats，`per_image_counts` 放在 detection；
+   - (4) `per_image` 覆盖 GT 里的每一张图，两个系统能按行对齐；
+   - (5) `ADE_REDUCE_ZERO_LABEL` 由调用方显式传入；
+   - (6) 数字不足 ⌈N/2⌉ 的带注释短行仍算文本行，已知局限，有测试钉住；
+   - (7) 允许 n_seeds == n_samples。
+3. **解除 D12 的禁用**：`intersect_and_union`/`mean_iou`、`normalize_choice`/`multiple_choice_accuracy`、`parse_grid_text`、`detection_bootstrap_statistic` 可以使用。
+4. **DEV-0001 结案**：原开发 CC 会话（cvpr2027-48）退役。以后的开发任务一律按模式 B 派发 worktree agent。
+
