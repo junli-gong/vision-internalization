@@ -463,6 +463,7 @@ def test_vision_features_is_overridden_and_base_default_raises():
         def add_grid_tokens(self, names): ...
         def num_layers(self): return 1
         def hidden_size(self): return 1
+        def parse_boxes(self, text, *, width, height): ...  # DEV-0006：只缺 vision_features 一个
 
     with pytest.raises(TypeError, match="vision_features"):  # D15-2：DEV-0004 起 vision_features 是抽象方法
         _Min()

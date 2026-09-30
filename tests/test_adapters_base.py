@@ -14,6 +14,7 @@ from src.adapters.base import (
     check_grid_token_names,
 )
 from src.constants import MAX_NEW_GRID_TOKENS
+from src.parsing import BoxParse, ParseFailure
 
 
 class _Dummy(ModelAdapter):
@@ -46,6 +47,9 @@ class _Dummy(ModelAdapter):
 
     def hidden_size(self):
         return 8
+
+    def parse_boxes(self, text, *, width, height):  # DEV-0006：parse_boxes 成为抽象方法
+        return BoxParse(None, None, ParseFailure.NO_BOX)
 
 
 def _inputs():
@@ -111,6 +115,7 @@ def test_vision_features_is_abstract():
         add_grid_tokens = _Dummy.add_grid_tokens
         num_layers = _Dummy.num_layers
         hidden_size = _Dummy.hidden_size
+        parse_boxes = _Dummy.parse_boxes  # DEV-0006：只缺 vision_features 一个
 
     with pytest.raises(TypeError, match="vision_features"):
         _NoVision()

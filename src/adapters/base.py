@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Sequence
 
 from src.constants import MAX_NEW_GRID_TOKENS
+from src.parsing import BoxParse, OneBoxParse, one_box
 
 Order = Literal["instruction_first", "image_first"]
 PositionMode = Literal["grid2d", "seq1d"]
@@ -163,6 +164,7 @@ def check_grid_token_names(names: Sequence[str], n_existing: int = 0) -> None:
 # 子类必须保持为"无默认值的关键字参数"的参数：方法名 -> 参数名
 _REQUIRED_KWONLY: dict[str, tuple[str, ...]] = {
     "generate": ("enable_thinking", "max_new_tokens"),
+    "parse_boxes": ("width", "height"),  # 原图宽高必须由调用方显式给出（DEV-0006）
 }
 # 子类必须保持为"无默认值"的参数（层号只能由调用方给出）
 _REQUIRED_NO_DEFAULT: dict[str, tuple[str, ...]] = {
@@ -266,3 +268,18 @@ class ModelAdapter(abc.ABC):
     @abc.abstractmethod
     def hidden_size(self) -> int:
         """LLM 隐藏维度。"""
+
+    @abc.abstractmethod
+    def parse_boxes(self, text: str, *, width: float, height: float) -> BoxParse:
+        """解析本家族的原生框格式，换算成内部的绝对像素 xyxy（constants.BOX_FORMAT；DEV-0006）。不需要加载模型。
+
+        text 是 GenerationResult.text（剥离思考段之后的回答，D10）；思考段未闭合与空回答由 src.parsing.parse_generation 先判。
+        width、height 是原图的宽高（像素）：三个家族都按原图归一化到 0–1000（model_notes §5.5、§6.5、§7.5 已核实），
+        与模型输入的缩放、tile 切法无关。返回 BoxParse(boxes, labels, failure)，labels 与 boxes 等长（没有标签的框为 None）。
+        规则"不猜"：任何一个框坏了整条判失败，不返回其余的（D19）；各家族的格式与失败判定写在各自的实现里。
+        """
+
+    def parse_one_box(self, text: str, *, width: float, height: float) -> OneBoxParse:
+        """只要一个框（如 RefCOCO 的 REC），建在 parse_boxes 之上（规则见 src.parsing.one_box）：
+        parse_boxes 失败 → 原样给出失败原因（没有框就是 no_box）；成功但零个框 → no_box；多于一个框 → multiple_boxes。"""
+        return one_box(self.parse_boxes(text, width=width, height=height))

@@ -16,9 +16,9 @@ _OTHER_BRACKETED = re.compile(r"[\(\[]\s*([A-Za-z])\s*[\)\]]")  # "(B)"、"[b]"
 _OTHER_LISTED = re.compile(r"(?<![A-Za-z])([A-Za-z])\)")  # "C)"：独立字母后接右括号
 # "answer is X" / "answer: X"（短语不分大小写）。X 为括号里的任意字母、独立的大写字母，
 # 或后面紧跟句末标点/结尾的小写字母（避免把 "the answer is a dog" 里的冠词 a 当成选项）
-_OTHER_STATED = re.compile(
-    r"(?i:answer)\s*(?:(?i:is)|:)\s*(?:[\(\[]\s*([A-Za-z])\s*[\)\]]|([A-Z])(?![A-Za-z])|([a-z])(?=\s*(?:[.,;:!?]|$)))"
-)
+# CHOICE_LETTER_FORM 就是其中 X 的写法，公开给 src.parsing.parse_choice 复用（DEV-0006；三个捕获组，恰有一个非空）
+CHOICE_LETTER_FORM = r"(?:[\(\[]\s*([A-Za-z])\s*[\)\]]|([A-Z])(?![A-Za-z])|([a-z])(?=\s*(?:[.,;:!?]|$)))"
+_OTHER_STATED = re.compile(r"(?i:answer)\s*(?:(?i:is)|:)\s*" + CHOICE_LETTER_FORM)
 
 
 def _accuracy(correct: Sequence[bool]) -> float | None:
@@ -78,6 +78,36 @@ def normalize_choice(answer: str | None) -> str | None:
             others = {x.upper() for x in found} - {letter}
             return None if others else letter
     return None
+
+
+# ---------------------------------------------------------------------------
+# 公开给解析器复用的定义（DEV-0006；src.parsing.parse_choice）。它们直接用 normalize_choice 的那几个正则，
+# 约定只在本模块定义一处；normalize_choice 自身不经过这些函数，行为不变。
+# ---------------------------------------------------------------------------
+
+
+def leading_choice_letter(text: str) -> str | None:
+    """回答以 normalize_choice 的前缀形式开头时，返回那个字母（大写）；否则 None。只看开头，不看余下文本。
+
+    前缀形式（与 normalize_choice 相同，按同样的顺序尝试）：括号 "(X) …"/"[X] …"，或字母加分隔符 "X. …"/"X: …"/"X) …"，
+    两种都要求后面跟空白。整段只有一个字母（如 "B"、"(B)"、"B."）不算前缀形式，那是 normalize_choice 的整段匹配。
+    """
+    s = text.strip()
+    for pat in (_LETTER_BRACKETED_PREFIX, _LETTER_DELIM_PREFIX):
+        m = pat.match(s)
+        if m:
+            return m.group(1).upper()
+    return None
+
+
+def stated_choice_letters(text: str) -> list[str]:
+    """文本里 "answer is X"/"answer: X" 明确给出的字母（大写，按出现顺序），与 normalize_choice 认"另一个选项"的规则相同。"""
+    return ["".join(g).upper() for g in _OTHER_STATED.findall(text)]
+
+
+def bracketed_choice_letters(text: str) -> list[str]:
+    """文本里括号形式 "(X)"/"[X]" 的字母（不分大小写，返回大写，按出现顺序），与 normalize_choice 认"另一个选项"的规则相同。"""
+    return [x.upper() for x in _OTHER_BRACKETED.findall(text)]
 
 
 class MultipleChoiceResult(NamedTuple):
