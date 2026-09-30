@@ -7,7 +7,9 @@
 ## 常量
 
 ```bash
-export ROOT=/home/ubuntu/workspace/wzg/gjl PROJ=$ROOT/vision-internalization
+# 每行一个 export：写在同一行时，$ROOT 会在赋值之前就被展开（RUN-0001 实测 PROJ 变成 /vision-internalization）
+export ROOT=/home/ubuntu/workspace/wzg/gjl
+export PROJ=$ROOT/vision-internalization
 REPO=$PROJ/repo
 STATUS=$PROJ/logs/standby.status
 DONE=$PROJ/logs/server_tasks_done.txt
