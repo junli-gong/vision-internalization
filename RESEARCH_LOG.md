@@ -8,7 +8,7 @@
 
 | RUN | 发出 | 校验 commit | 内容 | 状态 | 一句话结论 | Report |
 |---|---|---|---|---|---|---|
-| 0005 | 2026-09-30 | 0277617 | 思考行为事实探针：8 个 E1 模型 × 12 条提示 × 3 种设置（nothink_greedy / think_greedy / think_sampled），D20 | 第 1 批已回（9f198a6：InternVL-2B、Qwen-0.8B、Gemma E2B），第 2 批在跑 | InternVL-2B 开思考后多数写不完 4096；Gemma E2B 11/12 开思考且全部闭合；Qwen-0.8B 仓库没有 generation_config | — |
+| 0005 | 2026-09-30 | 0277617 | 思考行为事实探针：8 个 E1 模型 × 12 条提示 × 3 种设置（nothink_greedy / think_greedy / think_sampled），D20 | 完成（9f198a6、e288c1c；8 个模型、240 条，约 55 分钟） | InternVL 两个尺寸开思考后约一半写不完 4096（card 推荐的采样也不解决）；Qwen 四个尺寸都有 1–3 条写满预算，且仓库都没有 generation_config；Gemma 两个尺寸开了的全部闭合 | [0005](reports/0005-thinking-probe.md) |
 | 0004 | 2026-09-30 | b4b4810 | G0 冒烟（三家族）：服务器全量测试 + Qwen3.5-0.8B / Gemma 4 E2B-it / InternVL3.5-2B-HF 真实权重冒烟 + Qwen3.5-4B（取代 RUN-0003 §3–4） | 完成（806f4c0、0277617；值守自动接单） | 服务器 558 passed + 1 skipped；四份真实权重冒烟 all_ok=True；D1 仪器在三家族上重现；4B 的 lm_head 共享；InternVL 开思考时直接作答，没走到闭合分支 | [0004](reports/0004-g0-smoke-all.md) |
 | 0003 | 2026-09-30 | a4a60e8 | G0 冒烟（Qwen3.5）：服务器全量测试（312）+ 0.8B 与 4B 真实权重冒烟 | **停在 §3**（37a29bd）：服务器上 16 failed，开发机绿、服务器红；冒烟未跑 | 服务器装了 fla，transformers 在 import 时把 GDN 绑到 Triton，CPU 小模型走进 GPU 内核；屏蔽 fla 后 311+1 与开发机一致 | [0003](reports/0003-g0-smoke-qwen.md) |
 | 0002 | 2026-09-30 | 见任务书 | Phase 0：Gemma 4 E2B-it 与 InternVL3.5-2B-HF 事实探针（结构、模板、图像 token、位置、坐标、任务调制仪器、显存） | 完成（aa87b10、dc11314；服务器值守自动接单） | 三家族 D1 仪器全部成立（图在前逐位相同）；坐标轴序不同（Gemma y 在前）；Gemma 无预留行（复用 unusedN）；InternVL 处理器默认值与配置矛盾 | [0002](reports/0002-family-probe.md) |
@@ -210,4 +210,38 @@
   
   这些写进 E1 预注册，交项目负责人批。
 - **G0 门报告提交**：`reports/gates/G0.md`，待确认事项写进 N11。确认之前不写 E1 代码、不落地 E1 数据。
+- **账户会话用量上限**：DEV-0006、DEV-0007 两个 agent 在 03:2x PT 被 "session limit" 打断，3:30 重置。两个 worktree 的半成品都保留着。先恢复快完成的 DEV-0006；DEV-0007 等它合入后再恢复。以后同时在跑的 agent 不超过两个，免得再撞上限、连管理员自己也停摆。
+- **RUN-0005 完成**（e288c1c，[report](reports/0005-thinking-probe.md)；8 个模型、240 条，约 55 分钟）：
+
+  | 模型 | greedy：开 / 闭合 / 写满 4096 | 采样：开 / 闭合 / 写满 | greedy 思考中位数 |
+  |---|---|---|---|
+  | InternVL-2B | 8 / 3 / 5 | 9 / 5 / 4 | 4095 |
+  | InternVL-4B | 11 / 5 / 6 | 11 / 7 / 5 | 4095 |
+  | Qwen-0.8B | 12 / 10 / 2 | 跳过 | 227 |
+  | Qwen-2B | 12 / 9 / 3 | 跳过 | 312 |
+  | Qwen-4B | 12 / 10 / 2 | 跳过 | 233 |
+  | Qwen-9B | 12 / 11 / 1 | 跳过 | 297 |
+  | Gemma E2B | 11 / 11 / 0 | 11 / 11 / 0 | 303 |
+  | Gemma E4B | 11 / 11 / 0 | 10 / 10 / 0 | 312 |
+
+  - 四个 Qwen 的固定 revision 都没有 generation_config.json，采样一项全部按任务书跳过。
+  - 关思考时，8 个模型都没有输出思考标记。
+  - batch 1 的解码速度在 34–83 tok/s 之间。
+  - 根盘 09:44 掉了 0.30 GB，服务器 CC 查明是别的用户的 VSCode 扩展写入，不是本项目的文件。
+  - 服务器 CC 还发现 Qwen 适配器的 `token_id()` 只认 attach 时缓存的 token，不认 `<think>`。探针改为从 tokenizer 查，并做单 token 校验。这条不影响已有结果，记入 E1 准备任务。
+- **RUN-0005 的预测对照**：
+  - (a) 未兑现：2B 开了 8/12，只闭合 3 条。
+  - (b) 一半兑现：2B 采样比 greedy 多开 1 条；4B 两者都是 11 条，持平。
+  - (c) 前半不可判（Qwen 全部跳过采样）；后半兑现：0.8B 写满 2 条，2B 写满 3 条。
+  - (d) 未兑现：Gemma 两个尺寸都是 11/12 开思考，开了的全部闭合。
+  - (e) 兑现。
+  - (f) 前半不可判（没有采样）；greedy 下 Qwen 的思考长度与尺寸无单调关系。后半未兑现：InternVL 的中位数是 4095。
+  - (g) 兑现：0.8B 62–83 tok/s，9B 45–61 tok/s。
+  - (h) 兑现：约 55 分钟。
+
+  我系统性地低估了 InternVL 写不完的问题。这类事实，比凭 card 的描述去猜可靠得多。
+- **对 E1 思考子集协议的含义**（写进 E1 预注册，交项目负责人批）：
+  - 思考模式下"写不完"是一等结果：单独计数，不混进解析失败。
+  - 解码用 greedy，与主协议一致。原因：InternVL 采样也不解决问题；Qwen 仓库没有采样配置，采样就得我们自己定参数。
+  - 预算定 4096。另在小子集上用 8192 做一次敏感性检查，看 InternVL 写不完是不是预算不够。
 
