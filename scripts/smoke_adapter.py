@@ -22,9 +22,12 @@
   8 设备审计：参数与 buffer 全在目标设备；一次前向加一次生成里，每个子模块的张量输入都在目标设备
 执行顺序：0 1 2 5 6 7 3 4 8（会加 token / 注入查询的 3、4 放在后面；8 最后）。
 
-Gemma 4（DEV-0004）：--model gemma-4-e2b-it；开发机彩排 --model gemma-4-e2b-it --tiny（--tiny 时 --model 选家族与
-小模型 config 的来源，不给 --model 即 Qwen3.5）。按家族分派只在 setup() 里一处：Gemma 的构造与 0、1、3–7 项检查在
-src/adapters/gemma4.py（smoke_setup），2、8 两项沿用本脚本的通用实现；编号与含义同上，Gemma 的差异写在那里。
+其他家族按 --model 的注册键分派；开发机彩排加 --tiny（--tiny 时 --model 选家族与小模型 config 的来源，不给 --model
+即 Qwen3.5）。按家族分派只在 family_suite() 一处；每个家族的 setup 返回 (adapter, ctx)，ctx["checks"] 是它的检查表：
+- Gemma 4（DEV-0004）：--model gemma-4-e2b-it。构造与 0、1、3–7 项检查在 src/adapters/gemma4.py（smoke_setup），
+  2、8 两项沿用本脚本的通用实现；编号与含义同上，Gemma 的差异写在那里。
+- InternVL3.5（DEV-0005）：--model internvl3.5-2b-hf。构造与 0、1、4–7 项检查，以及附加的 9（多 tile），在
+  src/adapters/internvl35.py（smoke_suite），2、3、8 三项沿用本脚本的通用实现；差异写在那里。
 """
 
 from __future__ import annotations
@@ -81,7 +84,7 @@ def parse_args(argv=None):
     p.add_argument("--out", required=True, help="输出 JSON 路径")
     p.add_argument("--image-size", nargs=2, type=int, default=[480, 640], metavar=("H", "W"),
                    help="固定分辨率，默认 480 640（与 RUN-0001 §5.7 的 300 个视觉 token 同设置）")
-    p.add_argument("--tiny", action="store_true", help="用本地构造的小型随机 Qwen3.5 在 CPU 上彩排")
+    p.add_argument("--tiny", action="store_true", help="用本地构造的小型随机模型在 CPU 上彩排（家族取 --model，不给即 Qwen3.5）")
     p.add_argument("--max-new-tokens", type=int, default=8, help="检查 1、3、7（关思考对照）的生成长度")
     p.add_argument("--think-max-new-tokens", type=int, help="检查 7 的思考生成长度；默认真模型 512、--tiny 16")
     args = p.parse_args(argv)
@@ -110,10 +113,9 @@ def synthetic_image() -> Image.Image:
     return Image.fromarray(img.clip(0, 255).astype(np.uint8))
 
 
-def setup(args):
+def base_context(args):
+    """各家族共用的准备：固定种子、测试图（--image 或合成图）与第二张图。返回 ctx，各家族的 setup 在上面补充。"""
     torch.manual_seed(0)
-    dtype = DTYPES[args.dtype]
-    hw = tuple(args.image_size)
     if args.image:
         path = Path(args.image)
         img = Image.open(path).convert("RGB")
@@ -123,12 +125,14 @@ def setup(args):
         img = synthetic_image()
         image_info = {"path": None, "synthetic": True, "size_wh": list(img.size)}
     img2 = ImageOps.mirror(img)  # 多图检查用的第二张：左右翻转，内容不同
-    ctx = {"img": img, "img2": img2, "image_info": image_info, "args": args}
-    if args.model and registry.get_model(args.model).family == registry.FAMILY_GEMMA4:
-        # 按家族分派（唯一一处）：Gemma 4 的构造与检查项在 src/adapters/gemma4.py，ctx["checks"] 是它的检查表
-        from src.adapters import gemma4
+    return {"img": img, "img2": img2, "image_info": image_info, "args": args}
 
-        return gemma4.smoke_setup(args, dtype, ctx, sys.modules[__name__])
+
+def setup(args):
+    """Qwen3.5 的构造（不给 --model 时的默认家族）。其他家族的构造见 family_suite。"""
+    ctx = base_context(args)
+    dtype = DTYPES[args.dtype]
+    hw = tuple(args.image_size)
     if args.tiny:
         comps = qwen35.load_pinned_components()
         model = qwen35.build_tiny_model(comps[0], tie_word_embeddings=True, dtype=dtype)
@@ -136,7 +140,7 @@ def setup(args):
     else:
         ad = qwen35.Qwen35Adapter(device=args.device, image_size=hw)
         ad.load(args.model, dtype)
-    return ad, ctx
+    return ad, {**ctx, "checks": CHECKS}
 
 
 def _layers(ad):
@@ -499,6 +503,30 @@ CHECKS = {
 }
 
 
+def family_suite(args):
+    """按家族分派的唯一入口：返回 (setup, check_names, run_order)。没给 --model（只有 --tiny）时是 Qwen3.5。
+
+    setup(args) 返回 (adapter, ctx)，ctx["checks"] 是该家族的检查表（名字 → 函数）。其他家族的构造与检查逻辑放在
+    各自的适配器模块里，这里只加入口；它们拿到本模块，复用 base_context、通用检查与常量。
+    """
+    family = registry.get_model(args.model).family if args.model else registry.FAMILY_QWEN35
+    smoke = sys.modules[__name__]
+    if family == registry.FAMILY_GEMMA4:  # DEV-0004：构造与检查表在 gemma4.smoke_setup，检查项名字与顺序同 Qwen
+        from src.adapters import gemma4
+
+        def setup_gemma4(a):
+            return gemma4.smoke_setup(a, DTYPES[a.dtype], base_context(a), smoke)
+
+        return setup_gemma4, CHECK_NAMES, RUN_ORDER
+    if family == registry.FAMILY_INTERNVL35:  # DEV-0005：构造、检查表与附加的 9_multi_tile 在 internvl35.smoke_suite
+        from src.adapters import internvl35
+
+        return internvl35.smoke_suite(smoke)
+    if family != registry.FAMILY_QWEN35:
+        raise ValueError(f"冒烟脚本还不支持 {family} 家族（{args.model}）")
+    return setup, CHECK_NAMES, RUN_ORDER
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     out_path = Path(args.out)
@@ -508,27 +536,28 @@ def main(argv=None) -> int:
               "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
     t_all = time.perf_counter()
     try:
-        ad, ctx = setup(args)
+        setup_fn, check_names, run_order = family_suite(args)
+        ad, ctx = setup_fn(args)
     except Exception as e:  # noqa: BLE001 — 失败也先落盘
         report.update(setup_error=repr(e), traceback=traceback.format_exc()[-4000:], all_ok=False)
         out_path.write_text(json.dumps(report, indent=1, ensure_ascii=False, default=str))
         print(f"setup 失败：{e!r}", file=sys.stderr)
         return 2
     results = {}
-    for name in RUN_ORDER:
+    for name in run_order:
         t0 = time.perf_counter()
         try:
-            r = ctx.get("checks", CHECKS)[name](ad, ctx)
+            r = ctx["checks"][name](ad, ctx)
         except Exception as e:  # noqa: BLE001 — 单项失败不影响其他项，全部落盘后再判
             r = {"ok": False, "error": repr(e), "traceback": traceback.format_exc()[-4000:]}
         r["wall_time_s"] = round(time.perf_counter() - t0, 3)
         results[name] = r
-    report["checks"] = {n: results[n] for n in CHECK_NAMES}
-    report["ok"] = {n: bool(results[n].get("ok")) for n in CHECK_NAMES}
+    report["checks"] = {n: results[n] for n in check_names}
+    report["ok"] = {n: bool(results[n].get("ok")) for n in check_names}
     report["all_ok"] = all(report["ok"].values())
     report["wall_time_s"] = round(time.perf_counter() - t_all, 2)
     out_path.write_text(json.dumps(report, indent=1, ensure_ascii=False, default=str))
-    for n in CHECK_NAMES:
+    for n in check_names:
         print(f"{n:22s} {'PASS' if report['ok'][n] else 'FAIL'}  ({results[n]['wall_time_s']} s)")
     print(f"all_ok={report['all_ok']}  wall={report['wall_time_s']} s  -> {out_path}")
     return 0 if report["all_ok"] else 1
