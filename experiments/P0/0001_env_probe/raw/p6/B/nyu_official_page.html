@@ -1,0 +1,366 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" dir="ltr" lang="en-US">
+
+<head profile="http://gmpg.org/xfn/11">
+	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+
+	<title>NYU Depth V2 &laquo;  Nathan Silberman</title>
+
+	<style type="text/css" media="screen">
+		@import url( style3.css );
+	</style>
+</head>
+
+<body class="page page-id-27 page-template page-template-default">
+
+<div id="menu_wrapper">
+  <div id="left_menu">
+  </div>
+  <div id="right_menu">
+  </div>
+</div>
+
+<div id="container">
+
+  <div id="content">
+
+
+<div class="post-27 page hentry category-uncategorized" id="post-27">
+
+	<div class="storycontent">
+		<p style="text-align: center;">
+<h1 style="text-align: center;">NYU Depth Dataset V2</h1>
+<h3 style="text-align: center;">
+<a href="http://nsilberman.com/">Nathan Silberman</a>,
+<a href="https://research.google/people/pushmeet-kohli/">Pushmeet Kohli</a>,
+<a href="https://dhoiem.cs.illinois.edu/">Derek Hoiem</a>,
+<a href="http://cs.nyu.edu/~fergus">Rob Fergus</a>
+<br />
+
+<br/>
+<div style="font-size: 12px; margin: 0px;">
+If you use the dataset, please cite the following work:
+</div>
+Indoor Segmentation and Support Inference from RGBD Images<br/>
+ECCV 2012
+<a title="[PDF]" href="indoor_seg_support.pdf" target="_blank">[PDF]</a><a href="indoor_seg_support.bib" target="_self">[Bib]</a>  
+<p style="text-align: center;">
+<p style="text-align: center;">
+  <img class="aligncenter size-full wp-image-90" title="NYU Depth V2" src="nyu_depth_v2_web.jpg" alt="" width="881" height="521" /></p>
+<p style="text-align: center;">Samples of the RGB image, the raw depth image, and the class labels from the dataset.</p>
+<p style="text-align: center;">
+<p style="text-align: center;">
+<h2>Overview</h2>
+<p><span>The NYU-Depth V2 data set is comprised of video sequences from a variety of indoor scenes as recorded by both the RGB and Depth cameras from the Microsoft <a title="Kinect" href="http://www.xbox.com/kinect" target="_blank">Kinect</a>. It features: </span></p>
+
+<ul>
+  <li><b>1449</b> densely labeled pairs of aligned RGB and depth images</li>
+  <li><b>464</b> new scenes taken from 3 cities</li>
+  <li><b>407,024</b> new unlabeled frames</li>
+  <li>Each object is labeled with a class and an instance number (cup1, cup2, cup3, etc)</li>
+</ul> 
+
+<p><span>The dataset has several components:</span></p>
+<ul>
+  <li>Labeled: A subset of the video data accompanied by dense multi-class  labels. This data has also been preprocessed to fill in missing depth labels.</li>
+  <li>Raw: The raw rgb, depth and accelerometer data as provided by the Kinect.</li>
+  <li>Toolbox: Useful functions for manipulating the data and labels.</li>
+</ul>
+
+<h2>Downloads</h2>
+<ul>
+  <li>
+    <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/nyu_depth_v2_labeled.mat" target="_self">Labeled dataset (~2.8 GB)</a>
+  </li>
+  <li>
+    <a href="#raw_parts">Raw dataset, Multi-part (~428 GB)</a>
+  </li>
+  <li>
+    <a href="toolbox_nyu_depth_v2.zip">Toolbox</a></li>
+</ul>
+<p><span> </span></p>
+<h2>Labeled Dataset</h2>
+<p style="text-align: center;">
+  <img class="aligncenter size-medium wp-image-49" title="NYU Depth V2 Labeled Dataset" src="nyu_depth_v2_labeled.jpg" alt="" width="588" height="147" /></a><br/>
+Output from the RGB camera (left), preprocessed depth (center) and a set of labels (right) for the image.</p>
+<p>The labeled dataset is a subset of the Raw Dataset. It is comprised of pairs of RGB and Depth frames that have been synchronized and annotated with dense labels for every image. In addition to the projected depth maps, we have included a set of preprocessed depth maps whose missing values have been filled in using the <a href="http://www.cs.huji.ac.il/~yweiss/Colorization/" target="_blank">colorization scheme of Levin et al</a>. Unlike, the Raw dataset, the labeled dataset is provided as a Matlab .mat file with the following variables:</p>
+<ul>
+<li><strong>accelData</strong> &#8211; Nx4 matrix of accelerometer values indicated when each frame was taken. The columns contain the roll, yaw, pitch and tilt  angle of the device.</li>
+<li><strong>depths</strong> &#8211; HxWxN matrix of in-painted depth maps where H and W are the height and width, respectively and N is the number of images. The values of the depth elements are in meters.</li>
+<li><strong>images</strong> &#8211; HxWx3xN matrix of RGB images where H and W are the height and width, respectively, and N is the number of images.</li>
+<li><strong>instances</strong> &#8211; HxWxN matrix of instance maps. Use get_instance_masks.m in the Toolbox to recover masks for each object instance in a scene.</li>
+<li><strong>labels</strong> &#8211; HxWxN matrix of object label masks where H and W are the height and width, respectively and N is the number of images. The labels range from 1..C where C is the total number of classes. If a pixel&#8217;s label value is 0, then that pixel is &#8216;unlabeled&#8217;.</li>
+<li><strong>names</strong> &#8211; Cx1 cell array of the english names of each class.</li>
+<li><strong>namesToIds</strong> &#8211; map from english label names to class IDs (with C key-value pairs)</li>
+<li><strong>rawDepths</strong> &#8211; HxWxN matrix of raw depth maps where H and W are the height and width, respectively, and N is the number of images. These depth maps capture the depth images after they have been projected onto the RGB image plane but before the missing depth values have been filled in. Additionally, the depth non-linearity from the Kinect device has been removed and the values of each depth image are in meters.</li>
+<li><strong>rawDepthFilenames</strong> &#8211; Nx1 cell array of the filenames (in the Raw dataset) that were used for each of the depth images in the labeled dataset.</li>
+<li><strong>rawRgbFilenames</strong> &#8211; Nx1 cell array of the filenames (in the Raw dataset) that were used for each of the RGB images in the labeled dataset.</li>
+<li><strong>scenes</strong> &#8211; Nx1 cell array of the name of the scene from which each image was taken.</li>
+<li><strong>sceneTypes</strong> &#8211; Nx1 cell array of the scene type from which each image was taken.</li> 
+</ul>
+<h2>Raw Dataset</h2>
+<p style="text-align: center;">
+<img class="aligncenter" title="Raw Dataset" src="nyu_depth_v2_raw.jpg" alt="" width="588" height="220" /></a><em> </em></p>
+<p style="text-align: center;">Output  from the RGB camera (left) and depth camera (right). Missing values in  the depth image are a result of (a) shadows caused by the disparity  between the infrared emitter and camera or (b) random missing or spurious values caused by specular or low albedo surfaces.</p>
+<p><em><br />
+</em></p>
+<p>The raw dataset contains the raw image and accelerometer dumps from  the kinect. The RGB and Depth camera sampling rate lies between 20 and  30 FPS (variable over time). While the frames are not synchronized, the  timestamps for each of the RGB, depth and accelerometer files are  included as part of each filename and can be synchronized to produce a continuous video using the <font face="courier new">get_synched_frames.m</font> function in the Toolbox.</p>
+<p>The dataset is divided into different folders which correspond to  each &#8217;scene&#8217; being filmed, such as &#8216;living_room_0012&#8242; or &#8216;office_0014&#8242;.  The file hierarchy is structured as follows:</p>
+<pre>/
+../bedroom_0001/
+../bedroom_0001/a-1294886363.011060-3164794231.dump
+../bedroom_0001/a-1294886363.016801-3164794231.dump
+                  ...
+../bedroom_0001/d-1294886362.665769-3143255701.pgm
+../bedroom_0001/d-1294886362.793814-3151264321.pgm
+                  ...
+../bedroom_0001/r-1294886362.238178-3118787619.ppm
+../bedroom_0001/r-1294886362.814111-3152792506.ppm</pre>
+<p>Files that begin with the prefix a- are the accelerometer dumps.  These dumps are written to disk in binary and can be read with file get_accel_data.mex.  Files that begin with the prefix r- and d- are the frames from the RGB  and depth cameras, respectively. Since no preprocessing has been  performed, the raw depth images must be projected onto the RGB  coordinate space into order to align the images.</p>
+<h2>Toolbox</h2>
+<p>The matlab toolbox has several useful functions for handling the data.</p>
+
+<ul>
+  <li><font face="courier new">camera_params.m</font> - Contains the camera parameters for the Kinect used to capture the data.</li>
+  <li><font face="courier new">crop_image.m</font> &#8211; Crops an image to use only the area when the depth signal is projected.</li>
+  <li><font face="courier new">fill_depth_colorization.m</font> &#8211; Fills in the depth using Levin et al's Colorization method.</li>
+  <li><font face="courier new">fill_depth_cross_bf.m</font> - Fills in the depth using a cross-bilateral filter at multiple scales.</li>
+  <li><font face="courier new">get_accel_data.m</font> - Returns the accelerometer parameters at a specific moment in time.</li>
+  <li><font face="courier new">get_instance_masks.m</font> &#8211; Returns a set of binary masks, one for each object instance in an image.</li>
+  <li><font face="courier new">get_rgb_depth_overlay.m</font> &#8211; Returns a visualization of the RGB and Depth alignment.</li>
+  <li><font face="courier new">get_synched_frames.m</font> - Returns a set of synchronized RGB and Depth frames that can be used to produced RGBD videos of each scene.</li>
+  <li><font face="courier new">get_timestamp_from_filename.m</font> &#8211; Returns the timestamp from the raw dataset filenames. This is useful for sampling the RAW video dumps at even intervals in time. </li>
+  <li><font face="courier new">project_depth_map.m</font> &#8211; Projects the Depth map from the Kinect on the RGB image plane.</li>
+</ul>
+
+<h2>Raw Dataset Parts</h2>
+
+<p>
+If you don't want to download the entire RAW dataset in a single file, different parts of the dataset can be downloaded individually:
+</p>
+
+<table border="1" cellpadding="2">
+  <tr>
+    <td>Basements
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/basements.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/basements.md5">md5</a>
+    </td>
+    <td>Bedrooms (6/7)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bedrooms_part6.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bedrooms_part6.md5">md5</a>
+    </td>
+    <td>Home Offices
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/home_offices.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/home_offices.md5">md5</a>
+    </td>
+    <td>Misc (2/2)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/misc_part2.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/misc_part2.md5">md5</a>
+    </td>
+  </tr>
+  <tr>
+    <td>Bathrooms (1/4)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bathrooms_part1.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bathrooms_part1.md5">md5</a>
+    </td>
+    <td>Bedrooms (7/7)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bedrooms_part7.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bedrooms_part7.md5">md5</a>
+    </td>
+    <td>Kitchens (1/3)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/kitchens_part1.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/kitchens_part1.md5">md5</a>
+    </td>
+    <td>Offices (1/2)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/offices_part1.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/offices_part1.md5">md5</a>
+    </td>
+  </tr>
+  <tr>
+    <td>Bathrooms (2/4)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bathrooms_part2.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bathrooms_part2.md5">md5</a>
+    </td>
+    <td>Bookstore (1/3)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bookstore_part1.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bookstore_part1.md5">md5</a>
+    </td>
+    <td>Kitchens (2/3)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/kitchens_part2.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/kitchens_part2.md5">md5</a>
+    </td>
+    <td>Offices (2/2)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/offices_part2.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/offices_part2.md5">md5</a>
+    </td>
+  </tr>
+  <tr>
+    <td>Bathrooms (3/4)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bathrooms_part3.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bathrooms_part3.md5">md5</a>
+    </td>
+    <td>Bookstore (2/3)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bookstore_part2.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bookstore_part2.md5">md5</a>
+    </td>
+    <td>Kitchens (3/3)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/kitchens_part3.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/kitchens_part3.md5">md5</a>
+    </td>
+    <td>Office Kitchens
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/office_kitchens.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/office_kitchens.md5">md5</a>
+    </td>
+  </tr>
+  <tr>
+    <td>Bathrooms (4/4)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bathrooms_part4.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bathrooms_part4.md5">md5</a>
+    </td>
+    <td>Bookstore (3/3)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bookstore_part3.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bookstore_part3.md5">md5</a>
+    </td>
+    <td>Libraries
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/libraries.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/libraries.md5">md5</a>
+    </td>
+    <td>Playrooms
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/playrooms.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/playrooms.md5">md5</a>
+    </td>
+  </tr>
+  <tr>
+    <td>Bedrooms (1/7)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bedrooms_part1.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bedrooms_part1.md5">md5</a>
+    </td>
+    <td>Cafe
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/cafe.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/cafe.md5">md5</a>
+    </td>
+    <td>Living Rooms (1/4)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/living_rooms_part1.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/living_rooms_part1.md5">md5</a>
+    </td>
+    <td>Reception Rooms
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/reception_rooms.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/reception_rooms.md5">md5</a>
+    </td>
+  </tr>
+  <tr>
+    <td>Bedrooms (2/7)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bedrooms_part2.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bedrooms_part2.md5">md5</a>
+    </td>
+    <td>Living Rooms (2/4)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/living_rooms_part2.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/living_rooms_part2.md5">md5</a>
+    </td>
+    <td>Studies
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/studies.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/studies.md5">md5</a>
+    </td>
+  </tr>
+  <tr>
+    <td>Bedrooms (3/7)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bedrooms_part3.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bedrooms_part3.md5">md5</a>
+    </td>
+    <td>Dining Rooms (1/2)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/dining_rooms_part1.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/dining_rooms_part1.md5">md5</a>
+    </td>
+    <td>Living Rooms (3/4)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/living_rooms_part3.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/living_rooms_part3.md5">md5</a>
+    </td>
+    <td>Study Rooms
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/study_rooms.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/study_rooms.md5">md5</a>
+    </td>
+  </tr>
+  <tr>
+    <td>Bedrooms (4/7)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bedrooms_part4.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bedrooms_part4.md5">md5</a>
+    </td>
+    <td>Dining Rooms (2/2)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/dining_rooms_part2.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/dining_rooms_part2.md5">md5</a>
+    </td>
+    <td>Living Rooms (4/4)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/living_rooms_part4.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/living_rooms_part4.md5">md5</a>
+    </td>
+  </tr>
+  <tr>
+    <td>Bedrooms (5/7)
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bedrooms_part5.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/bedrooms_part5.md5">md5</a>
+    </td>
+    <td>Furniture Stores
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/furniture_stores.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/furniture_stores.md5">md5</a>
+    </td>
+    <td>Misc
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/misc_part1.zip">zip</a>
+      <a href="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/misc_part1.md5">md5</a>
+    </td>
+  </tr>
+</table>
+
+
+<h2>Correction to Segmentation Results</h2>
+
+<p>
+Due to a bug in the segmentation evaluation, the segmentation results in the
+paper were about 2% higher across the board:
+</p>
+
+<table border="1" cellpadding="2">
+  <thead>
+    <tr>
+      <td>Features</td>
+      <td align="center">Weighted Score</td>
+      <td align="center">Unweighted Score</td>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>RGB Only</td>
+      <td align="center">50.3</td>
+      <td align="center">44.0</td>
+    </tr>
+    <tr>
+      <td>Depth Only</td>
+      <td align="center">53.7</td>
+      <td align="center">43.0</td>
+    </tr>
+    <tr>
+      <td>RGBD</td>
+      <td align="center">60.1</td>
+      <td align="center">47.9</td>
+    </tr>
+    <tr>
+      <td>RGBD + Support</td>
+      <td align="center">60.7</td>
+      <td align="center">48.8</td>
+    </tr>
+    <tr>
+      <td>RGBD + Support + Structure classes</td>
+      <td align="center">61.1</td>
+      <td align="center">49.1</td>
+    </tr>
+  </tbody>
+</table>
+
+
+
+	</div>
+
+
+</div>
+
+</body>
+</html>

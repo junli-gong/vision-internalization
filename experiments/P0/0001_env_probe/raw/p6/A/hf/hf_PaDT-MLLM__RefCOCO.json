@@ -1,0 +1,563 @@
+{
+ "requested_id": "PaDT-MLLM/RefCOCO",
+ "probe_time": "2026-09-30T05:52:04+0000",
+ "resolved_id": "PaDT-MLLM/RefCOCO",
+ "sha": "63c2c228081b35e6023f903e1adbebbacc09d0a2",
+ "last_modified": "2025-10-10 04:11:31+00:00",
+ "created_at": "2025-10-06 09:00:15+00:00",
+ "gated": false,
+ "private": false,
+ "downloads": 332,
+ "likes": 4,
+ "tags": [
+  "task_categories:object-detection",
+  "task_categories:image-segmentation",
+  "language:en",
+  "language:zh",
+  "license:apache-2.0",
+  "size_categories:100K<n<1M",
+  "format:json",
+  "modality:text",
+  "library:datasets",
+  "library:dask",
+  "library:mlcroissant",
+  "arxiv:2510.01954",
+  "region:us",
+  "mllm",
+  "multimodal",
+  "vision-language-model",
+  "referring-expression-comprehension",
+  "computer-vision"
+ ],
+ "card_license": "apache-2.0",
+ "card_data_keys": [
+  "language",
+  "library_name",
+  "license",
+  "tags",
+  "task_categories"
+ ],
+ "card_configs": null,
+ "card_dataset_info": null,
+ "n_files": 19,
+ "total_bytes_hf_api": 579970949,
+ "files": [
+  {
+   "path": ".gitattributes",
+   "size": 2790,
+   "lfs": false
+  },
+  {
+   "path": "README.md",
+   "size": 11247,
+   "lfs": false
+  },
+  {
+   "path": "assets/Motivation.webp",
+   "size": 309198,
+   "lfs": true
+  },
+  {
+   "path": "assets/Pipeline.webp",
+   "size": 449180,
+   "lfs": true
+  },
+  {
+   "path": "assets/REC_OVD.webp",
+   "size": 1437348,
+   "lfs": true
+  },
+  {
+   "path": "assets/RIC.webp",
+   "size": 1640634,
+   "lfs": true
+  },
+  {
+   "path": "assets/TAM.webp",
+   "size": 867948,
+   "lfs": true
+  },
+  {
+   "path": "assets/TaskIntroduction.webp",
+   "size": 1469446,
+   "lfs": true
+  },
+  {
+   "path": "refcoco+_testA.json",
+   "size": 8797691,
+   "lfs": false
+  },
+  {
+   "path": "refcoco+_testB.json",
+   "size": 7170338,
+   "lfs": false
+  },
+  {
+   "path": "refcoco+_train.json",
+   "size": 181027589,
+   "lfs": true
+  },
+  {
+   "path": "refcoco+_val.json",
+   "size": 16125223,
+   "lfs": true
+  },
+  {
+   "path": "refcoco_testA.json",
+   "size": 8693087,
+   "lfs": false
+  },
+  {
+   "path": "refcoco_testB.json",
+   "size": 7378437,
+   "lfs": false
+  },
+  {
+   "path": "refcoco_train.json",
+   "size": 180701848,
+   "lfs": true
+  },
+  {
+   "path": "refcoco_val.json",
+   "size": 16154120,
+   "lfs": true
+  },
+  {
+   "path": "refcocog_test.json",
+   "size": 14993856,
+   "lfs": true
+  },
+  {
+   "path": "refcocog_train.json",
+   "size": 125219347,
+   "lfs": true
+  },
+  {
+   "path": "refcocog_val.json",
+   "size": 7521622,
+   "lfs": false
+  }
+ ],
+ "readme": "---\nlicense: apache-2.0\nlanguage:\n- en\n- zh\nlibrary_name: transformers\ntask_categories: [object-detection, image-segmentation]\ntags: [mllm, multimodal, vision-language-model, referring-expression-comprehension, computer-vision]\n---\n\n<div align='center'><h1>Patch-as-Decodable-Token: Towards Unified Multi-Modal Vision Tasks in MLLMs</h1></div>\n\n<font size=4><div align='center'>[[\ud83d\udd17 Released Code](https://github.com/Gorilla-Lab-SCUT/PaDT)]\n [[\ud83e\udd17 Datasets](https://huggingface.co/collections/PaDT-MLLM/padt-dataset-68e400440ffb8c8f95e5ee20)] [[\ud83e\udd17 Checkpoints](https://huggingface.co/collections/PaDT-MLLM/padt-68e3f5c22e8ecbd6d0d13d43)]</div></font>\n <font size=4><div align='center'>[[\ud83d\udcc4 Tech Report](https://arxiv.org/abs/2510.01954)] [[\ud83e\udd17 Paper](https://huggingface.co/papers/2510.01954)]</div></font>\n\n<div align=\"center\">\n<img src=\"./assets/Pipeline.webp\" width=\"900\"/>\n<p>Figure A. PaDT pipeline.</p>\n</div>\n\n## \ud83c\udf1f Introduction\n\nWe are pleased to introduce **Patch-as-Decodable Token (PaDT)**, a unified paradigm that enables multimodal large language models (MLLMs) to directly generate both textual and visual outputs.\n\nAt the core of PaDT are **Visual Reference Tokens (VRTs)**. Unlike conventional MLLMs that represent visual targets using text-based bounding box coordinates (which are often less semantic and poorly aligned with the actual objects, as shown in Figure B), PaDT allows MLLMs to represent visual targets directly through visual patches. These VRTs let the model reason about visual information within the output sequence in a more natural and direct way.\n\nBy introducing VRTs, we achieve **semantic reasoning and object-specific visual tokens prediction** within the MLLM\u2019s autoregressive generation process. The predicted visual tokens are then decoded into **low-level outputs** such as localization or segmentation maps using a plug-and-play lightweight PaDT decoder.\n\nAs illustrated in Figure C, we have validated PaDT across four major visual perception and understanding tasks. In all cases, PaDT achieves **state-of-the-art** performance compared to conventional character-by-character coordinate-generation MLLMs.\n\n### Why PaDT Succeeds?\n\nThe success of PaDT stems from its deep insight into the visual capability bottlenecks of MLLMs.\n\n1. **Native Vision-Language Alignment**: Instead of \u201cfitting\u201d vision into text space, PaDT directly treats visual patches as decodable tokens, achieving seamless modality alignment.\n\n2. **Dynamic Visual Binding**: A dynamic embedding mechanism tightly binds Visual Reference Tokens (VRTs) to each image, preventing cross-image confusion.\n\n3. **Unified Token Space**: Enables the LLM to handle language and vision uniformly, simplifying training and improving consistency.\n\n4. **Lightweight Decoder**: Decouples dense prediction from the LLM, preserving its semantic reasoning while adding precise spatial output capability.\n\n5. **Strong Multi-Task Generalization**: The PaDT Pro model, jointly trained on REC/RES/OVD/RIC, can switch tasks via prompts and outperforms single-task models.\n\nWe hope this work will **inspire further exploration** in the community:\n\n- What does true multimodal reasoning look like?\n\n- And is a purely text-based output ever sufficient for visual reasoning?\n\n<div align=\"center\">\n<img src=\"./assets/Motivation.webp\" width=\"900\"/>\n<p>Figure B. Some observations on conventional character-by-character coordinate-generation MLLMs and our PaDT.</p>\n</div>\n\n\n<div align=\"center\">\n<img src=\"./assets/TaskIntroduction.webp\" width=\"900\"/>\n<p>Figure C. PaDT works on four visual perception and understanding tasks.</p>\n</div>\n\n## Quick Start\n\nClone this repo, and set up the environment with a few commands.\n\n```bash\ngit clone https://github.com/Gorilla-Lab-SCUT/PaDT.git\n\nconda create -n PaDT python=3.11\nconda activate PaDT\n\nbash setup.sh\n```\n\nThe following contains a code snippet illustrating how to use our PaDT.\n\n```python\nimport torch\nfrom transformers import AutoProcessor\nfrom qwen_vl_utils import process_vision_info\nfrom PaDT import PaDTForConditionalGeneration, VisonTextProcessingClass, parseVRTintoCompletion\n\n\nTEST_IMG_PATH=\"./eval/imgs/000000368335.jpg\"\nMODEL_PATH=\"PaDT-MLLM/PaDT_Pro_3B\"\n\n# load model\nmodel = PaDTForConditionalGeneration.from_pretrained(MODEL_PATH, torch_dtype=torch.bfloat16, device_map={\"\": 0})\n# load processor\nprocessor = AutoProcessor.from_pretrained(\n    MODEL_PATH\n)\nprocessor = VisonTextProcessingClass(processor, model.config.vision_config.spatial_merge_size)\nprocessor.prepare(model.model.embed_tokens.weight.shape[0])\n\n# question prompt\nPROMPT = \"\"\"Please carefully check the image and detect the object this sentence describes: \"The car is on the left side of the horse\".\"\"\"\n\n# construct conversation\nmessage = [\n    {\n        \"role\": \"user\",\n        \"content\": [\n            {\n                \"type\": \"image\",\n                \"image\": TEST_IMG_PATH\n            }, {\n                \"type\": \"text\",\n                \"text\": PROMPT\n            }\n        ]\n    }\n]\ntext = processor.apply_chat_template(message, tokenize=False, add_generation_prompt=True)\nimage_inputs, video_inputs = process_vision_info(message)\nprompt_inputs = processor(\n    text=[text],\n    images=image_inputs,\n    padding=True,\n    padding_side=\"left\",\n    return_tensors=\"pt\",\n    add_special_tokens=False\n).to(\"cuda:0\")\n\n# generate\nwith torch.inference_mode():\n    generate_returned_result = model.generate(**prompt_inputs, use_cache=True, max_new_tokens=1024, do_sample=False,\n        output_hidden_states=True, return_dict_in_generate=True)\n    prompt_length = prompt_inputs[\"input_ids\"].size(1)\n    completion_ids = generate_returned_result['sequences'][:, prompt_length:]\n\n    # extract Visual Reference Tokens within the sequence\n    completions, feats, labels, vrts, vrts_feats = parseVRTintoCompletion(processor, completion_ids, generate_returned_result['hidden_states'], torch.Tensor([False]))\n\n    print(\"\\ngenerate result:\", completions[0])\n\n    # decode low-level visual task results\n    low_res_image_embeds = generate_returned_result.past_image_embeds\n    high_res_image_embeds = generate_returned_result.past_high_res_image_embeds\n    visual_pe = generate_returned_result.past_visual_pe\n    decoded_list = model.vl_decode(feats, low_res_image_embeds, high_res_image_embeds, prompt_inputs['image_grid_thw'], visual_pe)\n\n    print(f\"\\npred_bboxes: {decoded_list['pred_boxes']},\\npred_scores: {decoded_list['pred_score'].sigmoid()}\\n\")\n```\n\n## Models\n\n- PaDT_OVD: Trained on COCO2017 training set.\n- PaDT_REC: Trained on RefCOCO/+/g training set.\n- PaDT_RIC: Trained on Referring Image Captioning training set.\n- PaDT_Pro: Trained on the combined set of COCO2017, RefCOCO/+/g and Referring Image Captioning training sets.\n\n| Model | Base VLM | Checkpoint | Task Type |\n| - | - | - | - |\n| PaDT_OVD_3B | Qwen2.5VL-3B | [PaDT-MLLM/PaDT_OVD_3B](https://huggingface.co/PaDT-MLLM/PaDT_OVD_3B) | Open Vocabulary Detection |\n| PaDT_REC_3B | Qwen2.5VL-3B | [PaDT-MLLM/PaDT_REC_3B](https://huggingface.co/PaDT-MLLM/PaDT_REC_3B) | Referring Expression Comprehension/Segmentation | \n| PaDT_RIC_3B | Qwen2.5VL-3B | [PaDT-MLLM/PaDT_RIC_3B](https://huggingface.co/PaDT-MLLM/PaDT_RIC_3B) | Referring Image Captioning | \n| PaDT_Pro_3B | Qwen2.5VL-3B | [PaDT-MLLM/PaDT_Pro_3B](https://huggingface.co/PaDT-MLLM/PaDT_Pro_3B) | ALL |\n| PaDT_OVD_7B | Qwen2.5VL-7B | [PaDT-MLLM/PaDT_OVD_7B](https://huggingface.co/PaDT-MLLM/PaDT_OVD_7B) | Open Vocabulary Detection |\n| PaDT_REC_7B | Qwen2.5VL-7B | [PaDT-MLLM/PaDT_REC_7B](https://huggingface.co/PaDT-MLLM/PaDT_REC_7B) | Referring Expression Comprehension/Segmentation | \n| PaDT_RIC_7B | Qwen2.5VL-7B | [PaDT-MLLM/PaDT_RIC_7B](https://huggingface.co/PaDT-MLLM/PaDT_RIC_7B) | Referring Image Captioning | \n| PaDT_Pro_7B | Qwen2.5VL-7B | [PaDT-MLLM/PaDT_Pro_7B](https://huggingface.co/PaDT-MLLM/PaDT_Pro_7B) | ALL |\n\n\n## Showcase\n\nHere are some randomly selected test examples showcasing PaDT\u2019s excellent performance.\n\n- Referring Expression Comprehension/Segmentation and Open Vocabulary Detection Tasks\n\n<div align=\"center\">\n<img src=\"./assets/REC_OVD.webp\" width=\"900\"/>\n</div>\n\n- Referring Image Captioning Task\n\n<div align=\"center\">\n<img src=\"./assets/RIC.webp\" width=\"900\"/>\n</div>\n\n- Token Activation Map Comparison\n\n<div align=\"center\">\n<img src=\"./assets/TAM.webp\" width=\"900\"/>\n</div>\n\n\n## Training Instruction\n\nDownload Datasets:\n\n- [COCO](https://cocodataset.org/#home)\n\n- RefCOCO/+/g\n    ```bash\n    wget https://web.archive.org/web/20220413011718/https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcoco.zip\n    wget https://web.archive.org/web/20220413011656/https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcoco+.zip\n    wget https://web.archive.org/web/20220413012904/https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcocog.zip\n    ```\n\nUnpack these datasets and place them under the following directory:\n\n```\nPaDT/\n \u251c\u2500\u2500 dataset/\n \u2502    \u251c\u2500\u2500 coco/\n \u2502    \u2502     \u251c\u2500\u2500 annotations/\n \u2502    \u2502     \u251c\u2500\u2500 train2014/\n \u2502    \u2502     \u251c\u2500\u2500 train2017/\n \u2502    \u2502     \u251c\u2500\u2500 val2014/\n \u2502    \u2502     \u2514\u2500\u2500 val2017/\n \u2502    \u2514\u2500\u2500 RefCOCO/\n \u2502          \u251c\u2500\u2500 refcoco/\n \u2502          \u251c\u2500\u2500 refcoco+/\n \u2502          \u2514\u2500\u2500 refcocog/\n```\n\nPreprocess the datasets:\n- 1. Preprocess via our scripts. (Please first update the dataset path configuration in the preprocessing scripts)\n    ```bash\n    cd src/preprocess\n    python process_coco.py\n    python process_refcoco.py\n    ```\n- 2. We also released the preprocessed datasets which are ready to use for training in huggingface.\n\n    | Dataset | Dataset Path | Task Type |\n    | - | - | -|\n    | COCO | [PaDT-MLLM/COCO](https://huggingface.co/datasets/PaDT-MLLM/COCO) | Open Vocabulary Detection |\n    | RefCOCO | [PaDT-MLLM/RefCOCO](https://huggingface.co/datasets/PaDT-MLLM/RefCOCO) | Referring Expression Comprehension/Segmentation |\n    | RIC | [PaDT-MLLM/ReferringImageCaptioning](https://huggingface.co/datasets/PaDT-MLLM/ReferringImageCaptioning) | Referring Image Captioning |\n\n\nThe training scripts in `run_scripts` are ready to execute.\n\nFor example: Train the PaDT-Pro 3B model on a single node with 8\u00d796 GB GPUs.\n\n```bash\nbash ./run_scripts/padt_pro_3b_sft.sh\n```\n\n## Evaluation\n\nWe provide a simple inference example in `eval/test_demo.py`. More evaluation scripts will be added soon.\n\n\n## License Agreement\n\nPaDT is licensed under Apache 2.0.\n\n## References\n\n- [Patch-as-Decodable-Token: Towards Unified Multi-Modal Vision Tasks in MLLMs](https://huggingface.co/papers/2510.01954)\n\n\n## License Agreement\n\nPaDT is licensed under Apache 2.0.\n\n## Citation\n\nWe kindly encourage citation of our work if you find it useful.\n\n```\n@misc{su2025patchasdecodabletokenunifiedmultimodalvision,\n      title={Patch-as-Decodable-Token: Towards Unified Multi-Modal Vision Tasks in MLLMs}, \n      author={Yongyi Su and Haojie Zhang and Shijie Li and Nanqing Liu and Jingyi Liao and Junyi Pan and Yuan Liu and Xiaofen Xing and Chong Sun and Chen Li and Nancy F. Chen and Shuicheng Yan and Xulei Yang and Xun Xu},\n      year={2025},\n      eprint={2510.01954},\n      archivePrefix={arXiv},\n      primaryClass={cs.CV},\n      url={https://arxiv.org/abs/2510.01954}, \n}\n```\n",
+ "ds_splits": {
+  "status": 200,
+  "json": {
+   "splits": [
+    {
+     "dataset": "PaDT-MLLM/RefCOCO",
+     "config": "default",
+     "split": "train"
+    },
+    {
+     "dataset": "PaDT-MLLM/RefCOCO",
+     "config": "default",
+     "split": "validation"
+    },
+    {
+     "dataset": "PaDT-MLLM/RefCOCO",
+     "config": "default",
+     "split": "test"
+    }
+   ],
+   "pending": [],
+   "failed": []
+  }
+ },
+ "ds_size": {
+  "status": 200,
+  "json": {
+   "size": {
+    "dataset": {
+     "dataset": "PaDT-MLLM/RefCOCO",
+     "num_bytes_original_files": 541743605,
+     "num_bytes_parquet_files": 117415725,
+     "num_bytes_memory": 534965331,
+     "num_rows": 357417,
+     "estimated_num_rows": null
+    },
+    "configs": [
+     {
+      "dataset": "PaDT-MLLM/RefCOCO",
+      "config": "default",
+      "num_bytes_original_files": 541743605,
+      "num_bytes_parquet_files": 117415725,
+      "num_bytes_memory": 534965331,
+      "num_rows": 357417,
+      "num_columns": 6,
+      "estimated_num_rows": null
+     }
+    ],
+    "splits": [
+     {
+      "dataset": "PaDT-MLLM/RefCOCO",
+      "config": "default",
+      "split": "train",
+      "num_bytes_parquet_files": 105050098,
+      "num_bytes_memory": 480969447,
+      "num_rows": 321327,
+      "num_columns": 6,
+      "estimated_num_rows": null
+     },
+     {
+      "dataset": "PaDT-MLLM/RefCOCO",
+      "config": "default",
+      "split": "validation",
+      "num_bytes_parquet_files": 8356178,
+      "num_bytes_memory": 39230661,
+      "num_rows": 26488,
+      "num_columns": 6,
+      "estimated_num_rows": null
+     },
+     {
+      "dataset": "PaDT-MLLM/RefCOCO",
+      "config": "default",
+      "split": "test",
+      "num_bytes_parquet_files": 4009449,
+      "num_bytes_memory": 14765223,
+      "num_rows": 9602,
+      "num_columns": 6,
+      "estimated_num_rows": null
+     }
+    ]
+   },
+   "pending": [],
+   "failed": [],
+   "partial": false
+  }
+ },
+ "ds_info": {
+  "status": 200,
+  "json": {
+   "dataset_info": {
+    "default": {
+     "description": "",
+     "citation": "",
+     "homepage": "",
+     "license": "",
+     "features": {
+      "id": {
+       "dtype": "int64",
+       "_type": "Value"
+      },
+      "image": {
+       "dtype": "string",
+       "_type": "Value"
+      },
+      "conversations": [
+       {
+        "from": {
+         "dtype": "string",
+         "_type": "Value"
+        },
+        "value": {
+         "dtype": "string",
+         "_type": "Value"
+        }
+       }
+      ],
+      "task": {
+       "dtype": "string",
+       "_type": "Value"
+      },
+      "answer_template": {
+       "dtype": "string",
+       "_type": "Value"
+      },
+      "objects": [
+       {
+        "patches": [
+         {
+          "dtype": "int64",
+          "_type": "Value"
+         }
+        ],
+        "bbox": [
+         {
+          "dtype": "float64",
+          "_type": "Value"
+         }
+        ],
+        "iscrowd": {
+         "dtype": "int64",
+         "_type": "Value"
+        },
+        "area": {
+         "dtype": "float64",
+         "_type": "Value"
+        },
+        "rle": {
+         "size": [
+          {
+           "dtype": "int64",
+           "_type": "Value"
+          }
+         ],
+         "counts": {
+          "dtype": "string",
+          "_type": "Value"
+         }
+        },
+        "label": {
+         "dtype": "string",
+         "_type": "Value"
+        }
+       }
+      ]
+     },
+     "builder_name": "json",
+     "dataset_name": "ref_coco",
+     "config_name": "default",
+     "version": {
+      "version_str": "0.0.0",
+      "major": 0,
+      "minor": 0,
+      "patch": 0
+     },
+     "splits": {
+      "train": {
+       "name": "train",
+       "num_bytes": 480969447,
+       "num_examples": 321327,
+       "dataset_name": "ref_coco"
+      },
+      "validation": {
+       "name": "validation",
+       "num_bytes": 39230661,
+       "num_examples": 26488,
+       "dataset_name": "ref_coco"
+      },
+      "test": {
+       "name": "test",
+       "num_bytes": 14765223,
+       "num_examples": 9602,
+       "dataset_name": "ref_coco"
+      }
+     },
+     "download_checksums": {
+      "hf://datasets/PaDT-MLLM/RefCOCO@5418bc24d8b40ba8b67264d9f0157698a2d286a3/refcoco+_train.json": {
+       "num_bytes": 181027589,
+       "checksum": null
+      },
+      "hf://datasets/PaDT-MLLM/RefCOCO@5418bc24d8b40ba8b67264d9f0157698a2d286a3/refcoco_train.json": {
+       "num_bytes": 180701848,
+       "checksum": null
+      },
+      "hf://datasets/PaDT-MLLM/RefCOCO@5418bc24d8b40ba8b67264d9f0157698a2d286a3/refcocog_train.json": {
+       "num_bytes": 125219347,
+       "checksum": null
+      },
+      "hf://datasets/PaDT-MLLM/RefCOCO@5418bc24d8b40ba8b67264d9f0157698a2d286a3/refcoco+_val.json": {
+       "num_bytes": 16125223,
+       "checksum": null
+      },
+      "hf://datasets/PaDT-MLLM/RefCOCO@5418bc24d8b40ba8b67264d9f0157698a2d286a3/refcoco_val.json": {
+       "num_bytes": 16154120,
+       "checksum": null
+      },
+      "hf://datasets/PaDT-MLLM/RefCOCO@5418bc24d8b40ba8b67264d9f0157698a2d286a3/refcocog_val.json": {
+       "num_bytes": 7521622,
+       "checksum": null
+      },
+      "hf://datasets/PaDT-MLLM/RefCOCO@5418bc24d8b40ba8b67264d9f0157698a2d286a3/refcocog_test.json": {
+       "num_bytes": 14993856,
+       "checksum": null
+      }
+     },
+     "download_size": 541743605,
+     "dataset_size": 534965331,
+     "size_in_bytes": 1076708936
+    }
+   },
+   "pending": [],
+   "failed": [],
+   "partial": false
+  }
+ },
+ "ds_first_rows": {
+  "default/train": {
+   "features": [
+    {
+     "feature_idx": 0,
+     "name": "id",
+     "type": {
+      "dtype": "int64",
+      "_type": "Value"
+     }
+    },
+    {
+     "feature_idx": 1,
+     "name": "image",
+     "type": {
+      "dtype": "string",
+      "_type": "Value"
+     }
+    },
+    {
+     "feature_idx": 2,
+     "name": "conversations",
+     "type": {
+      "feature": {
+       "from": {
+        "dtype": "string",
+        "_type": "Value"
+       },
+       "value": {
+        "dtype": "string",
+        "_type": "Value"
+       }
+      },
+      "_type": "List"
+     }
+    },
+    {
+     "feature_idx": 3,
+     "name": "task",
+     "type": {
+      "dtype": "string",
+      "_type": "Value"
+     }
+    },
+    {
+     "feature_idx": 4,
+     "name": "answer_template",
+     "type": {
+      "dtype": "string",
+      "_type": "Value"
+     }
+    },
+    {
+     "feature_idx": 5,
+     "name": "objects",
+     "type": {
+      "feature": {
+       "patches": {
+        "feature": {
+         "dtype": "int64",
+         "_type": "Value"
+        },
+        "_type": "List"
+       },
+       "bbox": {
+        "feature": {
+         "dtype": "float64",
+         "_type": "Value"
+        },
+        "_type": "List"
+       },
+       "iscrowd": {
+        "dtype": "int64",
+        "_type": "Value"
+       },
+       "area": {
+        "dtype": "float64",
+        "_type": "Value"
+       },
+       "rle": {
+        "size": {
+         "feature": {
+          "dtype": "int64",
+          "_type": "Value"
+         },
+         "_type": "List"
+        },
+        "counts": {
+         "dtype": "string",
+         "_type": "Value"
+        }
+       },
+       "label": {
+        "dtype": "string",
+        "_type": "Value"
+       }
+      },
+      "_type": "List"
+     }
+    }
+   ],
+   "n_rows_returned": 100,
+   "truncated": true,
+   "rows_first2": [
+    {
+     "id": 98304,
+     "image": "COCO_train2014_000000098304.jpg",
+     "conversations": [
+      {
+       "from": "human",
+       "value": "Please carefully check the image and detect the object this sentence describes: \"black chair by table\"."
+      }
+     ],
+     "task": "refering",
+     "answer_template": "The \"black chair by table\" refers to <|Obj_0|> in this image.",
+     "objects": [
+      {
+       "patches": [
+        202,
+        203,
+        204,
+        205,
+        206,
+        "...<+29 items>"
+       ],
+       "bbox": [
+        0.7069687499999999,
+        0.5464858490566038,
+        0.981453125,
+        0.8840330188679246
+       ],
+       "iscrowd": 0,
+       "area": 19175.430549999997,
+       "rle": {
+        "size": [
+         424,
+         640
+        ],
+        "counts": "g]k53l<:N2N2N3M3N0fDIc97lE:S:G\\Ej0d:n0O0O10001O0O101O000O101O0O101O1O0O2O1O0O2O1O1O0O2O001N2O1O1O2M2O1O1O1N2O2N1O1O1O0M4L4L4N100O100O100O100O100O100O1O100O100O010O100O100O100O10O100000001O00000O1000001O000000000O2O0000000000001N1000000000001O0O100000001O0000000O10001O000000000O101O00000000001N100000...<+73 chars>"
+       },
+       "label": "black chair by table"
+      }
+     ]
+    },
+    {
+     "id": 98304,
+     "image": "COCO_train2014_000000098304.jpg",
+     "conversations": [
+      {
+       "from": "human",
+       "value": "Please carefully check the image and detect the object this sentence describes: \"the big recliner chair that is close to the tan chair\"."
+      }
+     ],
+     "task": "refering",
+     "answer_template": "The \"the big recliner chair that is close to the tan chair\" refers to <|Obj_0|> in this image.",
+     "objects": [
+      {
+       "patches": [
+        202,
+        203,
+        204,
+        205,
+        206,
+        "...<+29 items>"
+       ],
+       "bbox": [
+        0.7069687499999999,
+        0.5464858490566038,
+        0.981453125,
+        0.8840330188679246
+       ],
+       "iscrowd": 0,
+       "area": 19175.430549999997,
+       "rle": {
+        "size": [
+         424,
+         640
+        ],
+        "counts": "g]k53l<:N2N2N3M3N0fDIc97lE:S:G\\Ej0d:n0O0O10001O0O101O000O101O0O101O1O0O2O1O0O2O1O1O0O2O001N2O1O1O2M2O1O1O1N2O2N1O1O1O0M4L4L4N100O100O100O100O100O100O1O100O100O010O100O100O100O10O100000001O00000O1000001O000000000O2O0000000000001N1000000000001O0O100000001O0000000O10001O000000000O101O00000000001N100000...<+73 chars>"
+       },
+       "label": "the big recliner chair that is close to the tan chair"
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

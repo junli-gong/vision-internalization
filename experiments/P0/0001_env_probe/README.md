@@ -21,7 +21,7 @@ b200 服务器 CC，2026-09-30。代码 commit：本任务书 `587b9a5`，外加
 | `p5_8_mem.py` | 显存峰值与 generate 吞吐（`infer`、`lora`） | §5.8 |
 | `p5_dl_9b.sh` | 下载 Qwen3.5-9B 到内存盘 | §5 |
 | `p5_render.py` | 从 JSON 渲染 docs 里的表格（报告中的数字都来自它） | — |
-| `p6_*.py` | 数据源体积与 schema 探针（第 3 批加入） | §6 |
+| `p6_{A,B,C}_*.py` | §6 三个子代理的数据源体积与 schema 探针（HEAD、HF API、datasets-server、zip Range） | §6 |
 
 ## raw/
 
@@ -46,4 +46,5 @@ b200 服务器 CC，2026-09-30。代码 commit：本任务书 `587b9a5`，外加
 | `p5/render.json` | 渲染进 docs 的片段 |
 | `p5_8_nvsmi.csv`、`p5_8_marks.txt` | §5.8 期间 nvidia-smi 每 500 ms 一次的采样，以及各窗口的起止时间 |
 | `*.log` | 各探针的 stdout/stderr（原样） |
-| `p6/` | 数据源探针原始输出（第 3 批加入） |
+| `p6/{A,B,C}/` | §6 数据源探针的原始证据（HEAD 记录、HF API 与 datasets-server 的 JSON、zip 成员清单、facts.md 片段、`downloads.tsv` 下载与删除记账） |
+| `own_tmp_deleted.txt` | 服务器 CC 自己的临时下载（instances_val2017.json 等）删除前的 sha256、体积与删除时间 |

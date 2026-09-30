@@ -1,0 +1,427 @@
+{
+ "requested_id": "phiyodr/coco2017",
+ "probe_time": "2026-09-30T05:52:13+0000",
+ "resolved_id": "phiyodr/coco2017",
+ "sha": "036f3f8291db64d17faad9b09e59dd30bb65c4d7",
+ "last_modified": "2024-03-21 08:32:43+00:00",
+ "created_at": "2023-06-26 08:48:25+00:00",
+ "gated": false,
+ "private": false,
+ "downloads": 1928,
+ "likes": 29,
+ "tags": [
+  "task_categories:image-to-text",
+  "task_ids:image-captioning",
+  "language:en",
+  "size_categories:100K<n<1M",
+  "format:parquet",
+  "modality:image",
+  "modality:tabular",
+  "modality:text",
+  "library:datasets",
+  "library:pandas",
+  "library:mlcroissant",
+  "library:polars",
+  "region:us",
+  "coco",
+  "image-captioning"
+ ],
+ "card_license": null,
+ "card_data_keys": [
+  "dataset_info",
+  "language",
+  "pretty_name",
+  "size_categories",
+  "tags",
+  "task_categories",
+  "task_ids"
+ ],
+ "card_configs": null,
+ "card_dataset_info": {
+  "features": [
+   {
+    "name": "license",
+    "dtype": "int64"
+   },
+   {
+    "name": "file_name",
+    "dtype": "string"
+   },
+   {
+    "name": "coco_url",
+    "dtype": "string"
+   },
+   {
+    "name": "height",
+    "dtype": "int64"
+   },
+   {
+    "name": "width",
+    "dtype": "int64"
+   },
+   {
+    "name": "date_captured",
+    "dtype": "string"
+   },
+   {
+    "name": "flickr_url",
+    "dtype": "string"
+   },
+   {
+    "name": "image_id",
+    "dtype": "int64"
+   },
+   {
+    "name": "ids",
+    "sequence": "int64"
+   },
+   {
+    "name": "captions",
+    "sequence": "string"
+   }
+  ],
+  "splits": [
+   {
+    "name": "train",
+    "num_bytes": 64026361,
+    "num_examples": 118287
+   },
+   {
+    "name": "validation",
+    "num_bytes": 2684731,
+    "num_examples": 5000
+   }
+  ],
+  "download_size": 30170127,
+  "dataset_size": 66711092
+ },
+ "n_files": 4,
+ "total_bytes_hf_api": 30175139,
+ "files": [
+  {
+   "path": ".gitattributes",
+   "size": 2307,
+   "lfs": false
+  },
+  {
+   "path": "README.md",
+   "size": 2705,
+   "lfs": false
+  },
+  {
+   "path": "data/train-00000-of-00001-0084e041f1902997.parquet",
+   "size": 28909052,
+   "lfs": true
+  },
+  {
+   "path": "data/validation-00000-of-00001-e3c37e369512a3aa.parquet",
+   "size": 1261075,
+   "lfs": true
+  }
+ ],
+ "readme": "---\nlanguage:\n- en\npretty_name: COCO2017\nsize_categories:\n- 100K<n<1M\ntask_categories:\n- image-to-text\ntask_ids:\n- image-captioning\ntags:\n- coco\n- image-captioning\ndataset_info:\n  features:\n  - name: license\n    dtype: int64\n  - name: file_name\n    dtype: string\n  - name: coco_url\n    dtype: string\n  - name: height\n    dtype: int64\n  - name: width\n    dtype: int64\n  - name: date_captured\n    dtype: string\n  - name: flickr_url\n    dtype: string\n  - name: image_id\n    dtype: int64\n  - name: ids\n    sequence: int64\n  - name: captions\n    sequence: string\n  splits:\n  - name: train\n    num_bytes: 64026361\n    num_examples: 118287\n  - name: validation\n    num_bytes: 2684731\n    num_examples: 5000\n  download_size: 30170127\n  dataset_size: 66711092\n---\n# coco2017\n\nImage-text pairs from [MS COCO2017](https://cocodataset.org/#download).\n\n## Data origin\n\n* Data originates from [cocodataset.org](http://images.cocodataset.org/annotations/annotations_trainval2017.zip)\n* While `coco-karpathy` uses a dense format (with several sentences and sendids per row), `coco-karpathy-long` uses a long format with one `sentence` (aka caption) and `sendid` per row. `coco-karpathy-long` uses the first five sentences and therefore is five times as long as `coco-karpathy`.\n    * `phiyodr/coco2017`: One row corresponds one image with several sentences.\n    * `phiyodr/coco2017-long`: One row correspond one sentence (aka caption). There are 5 rows (sometimes more) with the same image details.\n\n## Format\n\n```python\nDatasetDict({\n    train: Dataset({\n        features: ['license', 'file_name', 'coco_url', 'height', 'width', 'date_captured', 'flickr_url', 'image_id', 'ids', 'captions'],\n        num_rows: 118287\n    })\n    validation: Dataset({\n        features: ['license', 'file_name', 'coco_url', 'height', 'width', 'date_captured', 'flickr_url', 'image_id', 'ids', 'captions'],\n        num_rows: 5000\n    })\n})\n```\n\n## Usage\n\n* Download image data and unzip\n  \n```bash\ncd PATH_TO_IMAGE_FOLDER\n\nwget http://images.cocodataset.org/zips/train2017.zip\nwget http://images.cocodataset.org/zips/val2017.zip\n#wget http://images.cocodataset.org/annotations/annotations_trainval2017.zip # zip not needed: everything you need is in load_dataset(\"phiyodr/coco2017\")\n\nunzip train2017.zip\nunzip val2017.zip\n```\n\n* Load dataset in Python\n  \n```python\nimport os\nfrom datasets import load_dataset\nPATH_TO_IMAGE_FOLDER = \"COCO2017\"\n\ndef create_full_path(example):\n    \"\"\"Create full path to image using `base_path` to COCO2017 folder.\"\"\"\n    example[\"image_path\"] = os.path.join(PATH_TO_IMAGE_FOLDER, example[\"file_name\"])\n    return example\n\ndataset = load_dataset(\"phiyodr/coco2017\")\ndataset = dataset.map(create_full_path)\n```",
+ "ds_splits": {
+  "status": 200,
+  "json": {
+   "splits": [
+    {
+     "dataset": "phiyodr/coco2017",
+     "config": "default",
+     "split": "train"
+    },
+    {
+     "dataset": "phiyodr/coco2017",
+     "config": "default",
+     "split": "validation"
+    }
+   ],
+   "pending": [],
+   "failed": []
+  }
+ },
+ "ds_size": {
+  "status": 200,
+  "json": {
+   "size": {
+    "dataset": {
+     "dataset": "phiyodr/coco2017",
+     "num_bytes_original_files": 30170127,
+     "num_bytes_parquet_files": 30170127,
+     "num_bytes_memory": 66751685,
+     "num_rows": 123287,
+     "estimated_num_rows": null
+    },
+    "configs": [
+     {
+      "dataset": "phiyodr/coco2017",
+      "config": "default",
+      "num_bytes_original_files": 30170127,
+      "num_bytes_parquet_files": 30170127,
+      "num_bytes_memory": 66751685,
+      "num_rows": 123287,
+      "num_columns": 10,
+      "estimated_num_rows": null
+     }
+    ],
+    "splits": [
+     {
+      "dataset": "phiyodr/coco2017",
+      "config": "default",
+      "split": "train",
+      "num_bytes_parquet_files": 28909052,
+      "num_bytes_memory": 64053120,
+      "num_rows": 118287,
+      "num_columns": 10,
+      "estimated_num_rows": null
+     },
+     {
+      "dataset": "phiyodr/coco2017",
+      "config": "default",
+      "split": "validation",
+      "num_bytes_parquet_files": 1261075,
+      "num_bytes_memory": 2698565,
+      "num_rows": 5000,
+      "num_columns": 10,
+      "estimated_num_rows": null
+     }
+    ]
+   },
+   "pending": [],
+   "failed": [],
+   "partial": false
+  }
+ },
+ "ds_info": {
+  "status": 200,
+  "json": {
+   "dataset_info": {
+    "default": {
+     "description": "",
+     "citation": "",
+     "homepage": "",
+     "license": "",
+     "features": {
+      "license": {
+       "dtype": "int64",
+       "_type": "Value"
+      },
+      "file_name": {
+       "dtype": "string",
+       "_type": "Value"
+      },
+      "coco_url": {
+       "dtype": "string",
+       "_type": "Value"
+      },
+      "height": {
+       "dtype": "int64",
+       "_type": "Value"
+      },
+      "width": {
+       "dtype": "int64",
+       "_type": "Value"
+      },
+      "date_captured": {
+       "dtype": "string",
+       "_type": "Value"
+      },
+      "flickr_url": {
+       "dtype": "string",
+       "_type": "Value"
+      },
+      "image_id": {
+       "dtype": "int64",
+       "_type": "Value"
+      },
+      "ids": {
+       "feature": {
+        "dtype": "int64",
+        "_type": "Value"
+       },
+       "_type": "Sequence"
+      },
+      "captions": {
+       "feature": {
+        "dtype": "string",
+        "_type": "Value"
+       },
+       "_type": "Sequence"
+      }
+     },
+     "builder_name": "parquet",
+     "dataset_name": "coco2017",
+     "config_name": "default",
+     "version": {
+      "version_str": "0.0.0",
+      "major": 0,
+      "minor": 0,
+      "patch": 0
+     },
+     "splits": {
+      "train": {
+       "name": "train",
+       "num_bytes": 64053120,
+       "num_examples": 118287,
+       "dataset_name": null
+      },
+      "validation": {
+       "name": "validation",
+       "num_bytes": 2698565,
+       "num_examples": 5000,
+       "dataset_name": null
+      }
+     },
+     "download_size": 30170127,
+     "dataset_size": 66751685
+    }
+   },
+   "pending": [],
+   "failed": [],
+   "partial": false
+  }
+ },
+ "ds_first_rows": {
+  "default/train": {
+   "features": [
+    {
+     "feature_idx": 0,
+     "name": "license",
+     "type": {
+      "dtype": "int64",
+      "_type": "Value"
+     }
+    },
+    {
+     "feature_idx": 1,
+     "name": "file_name",
+     "type": {
+      "dtype": "string",
+      "_type": "Value"
+     }
+    },
+    {
+     "feature_idx": 2,
+     "name": "coco_url",
+     "type": {
+      "dtype": "string",
+      "_type": "Value"
+     }
+    },
+    {
+     "feature_idx": 3,
+     "name": "height",
+     "type": {
+      "dtype": "int64",
+      "_type": "Value"
+     }
+    },
+    {
+     "feature_idx": 4,
+     "name": "width",
+     "type": {
+      "dtype": "int64",
+      "_type": "Value"
+     }
+    },
+    {
+     "feature_idx": 5,
+     "name": "date_captured",
+     "type": {
+      "dtype": "string",
+      "_type": "Value"
+     }
+    },
+    {
+     "feature_idx": 6,
+     "name": "flickr_url",
+     "type": {
+      "dtype": "string",
+      "_type": "Value"
+     }
+    },
+    {
+     "feature_idx": 7,
+     "name": "image_id",
+     "type": {
+      "dtype": "int64",
+      "_type": "Value"
+     }
+    },
+    {
+     "feature_idx": 8,
+     "name": "ids",
+     "type": {
+      "feature": {
+       "dtype": "int64",
+       "_type": "Value"
+      },
+      "_type": "Sequence"
+     }
+    },
+    {
+     "feature_idx": 9,
+     "name": "captions",
+     "type": {
+      "feature": {
+       "dtype": "string",
+       "_type": "Value"
+      },
+      "_type": "Sequence"
+     }
+    }
+   ],
+   "n_rows_returned": 100,
+   "truncated": true,
+   "rows_first2": [
+    {
+     "license": 3,
+     "file_name": "train2017/000000391895.jpg",
+     "coco_url": "http://images.cocodataset.org/train2017/000000391895.jpg",
+     "height": 360,
+     "width": 640,
+     "date_captured": "2013-11-14 11:18:45",
+     "flickr_url": "http://farm9.staticflickr.com/8186/8119368305_4e622c8349_z.jpg",
+     "image_id": 391895,
+     "ids": [
+      770337,
+      771687,
+      772707,
+      776154,
+      781998
+     ],
+     "captions": [
+      "A man with a red helmet on a small moped on a dirt road. ",
+      "Man riding a motor bike on a dirt road on the countryside.",
+      "A man riding on the back of a motorcycle.",
+      "A dirt path with a young person on a motor bike rests to the foreground of a verdant area with a bridge and a background of cloud-wreathed mountains. ",
+      "A man in a red shirt and a red hat is on a motorcycle on a hill side."
+     ]
+    },
+    {
+     "license": 4,
+     "file_name": "train2017/000000522418.jpg",
+     "coco_url": "http://images.cocodataset.org/train2017/000000522418.jpg",
+     "height": 480,
+     "width": 640,
+     "date_captured": "2013-11-14 11:38:44",
+     "flickr_url": "http://farm1.staticflickr.com/1/127244861_ab0c0381e7_z.jpg",
+     "image_id": 522418,
+     "ids": [
+      681330,
+      686718,
+      688839,
+      693159,
+      693204
+     ],
+     "captions": [
+      "A woman wearing a net on her head cutting a cake. ",
+      "A woman cutting a large white sheet cake.",
+      "A woman wearing a hair net cutting a large sheet cake.",
+      "there is a woman that is cutting a white cake",
+      "A woman marking a cake with the back of a chef's knife. "
+     ]
+    }
+   ]
+  }
+ }
+}
