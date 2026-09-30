@@ -18,6 +18,7 @@
 
 | DEV | 发出 | 合入 commit | 内容 | 状态 |
 |---|---|---|---|---|
+| 0006 | 2026-09-30 | — | 输出解析器：通用解析层（失败原因枚举、失败率记账、JSON/计数/多选/二选一/多边形）+ 三家族原生框格式（Phase 0 组件；模式 B，worktree agent） | 已派发 |
 | 0003-a1 | 2026-09-30 | 4ed6bc3 | Qwen3.5 适配器在 CPU 上显式走 GDN 的 torch 实现（修 RUN-0003 的跨机器差异；模式 B，worktree agent） | 已合入（main 433 passed，普通与服务器条件都通过） |
 | 0005 | 2026-09-30 | 00419da | InternVL3.5 适配器（照 Qwen35Adapter；模式 B，worktree agent） | 已合入（第 1 轮解冲突与思考规则；main 559 passed，普通/服务器条件都通过；三家族 --tiny 冒烟都通过） |
 | 0004 | 2026-09-30 | 2463c02 | Gemma 4 适配器（照 Qwen35Adapter；另把 vision_features 改为抽象方法；模式 B，worktree agent） | 已合入（93 新测试；main 共 424 passed；两个家族的 --tiny 冒烟都通过） |
@@ -170,4 +171,5 @@
   - (f) think_sampled 的思考长度中位数：Qwen 4B/9B 大于 0.8B/2B；所有模型的中位数都在 1500 token 以内。
   - (g) batch 1 的解码速度：0.8B ≥ 40 tokens/s，9B ≥ 20 tokens/s。
   - (h) 总墙钟 ≤ 3 小时。
+- **派发 DEV-0006（输出解析器）**：简报 §8.1 把解析器列为 Phase 0 组件，现在只有 InternVL 有框解析，Qwen 与 Gemma 没有，自由文本里的多选字母、计数、二选一、多边形也都没有。等 G0 期间先补上：它不依赖 G0 要定的事，E1 一开始就要用。RUN-0005 的 A4/B4 定位输出回来后，追加为回归样例。
 
