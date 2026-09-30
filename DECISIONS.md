@@ -139,3 +139,34 @@
    - 超过 243 个时，允许把嵌入（lm_head 不共享时也一起）扩到恰好需要的行数，新行用精确均值初始化，已有行逐位不变；
    - 任何时候不许缩表。已补发给 DEV-0003。
 
+## D12 — DEV-0001 addendum-1 合入、偏离裁定与复核发现的处理（2026-09-30）
+
+1. **合入**：addendum-1 合入。独立审查复核（manager.md §7.2）确认，原来的 S1–S3、M1–M4 全部修好：
+   - 核心数值对照在改动后仍然逐位一致或只有浮点级误差；
+   - 原先存活的 8 个变异全部被抓住。
+
+   **解禁** `stats.is_significant`、`stats.paired_bootstrap_ci`、`metrics.detection.detection_map`。
+2. **复核发现修复新引入的问题**，交给 addendum-2（第 2 轮返工，也是最后一轮）：
+   - N1：`intersect_and_union` 的默认值使旧写法 reduce 两次、两类用法忘传参就算错；
+   - N2：多选题的保守规则单向压低准确率；
+   - N3：检测 bootstrap 静默丢弃预测；
+   - N4：网格解析会被说明行误判；
+   - N7：`is_significant` 接受转置的输入；
+   - N8：检测缺配对显著性路径。
+
+   **addendum-2 合入前，下列函数继续禁用**：`intersect_and_union` 与 `mean_iou`、`normalize_choice` 与 `multiple_choice_accuracy`、`parse_grid_text`、`detection_bootstrap_statistic`。
+3. **对 addendum-1 的 9 条偏离的裁定**：
+   - (1) 无分数 AP 的平局打破改为成对（antithetic）抽取：接受。复核证实它无偏，K=20 时标准差 0.0007，独立置换是 0.0023。调用方要按规范顺序传入预测，见 addendum-2 第 7 条。
+   - (2) `intersect_and_union` 默认 `reduce_zero=True`：推翻，改为必填（N1）。
+   - (3) `is_significant` 的输入约定：接受，另加防转置守卫（N7）。
+   - (4) 检测工作点用最大基数匹配、crowd 按 COCOeval 口径忽略：接受。复核在 300 张随机图上（含 crowd 与重复框）得到的 TP/FP/nGT，与 COCOeval 在 IoU 0.5 下的计数完全一致。只有一个框同时覆盖多个同类 GT 时才与贪心不同，这时给出的是贪心的上界。
+   - (5) 只含污染行的块判 ILLEGAL_CHAR：修改为"多数字符规则 + 候选块规则"（N4）。
+   - (6) 多选题保守规则：推翻，收窄为括号形式、列表式 `X)`、以及 "answer is X"（N2）。报告要分系统列出 None 率。
+   - (7) `as_binary_mask` 放在 `grid/codec.py`：接受。
+   - (8) 记账的两种时间口径：接受。
+   - (9) 法向的 `valid` 必须是 bool：接受。
+4. **只改文档的两条**：
+   - N5：检测 bootstrap 的点估计用 `n_tiebreaks`（默认 1），标题数字取 `detection_map`（K=20）。
+   - N6：AP 忽略全集里没有 GT 的类别，F1 把这类框算作 FP。这一条补进 N9 供决策。
+   - N9（变异 X3 存活）是冗余检查，不处理。
+
