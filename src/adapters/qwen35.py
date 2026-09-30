@@ -20,6 +20,9 @@
 - 层号（base.py 的层号约定）：就是 HF `output_hidden_states` 元组的下标。0 = 视觉特征并入之后的嵌入输出，
   i = 第 i 个 decoder 层之后；最后一个下标（num_layers()）是最终归一化之后的值（HF 用 last_hidden_state
   覆盖元组末项）。
+- Gated DeltaNet 的实现（DEV-0003-a1，§5.6）：transformers 在 import 时把 GDN 的两个模块级函数绑到 fla 的 Triton
+  内核（装了 fla 时，只收 GPU 张量）或 torch 原函数，与张量在哪个设备无关。适配器在 CPU 上的前向与生成一律套
+  `torch_gdn()`，显式换成 torch 原函数；GPU 上不动，保持 transformers 的绑定。实际走哪个见 `gdn_implementation()`。
 
 处理器的用法：本适配器只用处理器的三个部件——tokenizer、image_processor、chat_template——自己完成图像占位符的
 展开与 mm_token_type_ids，做法与 `ProcessorMixin.__call__` 相同。原因：开发机没有 torchvision，
@@ -29,9 +32,12 @@
 
 from __future__ import annotations
 
+import contextlib
+import importlib
 import math
 import time
-from typing import Any, Iterable, Sequence
+import types
+from typing import Any, Callable, Iterable, Iterator, Sequence
 
 import numpy as np
 import torch
@@ -138,11 +144,121 @@ class _AllowedTokensProcessor(LogitsProcessor):
         return scores.masked_fill(~self._keep, float("-inf"))
 
 
+# ---------------------------------------------------------------------------
+# Gated DeltaNet 的实现选择（DEV-0003-a1；docs/model_notes.md §5.6，RUN-0003 的服务器诊断）
+#
+# transformers 5.17 在 import 下面这个模块时，用 use_kernel_func_from_hub_with_fallback 把两个 GDN 函数包成
+# "分派包装"：装了 fla 就调 fla 的 Triton 内核（只收 GPU 张量），没装就调 torch 原函数。这在 import 时一次决定，
+# 与张量在哪个设备无关，所以服务器（装了 fla）上 CPU 的小模型会把 CPU 张量送进 Triton。
+# 包装用 functools.wraps 包住 torch 原函数：`__wrapped__` 就是 torch 原函数，而包装自己的 __module__/__qualname__
+# 抄自 torch 原函数，只看名字分不出实际调用哪个，要看闭包里的 implementation（kernel_implementation）。
+# GDN 层的 forward 在调用时才按名字查模块全局，所以临时替换模块属性就能换掉实际调用的函数（§5.6.2 的做法）。
+# ---------------------------------------------------------------------------
+
+QWEN35_MODELING = "transformers.models.qwen3_5.modeling_qwen3_5"
+# 只换这两个。causal_conv1d_fn / causal_conv1d_update 在两台机器上本来都走 torch（都没装 causal-conv1d），不动。
+GDN_FUNCTIONS: tuple[str, ...] = ("torch_chunk_gated_delta_rule", "torch_recurrent_gated_delta_rule")
+
+
+class GDNKernelError(RuntimeError):
+    """GDN 实现切换失败：取不到 torch 原函数、换完不是预期的函数、认不出绑定，或退出时绑定已被别处改动。"""
+
+
+def _modeling_module() -> types.ModuleType:
+    return importlib.import_module(QWEN35_MODELING)
+
+
+def _qualified(fn: Any) -> str:
+    return f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', type(fn).__name__)}"
+
+
+def _is_torch_reference(fn: Any, module: types.ModuleType, name: str) -> bool:
+    """fn 是否正是 modeling_qwen3_5 源码里定义的 torch 原函数 `name`。
+
+    要求：普通 Python 函数、名字相同、全局命名空间就是该模块（hub_kernels 里的分派包装、测试替身都不满足）、
+    自己没有再包一层（没有 __wrapped__）。
+    """
+    return (
+        isinstance(fn, types.FunctionType)
+        and fn.__name__ == name
+        and fn.__qualname__ == name
+        and fn.__globals__ is vars(module)
+        and not hasattr(fn, "__wrapped__")
+    )
+
+
+def _torch_reference(module: types.ModuleType, name: str) -> Callable[..., Any]:
+    """模块级函数 `name` 对应的 torch 原函数：当前绑定已经是它就原样返回（嵌套进入），否则取 `__wrapped__` 并校验。"""
+    bound = getattr(module, name, None)
+    if bound is None:
+        raise GDNKernelError(f"{module.__name__} 里没有 {name}（transformers 版本变了？）")
+    if _is_torch_reference(bound, module, name):
+        return bound
+    try:
+        target = bound.__wrapped__
+    except AttributeError:
+        raise GDNKernelError(f"{name} 当前绑定的 {_qualified(bound)} 没有 __wrapped__，取不到 torch 原函数") from None
+    if not _is_torch_reference(target, module, name):
+        raise GDNKernelError(
+            f"{name}.__wrapped__ 是 {_qualified(target)}，不是 {module.__name__} 里定义的 torch 原函数")
+    return target
+
+
+def kernel_implementation(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """模块级绑定 fn 实际调用的函数。
+
+    fn 是 transformers 的分派包装（有 `__wrapped__`）时，返回它闭包里的 implementation（服务器上是 fla 的内核，
+    开发机上是 torch 原函数）；否则（例如 torch_gdn() 换上的 torch 原函数）就是 fn 自己。有 `__wrapped__` 却认不出
+    implementation 时报错，不猜。
+    """
+    if not hasattr(fn, "__wrapped__"):
+        return fn
+    code = getattr(fn, "__code__", None)
+    cells = dict(zip(code.co_freevars, fn.__closure__ or ())) if code is not None else {}
+    if "implementation" not in cells:
+        raise GDNKernelError(f"{_qualified(fn)} 有 __wrapped__，但不是认得的 transformers 分派包装（闭包里没有 implementation）")
+    return cells["implementation"].cell_contents
+
+
+@contextlib.contextmanager
+def torch_gdn() -> Iterator[None]:
+    """临时把 modeling_qwen3_5 的两个 GDN 模块级函数（GDN_FUNCTIONS）换成 torch 原函数；退出时恢复进入时的绑定，
+    异常退出也恢复。
+
+    - 先把两个目标都取到并校验完才动手：任何一个取不到 `__wrapped__`、或它不是预期的 torch 原函数，就报 GDNKernelError，
+      一个也不换。换完再核对一遍模块属性。
+    - 嵌套：可以。内层进入时绑定已经是 torch 原函数，目标就是它自己；内层退出时恢复成它进入时看到的绑定（仍是 torch），
+      外层退出时才恢复 transformers 的原绑定。
+    - 线程安全：不是。换的是进程级的模块属性，对本进程所有模型、所有线程同时生效：在这段时间里别的线程跑 GPU 前向
+      也会走 torch 实现，两个线程交错进出会恢复错。本项目单进程单线程使用。退出时若发现绑定已不是本层换上的函数
+      （交错使用的迹象），照样恢复进入时的绑定，然后抛 GDNKernelError。
+    """
+    mq = _modeling_module()
+    saved = {n: getattr(mq, n, None) for n in GDN_FUNCTIONS}
+    targets = {n: _torch_reference(mq, n) for n in GDN_FUNCTIONS}
+    try:
+        for n, fn in targets.items():
+            setattr(mq, n, fn)
+        for n, fn in targets.items():
+            now = getattr(mq, n)
+            if now is not fn or not _is_torch_reference(now, mq, n):
+                raise GDNKernelError(f"换完后 {n} 是 {_qualified(now)}，不是预期的 torch 原函数")
+        yield
+    finally:
+        clobbered = [n for n in GDN_FUNCTIONS if getattr(mq, n) is not targets[n]]
+        for n, fn in saved.items():
+            setattr(mq, n, fn)
+        if clobbered:
+            raise GDNKernelError(
+                f"退出 torch_gdn() 时 {clobbered} 的绑定已不是本层换上的 torch 原函数（多线程或非后进先出的交错使用？）；"
+                "已恢复进入时的绑定")
+
+
 class Qwen35Adapter(ModelAdapter):
     """Qwen3.5（0.8B/2B/4B/9B）适配器。单条样本（batch = 1）；批处理和 vLLM 另开任务。
 
     设备在构造时给定，dtype 在 load 时给定。进入任何模型算子之前，入口断言检查输入与模型的 device/dtype，
-    不一致就抛 AdapterDeviceError 并报出两个值。
+    不一致就抛 AdapterDeviceError 并报出两个值。设备是 CPU 时，前向与生成显式走 GDN 的 torch 实现（gdn_scope）。
     """
 
     family = registry.FAMILY_QWEN35
@@ -612,7 +728,8 @@ class Qwen35Adapter(ModelAdapter):
         self._check_entry(inputs, None, where="vision_features")
         if not inputs.images:
             return torch.empty((0, self.hidden_size()), dtype=self._dtype, device=self._device)
-        return self._image_features(inputs)
+        with self.gdn_scope():
+            return self._image_features(inputs)
 
     # ------------------------------------------------------------------
     # 生成
@@ -685,7 +802,7 @@ class Qwen35Adapter(ModelAdapter):
         if self._device.type == "cuda":
             torch.cuda.synchronize(self._device)
         t0 = time.perf_counter()
-        with torch.no_grad():
+        with self.gdn_scope(), torch.no_grad():
             out = self._model.generate(
                 **kw,
                 max_new_tokens=max_new_tokens,
@@ -795,6 +912,42 @@ class Qwen35Adapter(ModelAdapter):
     def hidden_size(self) -> int:
         self._require_loaded()
         return int(self._model.config.text_config.hidden_size)
+
+    # ------------------------------------------------------------------
+    # GDN 实现（DEV-0003-a1）
+    # ------------------------------------------------------------------
+
+    def gdn_scope(self) -> contextlib.AbstractContextManager[None]:
+        """本适配器前向与生成所用的 GDN 实现作用域。
+
+        设备是 CPU 时返回 torch_gdn()：显式走 torch 原函数，不管 transformers 在 import 时绑到了什么（服务器装了 fla，
+        绑定的是只收 GPU 张量的 Triton 内核）。其他设备返回空作用域，保持 transformers 的绑定（服务器 GPU 上是 fla）。
+        _run、vision_features、generate 都套在它里面；绕过适配器直接调 self.model(...) 做对照时也要套上它，
+        两条路径才走同一个实现。
+        """
+        return torch_gdn() if self._device.type == "cpu" else contextlib.nullcontext()
+
+    def gdn_implementation(self) -> dict[str, dict[str, Any]]:
+        """只读：本适配器的前向与生成此刻会走的 GDN 实现，按模块级函数名给出实际调用的函数。
+
+        在与前向相同的作用域（gdn_scope）里读 modeling_qwen3_5 的绑定，读完退出，绑定原样恢复，不改任何状态。
+        绑定是 transformers 的分派包装时穿过它（kernel_implementation），报实际调用的函数。每项的字段：
+        module、name（实际调用的函数的模块路径与名字）；is_torch_reference（是否就是 transformers 的 torch 原函数）；
+        switched_to_torch（本适配器的设备是否触发 CPU 上的切换）。不需要已挂模型。
+        """
+        mq = _modeling_module()
+        switched = self._device.type == "cpu"
+        out: dict[str, dict[str, Any]] = {}
+        with self.gdn_scope():
+            for name in GDN_FUNCTIONS:
+                impl = kernel_implementation(getattr(mq, name))
+                out[name] = {
+                    "module": getattr(impl, "__module__", None),
+                    "name": getattr(impl, "__qualname__", type(impl).__name__),
+                    "is_torch_reference": _is_torch_reference(impl, mq, name),
+                    "switched_to_torch": switched,
+                }
+        return out
 
     # ------------------------------------------------------------------
     # 内部
@@ -926,17 +1079,18 @@ class Qwen35Adapter(ModelAdapter):
 
     def _run(self, inputs: ModelInputs, query_embeds: torch.Tensor | None, *, where: str) -> tuple[torch.Tensor, ...]:
         self._check_entry(inputs, query_embeds, where=where)
-        embeds = self._input_embeds(inputs, query_embeds)
-        pos = self.position_ids(inputs)
-        out = self._model(
-            inputs_embeds=embeds,
-            attention_mask=inputs.tensors["attention_mask"],
-            position_ids=pos,
-            output_hidden_states=True,
-            logits_to_keep=1,
-            use_cache=False,
-            return_dict=True,
-        )
+        with self.gdn_scope():
+            embeds = self._input_embeds(inputs, query_embeds)
+            pos = self.position_ids(inputs)
+            out = self._model(
+                inputs_embeds=embeds,
+                attention_mask=inputs.tensors["attention_mask"],
+                position_ids=pos,
+                output_hidden_states=True,
+                logits_to_keep=1,
+                use_cache=False,
+                return_dict=True,
+            )
         hs = out.hidden_states
         if len(hs) != self.num_layers() + 1:
             raise RuntimeError(f"hidden_states 有 {len(hs)} 项，期望 num_layers()+1 = {self.num_layers() + 1}")
@@ -1115,11 +1269,16 @@ def make_tiny_adapter(
 
 __all__ = [
     "AdapterDeviceError",
+    "GDNKernelError",
+    "GDN_FUNCTIONS",
     "PIXELS_PER_LLM_TOKEN",
     "QUERY_PLACEHOLDER",
+    "QWEN35_MODELING",
     "Qwen35Adapter",
     "build_tiny_model",
+    "kernel_implementation",
     "load_pinned_components",
     "make_tiny_adapter",
     "tiny_config",
+    "torch_gdn",
 ]
