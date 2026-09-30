@@ -168,6 +168,8 @@ def check_0_facts(ad, ctx):
     from transformers.models.qwen3_5 import modeling_qwen3_5 as mq
 
     def fn_name(f):
+        # 穿过 transformers 的分派包装：包装的 __module__/__qualname__ 抄自 torch 原函数，只看名字分不出 fla 与 torch
+        f = qwen35.kernel_implementation(f)
         return f"{getattr(f, '__module__', '?')}.{getattr(f, '__qualname__', type(f).__name__)}"
 
     entry = registry.MODELS.get(ad.model_key) if ad.model_key in registry.MODELS else None
@@ -198,8 +200,12 @@ def check_0_facts(ad, ctx):
         "image": ctx["image_info"],
         "versions": {"python": platform.python_version(), "torch": torch.__version__,
                      "transformers": transformers.__version__},
+        # transformers 在 import 时的模块级绑定实际调用的函数（服务器装了 fla 时，GDN 两项是 fla 的 Triton 内核）
         "kernels": {n: fn_name(getattr(mq, n)) for n in ("torch_chunk_gated_delta_rule", "torch_recurrent_gated_delta_rule",
                                                           "causal_conv1d_fn", "causal_conv1d_update") if hasattr(mq, n)},
+        # 适配器的前向与生成实际走的 GDN 实现：CPU 上是切换之后的 torch 原函数，GPU 上同上面的绑定（DEV-0003-a1）。
+        # 只有带 GDN 的家族（Qwen3.5）的适配器有这个方法，其他家族记 None
+        "gdn_in_adapter_forward": ad.gdn_implementation() if hasattr(ad, "gdn_implementation") else None,
     }
 
 
@@ -351,6 +357,8 @@ def check_4_query_tokens(ad, ctx):
 
 
 def check_5_position_ids(ad, ctx):
+    import contextlib
+
     imgs = [ctx["img"], ctx["img2"]]
     layers = _layers(ad)
     out = {}
@@ -365,9 +373,12 @@ def check_5_position_ids(ad, ctx):
         kw = dict(output_hidden_states=True, logits_to_keep=1)
         with torch.no_grad():
             ours = ad.sequence_hidden_states(inp, layers)
-            auto = ad.model(**t, use_cache=False, **kw).hidden_states
-            given = ad.model(**t, position_ids=pos, use_cache=False, **kw).hidden_states
-            default = ad.model(**t, **kw).hidden_states  # HF 默认（use_cache 取 config），只记录
+            # 直接调 ad.model 的 HF 原生参照路径，与适配器走同一个 GDN 实现（Qwen3.5 在 CPU 上是 torch，DEV-0003-a1）；
+            # 适配器没有 gdn_scope 的家族（Gemma 4、InternVL3.5）不切换
+            with getattr(ad, "gdn_scope", contextlib.nullcontext)():
+                auto = ad.model(**t, use_cache=False, **kw).hidden_states
+                given = ad.model(**t, position_ids=pos, use_cache=False, **kw).hidden_states
+                default = ad.model(**t, **kw).hidden_states  # HF 默认（use_cache 取 config），只记录
         given_eq = [bool(torch.equal(auto[l][0], given[l][0])) for l in layers]
         ours_eq = [bool(torch.equal(auto[l][0], ours[l])) for l in layers]
         default_eq = [bool(torch.equal(default[l][0], ours[l])) for l in layers]
