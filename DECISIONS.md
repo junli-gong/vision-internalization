@@ -213,3 +213,22 @@
    - E3a 若要在训练中对 64 维嵌入场做全分辨率引导上采样，需要 torch/GPU 版本，届时与本实现对照；
    - 小物体的加噪幅度，要不要按网格分辨率另设下限，在 E3b 预注册前定。
 
+## D15 — DEV-0003 合入、偏离裁定，以及对 D9-3、D11-8 的更正（2026-09-30）
+
+1. **合入**：DEV-0003 由 worktree 开发 agent 完成，合入 main（a4a60e8）。
+   - 管理员通读了 `qwen35.py`、`base.py` 的改动和 registry。在干净的 worktree 里跑全量测试，312 passed；`smoke --tiny` 退出码 0。
+   - 冒烟脚本的各项检查都拿外部参照对比：官方 processor、`get_rope_index`、HF 原生前向路径。它们充当 G0 的独立检验。
+   - 隐藏状态路径的独立代码审查安排在 E2 之前做。
+2. **偏离裁定**：
+   - (2) 层号采用 HF 惯例：最后一个层号取 final norm 之后的值，其余层号是各 decoder 层的原始输出。接受，三个家族一律照此执行，base.py 的 docstring 已写明。E2 的逐层曲线在最后一个点上是 post-norm，报告时注明。
+   - (1)(3) `hidden_states` 的 `query_embeds` 不在子类检查里强制；`vision_features` 暂时不是抽象方法。暂时接受，DEV-0004 更新 base 的测试替身之后改为抽象方法。
+   - (4)(5) 预算检查收紧；`GenerationResult` 加 `raw_text`（默认 None 只为兼容）和 `thinking_unclosed`。接受。
+   - (6) 查询占位符用专用 token `<|visint_query|>`，占一个预留行，不计入 300 的预算。接受。之后 grid token 在扩表前只剩 242 个预留行。
+   - (7a)(7c) 手写只增不缩的扩表，不调用 `resize_token_embeddings`；扩表后同步 `vocab_size`。接受。
+   - (9) 适配器自己完成图像占位符的展开。在服务器上，像素值来自官方 processor 的 image_processor。冒烟检查 1 与官方 processor 逐项比对，是这条的前提；RUN-0003 核实。
+   - (10)–(20) 接受。
+3. **更正 D9-3**：lm_head 是否与嵌入共享，以运行时和 config 为准，适配器已按此实现。据 RUN-0001 存下的 4B config，0.8B/2B/4B 共享，只有 9B 不共享。D9-3 里"4B/9B 不共享"一句作废，RUN-0003 用 4B 实测核对。
+4. **更正 D11-8 的措辞**：原句"已有的 248320 行逐位不变"与 D9-3"预留行原有的值不用"字面冲突。按本意改为：
+   - 已有 token 的行（id < 原 len(tokenizer)）逐位不变；
+   - 新 token 的行不论来自预留行还是扩出来的行，一律写成基础词表行的精确均值。
+
