@@ -5,6 +5,12 @@
 
 约定：
 - 层号只能作为参数传入；本模块不出现任何具体层号（简报 §4 第 6 条）。
+- **层号约定（D10，各家族必须一致，否则 E2 的逐层曲线会错位）**：
+  - 层号 0 = 视觉特征并入序列之后的嵌入输出，即第一个 decoder 层的输入；
+  - 层号 i（1 ≤ i ≤ num_layers()）= 第 i 个 decoder 层的输出；
+  - 其中最后一个层号 num_layers() 按 HF `output_hidden_states` 元组的惯例，取经过最终归一化（final norm）
+    之后的值。三个家族的 HF 实现都是这个惯例，所以层号与 HF 元组下标一一对应；
+  - 有效范围 [0, num_layers()]，越界报错。
 - `generate` 的 `enable_thinking` 与 `max_new_tokens` 是必填关键字参数，没有默认值（D1：每次调用都
   显式设置）。子类若给它们加默认值，定义类时就报 TypeError（见 `ModelAdapter.__init_subclass__`）。
 - token 区间一律是半开区间 [start, end)，下标相对于单条输入序列。
@@ -80,7 +86,12 @@ class ModelInputs:
 
 @dataclass(frozen=True)
 class GenerationResult:
-    """一次 generate 调用的结果与计算量（记账字段见 src/accounting.py）。"""
+    """一次 generate 调用的结果与计算量（记账字段见 src/accounting.py）。
+
+    text：剥离思考段之后的最终回答（各家族的剥离规则写在适配器里），解析器只看它（D10）。
+    raw_text：完整解码结果，含思考段与特殊 token。适配器必须填写；默认 None 只为兼容旧的构造方式。
+    thinking_unclosed：开启了思考、却没有生成思考段的结束标记（例如 max_new_tokens 用完）。此时 text 为空串。
+    """
 
     text: str
     token_ids: tuple[int, ...]
@@ -88,6 +99,8 @@ class GenerationResult:
     n_prompt_tokens: int
     n_visual_tokens: int
     wall_time_s: float
+    raw_text: str | None = None
+    thinking_unclosed: bool = False
 
     def __post_init__(self) -> None:
         if self.n_generated_tokens != len(self.token_ids):
@@ -99,6 +112,8 @@ class GenerationResult:
                 raise ValueError(f"{name} 不能为负")
         if self.wall_time_s < 0:
             raise ValueError("wall_time_s 不能为负")
+        if self.thinking_unclosed and self.text != "":
+            raise ValueError("思考段未闭合时 text 必须为空串")
 
 
 @dataclass(frozen=True)
@@ -121,14 +136,26 @@ class HiddenStates:
             raise ValueError(f"query 的层号 {sorted(self.query)} 与 layers {list(self.layers)} 不一致")
 
 
-def check_grid_token_names(names: Sequence[str]) -> None:
-    """add_grid_tokens 实现里调用：名字不重复、非空，总数不超过 MAX_NEW_GRID_TOKENS（简报 §4 第 4 条）。"""
+def check_grid_token_names(names: Sequence[str], n_existing: int = 0) -> None:
+    """add_grid_tokens 实现里调用：名字不重复、非空，总数不超过 MAX_NEW_GRID_TOKENS（简报 §4 第 4 条）。
+
+    预算跨调用累计（D10）：n_existing 是此前已经加过的 grid token 个数，由适配器自己记；
+    判据是 n_existing + len(names) ≤ MAX_NEW_GRID_TOKENS。
+    """
+    if isinstance(names, str):
+        raise TypeError("names 必须是字符串的序列，不能是单个字符串")
+    if isinstance(n_existing, bool) or not isinstance(n_existing, int) or n_existing < 0:
+        raise ValueError(f"n_existing 必须是非负整数，收到 {n_existing!r}")
     if len(names) == 0:
         raise ValueError("names 为空")
+    if any(not isinstance(n, str) or n == "" for n in names):
+        raise ValueError("grid token 名字必须是非空字符串")
     if len(set(names)) != len(names):
         raise ValueError("grid token 名字有重复")
-    if len(names) > MAX_NEW_GRID_TOKENS:
-        raise ValueError(f"新增 {len(names)} 个 token，超过上限 {MAX_NEW_GRID_TOKENS}")
+    if n_existing + len(names) > MAX_NEW_GRID_TOKENS:
+        raise ValueError(
+            f"累计新增 {n_existing} + {len(names)} = {n_existing + len(names)} 个 token，超过上限 {MAX_NEW_GRID_TOKENS}"
+        )
 
 
 # 子类必须保持为"无默认值的关键字参数"的参数：方法名 -> 参数名
@@ -192,11 +219,29 @@ class ModelAdapter(abc.ABC):
         """
 
     @abc.abstractmethod
-    def hidden_states(self, inputs: ModelInputs, layers: Sequence[int]) -> HiddenStates:
+    def hidden_states(
+        self, inputs: ModelInputs, layers: Sequence[int], *, query_embeds: Any | None = None
+    ) -> HiddenStates:
         """返回指定层在图像 token 位置和查询 token 位置的隐藏状态。
 
         layers 由调用方给出（来自探针结果或可学习逐层加权的配置），适配器不设默认层。
+        层号按本模块开头的层号约定：层号 0 是视觉特征并入之后的嵌入输出，层号 i 是第 i 个 decoder 层的
+        输出（最后一个取最终归一化之后的值），有效范围 [0, num_layers()]，越界报错。
+
+        query_embeds（D10 的接口扩展，DEV-0003）：形状 [n_query, hidden_size]。非 None 时，前向前把查询位置的
+        输入嵌入替换成它，E3a 的可学习查询 token 从这里进；inputs 里必须有查询 token，个数一致。
         """
+
+    def vision_features(self, inputs: ModelInputs) -> Any:
+        """进入 LLM 之前、经过投影/合并之后的视觉 token（D10，DEV-0003）。
+
+        形状 [n_image_tokens, hidden_size]，多图按 inputs.images 的顺序拼接。E2 的参考线、E3a 的 C2 对照用它。
+        各家族在适配器里写明它与 hidden_states(inputs, [0]) 在图像位置上的关系（Qwen3.5 要求逐位相同）。
+
+        注意：任务书要求这是抽象方法。tests/test_adapters_base.py 里的测试替身没有实现它，而那个文件不在
+        DEV-0003 的改动范围内，所以这里暂用"默认抛 NotImplementedError"的普通方法，待管理员裁定。
+        """
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 vision_features")
 
     @abc.abstractmethod
     def inject_query_tokens(self, n: int, position_mode: PositionMode) -> None:
@@ -211,7 +256,8 @@ class ModelAdapter(abc.ABC):
         """加入像素 token 通道用的新 token，返回 名字 -> token id。
 
         优先复用预留 token，否则扩展嵌入（简报 §8.1）。实现须调用 check_grid_token_names，
-        并确认分词器把每个新 token 当作单个 token（简报 §12）。
+        并确认分词器把每个新 token 当作单个 token（简报 §12）。预算按累计计：适配器自己记已加的总数，
+        作为 n_existing 传给 check_grid_token_names（D10）。
         """
 
     @abc.abstractmethod

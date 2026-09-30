@@ -1,0 +1,1125 @@
+"""Qwen3.5 家族适配器（简报 §8.1；DEV-0003）。
+
+模型事实一律以 `docs/model_notes.md`（RUN-0001 实测）为准；运行时从 tokenizer / config 读取并断言，
+不写死 token id，不写死层号（简报 §4 第 6 条）：
+
+- 加载类：`AutoModelForImageTextToText` → `Qwen3_5ForConditionalGeneration`，`attn_implementation="sdpa"`，
+  eval 模式；processor 由 `AutoProcessor` 加载（§5.1）。load 一律带注册表里的 revision（D9-2）。
+- 固定分辨率（§5.3、简报 §12）：每个 LLM 视觉 token 对应缩放后图像的 32×32 像素（patch 16 × merge 2）。
+  先用 PIL 把图缩放到构造时给定的 (H, W)，再以 min_pixels = max_pixels = H·W 调图像处理器，处理器不再缩放；
+  视觉网格 = (H/32, W/32)。
+- M-RoPE（§5.4）：文本 token 的 (T, H, W) 都等于顺序位置；图像 token 的 T = s、H = s + 行、W = s + 列；
+  图像之后从 s + max(h, w) 接着编号。position_ids 形状 (4, B, L)，第 0 行是 0..L-1 的文本位置，
+  第 1–3 行是 M-RoPE 位置，与 generate 内部的做法相同。本适配器自己构造并显式传入，
+  每次都在查询块之前的部分与 `get_rope_index` 逐项比对。
+- 聊天模板（§5.2、D9-4）：思考开关直接作为 `apply_chat_template` 的关键字参数传，不用 `chat_template_kwargs`；
+  0.8B/2B 与 4B/9B 的默认值相反，所以 generate 必须显式给出。
+- 新增 token（D9-3 + 管理员对 DEV-0003 的补充规则）：先复用超出 tokenizer 的预留嵌入行（0.8B–9B 都是 243 行）；
+  累计需要的行数超过现有行数时，把嵌入（不共享时连同 lm_head）扩到恰好需要的行数，已有的行逐位不变；
+  任何时候都不缩表，不调用 `resize_token_embeddings`。新行一律初始化为基础词表行的精确均值。
+- 层号（base.py 的层号约定）：就是 HF `output_hidden_states` 元组的下标。0 = 视觉特征并入之后的嵌入输出，
+  i = 第 i 个 decoder 层之后；最后一个下标（num_layers()）是最终归一化之后的值（HF 用 last_hidden_state
+  覆盖元组末项）。
+
+处理器的用法：本适配器只用处理器的三个部件——tokenizer、image_processor、chat_template——自己完成图像占位符的
+展开与 mm_token_type_ids，做法与 `ProcessorMixin.__call__` 相同。原因：开发机没有 torchvision，
+`Qwen3VLProcessor` 的视频部件在那里构造不出来，测试没法走官方处理器。服务器上 load() 仍用官方
+`AutoProcessor` 加载，并把它留在 `hf_processor` 上；冒烟脚本逐项比对两者的输出。
+"""
+
+from __future__ import annotations
+
+import math
+import time
+from typing import Any, Iterable, Sequence
+
+import numpy as np
+import torch
+from PIL import Image
+from transformers import LogitsProcessor
+
+from src.adapters import registry
+from src.adapters.base import (
+    ORDERS,
+    POSITION_MODES,
+    GenerationResult,
+    HiddenStates,
+    ImageTokenInfo,
+    ModelAdapter,
+    ModelInputs,
+    Order,
+    PositionMode,
+    Span,
+    check_grid_token_names,
+)
+
+# ---------------------------------------------------------------------------
+# Qwen3.5 家族事实（字符串来自 docs/model_notes.md §5.1–5.2；id 一律在 attach 时从 tokenizer 查）
+# ---------------------------------------------------------------------------
+
+IM_START = "<|im_start|>"
+IM_END = "<|im_end|>"
+END_OF_TEXT = "<|endoftext|>"
+THINK_END = "</think>"
+IMAGE_PAD = "<|image_pad|>"
+VIDEO_PAD = "<|video_pad|>"
+VISION_START = "<|vision_start|>"
+VISION_END = "<|vision_end|>"
+# 停止 token（任务书：取 tokenizer 里的 <|im_end|> 与 <|endoftext|>）
+STOP_TOKENS: tuple[str, ...] = (IM_END, END_OF_TEXT)
+# 指令里不许出现的结构性 token：出现就会打乱区间或模板结构
+_STRUCTURAL_TOKENS: tuple[str, ...] = (IM_START, IM_END, END_OF_TEXT, IMAGE_PAD, VIDEO_PAD, VISION_START, VISION_END)
+
+# E3a 查询 token 的占位符：add_tokens 新增的专用 token。前向时它的嵌入被 query_embeds 替换，
+# 不计入 E3b 的 300 个 token 预算（任务书），但占用一个嵌入行。
+QUERY_PLACEHOLDER = "<|visint_query|>"
+
+# 每个 LLM 视觉 token 对应缩放后图像的边长（像素），= patch_size × spatial_merge_size（§5.1）。
+# 构造时用它检查 image_size；attach 时与 config 比对。
+PIXELS_PER_LLM_TOKEN = 32
+
+# 小型随机模型：从哪个登记模型的真实 config 缩出来（任务书：取固定 revision 的真实 config）
+TINY_SOURCE_KEY = "qwen3.5-0.8b"
+
+_SENTINEL = "VISINTINSTRUCTIONSLOT"
+_MEAN_CHUNK_BYTES = 1 << 28  # 求基础行均值时每块 float64 的字节上限
+
+
+class AdapterDeviceError(RuntimeError):
+    """入口断言：输入与模型的 device / dtype 不一致（lessons：跨机器差异）。消息里报出两个值。"""
+
+
+def _canonical_device(device: str | torch.device) -> torch.device:
+    """把 "cuda" 这类不带下标的写法规范成张量实际报告的设备（如 cuda:0），便于逐项比较。"""
+    return torch.empty(0, device=device).device
+
+
+def _runs(ids: Sequence[int], token_id: int) -> list[tuple[int, int]]:
+    """ids 里 token_id 的连续段，返回半开区间列表。"""
+    out: list[tuple[int, int]] = []
+    start = None
+    for i, t in enumerate(ids):
+        if t == token_id and start is None:
+            start = i
+        elif t != token_id and start is not None:
+            out.append((start, i))
+            start = None
+    if start is not None:
+        out.append((start, len(ids)))
+    return out
+
+
+class _AllowedTokensProcessor(LogitsProcessor):
+    """把 allowed_token_ids 以外的 logits 置为 -inf（任务书）。
+
+    在 HF generate 里，自定义处理器排在温度 / top-k / top-p 之前，所以采样时也先限制再截断。
+    """
+
+    def __init__(self, allowed_ids: Sequence[int], vocab_rows: int):
+        ids = [int(i) for i in allowed_ids]
+        if len(ids) == 0:
+            raise ValueError("allowed_token_ids 为空；不限制请传 None")
+        if len(set(ids)) != len(ids):
+            raise ValueError("allowed_token_ids 有重复")
+        bad = [i for i in ids if not 0 <= i < vocab_rows]
+        if bad:
+            raise ValueError(f"allowed_token_ids 越界：{bad}，logits 宽度 {vocab_rows}")
+        self.allowed = torch.tensor(ids, dtype=torch.long)
+        self.vocab_rows = vocab_rows
+        self._keep: torch.Tensor | None = None
+
+    def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
+        if scores.shape[-1] != self.vocab_rows:
+            raise RuntimeError(f"logits 宽度 {scores.shape[-1]} 与 lm_head 行数 {self.vocab_rows} 不一致")
+        if self._keep is None or self._keep.device != scores.device:
+            keep = torch.zeros(scores.shape[-1], dtype=torch.bool, device=scores.device)
+            keep[self.allowed.to(scores.device)] = True
+            self._keep = keep
+        return scores.masked_fill(~self._keep, float("-inf"))
+
+
+class Qwen35Adapter(ModelAdapter):
+    """Qwen3.5（0.8B/2B/4B/9B）适配器。单条样本（batch = 1）；批处理和 vLLM 另开任务。
+
+    设备在构造时给定，dtype 在 load 时给定。进入任何模型算子之前，入口断言检查输入与模型的 device/dtype，
+    不一致就抛 AdapterDeviceError 并报出两个值。
+    """
+
+    family = registry.FAMILY_QWEN35
+
+    def __init__(self, *, device: str | torch.device, image_size: tuple[int, int]):
+        if not isinstance(image_size, (tuple, list)) or len(image_size) != 2:
+            raise ValueError(f"image_size 必须是 (H, W)，收到 {image_size!r}")
+        h, w = image_size
+        for name, v in (("H", h), ("W", w)):
+            if isinstance(v, bool) or not isinstance(v, (int, np.integer)) or v <= 0:
+                raise ValueError(f"image_size 的 {name} 必须是正整数，收到 {v!r}")
+            if int(v) % PIXELS_PER_LLM_TOKEN != 0:
+                raise ValueError(f"image_size 的 {name}={v} 不是 {PIXELS_PER_LLM_TOKEN} 的倍数")
+        self._image_size = (int(h), int(w))
+        self._device = _canonical_device(device)
+        self._dtype: torch.dtype | None = None
+        self._model: Any = None
+        self._tok: Any = None
+        self._ip: Any = None
+        self._template: str | None = None
+        self._model_key: str | None = None
+        self.hf_processor: Any = None  # 只有 load() 设置：官方 AutoProcessor，供冒烟脚本比对
+        self._ids: dict[str, int] = {}
+        self._n_base_vocab: int | None = None
+        self._tied: bool | None = None
+        self._resample: Any = None
+        self._header_cache: dict[bool, tuple[int, ...]] = {}
+        self._n_grid_tokens = 0
+        self._grid_token_ids: dict[str, int] = {}
+        self._query_token_id: int | None = None
+        self._query_n: int | None = None
+        self._query_mode: PositionMode | None = None
+
+    # ------------------------------------------------------------------
+    # 属性
+    # ------------------------------------------------------------------
+
+    @property
+    def device(self) -> torch.device:
+        return self._device
+
+    @property
+    def dtype(self) -> torch.dtype:
+        self._require_loaded()
+        return self._dtype
+
+    @property
+    def image_size(self) -> tuple[int, int]:
+        return self._image_size
+
+    @property
+    def llm_grid_hw(self) -> tuple[int, int]:
+        """每张图送进 LLM 的视觉 token 网格 (H/32, W/32)。"""
+        return (self._image_size[0] // PIXELS_PER_LLM_TOKEN, self._image_size[1] // PIXELS_PER_LLM_TOKEN)
+
+    @property
+    def model(self) -> Any:
+        self._require_loaded()
+        return self._model
+
+    @property
+    def tokenizer(self) -> Any:
+        self._require_loaded()
+        return self._tok
+
+    @property
+    def image_processor(self) -> Any:
+        self._require_loaded()
+        return self._ip
+
+    @property
+    def model_key(self) -> str | None:
+        return self._model_key
+
+    @property
+    def tied_word_embeddings(self) -> bool:
+        self._require_loaded()
+        return self._tied
+
+    @property
+    def n_base_vocab(self) -> int:
+        """基础词表大小（不含 added tokens），新行初始化取这些行的均值（D9-3）。"""
+        self._require_loaded()
+        return self._n_base_vocab
+
+    @property
+    def grid_token_ids(self) -> dict[str, int]:
+        return dict(self._grid_token_ids)
+
+    @property
+    def n_grid_tokens(self) -> int:
+        """累计已加的 grid token 个数（计入 300 的预算；查询占位符不计）。"""
+        return self._n_grid_tokens
+
+    @property
+    def query_token_id(self) -> int | None:
+        return self._query_token_id
+
+    def token_id(self, token: str) -> int:
+        """attach 时查好的特殊 token id（如 IM_END、THINK_END）。"""
+        self._require_loaded()
+        return self._ids[token]
+
+    # ------------------------------------------------------------------
+    # 加载
+    # ------------------------------------------------------------------
+
+    def load(self, model_id: str, dtype: Any) -> None:
+        """按注册键加载（带固定 revision）。dtype 由调用方给出，如 torch.bfloat16。"""
+        entry = registry.get_model(model_id)
+        if entry.family != registry.FAMILY_QWEN35:
+            raise ValueError(f"{model_id} 属于 {entry.family} 家族，不是 {registry.FAMILY_QWEN35}")
+        if not isinstance(dtype, torch.dtype) or not dtype.is_floating_point:
+            raise TypeError(f"dtype 必须是浮点 torch.dtype，收到 {dtype!r}")
+        from transformers import AutoModelForImageTextToText, AutoProcessor
+
+        processor = AutoProcessor.from_pretrained(entry.repo, revision=entry.revision)
+        model = AutoModelForImageTextToText.from_pretrained(
+            entry.repo,
+            revision=entry.revision,
+            dtype=dtype,
+            attn_implementation="sdpa",
+            device_map=str(self._device),
+        )
+        self.attach(
+            model,
+            tokenizer=processor.tokenizer,
+            image_processor=processor.image_processor,
+            chat_template=processor.chat_template,
+            model_key=entry.key,
+            expected_dtype=dtype,
+        )
+        self.hf_processor = processor
+
+    def attach(
+        self,
+        model: Any,
+        *,
+        tokenizer: Any,
+        image_processor: Any,
+        chat_template: str,
+        model_key: str | None = None,
+        expected_dtype: torch.dtype | None = None,
+    ) -> None:
+        """挂上已经构造好的模型与处理器部件（load 与小型随机模型共用这条路径）。
+
+        模型若不在构造时给定的设备上，会被整体搬过去；dtype 不做转换，取模型参数的 dtype，
+        要求全部浮点参数同一个 dtype（buffer 如 RoPE 的 inv_freq 按 HF 的做法保持 float32，不检查）。
+        """
+        if self._model is not None:
+            raise RuntimeError("这个适配器已经挂过模型；新模型请新建适配器")
+        if type(model).__name__ != "Qwen3_5ForConditionalGeneration":
+            raise TypeError(f"期望 Qwen3_5ForConditionalGeneration，收到 {type(model).__name__}")
+        if not isinstance(chat_template, str) or not chat_template:
+            raise ValueError("chat_template 为空")
+        cfg = model.config
+        tc, vc = cfg.text_config, cfg.vision_config
+        attn = getattr(cfg, "_attn_implementation", None)
+        if attn != "sdpa":
+            raise ValueError(f"attn_implementation 必须是 sdpa（任务书），收到 {attn!r}")
+
+        # 视觉几何：config、图像处理器与 PIXELS_PER_LLM_TOKEN 三方一致
+        unit = vc.patch_size * vc.spatial_merge_size
+        if unit != PIXELS_PER_LLM_TOKEN:
+            raise ValueError(f"config 的 patch_size×spatial_merge_size={unit}，与 {PIXELS_PER_LLM_TOKEN} 不一致")
+        for ip_attr, cfg_val in (
+            ("patch_size", vc.patch_size),
+            ("merge_size", vc.spatial_merge_size),
+            ("temporal_patch_size", vc.temporal_patch_size),
+        ):
+            if getattr(image_processor, ip_attr) != cfg_val:
+                raise ValueError(f"图像处理器 {ip_attr}={getattr(image_processor, ip_attr)} 与 config 的 {cfg_val} 不一致")
+
+        # 特殊 token：每个都必须分词成单个 token，并与 config 登记的 id 一致
+        ids: dict[str, int] = {}
+        for s in (IM_START, IM_END, END_OF_TEXT, THINK_END, IMAGE_PAD, VIDEO_PAD, VISION_START, VISION_END):
+            enc = tokenizer(s, add_special_tokens=False)["input_ids"]
+            if len(enc) != 1 or tokenizer.convert_tokens_to_ids(s) != enc[0]:
+                raise ValueError(f"{s!r} 没有分词成单个已知 token：{enc}")
+            ids[s] = enc[0]
+        for s, cfg_name in (
+            (IMAGE_PAD, "image_token_id"),
+            (VIDEO_PAD, "video_token_id"),
+            (VISION_START, "vision_start_token_id"),
+            (VISION_END, "vision_end_token_id"),
+        ):
+            if getattr(cfg, cfg_name) != ids[s]:
+                raise ValueError(f"config.{cfg_name}={getattr(cfg, cfg_name)} 与 tokenizer 的 {s} id {ids[s]} 不一致")
+
+        # 嵌入行与词表
+        emb = model.get_input_embeddings()
+        head = model.get_output_embeddings()
+        n_rows = emb.weight.shape[0]
+        if head.weight.shape[0] != n_rows:
+            raise ValueError(f"lm_head 行数 {head.weight.shape[0]} 与嵌入行数 {n_rows} 不一致")
+        if tc.vocab_size != n_rows:
+            raise ValueError(f"text_config.vocab_size={tc.vocab_size} 与嵌入行数 {n_rows} 不一致")
+        if len(tokenizer) > n_rows:
+            raise ValueError(f"len(tokenizer)={len(tokenizer)} 超过嵌入行数 {n_rows}")
+        tied = head.weight is emb.weight
+        if tied != (head.weight.data_ptr() == emb.weight.data_ptr()):
+            raise ValueError("lm_head 与嵌入的共享状态不一致（对象与存储判断矛盾）")
+        cfg_tied = bool(getattr(cfg, "tie_word_embeddings", False))
+        if tied != cfg_tied:
+            raise ValueError(f"config.tie_word_embeddings={cfg_tied}，但 lm_head 与嵌入{'共享' if tied else '不共享'}")
+        n_base = int(tokenizer.vocab_size)
+        if not 0 < n_base <= len(tokenizer):
+            raise ValueError(f"tokenizer.vocab_size={n_base} 不在 (0, len(tokenizer)={len(tokenizer)}]")
+
+        # dtype：全部浮点参数同一个 dtype
+        dtypes = {p.dtype for p in model.parameters() if p.is_floating_point()}
+        if len(dtypes) != 1:
+            raise ValueError(f"模型浮点参数的 dtype 不唯一：{sorted(map(str, dtypes))}")
+        (dtype,) = dtypes
+        if expected_dtype is not None and dtype != expected_dtype:
+            raise AdapterDeviceError(f"加载后参数 dtype 是 {dtype}，调用方要求 {expected_dtype}")
+
+        # 设备：整体搬到构造时给定的设备，再逐个参数 / buffer 核对
+        if any(t.device != self._device for t in _params_and_buffers(model)):
+            model.to(self._device)
+        bad = [(n, t.device) for n, t in _named_params_and_buffers(model) if t.device != self._device]
+        if bad:
+            raise AdapterDeviceError(f"模型张量 {bad[0][0]} 在 {bad[0][1]}，构造时给定的设备是 {self._device}")
+        model.eval()
+
+        self._model = model
+        self._tok = tokenizer
+        self._ip = image_processor
+        self._template = chat_template
+        self._model_key = model_key
+        self._dtype = dtype
+        self._ids = ids
+        self._n_base_vocab = n_base
+        self._tied = tied
+        self._resample = Image.Resampling(int(image_processor.resample))
+
+        # 模板自检：user 轮渲染与思考开关无关，以 <|im_end|>\n 结束；两种 assistant 头都能拆出来。失败就撤销挂载。
+        try:
+            probe = [{"type": "text", "text": "x"}]
+            plain = self._render(probe)
+            for flag in (False, True):
+                if self._render(probe, enable_thinking=flag) != plain:
+                    raise ValueError("user 轮的渲染随思考开关变化，与 model_notes §5.2 不符")
+            if not plain.endswith(IM_END + "\n"):
+                raise ValueError(f"user 轮渲染没有以 {IM_END!r}+换行 结束：{plain[-40:]!r}")
+            for flag in (False, True):
+                self.assistant_header_ids(flag)
+        except Exception:
+            self._model = None
+            self._header_cache.clear()
+            raise
+
+    # ------------------------------------------------------------------
+    # 输入
+    # ------------------------------------------------------------------
+
+    def resize_image(self, image: Any) -> Image.Image:
+        """把一张图转成 RGB 并缩放到 (H, W)。缩放用 PIL，重采样方式取图像处理器的 resample（执行器白名单）。"""
+        self._require_loaded()
+        if isinstance(image, Image.Image):
+            pil = image if image.mode == "RGB" else image.convert("RGB")
+        elif isinstance(image, np.ndarray):
+            if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
+                raise ValueError(f"numpy 图必须是 uint8 的 (H, W, 3)，收到 dtype={image.dtype} shape={image.shape}")
+            pil = Image.fromarray(image)
+        else:
+            raise TypeError(f"图像必须是 PIL.Image 或 numpy 数组，收到 {type(image).__name__}")
+        h, w = self._image_size
+        if pil.size != (w, h):
+            pil = pil.resize((w, h), resample=self._resample)
+        return pil
+
+    def build_inputs(self, images: Sequence[Any], instruction: str, order: Order) -> ModelInputs:
+        """组装单条输入。区间都是 input_ids 里的 token 下标（半开）。
+
+        user 内容的顺序：instruction_first → [指令, 图1, 图2, …]；image_first → [图1, …, 指令]。
+        已调用 inject_query_tokens 时，查询 token 放在 user 内容最后一项之后、<|im_end|> 之前。
+        只渲染到 user 轮结束（<|im_end|>\\n），不含 assistant 头；assistant 头由 generate 按思考开关追加。
+        """
+        self._require_loaded()
+        if order not in ORDERS:
+            raise ValueError(f"order 必须是 {ORDERS} 之一，收到 {order!r}")
+        if not isinstance(instruction, str):
+            raise TypeError(f"instruction 必须是 str，收到 {type(instruction).__name__}")
+        self._check_instruction(instruction)
+        if isinstance(images, (Image.Image, np.ndarray)):
+            raise TypeError("images 必须是图像的序列（单张图也要放进列表）")
+        pil = [self.resize_image(im) for im in images]
+        n_img = len(pil)
+
+        # 1. 渲染：指令槽先放哨兵，确认模板对指令原样输出（Qwen 模板会 trim 整段内容）
+        content = self._content(n_img, instruction, order)
+        text = self._render(content)
+        sent_text = self._render(self._content(n_img, _SENTINEL, order))
+        if sent_text.count(_SENTINEL) != 1:
+            raise RuntimeError("哨兵在渲染结果里出现的次数不是 1")
+        cut = sent_text.index(_SENTINEL)
+        prefix, suffix = sent_text[:cut], sent_text[cut + len(_SENTINEL) :]
+        if text != prefix + instruction + suffix:
+            raise ValueError("聊天模板改写了指令文本（例如首尾空白被 trim），指令区间无法精确定位；请去掉首尾空白")
+        if not text.endswith(IM_END + "\n"):
+            raise RuntimeError(f"渲染没有以 {IM_END!r}+换行 结束")
+
+        # 2. 图像：处理器不再缩放（min = max = H·W），逐张核对网格
+        h, w = self._image_size
+        tensors: dict[str, torch.Tensor] = {}
+        n_tok_per_image: list[int] = []
+        if n_img:
+            enc = self._ip(images=pil, min_pixels=h * w, max_pixels=h * w, return_tensors="pt")
+            grid = enc["image_grid_thw"]
+            p = self._ip.patch_size
+            want = torch.tensor([[1, h // p, w // p]] * n_img, dtype=grid.dtype)
+            if not torch.equal(grid, want):
+                raise RuntimeError(f"image_grid_thw={grid.tolist()}，期望 {want.tolist()}：处理器又做了缩放")
+            merge2 = self._ip.merge_size**2
+            n_tok_per_image = [int(g.prod()) // merge2 for g in grid]
+            tensors["pixel_values"] = enc["pixel_values"].to(device=self._device, dtype=self._dtype)
+            tensors["image_grid_thw"] = grid.to(self._device)
+
+        # 3. 展开图像占位符并分词；指令两侧分别分词，拼接必须与整段分词逐个相同
+        n_pre = prefix.count(IMAGE_PAD)
+        if n_pre + suffix.count(IMAGE_PAD) != n_img:
+            raise RuntimeError("模板里的图像占位符个数与图数不一致")
+        pre_exp = self._expand(prefix, n_tok_per_image[:n_pre])
+        post_exp = self._expand(suffix, n_tok_per_image[n_pre:])
+        ids_pre, ids_ins, ids_post = self._encode(pre_exp), self._encode(instruction), self._encode(post_exp)
+        ids = ids_pre + ids_ins + ids_post
+        if ids != self._encode(pre_exp + instruction + post_exp):
+            raise ValueError("指令与相邻模板文本在分词时合并，指令区间无法精确定位")
+        instruction_span = Span(len(ids_pre), len(ids_pre) + len(ids_ins))
+
+        # 4. 图像区间：<|image_pad|> 的连续段，个数、长度、前后标记逐项核对
+        runs = _runs(ids, self._ids[IMAGE_PAD])
+        if [e - s for s, e in runs] != n_tok_per_image:
+            raise RuntimeError(f"图像 token 段 {runs} 与每张图的 token 数 {n_tok_per_image} 不一致")
+        gh, gw = self.llm_grid_hw
+        infos = []
+        for s, e in runs:
+            if ids[s - 1] != self._ids[VISION_START] or ids[e] != self._ids[VISION_END]:
+                raise RuntimeError(f"图像段 [{s}, {e}) 前后不是 vision_start / vision_end")
+            if e - s != gh * gw:
+                raise RuntimeError(f"图像段长度 {e - s} 与网格 {gh}×{gw} 不一致")
+            infos.append(ImageTokenInfo(Span(s, e), (gh, gw)))
+
+        # 5. 查询区间
+        query_span = None
+        if self._query_n is not None:
+            qruns = _runs(ids, self._query_token_id)
+            if len(qruns) != 1 or qruns[0][1] - qruns[0][0] != self._query_n:
+                raise RuntimeError(f"查询 token 段 {qruns} 与登记的 {self._query_n} 个不一致")
+            qs, qe = qruns[0]
+            if ids[qe] != self._ids[IM_END] or qe + 2 != len(ids):
+                raise RuntimeError("查询 token 没有紧挨在 <|im_end|>\\n 之前")
+            if qs < instruction_span.end or any(qs < info.span.end for info in infos):
+                raise RuntimeError("查询 token 不在 user 内容的最后")
+            query_span = Span(qs, qe)
+
+        input_ids = torch.tensor([ids], dtype=torch.long, device=self._device)
+        tensors["input_ids"] = input_ids
+        tensors["attention_mask"] = torch.ones_like(input_ids)
+        # 与 ProcessorMixin.create_mm_token_type_ids 相同：图像 token 记 1，其余 0（int64）
+        tensors["mm_token_type_ids"] = (input_ids == self._ids[IMAGE_PAD]).to(torch.long)
+        return ModelInputs(
+            tensors=tensors,
+            order=order,
+            images=tuple(infos),
+            instruction_span=instruction_span,
+            query_span=query_span,
+            query_position_mode=self._query_mode if query_span is not None else None,
+        )
+
+    # ------------------------------------------------------------------
+    # 位置
+    # ------------------------------------------------------------------
+
+    def position_ids(self, inputs: ModelInputs) -> torch.Tensor:
+        """自己构造的 (4, 1, L) position_ids：第 0 行 0..L-1，第 1–3 行 M-RoPE 的 (T, H, W)。
+
+        文本 token 三维都等于顺序位置；图像 token T = s、H = s + 行、W = s + 列，之后从 s + max(h, w) 接着编号。
+        查询块：grid2d 时 q×q 网格像图像一样编码——块前最后一个 token 的位置是 p，t0 = p + 1，
+        查询 (r, c) 的 (T, H, W) = (t0, t0 + r, t0 + c)，块之后从 t0 + q 接着编号；seq1d 时按文本顺序编号。
+        查询块之前的部分（seq1d 时整条）与 get_rope_index 逐项比对，不一致就报错。
+        """
+        self._require_loaded()
+        t = inputs.tensors
+        ids = t["input_ids"]
+        if ids.dim() != 2 or ids.shape[0] != 1:
+            raise ValueError(f"只支持单条样本，input_ids 形状 {tuple(ids.shape)}")
+        seq_len = ids.shape[1]
+        segs: list[tuple[int, int, tuple[int, int]]] = [(i.span.start, i.span.end, i.grid_hw) for i in inputs.images]
+        qs = None
+        if inputs.query_span is not None:
+            qs, qe = inputs.query_span.start, inputs.query_span.end
+            if any(i.span.start <= qs - 1 < i.span.end for i in inputs.images):
+                raise RuntimeError("查询块前一个 token 是图像 token，t0 = p + 1 的规则无定义")
+            if inputs.query_position_mode == "grid2d":
+                q = math.isqrt(qe - qs)
+                if q * q != qe - qs:
+                    raise ValueError(f"grid2d 的查询个数 {qe - qs} 不是完全平方数")
+                segs.append((qs, qe, (q, q)))
+        segs.sort()
+        rows = torch.empty((3, seq_len), dtype=torch.long)
+        cur = 0
+        i = 0
+        for s, e, (gh, gw) in segs:
+            if s < i or e - s != gh * gw:
+                raise RuntimeError(f"段 [{s}, {e}) 与网格 {gh}×{gw} 或前一段不相容")
+            rows[:, i:s] = torch.arange(cur, cur + (s - i))
+            cur += s - i
+            r = torch.arange(gh).repeat_interleave(gw)
+            c = torch.arange(gw).repeat(gh)
+            rows[0, s:e] = cur
+            rows[1, s:e] = cur + r
+            rows[2, s:e] = cur + c
+            cur += max(gh, gw)
+            i = e
+        rows[:, i:] = torch.arange(cur, cur + (seq_len - i))
+        pos = torch.cat([torch.arange(seq_len)[None], rows], dim=0).unsqueeze(1)
+
+        # 与模型自己的 get_rope_index 比对（查询 token 在 mm_token_type_ids 里记为文本）
+        ref, _ = self._model.model.get_rope_index(
+            ids,
+            mm_token_type_ids=t["mm_token_type_ids"],
+            image_grid_thw=t.get("image_grid_thw"),
+            attention_mask=t["attention_mask"],
+        )
+        check_end = seq_len if (qs is None or inputs.query_position_mode == "seq1d") else qs
+        if not torch.equal(pos[1:, :, :check_end], ref[:, :, :check_end].cpu()):
+            raise RuntimeError("自构 M-RoPE 位置与 get_rope_index 不一致")
+        return pos.to(ids.device)
+
+    # ------------------------------------------------------------------
+    # 前向：隐藏状态与视觉特征
+    # ------------------------------------------------------------------
+
+    def hidden_states(
+        self, inputs: ModelInputs, layers: Sequence[int], *, query_embeds: torch.Tensor | None = None
+    ) -> HiddenStates:
+        """指定层在图像 token 与查询 token 位置的隐藏状态（层号约定见 base.py）。
+
+        不强制 no_grad：沿用调用方的梯度模式（E3a 训练要让梯度流回 query_embeds 与 LoRA）；
+        只做推理时请在 torch.no_grad() 里调用。
+        """
+        layer_list = self._check_layers(layers)
+        hs = self._run(inputs, query_embeds, where="hidden_states")
+        img_idx = self._image_index(inputs)
+        image = {l: hs[l][0].index_select(0, img_idx) for l in layer_list}
+        query = None
+        if inputs.query_span is not None:
+            q_idx = torch.arange(inputs.query_span.start, inputs.query_span.end, device=img_idx.device)
+            query = {l: hs[l][0].index_select(0, q_idx) for l in layer_list}
+        return HiddenStates(layers=tuple(layer_list), image=image, query=query)
+
+    def sequence_hidden_states(
+        self, inputs: ModelInputs, layers: Sequence[int], *, query_embeds: torch.Tensor | None = None
+    ) -> dict[int, torch.Tensor]:
+        """诊断用：指定层在整条序列上的隐藏状态，每层形状 [L, hidden]。与 hidden_states 走同一条前向路径。"""
+        layer_list = self._check_layers(layers)
+        hs = self._run(inputs, query_embeds, where="sequence_hidden_states")
+        return {l: hs[l][0] for l in layer_list}
+
+    def vision_features(self, inputs: ModelInputs) -> torch.Tensor:
+        """进入 LLM 之前、经过 patch merger 投影之后的视觉 token，[n_image_tokens, hidden]，多图按顺序拼接。
+
+        就是前向时并入嵌入序列的那组向量，所以与 hidden_states(inputs, [0]) 在图像位置上逐位相同（测试与冒烟都查）。
+        """
+        self._check_entry(inputs, None, where="vision_features")
+        if not inputs.images:
+            return torch.empty((0, self.hidden_size()), dtype=self._dtype, device=self._device)
+        return self._image_features(inputs)
+
+    # ------------------------------------------------------------------
+    # 生成
+    # ------------------------------------------------------------------
+
+    def assistant_header_ids(self, enable_thinking: bool) -> tuple[int, ...]:
+        """assistant 头的 token：apply_chat_template(add_generation_prompt=True, enable_thinking=X) 比不加时多出的部分。"""
+        self._require_loaded()
+        if not isinstance(enable_thinking, bool):
+            raise TypeError(f"enable_thinking 必须是 bool，收到 {enable_thinking!r}")
+        if enable_thinking not in self._header_cache:
+            probe = [{"type": "text", "text": "x"}]
+            plain = self._render(probe)
+            full = self._render(probe, add_generation_prompt=True, enable_thinking=enable_thinking)
+            if not full.startswith(plain) or not full[len(plain) :].startswith(IM_START):
+                raise RuntimeError("加了生成提示的渲染不是 user 轮 + <|im_start|>… 的形式")
+            header = self._encode(full[len(plain) :])
+            if self._encode(plain) + header != self._encode(full):
+                raise RuntimeError("assistant 头单独分词与整段分词不一致")
+            self._header_cache[enable_thinking] = tuple(header)
+        return self._header_cache[enable_thinking]
+
+    def generate(
+        self,
+        inputs: ModelInputs,
+        *,
+        enable_thinking: bool,
+        allowed_token_ids: Sequence[int] | None = None,
+        max_new_tokens: int,
+        **gen_kwargs: Any,
+    ) -> GenerationResult:
+        """单条样本生成。默认 greedy；停止 token 是 <|im_end|> 与 <|endoftext|>（id 从 tokenizer 查）。
+
+        allowed_token_ids 非空时，每一步把其他 id 的 logits 置为 -inf；这时若希望能停下，调用方要把停止 token
+        放进允许集合。返回的 token_ids 含生成出的停止 token；n_prompt_tokens 含 assistant 头。
+        """
+        self._require_loaded()
+        if not isinstance(enable_thinking, bool):
+            raise TypeError(f"enable_thinking 必须是 bool，收到 {enable_thinking!r}")
+        if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or max_new_tokens < 1:
+            raise ValueError(f"max_new_tokens 必须是正整数，收到 {max_new_tokens!r}")
+        if inputs.query_span is not None:
+            raise ValueError("带查询 token 的输入不能用于 generate（查询 token 只供 hidden_states 读出）")
+        reserved = {"input_ids", "attention_mask", "pixel_values", "image_grid_thw", "mm_token_type_ids",
+                    "position_ids", "inputs_embeds", "max_new_tokens", "eos_token_id", "pad_token_id"}
+        clash = sorted(reserved & set(gen_kwargs))
+        if clash:
+            raise ValueError(f"gen_kwargs 不能覆盖适配器控制的参数：{clash}")
+        self._check_entry(inputs, None, where="generate")
+        from transformers import LogitsProcessorList
+
+        t = inputs.tensors
+        header = torch.tensor([self.assistant_header_ids(enable_thinking)], dtype=torch.long, device=self._device)
+        input_ids = torch.cat([t["input_ids"], header], dim=1)
+        kw: dict[str, Any] = {
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids),
+            "mm_token_type_ids": torch.cat([t["mm_token_type_ids"], torch.zeros_like(header)], dim=1),
+        }
+        if inputs.images:
+            kw["pixel_values"] = t["pixel_values"]
+            kw["image_grid_thw"] = t["image_grid_thw"]
+        processors = list(gen_kwargs.pop("logits_processor", None) or [])
+        if allowed_token_ids is not None:
+            vocab_rows = self._model.get_output_embeddings().weight.shape[0]
+            processors.insert(0, _AllowedTokensProcessor(allowed_token_ids, vocab_rows))
+        gen_kwargs.setdefault("do_sample", False)
+        stop_ids = [self._ids[s] for s in STOP_TOKENS]
+
+        if self._device.type == "cuda":
+            torch.cuda.synchronize(self._device)
+        t0 = time.perf_counter()
+        with torch.no_grad():
+            out = self._model.generate(
+                **kw,
+                max_new_tokens=max_new_tokens,
+                eos_token_id=stop_ids,
+                pad_token_id=self._ids[END_OF_TEXT],
+                logits_processor=LogitsProcessorList(processors),
+                **gen_kwargs,
+            )
+        new_ids = out[0, input_ids.shape[1] :].tolist()
+        wall = time.perf_counter() - t0
+        if out.shape[0] != 1 or not torch.equal(out[0, : input_ids.shape[1]], input_ids[0]):
+            raise RuntimeError("generate 的输出不以输入为前缀")
+
+        text, raw_text, unclosed = self.split_answer(new_ids, enable_thinking=enable_thinking)
+        return GenerationResult(
+            text=text,
+            token_ids=tuple(new_ids),
+            n_generated_tokens=len(new_ids),
+            n_prompt_tokens=int(input_ids.shape[1]),
+            n_visual_tokens=sum(len(i.span) for i in inputs.images),
+            wall_time_s=wall,
+            raw_text=raw_text,
+            thinking_unclosed=unclosed,
+        )
+
+    def split_answer(self, token_ids: Sequence[int], *, enable_thinking: bool) -> tuple[str, str, bool]:
+        """把生成的 token 拆成 (text, raw_text, thinking_unclosed)（D10）。
+
+        raw_text：全部生成 token 的解码，含思考段与特殊 token。
+        text：最后一个 </think> 之后的内容；末尾的停止 token 去掉，其余特殊 token（包括 grid token）保留，
+        首尾换行去掉（与 Qwen 官方示例的 strip("\\n") 相同）。
+        开了思考却没有 </think>：text 为空串，thinking_unclosed = True。关思考时没有 </think> 就取全部。
+        """
+        self._require_loaded()
+        ids = [int(i) for i in token_ids]
+        raw_text = self._tok.decode(ids, skip_special_tokens=False)
+        end = self._ids[THINK_END]
+        last = max((k for k, v in enumerate(ids) if v == end), default=None)
+        if last is not None:
+            ans = ids[last + 1 :]
+        elif enable_thinking:
+            return "", raw_text, True
+        else:
+            ans = ids
+        stop = {self._ids[s] for s in STOP_TOKENS}
+        if ans and ans[-1] in stop:
+            ans = ans[:-1]
+        text = self._tok.decode(ans, skip_special_tokens=False).strip("\n")
+        return text, raw_text, False
+
+    # ------------------------------------------------------------------
+    # 查询 token 与新增 token
+    # ------------------------------------------------------------------
+
+    def inject_query_tokens(self, n: int, position_mode: PositionMode) -> None:
+        """登记 n 个查询 token；之后的 build_inputs 把它们放在 user 内容最后一项之后。可重复调用以改变 n 或模式。
+
+        占位符是 add_tokens 新增的一个专用 token（QUERY_PLACEHOLDER），首次调用时加入，嵌入行按 D9-3 初始化为
+        基础词表行的均值。它不计入 E3b 的 300 个 token 预算，但占用一个嵌入行。
+        """
+        self._require_loaded()
+        if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+            raise ValueError(f"n 必须是正整数，收到 {n!r}")
+        if position_mode not in POSITION_MODES:
+            raise ValueError(f"position_mode 必须是 {POSITION_MODES} 之一，收到 {position_mode!r}")
+        if position_mode == "grid2d" and math.isqrt(n) ** 2 != n:
+            raise ValueError(f"grid2d 要求 n 是完全平方数，收到 {n}")
+        if self._query_token_id is None:
+            (self._query_token_id,) = self._add_new_tokens([QUERY_PLACEHOLDER])
+        self._query_n = n
+        self._query_mode = position_mode
+
+    def clear_query_tokens(self) -> None:
+        """取消查询 token：之后的 build_inputs 不再追加（占位符 token 仍留在词表里）。"""
+        self._query_n = None
+        self._query_mode = None
+
+    def add_grid_tokens(self, names: Sequence[str]) -> dict[str, int]:
+        """加入像素 token 通道用的新 token，返回 名字 → id。
+
+        预算按累计计（≤ MAX_NEW_GRID_TOKENS，查询占位符不计）。先复用预留嵌入行；累计需要的行数超过现有行数时，
+        嵌入（lm_head 不共享时连同 lm_head）扩到恰好需要的行数，已有的行逐位不变，从不缩表。
+        新行初始化为基础词表行的精确均值；lm_head 与嵌入共享（0.8B/2B）时只写一次。
+        """
+        self._require_loaded()
+        if isinstance(names, str):
+            raise TypeError("names 必须是字符串的序列，不能是单个字符串")
+        names = list(names)
+        check_grid_token_names(names, n_existing=self._n_grid_tokens)
+        ids = self._add_new_tokens(names)
+        self._n_grid_tokens += len(names)
+        added = dict(zip(names, ids))
+        self._grid_token_ids.update(added)
+        return added
+
+    # ------------------------------------------------------------------
+    # 规模
+    # ------------------------------------------------------------------
+
+    def num_layers(self) -> int:
+        self._require_loaded()
+        n = int(self._model.config.text_config.num_hidden_layers)
+        if len(self._model.model.language_model.layers) != n:
+            raise RuntimeError("decoder 层数与 text_config.num_hidden_layers 不一致")
+        return n
+
+    def hidden_size(self) -> int:
+        self._require_loaded()
+        return int(self._model.config.text_config.hidden_size)
+
+    # ------------------------------------------------------------------
+    # 内部
+    # ------------------------------------------------------------------
+
+    def _require_loaded(self) -> None:
+        if self._model is None:
+            raise RuntimeError("还没有 load / attach 模型")
+
+    def _content(self, n_images: int, instruction: str, order: Order) -> list[dict[str, str]]:
+        imgs = [{"type": "image"} for _ in range(n_images)]
+        instr = {"type": "text", "text": instruction}
+        content = [instr, *imgs] if order == "instruction_first" else [*imgs, instr]
+        if self._query_n is not None:
+            content.append({"type": "text", "text": QUERY_PLACEHOLDER * self._query_n})
+        return content
+
+    def _render(self, content: list[dict[str, str]], *, add_generation_prompt: bool = False,
+                enable_thinking: bool | None = None) -> str:
+        kwargs = {} if enable_thinking is None else {"enable_thinking": enable_thinking}
+        return self._tok.apply_chat_template(
+            [{"role": "user", "content": content}],
+            chat_template=self._template,
+            tokenize=False,
+            add_generation_prompt=add_generation_prompt,
+            **kwargs,
+        )
+
+    def _encode(self, text: str) -> list[int]:
+        return list(self._tok(text, add_special_tokens=False)["input_ids"])
+
+    def _expand(self, text: str, counts: Sequence[int]) -> str:
+        parts = text.split(IMAGE_PAD)
+        if len(parts) != len(counts) + 1:
+            raise RuntimeError("图像占位符个数与展开计数不一致")
+        out = [parts[0]]
+        for n, part in zip(counts, parts[1:]):
+            out.append(IMAGE_PAD * n)
+            out.append(part)
+        return "".join(out)
+
+    def _check_instruction(self, instruction: str) -> None:
+        if _SENTINEL in instruction:
+            raise ValueError(f"指令里含有内部哨兵字符串 {_SENTINEL!r}")
+        ids = set(self._encode(instruction))
+        forbidden = [s for s in _STRUCTURAL_TOKENS if self._ids[s] in ids]
+        if self._query_token_id is not None and self._query_token_id in ids:
+            forbidden.append(QUERY_PLACEHOLDER)
+        if forbidden:
+            raise ValueError(f"指令里含有结构性 token：{forbidden}")
+
+    def _check_layers(self, layers: Iterable[int]) -> list[int]:
+        self._require_loaded()
+        if isinstance(layers, (str, bytes)):
+            raise TypeError("layers 必须是整数序列")
+        n = self.num_layers()
+        out = []
+        for layer in layers:
+            if isinstance(layer, bool) or not isinstance(layer, (int, np.integer)):
+                raise TypeError(f"层号必须是整数，收到 {layer!r}")
+            if not 0 <= int(layer) <= n:
+                raise ValueError(f"层号 {int(layer)} 越界，有效范围 [0, {n}]")
+            out.append(int(layer))
+        if not out:
+            raise ValueError("layers 为空")
+        if len(set(out)) != len(out):
+            raise ValueError(f"layers 有重复：{out}")
+        return out
+
+    def _model_device_dtype(self) -> tuple[torch.device, torch.dtype]:
+        w = self._model.get_input_embeddings().weight
+        return w.device, w.dtype
+
+    def _check_entry(self, inputs: ModelInputs, query_embeds: Any, *, where: str) -> None:
+        """入口断言：在任何模型算子之前比较 device / dtype，纯 Python，任何机器上都会触发。"""
+        self._require_loaded()
+        m_dev, m_dtype = self._model_device_dtype()
+        if m_dev != self._device:
+            raise AdapterDeviceError(f"{where}：模型在 {m_dev}，构造时给定的设备是 {self._device}")
+        if m_dtype != self._dtype:
+            raise AdapterDeviceError(f"{where}：模型 dtype 是 {m_dtype}，load 时给定的是 {self._dtype}")
+        for mod_name, mod in (("lm_head", self._model.get_output_embeddings()),
+                              ("visual.patch_embed", self._model.model.visual.patch_embed.proj)):
+            if mod.weight.device != m_dev:
+                raise AdapterDeviceError(f"{where}：{mod_name} 在 {mod.weight.device}，嵌入层在 {m_dev}")
+        if not isinstance(inputs, ModelInputs):
+            raise TypeError(f"inputs 必须是 ModelInputs，收到 {type(inputs).__name__}")
+        for name, v in inputs.tensors.items():
+            if not torch.is_tensor(v):
+                continue
+            if v.device != m_dev:
+                raise AdapterDeviceError(f"{where}：输入 {name} 在 {v.device}，模型在 {m_dev}")
+            if v.is_floating_point() and v.dtype != m_dtype:
+                raise AdapterDeviceError(f"{where}：输入 {name} 的 dtype 是 {v.dtype}，模型是 {m_dtype}")
+        if query_embeds is not None:
+            if not torch.is_tensor(query_embeds):
+                raise TypeError(f"query_embeds 必须是张量，收到 {type(query_embeds).__name__}")
+            if query_embeds.device != m_dev:
+                raise AdapterDeviceError(f"{where}：query_embeds 在 {query_embeds.device}，模型在 {m_dev}")
+            if query_embeds.dtype != m_dtype:
+                raise AdapterDeviceError(f"{where}：query_embeds 的 dtype 是 {query_embeds.dtype}，模型是 {m_dtype}")
+            if inputs.query_span is None:
+                raise ValueError(f"{where}：给了 query_embeds，但 inputs 里没有查询 token")
+            want = (len(inputs.query_span), self.hidden_size())
+            if tuple(query_embeds.shape) != want:
+                raise ValueError(f"{where}：query_embeds 形状 {tuple(query_embeds.shape)}，期望 {want}")
+
+    def _image_features(self, inputs: ModelInputs) -> torch.Tensor:
+        t = inputs.tensors
+        out = self._model.model.get_image_features(t["pixel_values"], t["image_grid_thw"], return_dict=True)
+        feats = torch.cat(out.pooler_output, dim=0).to(device=self._device, dtype=self._dtype)
+        n_expected = sum(len(i.span) for i in inputs.images)
+        if tuple(feats.shape) != (n_expected, self.hidden_size()):
+            raise RuntimeError(f"视觉特征形状 {tuple(feats.shape)}，期望 ({n_expected}, {self.hidden_size()})")
+        return feats
+
+    def _input_embeds(self, inputs: ModelInputs, query_embeds: torch.Tensor | None) -> torch.Tensor:
+        """与 Qwen3_5Model.forward 相同的并入方式：嵌入查表 → 图像位置 masked_scatter 视觉特征；再替换查询位置。"""
+        ids = inputs.tensors["input_ids"]
+        embeds = self._model.get_input_embeddings()(ids)
+        if inputs.images:
+            feats = self._image_features(inputs)
+            mask = (ids == self._ids[IMAGE_PAD]).unsqueeze(-1)
+            embeds = embeds.masked_scatter(mask, feats)
+        if query_embeds is not None:
+            qs, qe = inputs.query_span.start, inputs.query_span.end
+            embeds = torch.cat([embeds[:, :qs], query_embeds.unsqueeze(0), embeds[:, qe:]], dim=1)
+        return embeds
+
+    def _run(self, inputs: ModelInputs, query_embeds: torch.Tensor | None, *, where: str) -> tuple[torch.Tensor, ...]:
+        self._check_entry(inputs, query_embeds, where=where)
+        embeds = self._input_embeds(inputs, query_embeds)
+        pos = self.position_ids(inputs)
+        out = self._model(
+            inputs_embeds=embeds,
+            attention_mask=inputs.tensors["attention_mask"],
+            position_ids=pos,
+            output_hidden_states=True,
+            logits_to_keep=1,
+            use_cache=False,
+            return_dict=True,
+        )
+        hs = out.hidden_states
+        if len(hs) != self.num_layers() + 1:
+            raise RuntimeError(f"hidden_states 有 {len(hs)} 项，期望 num_layers()+1 = {self.num_layers() + 1}")
+        return hs
+
+    def _image_index(self, inputs: ModelInputs) -> torch.Tensor:
+        idx = [torch.arange(i.span.start, i.span.end) for i in inputs.images]
+        cat = torch.cat(idx) if idx else torch.empty(0, dtype=torch.long)
+        return cat.to(inputs.tensors["input_ids"].device)
+
+    def _add_new_tokens(self, names: list[str]) -> list[int]:
+        """加 token 的公共路径（grid token 与查询占位符）：分词器 → 行数（必要时扩表）→ 行初始化。"""
+        vocab = self._tok.get_vocab()
+        clash = [n for n in names if n in vocab]
+        if clash:
+            raise ValueError(f"这些 token 已在词表里：{clash[:5]}")
+        n_before = len(self._tok)
+        expected = list(range(n_before, n_before + len(names)))
+        n_added = self._tok.add_tokens(names, special_tokens=True)
+        ids = [self._tok.convert_tokens_to_ids(n) for n in names]
+        if n_added != len(names) or ids != expected:
+            raise RuntimeError(f"add_tokens 加了 {n_added} 个，id {ids[:3]}…，期望从 {n_before} 起连续")
+        for name, i in zip(names, ids):
+            if self._encode(name) != [i]:
+                raise RuntimeError(f"{name!r} 没有分词成单个 token")
+        if self._encode("".join(names)) != ids:
+            raise RuntimeError("新 token 首尾相接时没有逐个分词")
+        self._ensure_rows(n_before + len(names))
+        rows = self._model.get_input_embeddings().weight.shape[0]
+        if max(ids) >= rows or self._model.get_output_embeddings().weight.shape[0] != rows:
+            raise RuntimeError(f"新 id 超出嵌入行数 {rows}")
+        self._init_rows(ids)
+        return ids
+
+    def _ensure_rows(self, needed: int) -> None:
+        """行数不够时扩到恰好 needed 行（不共享时 lm_head 同步），已有行逐位不变；够了什么都不做，从不缩表。"""
+        emb = self._model.get_input_embeddings()
+        head = self._model.get_output_embeddings()
+        n_old = emb.weight.shape[0]
+        if needed <= n_old:
+            return
+        with torch.no_grad():
+            pairs = [(emb, "num_embeddings")] + ([] if self._tied else [(head, "out_features")])
+            for mod, size_attr in pairs:
+                old = mod.weight.data
+                new = torch.empty((needed, old.shape[1]), dtype=old.dtype, device=old.device)
+                new[:n_old] = old
+                new[n_old:] = self._base_mean(old)
+                mod.weight.data = new  # 同一个 Parameter 对象：共享的 lm_head 跟着变
+                setattr(mod, size_attr, needed)
+                if not torch.equal(mod.weight[:n_old], old):
+                    raise RuntimeError("扩表后已有的行不再逐位相同")
+        if self._tied and head.weight is not emb.weight:
+            raise RuntimeError("扩表后 lm_head 与嵌入不再共享")
+        if head.weight.shape[0] != needed or emb.weight.shape[0] != needed:
+            raise RuntimeError("扩表后嵌入与 lm_head 行数不一致")
+        head.out_features = needed  # 共享时 Parameter 已随嵌入变了，这里只同步 nn.Linear 的属性
+        self._model.config.get_text_config().vocab_size = needed
+
+    def _base_mean(self, weight: torch.Tensor) -> torch.Tensor:
+        """基础词表行 [0, n_base_vocab) 的均值：float64 分块累加，再转回参数 dtype。"""
+        n, dim = self._n_base_vocab, weight.shape[1]
+        step = max(1, _MEAN_CHUNK_BYTES // (dim * 8))
+        acc = torch.zeros(dim, dtype=torch.float64, device=weight.device)
+        for s in range(0, n, step):
+            acc += weight[s : min(s + step, n)].to(torch.float64).sum(dim=0)
+        return (acc / n).to(weight.dtype)
+
+    def _init_rows(self, ids: list[int]) -> None:
+        """新 token 的嵌入行（不共享时连同 lm_head 行）写成基础词表行的均值；共享时只写一次。"""
+        idx = torch.tensor(ids, dtype=torch.long, device=self._device)
+        with torch.no_grad():
+            emb = self._model.get_input_embeddings().weight
+            emb[idx] = self._base_mean(emb)
+            if not self._tied:
+                head = self._model.get_output_embeddings().weight
+                head[idx] = self._base_mean(head)
+
+
+def _params_and_buffers(model: Any) -> Iterable[torch.Tensor]:
+    yield from model.parameters()
+    yield from model.buffers()
+
+
+def _named_params_and_buffers(model: Any) -> Iterable[tuple[str, torch.Tensor]]:
+    yield from model.named_parameters()
+    yield from model.named_buffers()
+
+
+# ---------------------------------------------------------------------------
+# 小型随机 Qwen3.5：CPU 测试与冒烟脚本 --tiny 的彩排（不下载权重）
+# ---------------------------------------------------------------------------
+
+TINY_TEXT = {
+    "hidden_size": 64,
+    "intermediate_size": 128,
+    "num_hidden_layers": 4,
+    "num_attention_heads": 2,
+    "num_key_value_heads": 1,
+    "linear_num_key_heads": 2,
+    "linear_num_value_heads": 2,
+    "linear_key_head_dim": 16,
+    "linear_value_head_dim": 16,
+}
+TINY_VISION = {"depth": 1, "hidden_size": 64, "intermediate_size": 128, "num_heads": 2, "out_hidden_size": 64}
+
+
+def load_pinned_components(model_key: str = TINY_SOURCE_KEY) -> tuple[Any, Any, Any, str]:
+    """从登记的固定 revision 下载 config、tokenizer、图像处理器与聊天模板（都是小文件，不含权重）。
+
+    图像处理器固定用 PIL 后端（Qwen2VLImageProcessorPil），开发机没有 torchvision 也能跑；服务器上的 load()
+    走官方 AutoProcessor（torchvision 后端）。两者只在像素值的舍入上可能不同，接口相同。
+    """
+    from transformers import AutoConfig, AutoTokenizer
+    from transformers.models.qwen2_vl.image_processing_pil_qwen2_vl import Qwen2VLImageProcessorPil
+
+    entry = registry.get_model(model_key)
+    if entry.family != registry.FAMILY_QWEN35:
+        raise ValueError(f"{model_key} 不是 Qwen3.5")
+    config = AutoConfig.from_pretrained(entry.repo, revision=entry.revision)
+    tokenizer = AutoTokenizer.from_pretrained(entry.repo, revision=entry.revision)
+    image_processor = Qwen2VLImageProcessorPil.from_pretrained(entry.repo, revision=entry.revision)
+    template = tokenizer.chat_template
+    if not isinstance(template, str) or not template:
+        raise RuntimeError(f"{entry.repo}@{entry.revision} 没有取到聊天模板")
+    return config, tokenizer, image_processor, template
+
+
+def tiny_config(real_config: Any, *, tie_word_embeddings: bool) -> Any:
+    """把真实 config 缩成小型随机模型的 config：4 层（3 层 linear_attention + 1 层 full_attention）、hidden 64、
+    视觉塔 1 层。词表、特殊 token id、patch/merge、head_dim 与 RoPE 参数保持真实值，位置编码的结构与真模型相同。"""
+    d = real_config.to_dict()
+    tc, vc = d["text_config"], d["vision_config"]
+    types = list(tc["layer_types"][: TINY_TEXT["num_hidden_layers"]])
+    if types.count("linear_attention") != 3 or types.count("full_attention") != 1:
+        raise ValueError(f"真实 config 的前 4 层类型不是 3 linear + 1 full：{types}")
+    tc.update(TINY_TEXT, layer_types=types, tie_word_embeddings=bool(tie_word_embeddings))
+    vc.update(TINY_VISION)
+    d["tie_word_embeddings"] = bool(tie_word_embeddings)
+    return type(real_config).from_dict(d)
+
+
+def build_tiny_model(real_config: Any, *, tie_word_embeddings: bool, dtype: torch.dtype = torch.float32,
+                     seed: int = 0) -> Any:
+    """按 tiny_config 构造随机初始化的 Qwen3_5ForConditionalGeneration（sdpa，eval）。"""
+    from transformers import AutoModelForImageTextToText
+
+    cfg = tiny_config(real_config, tie_word_embeddings=tie_word_embeddings)
+    torch.manual_seed(seed)
+    model = AutoModelForImageTextToText.from_config(cfg, attn_implementation="sdpa", dtype=dtype)
+    return model.eval()
+
+
+def make_tiny_adapter(
+    components: tuple[Any, Any, Any, str],
+    *,
+    image_size: tuple[int, int],
+    tie_word_embeddings: bool = True,
+    dtype: torch.dtype = torch.float32,
+    seed: int = 0,
+    device: str | torch.device = "cpu",
+    model: Any = None,
+) -> Qwen35Adapter:
+    """用 load_pinned_components 的结果挂一个小型随机模型的适配器。
+
+    注意：add_grid_tokens / inject_query_tokens 会改 tokenizer；需要彼此独立的适配器时，传入各自的 tokenizer 副本。
+    """
+    config, tokenizer, image_processor, template = components
+    if model is None:
+        model = build_tiny_model(config, tie_word_embeddings=tie_word_embeddings, dtype=dtype, seed=seed)
+    adapter = Qwen35Adapter(device=device, image_size=image_size)
+    adapter.attach(model, tokenizer=tokenizer, image_processor=image_processor, chat_template=template,
+                   model_key=f"tiny({TINY_SOURCE_KEY})")
+    return adapter
+
+
+__all__ = [
+    "AdapterDeviceError",
+    "PIXELS_PER_LLM_TOKEN",
+    "QUERY_PLACEHOLDER",
+    "Qwen35Adapter",
+    "build_tiny_model",
+    "load_pinned_components",
+    "make_tiny_adapter",
+    "tiny_config",
+]
