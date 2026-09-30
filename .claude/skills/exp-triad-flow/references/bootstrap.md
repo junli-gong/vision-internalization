@@ -5,6 +5,9 @@
 - 规格文件是什么、叫什么名（默认 `SPEC.md`；若用户已有 PILOT.md 之类，用他们的）。
 - 硬约束与预注册判据是否已写死；没有就先补进规格再动工。
 - 三台机器/三个对话是否就绪：开发机、算力机（ssh 别名、是否共享、工作目录限制）、GitHub 账号。
+- 选模式：A 人工转交，或 B 派发 + 值守（管理员与开发在同一台机器时推荐，用户不在电脑前实验也不断）。
+  选 B 时还要确认三件事：开发机会一直开着且不休眠；服务器 CC 的权限模式不需要逐条人工批准；
+  管理员会话会一直开着。
 
 ## 1. 建骨架
 
@@ -12,8 +15,10 @@
 `CLAUDE.md`（填项目一句话 + 专属约束速查）、`DECISIONS.md`、`EXPERIMENTS.md`、
 `prompts/dev/`、`prompts/server/`、`reports/`、`results/`、`.gitignore`。
 
-`CLAUDE.md` 必须含角色判定规则（三行）并指向本 skill——它是每个对话都会加载的双保险，
+`CLAUDE.md` 必须含角色判定规则（三行）、写明模式，并指向本 skill——它是每个对话都会加载的双保险，
 skill 描述再"pushy"也可能不触发。
+把 skill 整个复制到仓库的 `.claude/skills/exp-triad-flow/`（服务器上没有全局 skill），全局版改动后同步副本。
+模式 B 另加 `prompts/server/STANDBY.md`（从 `assets/server-standby.template.md` 填路径），`.gitignore` 加 `.claude/worktrees/`。
 
 ## 2. git 与远端
 
@@ -32,6 +37,9 @@ skill 描述再"pushy"也可能不触发。
 - DEV-0001：与数据无关的骨架 + CPU 冒烟测试（测试用小型随机模型，不下载权重）。
 - RUN-0001：环境基线 + 数据落地 + **真实 schema 报告**（不得对假设的 schema 编码）。
 - 两者并行；loader 等 RUN-0001 的报告出来再写。
+- 模式 B：DEV-0001 用 Agent 派发（见 manager.md §7.1）；服务器 CC 由用户启动一次，第一条消息是
+  `[RUN-TASK 0001] …读 prompts/server/0001-… 按它做，完成后按 prompts/server/STANDBY.md 进入值守`，
+  此后不再需要转交。
 
 ## 4. 记忆
 

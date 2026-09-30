@@ -34,3 +34,27 @@
 
 每个配置/阶段跑完单独 `[results] NNNN: 摘要` commit + push；report 最后随终版 push。
 push 失败只记日志不中断后续，事后补推。
+
+## 值守模式（模式 B）
+
+用户可能不在电脑前：你自己发现新任务、执行、回传，再等下一个。项目的具体路径写在
+`prompts/server/STANDBY.md`（模板 `assets/server-standby.template.md`）。
+
+- **进入值守**：当前任务全部推送完后，把已执行过的任务书文件名逐行写进完成清单（done 文件），
+  然后用 Bash 的 `run_in_background` 运行
+  `scripts/server_standby_wait.sh <repo> <状态文件> <done文件> 120 21600`。
+  不要前台 sleep，不要自己循环轮询：脚本退出时你会被自动唤醒。
+- **脚本退出码**：
+  - 0：stdout 是新任务书路径 → `git pull --ff-only` → 状态文件写 `running <文件名>` → 按本文件
+    前面的纪律和该任务书执行 → 完成（或按规定停止且已推送 report）后把文件名追加进 done 文件
+    → 重新进入值守。
+  - 3：等满，检查磁盘红线后立即重挂。
+  - 其他：把输出记进日志后重挂；连续三次异常就在状态文件写 `blocked <原因>` 并停止值守，
+    管理员会从心跳发现。
+- 一次只执行一个任务；执行中不接新任务，addendum 在当前任务完成后按文件名顺序接。
+- 任务书里的"停下报告"= 推送 report 后在状态文件写 `blocked <原因>`，然后重新进入值守，
+  等管理员的 addendum 或新任务书。不要自己决定绕过去。
+- `origin` 的仓库根出现 `HOLD` 文件时，脚本只写心跳不接单。不要自己删 `HOLD`。
+- 长任务 nohup + 状态文件；等长任务结束也用 `run_in_background` 的 until 循环（一次性事件），
+  不要前台等待；每个配置跑完照常单独 push。
+- 某一步被权限拦住需要人工批准：推送 report 说明卡点，状态写 `blocked permission`。

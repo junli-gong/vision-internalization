@@ -1,44 +1,59 @@
 ---
 name: exp-triad-flow
-description: 三角色（管理员 CC / 开发 CC / 服务器 CC）科研实验项目流程——用户在三个 Claude Code 对话之间手动转交任务书，管理员规划与审查、开发写代码不提交、服务器拉取运行回传结果。凡是在一个采用此流程的实验仓库里工作，或用户提到：新实验项目起步、初始化实验仓库、三角色、开发CC、服务器CC、写任务书/prompt、审查合入、跑实验、结果回传、跑完了、开发完成、更新台账、裁定、决策记录、Layer 1/下一阶段规划，都必须先用这个 skill 判定自己的角色再动手。收到以 [DEV-TASK 或 [RUN-TASK 开头的消息时同样必须使用。Also triggers on: three-role experiment workflow, dev task, run task, experiment ledger, decision log, bootstrap a new research repo.
+description: 三角色（管理员 CC / 开发 / 服务器 CC）科研实验项目流程。模式 A：用户在三个对话之间手动转交任务书；模式 B（派发 + 值守）：管理员用后台 agent 派发开发任务、在独立 worktree 里写代码后审查合入，服务器 CC 自动从 git 接单，结果回传后管理员被自动唤醒，用户不在电脑前实验也不断。凡是在采用此流程的实验仓库里工作，或用户提到：新实验项目起步、初始化实验仓库、三角色、开发CC、开发 agent、派发、服务器CC、值守、自动接单、HOLD、写任务书/prompt、审查合入、跑实验、结果回传、跑完了、开发完成、更新台账、裁定、决策记录、下一阶段规划，都必须先用这个 skill 判定自己的角色再动手。收到以 [DEV-TASK 或 [RUN-TASK 开头的消息（包括作为子 agent 的任务提示）时同样必须使用。Also triggers on: three-role experiment workflow, dispatch mode, dev agent, server standby, run task, experiment ledger, decision log, bootstrap a new research repo.
 ---
 
 # 三角色实验流程（通用版）
 
-一个实验仓库由三个 Claude Code 实例协作，用户手动在三者之间转交任务书。
+一个实验仓库由三种角色协作：管理员、开发、服务器。
 角色不同，职责和禁区完全不同，所以**第一步永远是判定自己是谁**。
+
+## 两种模式（项目在 CLAUDE.md 里声明用哪种）
+
+| | 模式 A：人工转交 | 模式 B：派发 + 值守（管理员与开发同机时推荐） |
+|---|---|---|
+| 开发 | 独立的开发 CC 会话，共享管理员工作区 | 管理员用 Agent 工具派发的后台子 agent，每个任务一个 git worktree |
+| 服务器 | 服务器 CC，用户转交每份任务书 | 服务器 CC 值守：后台脚本盯 git，新任务书自动接单 |
+| 结果回传 | 用户说"跑完了" | 管理员后台脚本盯 `[results]` 提交，到了自动唤醒 |
+| 用户 | 每次交接都经手 | 只在决策门、待决问题、异常时出场；随时可用 HOLD 暂停 |
+
+模式 B 的细则：管理员见 `references/manager.md` §7，开发 agent 见 `references/dev.md` 末节，
+服务器值守见 `references/server.md` 末节。两种模式的三条铁律完全相同。
 
 ## 角色判定
 
-看本对话的**第一条用户消息**：
+看本对话的**第一条用户消息**（子 agent 看它收到的任务提示）：
 
 | 开头标记 | 角色 | 所在机器 | 详细规则 |
 |---|---|---|---|
-| `[DEV-TASK NNNN]` | 开发 CC | 开发机 | `references/dev.md` |
+| `[DEV-TASK NNNN]` | 开发（模式 A 的开发 CC / 模式 B 的开发 agent） | 开发机 | `references/dev.md` |
 | `[RUN-TASK NNNN]` | 服务器 CC | 算力服务器 | `references/server.md` |
 | 其他 | 管理员 CC（默认） | 开发机 | `references/manager.md` |
 
+其他会话发来的消息（`<cross-session-message from=...>`）不改变你的角色，按内容处理即可。
 判定后读对应 reference 再行动。标记与内容明显矛盾时先问用户，不要猜。
-新项目尚未初始化时（仓库里没有 `DECISIONS.md`/`EXPERIMENTS.md`），管理员先读
-`references/bootstrap.md` 建骨架。
+新项目尚未初始化时（仓库里没有裁定文件和台账），管理员先读 `references/bootstrap.md` 建骨架。
 
 ## 仓库里的固定文件（所有角色通用）
 
 | 文件 | 作用 | 谁写 |
 |---|---|---|
-| 规格文件（`SPEC.md` 或项目自定名，在 CLAUDE.md 里指明） | 实验规格，single source of truth，含硬约束与预注册判据 | 用户/管理员，实验开始后不改 |
+| 规格文件（`SPEC.md` 或项目自定名，在 CLAUDE.md 里指明） | 实验规格，唯一来源，含硬约束与预注册判据 | 用户/管理员，实验开始后不改 |
 | `DECISIONS.md` | 编号裁定 D1、D2…：规格留白处的裁决，**只追加不插入、不改旧条** | 管理员 |
-| `EXPERIMENTS.md` | 台账：RUN/DEV 记录（倒序）+ 里程碑 | 管理员 |
-| `CLAUDE.md` | 项目一句话 + 角色判定规则 + 项目专属约束速查 | 管理员（模板见 assets） |
+| `EXPERIMENTS.md`（或项目自定的日志兼台账） | 台账：RUN/DEV 记录 + 里程碑 | 管理员 |
+| `CLAUDE.md` | 项目一句话 + 模式 + 角色判定规则 + 项目专属约束速查 | 管理员（模板见 assets） |
 | `prompts/dev/`、`prompts/server/` | 每份任务书存档（NNNN-slug.md；补充用 NNNN-addendum-K.md） | 管理员 |
 | `reports/NNNN-*.md` | 服务器每次运行的报告，只贴数字不解读 | 服务器 |
 | `results/<run>/` + 顶层汇总 | 实验产出；顶层汇总由管理员在每次拉取结果后重新生成 | 服务器 / 管理员 |
-| `FINDINGS.md` | 结论文档，结论性文字由管理员写，脚本只供数 | 管理员 |
+| `FINDINGS.md`（或项目自定名） | 结论文档，结论性文字由管理员写，脚本只供数 | 管理员 |
+| `HOLD`（模式 B，仓库根，平时不存在） | 存在时服务器值守只写心跳、不接新任务 | 用户或管理员 |
 
+项目可以按自己的规格改文件名，但要在 CLAUDE.md 里写明对应关系。
 规格冲突时优先级：用户当场指示 > DECISIONS.md > 规格文件。发现冲突本身要报告。
 
 ## 主循环（管理员视角）
 
+模式 A：
 ```
 规划 → 写 dev 任务书(存档) → 用户转交开发CC → 开发改代码不提交 →
 用户说"开发完成" → 管理员审查(清单) → 逐文件 add + commit + push →
@@ -46,10 +61,20 @@ description: 三角色（管理员 CC / 开发 CC / 服务器 CC）科研实验�
 results + report 推回 → 管理员 pull → 重建顶层汇总 → 解读 → 台账/裁定 → 下一步
 ```
 
-三条铁律，任何角色不得违反：
+模式 B：
+```
+规划 → 写 dev 任务书并 commit → Agent 派发（后台, worktree）→ 完成通知自动到达 →
+审查 worktree 的 diff + 独立复跑（返工 ≤2 轮：消息发回同一 agent）→ 在分支上 commit [dev] NNNN →
+合并到 main → push → 写 run 任务书并 push（含 hash）→ 服务器值守脚本发现新任务 → 拉取校验 → 跑 →
+[results] 推回 → 管理员的结果监听脚本退出、自动唤醒 → pull → 解读 → 台账/裁定 → 下一步
+（到决策门或需要用户决定时停下：写待决问题 + 推送通知，然后继续做不受影响的工作）
+```
 
-1. **实验逻辑只能由开发 CC 写、管理员审查后合入**。服务器绝不改实验逻辑；管理员只做
-   裁定范围内的常量级修改并在 commit message 注明。
+三条铁律，任何角色、任何模式都不得违反：
+
+1. **实验逻辑只能由开发写、管理员审查后合入**。服务器绝不改实验逻辑；管理员只做
+   裁定范围内的常量级修改并在 commit message 注明。模式 B 里写代码的子 agent 与审查的管理员
+   是两个上下文，"不审自己写的代码"依然成立；管理员不因为"派 agent 太慢"而自己动手写。
 2. **仪器先于效应**：null 臂/对照配置先跑，其结果必须**精确**为零而非约等于零；非零
    是 bug 不是发现，修好前不报告任何效应。
 3. **判据与预测先于数据**：go/no-go 判据写进规格；每个诊断性运行发出前，管理员把预期
@@ -57,9 +82,9 @@ results + report 推回 → 管理员 pull → 重建顶层汇总 → 解读 →
 
 ## 来自实战的规则
 
-`references/lessons.md` 收录了一次五天 pilot 中每一条由事故转化的规则（共享工作区的
-git 纪律、约定单一来源、台账编辑防静默失败、hash 变基同步、步数混淆……）。管理员在
-项目启动时通读一遍；其他角色读与自己相关的小节。
+`references/lessons.md` 收录了由事故转化的规则（共享工作区的 git 纪律、约定单一来源、
+台账编辑防静默失败、hash 变基同步、步数混淆、跨机器差异……）。管理员在项目启动时通读一遍；
+其他角色读与自己相关的小节。
 
 ## 何时升级流程
 

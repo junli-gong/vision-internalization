@@ -59,3 +59,25 @@
    - DEV-0003 起：各家族适配器，等 RUN-0001 报回真实 schema 再写，不对假设的格式编码。
    - E5 合成数据生成器：单独任务，可与 Phase 0 并行。
 3. G0 之前不跑任何训练。显存实测里的单步前向加反向不算训练。
+
+## D8 — 改用模式 B：派发 + 值守（2026-09-29，用户确认）
+
+1. **开发**：
+   - DEV-0002 起，管理员用 Agent 工具派发后台开发 agent，每个任务一个 git worktree（在 `.claude/worktrees/`，已 gitignore）。审查、返工（最多两轮）、合入按 skill 的 manager.md §7。
+   - 决策门判据会用到的仪器代码，另派独立审查 agent。
+   - DEV-0001 由原开发 CC 会话（cvpr2027-48）完成，完成总结经跨会话消息直接交给管理员。该会话此后退役。
+2. **服务器**：
+   - RUN-0001 完成后，服务器 CC 按 `prompts/server/STANDBY.md` 进入值守，从 origin/main 自动接 `prompts/server/NNNN-*.md`。
+   - 心跳写 `$PROJ/logs/standby.status`，完成清单记在 `$PROJ/logs/server_tasks_done.txt`。
+   - 暂停：在仓库根提交 `HOLD`。
+3. **管理员**：
+   - 发出 run 任务书后，在后台挂 `wait_for_results.sh`：每 3 分钟 fetch 一次，6 小时重挂，同时只读查看服务器心跳。
+   - 开发机用 `caffeinate -ims` 保持不休眠；管理员会话保持打开。
+4. **自主范围**按 manager.md §7.4。以下情况一律停下，写 DECISIONS_NEEDED 并推送通知：
+   - 简报 §10 的请示事项，以及决策门；
+   - 删除非本项目文件；
+   - 两轮返工仍不过；
+   - 同一运行因代码 bug 失败两次；
+   - 服务器值守失联。
+
+**理由**：管理员与开发同机，人工转交是瓶颈；用户要求"不在电脑前实验也不断"。独立审查仍然成立：写代码的 agent 和审查的管理员是两个上下文，仪器代码还多一道独立审查。

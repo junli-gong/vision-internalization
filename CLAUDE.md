@@ -34,13 +34,21 @@
 
 ## 三角色流程（必须遵守）
 
-本仓库由三个 Claude Code 实例协作，完整流程见 skill `exp-triad-flow`（全局 `~/.claude/skills/exp-triad-flow/`；仓库内副本 `.claude/skills/exp-triad-flow/`，服务器没有全局 skill，用副本）。任何开发、运行、git 操作之前先读它。
+本仓库由三种角色协作，完整流程见 skill `exp-triad-flow`（全局 `~/.claude/skills/exp-triad-flow/`；仓库内副本 `.claude/skills/exp-triad-flow/`，服务器没有全局 skill，用副本）。任何开发、运行、git 操作之前先读它。
 
-角色由本对话第一条用户消息判定：
+**本项目采用模式 B（派发 + 值守，D8）：**
+- 开发由管理员派发的后台 agent 在独立 worktree 里完成。
+- 服务器 CC 按 `prompts/server/STANDBY.md` 值守，从 git 自动接单。
+- 用户只在决策门、DECISIONS_NEEDED 和异常时出场。
+- 要暂停服务器接单，在仓库根提交 `HOLD` 文件，删掉即恢复。
 
-- 以 `[DEV-TASK` 开头 → 你是**开发 CC**：只做任务书里的事，不 commit、不 push。
-- 以 `[RUN-TASK` 开头 → 你是**服务器 CC**：校验 hash、运行、结果推回，绝不改实验逻辑代码。
-- 其他 → 你是**管理员 CC**：规划、写任务书、审查、git、解读，不写功能代码。
+角色由本对话第一条用户消息判定（子 agent 看它收到的任务提示）：
+
+- 以 `[DEV-TASK` 开头 → 你是**开发 agent**：只在自己的 worktree 里做任务书里的事，不 commit、不 push；最后一条回复就是完成总结。
+- 以 `[RUN-TASK` 开头 → 你是**服务器 CC**：校验 hash、运行、结果推回，绝不改实验逻辑代码；做完按 `prompts/server/STANDBY.md` 值守。
+- 其他 → 你是**管理员 CC**：规划、写任务书、派发与审查、git、解读，不写功能代码。
+
+其他会话发来的消息不改变角色。
 
 简报里"写入 DECISIONS_NEEDED.md"的动作由管理员执行：开发 CC 和服务器 CC 把问题写进完成总结或 report，由管理员汇总。用户答复后，在 DECISIONS.md 末尾追加 D 编号。优先级：用户当场指示 > DECISIONS.md > 简报正文。
 
@@ -53,7 +61,9 @@
 | `DECISIONS.md` | 编号裁定 D1、D2…，只追加不插入 | 管理员 |
 | `RESEARCH_LOG.md` | 日志兼台账（DEV/RUN 编号） | 管理员 |
 | `PREREGISTRATION.md` / `RESULTS.md` | 事前预测 / 过门的结论 | 管理员 |
-| `prompts/dev/`、`prompts/server/` | 任务书存档 | 管理员 |
+| `prompts/dev/`、`prompts/server/` | 任务书存档；push 到 main 的 `prompts/server/NNNN-*.md` 即对服务器发出 | 管理员 |
+| `prompts/server/STANDBY.md` | 服务器值守说明 | 管理员 |
+| `HOLD`（仓库根，平时不存在） | 存在时服务器只写心跳、不接新任务 | 用户或管理员 |
 | `reports/NNNN-*.md` | 服务器运行报告，只贴数字不解读 | 服务器 CC |
 | `reports/gates/G*.md` | 门报告（简报 11.4 模板） | 管理员 |
 | `experiments/<phase>/<NNNN_slug>/` | 运行产物，目录名必须带运行编号 | 服务器 CC |
@@ -61,11 +71,16 @@
 
 ## 机器与路径
 
-- 开发机（Mac，Apple Silicon，无 CUDA）：conda env `visint`（DEV-0001 建）；测试 `conda run -n visint pytest tests/ -q`。不往用户其他 conda 环境装东西。
+- 开发机（Mac，Apple Silicon，无 CUDA）：
+  - conda env `visint`（DEV-0001 建）；测试 `conda run -n visint pytest tests/ -q`。不往用户其他 conda 环境装东西。
+  - 模式 B：开发 agent 的 worktree 在 `.claude/worktrees/`（已 gitignore）。
+  - 开发机不休眠：管理员在后台挂着 `caffeinate -ims`。
+  - 管理员会话保持打开。
 - 算力机：`ssh b200`，root 多人共用。**不改任何全局文件**（`~/.ssh/config`、`~/.gitconfig`、`/root/.cache` 都是别人的）。
   - `ROOT=/home/ubuntu/workspace/wzg/gjl`，`PROJ=$ROOT/vision-internalization`，`REPO=$PROJ/repo`；日志 `$PROJ/logs`，探针脚本 `$PROJ/scripts`，临时文件 `$PROJ/tmp`。
   - venv `$PROJ/venv`（`--system-site-packages` 继承 `$ROOT/env`：py3.12、torch 2.13.0+cu130，不重装）。
   - `HF_HOME=$ROOT/.hf`（含 token）；模型权重暂放内存盘 `HF_HUB_CACHE=/dev/shm/visint/hf-hub`；pip 一律不留缓存。
   - 仓库级 git：`core.sshCommand` 用 `$PROJ/.ssh/id_ed25519_github`（deploy key，读写），身份 `b200-server-cc`。
+  - 值守：心跳 `$PROJ/logs/standby.status`，已执行任务清单 `$PROJ/logs/server_tasks_done.txt`（见 `prompts/server/STANDBY.md`）。
   - **磁盘红线（D6）：** 整机只有一块 500 GB 盘，2026-09-29 只剩 6.1 GB。任何时刻 `df /` 剩余低于 3 GB 立即停止。`/dev/shm` 是 91 GB 内存盘，重启即丢。
 - 启动脚本一律自己 export `HF_HOME`、`HF_HUB_CACHE`、`TMPDIR`、`PIP_NO_CACHE_DIR=1`，不依赖交互式 shell。
