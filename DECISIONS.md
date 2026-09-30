@@ -170,3 +170,30 @@
    - N6：AP 忽略全集里没有 GT 的类别，F1 把这类框算作 FP。这一条补进 N9 供决策。
    - N9（变异 X3 存活）是冗余检查，不处理。
 
+## D13 — Gemma 4 与 InternVL3.5 的适配约定（2026-09-30，依据 RUN-0002）
+
+1. **新增 token**：
+   - **InternVL3.5**：有 257 个预留行（id 151679–151935），规则同 D9-3 和 D11-8：累计不超过 257 个就复用预留行，超过才扩表，只增不缩，禁止缩表。它的 `resize_token_embeddings(len(tok))` 同样会缩表，已实测。lm_head 不共享（checkpoint 里两者的值不同，transformers 没有绑定），嵌入行和 lm_head 行都用各自基础行的精确均值初始化。
+   - **Gemma 4**：没有预留行。复用 6227 个 `<unusedN>`：先用 `add_tokens` 注册，注册后仍是原 id、仍是单个 token，不 resize。要初始化两处，都用基础词表（不含 `<unusedN>` 与特殊 token）的精确均值：主嵌入行（与 lm_head 共享）和 PLE 的 `embed_tokens_per_layer` 对应行。
+2. **思考开关**：
+   - Gemma：把 `enable_thinking` 直接传给 `apply_chat_template`，默认关闭。
+   - InternVL：模板没有开关。开启 = 加 model card 给出的 R1 system prompt，原文逐字存在适配器里并注明出处；关闭 = 不加 system prompt。
+3. **生成**：三家族都显式用 greedy（Gemma 的 generation_config 默认是采样）。停止 token 一律从 tokenizer 查，不写死：
+   - Qwen：`<|im_end|>` 与 `<|endoftext|>`；
+   - Gemma：`<turn|>` 与 `<eos>`；
+   - InternVL：`<|im_end|>`。
+4. **坐标**：各家原生框格式由各自的适配器换算成内部的绝对像素 xyxy，轴序与量程写进单元测试：
+   - Qwen：`bbox_2d`，0–1000，x 在前；
+   - Gemma：`box_2d`，0–1000，**y 在前**；
+   - InternVL：`<box>[[x1,y1,x2,y2]]</box>`，0–1000，x 在前。
+5. **视觉 token 数**：每个家族一套固定策略，参数全部显式传入，**禁止依赖处理器默认值**（InternVL 的处理器默认 `crop_to_patches=True`，与 preprocessor_config 相反）。可调参数：
+   - Qwen：`min_pixels`/`max_pixels`；
+   - Gemma：`max_soft_tokens`，只能取 70/140/280/560/1120；
+   - InternVL：`crop_to_patches` 与 `max_patches`。
+
+   E1 的具体取值写进 E1 预注册，并在 G0 报告里列出。
+6. **其他**：
+   - Gemma 的 processor 做批处理时，图像要按样本嵌套传入；
+   - Gemma 的按层属性不能全局读取，例如 `head_dim` 要从 `per_layer_config[i]` 取；
+   - HF hub 1.x 的缓存 blob 全局共享，删模型用 `scan_cache_dir(...).delete_revisions(...)`，只删 `models--X` 目录腾不出空间（RUN-0002 实测，已写进 skill lessons）。
+
