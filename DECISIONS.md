@@ -359,3 +359,37 @@
    - Qwen grid2d 的查询位置；
    - Gemma 查询位置的 PLE 与 HF 公式一致。
 
+## D22 — DEV-0006（输出解析器）合入与偏离裁定（2026-09-30）
+
+1. **合入**（f352489，审查 1 轮）：
+   - 新的 `src/parsing/`：
+     - 失败原因枚举（16 项，与网格解析的枚举不重名）；
+     - `ParseTally` 与 `parse_generation`（先判思考段未闭合，再判空回答）；
+     - `extract_json`；
+     - 计数、多选、具名二选一、多边形的解析。
+   - 适配器接口加抽象方法 `parse_boxes(text, *, width, height)`，`width`、`height` 必须是无默认值的关键字参数；基类提供 `parse_one_box`。
+   - 三家族的原生框解析，用 model_notes 里的 8 条真实输出做测试。轴序读反时，与 COCO GT 的 IoU ≤0.22，所以写反一定会被测试抓住。
+   - 合入后在干净 worktree 里验证：普通与 server-parity 条件都是 785 passed；三家族 `--tiny` 冒烟都通过。
+2. **偏离裁定**：
+   - **代码块**：多个代码块判 ambiguous，即使其中只有一个能解析；恰好一个代码块才解析。接受。
+   - **小数坐标**：Qwen 与 Gemma 的 JSON 坐标接受小数；InternVL 保持整数语法（D19）。接受。
+     - 风险：0–1 归一化坐标或像素坐标会被当成 0–1000，记为定位错误，而不是解析失败。
+     - 对策：E1 按模型报告"全部坐标 ≤1 且含小数"的条数，作为诊断量，由 E1 框架实现。
+   - **负数**：JSON 里的负数判 out_of_range；InternVL 语法里的负号仍判 malformed。接受。
+   - **空列表**：Qwen/Gemma 的 `[]` 在 `parse_boxes` 里算解析成功、零个框（检测任务里"没有"是合法回答）；`parse_one_box` 判 no_box。InternVL 的 `<box>[]</box>` 仍判 malformed。接受。
+   - **`parse_choice` 改为严格版**（审查第 1 轮）：
+     - 回答以前缀式字母开头，又明确陈述了另一个字母，判 multiple_choices，与 D12 N2 一致；
+     - 字母写法与 `metrics.misc` 共用一处定义。misc 只做导出，`normalize_choice` 的行为不变。
+   - **其他**：
+     - 新增 `no_json`，只由 `extract_json` 给出，框和多边形解析会把它换成 no_box / no_polygon；
+     - JSON 对象里有重复键，判 ambiguous；
+     - InternVL 的 label 取紧挨 `<box>` 的 `<ref>…</ref>`，两者之间只允许空白。
+
+     以上全部接受。
+   - **已知局限**：
+     - "The answer is: D"（is 后面带冒号）判 no_choice：misc 的 "answer is X" 不含这种写法，改它会改变 `normalize_choice`（D12）。E1 先在开发子集上（D11-6）看解析失败的实际分布，需要时再开 D 条。
+     - 计数里的代词 one、连字符数词、"no cats"、小数的处理，见 docstring。
+3. **并入 E1 准备任务**：
+   - 解析失败率用 `ParseTally.to_dict()` 按模型 × 任务单列，与准确率分开报；
+   - 思考段未闭合和被 max_new_tokens 截断各自单列，截断的判定依赖 D21 的停止原因字段。
+
