@@ -81,8 +81,9 @@
   会让它改到主工作区里去。
 - 并发 ≤3。每份任务书写明允许改动的文件范围；范围有交集的任务串行；约定文件（constants）
   和依赖清单（requirements）的改动一次只允许一个任务碰。
-- 派发后在台账记一行（DEV 编号、agentId、分支/worktree、状态"已派发"），会话中断后
-  靠它恢复：SendMessage 给该 agentId 即可接着它的上下文继续。
+- 派发后在台账记一行（DEV 编号、分支/worktree、状态"已派发"）。agentId 是内部标识，不写进会推到远端的
+  台账，记在仓库里不入 git 的本地派发表（如 `.claude/dispatch.local.tsv`，gitignore 加 `*.local.tsv`）。
+  会话中断后靠它恢复：SendMessage 给该 agentId 即可接着它的上下文继续。
 
 ### 7.2 审查与合入
 
