@@ -8,7 +8,8 @@
 
 | RUN | 发出 | 校验 commit | 内容 | 状态 | 一句话结论 | Report |
 |---|---|---|---|---|---|---|
-| 0004 | 2026-09-30 | b4b4810 | G0 冒烟（三家族）：服务器全量测试 + Qwen3.5-0.8B / Gemma 4 E2B-it / InternVL3.5-2B-HF 真实权重冒烟 + Qwen3.5-4B（取代 RUN-0003 §3–4） | 已发（值守自动接单） | — | — |
+| 0005 | 2026-09-30 | 0277617 | 思考行为事实探针：8 个 E1 模型 × 12 条提示 × 3 种设置（nothink_greedy / think_greedy / think_sampled），D20 | 已发（值守自动接单） | — | — |
+| 0004 | 2026-09-30 | b4b4810 | G0 冒烟（三家族）：服务器全量测试 + Qwen3.5-0.8B / Gemma 4 E2B-it / InternVL3.5-2B-HF 真实权重冒烟 + Qwen3.5-4B（取代 RUN-0003 §3–4） | 完成（806f4c0、0277617；值守自动接单） | 服务器 558 passed + 1 skipped；四份真实权重冒烟 all_ok=True；D1 仪器在三家族上重现；4B 的 lm_head 共享；InternVL 开思考时直接作答，没走到闭合分支 | [0004](reports/0004-g0-smoke-all.md) |
 | 0003 | 2026-09-30 | a4a60e8 | G0 冒烟（Qwen3.5）：服务器全量测试（312）+ 0.8B 与 4B 真实权重冒烟 | **停在 §3**（37a29bd）：服务器上 16 failed，开发机绿、服务器红；冒烟未跑 | 服务器装了 fla，transformers 在 import 时把 GDN 绑到 Triton，CPU 小模型走进 GPU 内核；屏蔽 fla 后 311+1 与开发机一致 | [0003](reports/0003-g0-smoke-qwen.md) |
 | 0002 | 2026-09-30 | 见任务书 | Phase 0：Gemma 4 E2B-it 与 InternVL3.5-2B-HF 事实探针（结构、模板、图像 token、位置、坐标、任务调制仪器、显存） | 完成（aa87b10、dc11314；服务器值守自动接单） | 三家族 D1 仪器全部成立（图在前逐位相同）；坐标轴序不同（Gemma y 在前）；Gemma 无预留行（复用 unusedN）；InternVL 处理器默认值与配置矛盾 | [0002](reports/0002-family-probe.md) |
 | 0001 | 2026-09-29 | 见任务书 | Phase 0：环境、Qwen3.5 事实探针、模型登记、数据源体积与 schema（磁盘受限版） | 完成（45ce09b、27b00a5、8c010e4） | 仪器（图在前逐位相同）在 0.8B/9B 上成立；原生坐标 0–1000；数据源全部定位，许可与去重问题上报（N10、D11） | [0001](reports/0001-phase0-env.md) |
@@ -138,4 +139,35 @@
   - (h) 各家族 vision_features 与第 0 层逐位相同；
   - (i) Qwen 在 GPU 上检查 0 记录的 GDN 实现是 fla，switched_to_torch=False；
   - (j) InternVL 在 2048 个思考 token 内出现闭合的思考段；Gemma 的思考段在真实权重上闭合，格式与 tokenizer_config 一致。
+
+### 2026-09-30（管理员，续）
+
+- **RUN-0004 结果**（806f4c0 批次 1，0277617 批次 2，[report](reports/0004-g0-smoke-all.md)）。预测逐条对照：
+  - (a) 兑现：558 passed + 1 skipped（cv2 未装）。
+  - (b) 兑现：四份冒烟 all_ok=True，退出码都是 0。
+  - (c) 兑现：16 行（4 个模型 × 2 种顺序 × 思考开关）与官方 processor 逐项相等。
+  - (d) 兑现：图在前 25/25、36/36、29/29、33/33 层逐位相同；指令在前都只有第 0 层相同。
+  - (e) 兑现：0.8B 指令在前 25 层的 max|Δ| 与 model_notes §5.7 的 bf16 表逐项相同。那张表出自 RUN-0001 的探针脚本，这次走的是适配器 API：两套代码、两次运行，结果一致。
+  - (f) 兑现：Qwen 248077/248078，Gemma 6/7，InternVL 151679/151680。
+  - (g) 兑现：4B 的 lm_head 共享（D15 的更正成立）。
+  - (h) 兑现：四个模型的 vision_features 与第 0 层图像位置 `torch.equal`。
+  - (i) 兑现：两个 Qwen 的 chunk 与 recurrent GDN 都绑到 fla，switched_to_torch=False。
+  - (j) **只兑现一半**：
+    - Gemma 在真实权重上开了思考段并闭合（202 token，以 `<|channel>thought\n` 开头，与 D13 一致）；两个 Qwen 也都闭合（144、147 token）。
+    - **InternVL 未兑现**：加了 R1 system prompt、greedy 解码时，直接回答 "Pink"（2 个 token，没有 `<think>`）。闭合分支没有在真实权重上走到，目前只有 fake 单测覆盖。
+- **没预测到的事实**：
+  - InternVL 多 tile（检查 9）：640×480、max_patches=6，得到 7 个 tile、1792 个 token；两种思考开关下都与官方 processor 逐项相等；探针类方法按设计拒绝多 tile。
+  - 检查 1 里开思考的 8 行 text 都是空串、thinking_unclosed=True：检查 1 的生成预算只有 8 个 token，思考段写不完。符合规则，不是问题。
+  - 开思考后提示长度的变化：Gemma 多 7 个 token（system 轮），InternVL 多 120 个（R1 system prompt），Qwen 少 2 个（关思考的模板里有一个空思考块）。
+- **解读**：G0 要求的"每个家族最小尺寸跑通冒烟"已满足。唯一的缺口是 InternVL 的思考闭合分支。InternVL 的 model card 建议思考模式用 `do_sample=True, temperature=0.6`，我们一律 greedy，所以这是 E1 思考子集的协议问题，不是适配器 bug。下面发 RUN-0005，先测事实。
+- **读代码时的新发现（G0 要报告）**：Qwen 适配器把每张图都强制缩放到固定的 H×W（默认 480×640），不保持长宽比。竖图（例如 480×640）会被拉成横图，长宽比失真约 1.78 倍。这对 E2/E3 的固定网格方便，但会压低 E1 零样本基线。Gemma 的处理器保持长宽比；InternVL 单 tile 时压成 448×448 的正方形（这是官方在 max_num=1 时的做法）。E1 的分辨率策略写进 G0 报告，请项目负责人定。
+- **发出 RUN-0005**（思考行为事实探针，D20）。同时定了探针用图的排除规则：P0 用过的两张 COCO val2017 图，从所有评测子集中排除。**管理员预测**：
+  - (a) InternVL-2B 的 think_greedy 开思考不到一半（≤6/12）；开了的都在 4096 内闭合。
+  - (b) InternVL 两个尺寸的 think_sampled（T=0.6）开思考的条数都多于 think_greedy。
+  - (c) Qwen 四个尺寸的 think_sampled 都是 12/12 闭合；0.8B 或 2B 的 think_greedy 至少有一条写满预算（重复循环）。
+  - (d) Gemma E2B/E4B 的 think_greedy 都是 12/12 开思考并闭合。
+  - (e) nothink_greedy 下没有任何模型输出思考标记。
+  - (f) think_sampled 的思考长度中位数：Qwen 4B/9B 大于 0.8B/2B；所有模型的中位数都在 1500 token 以内。
+  - (g) batch 1 的解码速度：0.8B ≥ 40 tokens/s，9B ≥ 20 tokens/s。
+  - (h) 总墙钟 ≤ 3 小时。
 
