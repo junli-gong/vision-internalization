@@ -96,3 +96,27 @@
    - 按简报 §5.2，新 token 的嵌入行初始化为基础词表嵌入的均值。4B/9B 的 lm_head 与嵌入不共享，也用 lm_head 基础行的均值初始化对应行。预留行原有的值不用。
 4. **思考开关**：Qwen3.5 的 0.8B/2B 模板默认关闭思考，4B/9B 默认开启。简报说"默认开启"与此不完全一致。按 D1，每次调用都显式传 `enable_thinking`，并直接作为 `apply_chat_template` 的关键字参数传入；`chat_template_kwargs` 在 transformers 里不生效，已实测。
 5. **内存盘上的权重可以随时删**。9B 重新下载实测约 34 秒，D6 的 25 GB 上限不变：放不下时，先删眼下不用的模型。
+
+## D10 — DEV-0001 合入、偏离裁定与独立审查的处理（2026-09-30）
+
+1. **合入范围**：DEV-0001 按现状合入 main，便于 DEV-0002/0003 从它开 worktree。独立审查（manager.md §7.2）查出的问题由 `prompts/dev/0001-addendum-1.md` 修复，交还原开发 CC，算第 1 轮返工：
+   - 会改变门判定的 S1–S3；
+   - 中等问题 M1–M4；
+   - 低风险的若干条。
+
+   **addendum-1 合入前，任何实验不得使用** `stats.is_significant`、`stats.paired_bootstrap_ci`、`metrics.detection.detection_map`、`grid.codec.parse_grid_text`、`metrics.misc.normalize_choice`。
+2. **对开发列出的 9 条偏离逐条裁定**：
+   - (1) NYU 有效深度上端：改为开区间 gt < 10，与 BTS/AdaBins 的实现一致。对齐官方评测优先于任务书当初写的闭区间。见 addendum-1 第 12 条。
+   - (2) 框光栅化取 (lo, hi]：接受。独立审查用 22,400 个随机框与 pycocotools 对照，0 处不一致。
+   - (3) 两个 mask 都空时 Boundary IoU 记 1.0：接受，与 gIoU 的空并集约定一致（官方是 0/0）。
+   - (4) 解析失败记错或 IoU 记 0，检测预测为空时 AP 记 0：接受。分割预测为 None 时同样记 0（addendum-1 第 6 条）。
+   - (5) 无分数检测统一记 score=1.0：取代。改为 K 次随机打破平局取平均，另报单一工作点 P/R/F1（addendum-1 第 3 条）。标题指标见 N9。
+   - (6) 元数据写 meta.json：接受。
+   - (7) 任务书外的补充：接受 `ratio_of_sums`、`check_grid_token_names`，以及 visint 里只供测试对照的 opencv。
+   - (8) 适配器接口的几处解释：在 DEV-0003 定。层号约定、`vision_features`、token 预算跨调用累计、`raw_text`，由 DEV-0003 补进 base.py。
+   - (9) `is_significant` 的逐样本取法：取代，按 addendum-1 第 2 条重写（同一统计量、分方向、三条规则）。这仍是对简报 §8.4 措辞的实现解释，G0 报告里请项目负责人确认。
+3. **审查的其他发现**：
+   - 预测为 None 时，分割记 0；GT 为空时仍按空并集约定处理。
+   - 多个候选块里恰好只有一个是 N×N 时，仍判失败（不猜）。
+   - 思考段由适配器剥离，解析器只看最终答案（DEV-0003）。
+
