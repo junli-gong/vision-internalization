@@ -7,6 +7,8 @@
     python scripts/smoke_adapter.py --model qwen3.5-0.8b --device cuda --dtype bf16 --image <图路径> --out <json>
 开发机彩排（本地构造的小型随机 Qwen3.5，CPU，只下载 tokenizer / 处理器 / config 小文件）：
     python scripts/smoke_adapter.py --tiny --out /tmp/smoke_tiny.json
+其他家族按 --model 的注册键分派（family_suite；--tiny 时从该键的固定 revision config 缩出小模型）：
+    InternVL3.5（DEV-0005）：--model internvl3.5-2b-hf [--tiny]；构造与检查项见 src/adapters/internvl35.py 的冒烟一节
 
 检查项（1–7 的编号同任务书；0、8 是附加项）：
   0 环境与模型事实（只记录）
@@ -82,8 +84,6 @@ def parse_args(argv=None):
     p.add_argument("--think-max-new-tokens", type=int, help="检查 7 的思考生成长度；默认真模型 512、--tiny 16")
     args = p.parse_args(argv)
     if args.tiny:
-        if args.model:
-            p.error("--tiny 与 --model 不能同时给")
         args.device = args.device or "cpu"
         args.dtype = args.dtype or "fp32"
         args.think_max_new_tokens = args.think_max_new_tokens or 16
@@ -480,6 +480,21 @@ CHECKS = {
 }
 
 
+def family_suite(args):
+    """按家族分派的唯一入口：返回 (setup, checks, check_names, run_order)。没给 --model（只有 --tiny）时是 Qwen3.5。
+
+    其他家族的构造与检查逻辑放在各自的适配器模块里，这里只加入口；它们拿到本模块，复用通用检查与常量。
+    """
+    family = registry.get_model(args.model).family if args.model else registry.FAMILY_QWEN35
+    if family == registry.FAMILY_INTERNVL35:  # DEV-0005
+        from src.adapters import internvl35
+
+        return internvl35.smoke_suite(sys.modules[__name__])
+    if family != registry.FAMILY_QWEN35:
+        raise ValueError(f"冒烟脚本还不支持 {family} 家族（{args.model}）")
+    return setup, CHECKS, CHECK_NAMES, RUN_ORDER
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     out_path = Path(args.out)
@@ -489,27 +504,28 @@ def main(argv=None) -> int:
               "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
     t_all = time.perf_counter()
     try:
-        ad, ctx = setup(args)
+        setup_fn, checks, check_names, run_order = family_suite(args)
+        ad, ctx = setup_fn(args)
     except Exception as e:  # noqa: BLE001 — 失败也先落盘
         report.update(setup_error=repr(e), traceback=traceback.format_exc()[-4000:], all_ok=False)
         out_path.write_text(json.dumps(report, indent=1, ensure_ascii=False, default=str))
         print(f"setup 失败：{e!r}", file=sys.stderr)
         return 2
     results = {}
-    for name in RUN_ORDER:
+    for name in run_order:
         t0 = time.perf_counter()
         try:
-            r = CHECKS[name](ad, ctx)
+            r = checks[name](ad, ctx)
         except Exception as e:  # noqa: BLE001 — 单项失败不影响其他项，全部落盘后再判
             r = {"ok": False, "error": repr(e), "traceback": traceback.format_exc()[-4000:]}
         r["wall_time_s"] = round(time.perf_counter() - t0, 3)
         results[name] = r
-    report["checks"] = {n: results[n] for n in CHECK_NAMES}
-    report["ok"] = {n: bool(results[n].get("ok")) for n in CHECK_NAMES}
+    report["checks"] = {n: results[n] for n in check_names}
+    report["ok"] = {n: bool(results[n].get("ok")) for n in check_names}
     report["all_ok"] = all(report["ok"].values())
     report["wall_time_s"] = round(time.perf_counter() - t_all, 2)
     out_path.write_text(json.dumps(report, indent=1, ensure_ascii=False, default=str))
-    for n in CHECK_NAMES:
+    for n in check_names:
         print(f"{n:22s} {'PASS' if report['ok'][n] else 'FAIL'}  ({results[n]['wall_time_s']} s)")
     print(f"all_ok={report['all_ok']}  wall={report['wall_time_s']} s  -> {out_path}")
     return 0 if report["all_ok"] else 1
