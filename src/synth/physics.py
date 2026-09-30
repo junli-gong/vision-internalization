@@ -5,6 +5,7 @@
 - 长度单位 = 画布宽 W（像素）：重力 PHYSICS_GRAVITY·W px/s² 向下；文字里的速度以"image widths per second"给出。
 - 刚体只有盒子（rectangle 族）与圆（circle 族）；质量 = 面积 × 密度，质心在单位形状的原点，
   碰撞形状与渲染用的多边形相同（圆的碰撞形状是真圆，渲染是 128 边内接多边形，差 ≤ 0.03 px）。
+  盒子的面积与转动惯量在有理数上精确计算（poly_mass_moment），不经 GEOS 或 Chipmunk 的浮点。
 - 摩擦、弹性、密度都是全局常数（图像里看不出的量不随样本变化），见 constants。
 
 时间
@@ -23,21 +24,28 @@
 - 平凡基线："copy"（目标的初始 mask）；"const_velocity"（目标按文字给出的初速度匀速平移 k 步；drop 的初速为 0，等于 copy）。
 
 合理性（生成时作为拒绝条件，并记进元数据；tests/test_synth_physics.py 另在不设拒绝的场景上检查）
-- 任一接触点的穿透深度 ≤ PHYSICS_PENETRATION_TOL_PX（每步检查 pymunk 的接触距离）；
-- 第 k 步两两多边形的重叠面积 ≤ PHYSICS_OVERLAP_TOL × 较小者面积（shapely，独立于 pymunk）。
+- 任一接触点的穿透深度 ≤ PHYSICS_PENETRATION_TOL_PX（每步检查 pymunk 的接触距离，先量化到 COORD_QUANTUM）；
+- 第 0 步两两 mask 没有公共像素；第 k 步两两 mask 的公共像素数 ≤ PHYSICS_OVERLAP_TOL × 较小者像素数
+  （max_overlap_fraction：精确整数计数，独立于 pymunk 与 GEOS）。
 
-确定性：同一进程、同一 pymunk 构建下逐位相同（按同样顺序加入物体、同样的步长序列）。
-第 k 步的位姿量化后再渲染（坐标 1/256 px、角度 1/256 度）。跨机器（arm64 开发机 vs x86 服务器）是否逐位相同
-取决于 Chipmunk 的编译浮点行为，由 tests/test_synth_repro.py 的钉住摘要在服务器上核对。
+确定性（D24）
+- 同一进程、同一 pymunk 构建下逐位相同（按同样顺序加入物体、同样的步长序列）。
+- Chipmunk（C）的浮点行为随平台与编译器不同，不在我们控制之内：规范平台是服务器（x86_64 Linux，固定的 pymunk 版本），
+  d 的数据只在规范平台上生成；钉住的摘要只在规范平台上比对（tests/test_synth_repro.py）。
+- 我们自己写的部分都是确定的，所以跨平台差异只可能来自 pymunk：
+  * 进 pymunk 的量：位姿、速度来自量化后的场景规格；质量、转动惯量精确计算；
+  * 出 pymunk 的量：位姿、穿透深度先量化（坐标 1/256 px、角度 1/256 度）再用于判定、渲染和元数据；
+    touched 是 pymunk 碰撞回调给出的布尔值，没法量化，只随 pymunk 本身变化；
+  * 摆放、判定、光栅化、元数据只用确定的运算（dmath 的三角函数、raster.py、整数计数）。
 """
 
 from __future__ import annotations
 
 import math
+from fractions import Fraction
 
 import numpy as np
 import pymunk
-import shapely
 
 from src.synth.constants import (
     ANGLE_QUANTUM_DEG,
@@ -81,7 +89,7 @@ from src.synth.sample import (
 )
 from src.synth.scene import Background, Ground, ObjectSpec, SceneSpec, object_masks, render_image
 from src.synth.seeding import coin, pick, randint, uniform
-from src.synth.shapes import describe, polygon_inside, qcoord, quantize, rasterize, sample_identity, unit_polygon
+from src.synth.shapes import describe, polygon_inside, qcoord, quantize, rasterize, rot_cs, sample_identity, unit_polygon
 
 TEMPLATES = (
     "{action} Where will the {target} be after {k} time steps? One time step is 1/30 of a second.",
@@ -99,6 +107,37 @@ def ground_y(height: int) -> float:
 # ---------------------------------------------------------------------------
 # 仿真
 # ---------------------------------------------------------------------------
+
+
+def poly_mass_moment(unit: np.ndarray, radius: float) -> tuple[list[tuple[float, float]], float, float]:
+    """盒子（凸多边形）的碰撞顶点（像素，相对质心）、质量与绕原点的转动惯量。全部在整数与有理数上精确计算，最后各舍入一次。
+
+    - 顶点 = 单位顶点 × 半径。单位顶点是 k/2^24（|k| ≤ 2^24），半径是 m/256（qcoord），乘积 k·m/2^32 是精确的 float。
+    - 面积 = |Σ (x_i·y_{i+1} - x_{i+1}·y_i)| / 2（整数鞋带公式）；质量 = PHYSICS_DENSITY × 面积。
+    - 转动惯量用与 Chipmunk cpMomentForPoly 相同的公式 I = m·Σ(c_i·b_i) / (6·Σc_i)，
+      c_i = x_i·y_{i+1} - x_{i+1}·y_i，b_i = |v_i|² + v_i·v_{i+1} + |v_{i+1}|²，在有理数上精确求值。
+    """
+    unit_scale, radius_scale = 1 << 24, 1 << 8
+    ku = np.rint(np.asarray(unit, dtype=np.float64) * unit_scale)
+    kr = radius * radius_scale
+    if not (np.array_equal(ku / unit_scale, unit) and kr == int(kr)):  # pragma: no cover - 量化约定被改
+        raise ValueError("单位顶点必须在 2^-24 网格上、半径必须在 1/256 px 网格上")
+    kr = int(kr)
+    xs = [int(a) * kr for a in ku[:, 0]]  # 精确整数，单位 2^-32 px
+    ys = [int(b) * kr for b in ku[:, 1]]
+    den = unit_scale * radius_scale
+    verts = [(x / den, y / den) for x, y in zip(xs, ys)]  # int / int：正确舍入，这里是精确的
+    n = len(xs)
+    sum_c = sum_cb = 0
+    for i in range(n):
+        x0, y0, x1, y1 = xs[i], ys[i], xs[(i + 1) % n], ys[(i + 1) % n]
+        c = x0 * y1 - x1 * y0
+        sum_c += c
+        sum_cb += c * (x0 * x0 + y0 * y0 + x0 * x1 + y0 * y1 + x1 * x1 + y1 * y1)
+    area = Fraction(abs(sum_c), 2 * den * den)
+    mass = float(Fraction(PHYSICS_DENSITY) * area)
+    moment = float(Fraction(mass) * Fraction(sum_cb, 6 * sum_c * den * den))
+    return verts, mass, moment
 
 
 class Simulation:
@@ -124,13 +163,11 @@ class Simulation:
                 raise ValueError(f"物理场景只支持 {PHYSICS_FAMILIES}，收到 {o.family}")
             if o.family == "circle":
                 mass = PHYSICS_DENSITY * math.pi * o.radius * o.radius
-                body = pymunk.Body(mass, pymunk.moment_for_circle(mass, 0.0, o.radius))
+                body = pymunk.Body(mass, 0.5 * mass * (o.radius * o.radius))  # 实心圆盘，与 moment_for_circle(m, 0, r) 同式
                 shp = pymunk.Circle(body, o.radius)
             else:
-                verts = [(float(x), float(y)) for x, y in unit_polygon(o.family, o.variant) * o.radius]
-                area = abs(shapely.polygons(np.asarray(verts)).area)
-                mass = PHYSICS_DENSITY * area
-                body = pymunk.Body(mass, pymunk.moment_for_poly(mass, verts))
+                verts, mass, moment = poly_mass_moment(unit_polygon(o.family, o.variant), o.radius)
+                body = pymunk.Body(mass, moment)
                 shp = pymunk.Poly(body, verts)
             body.position = (o.cx, o.cy)
             body.angle = math.radians(o.angle)
@@ -153,7 +190,7 @@ class Simulation:
         sp.on_collision(None, None, begin=_begin)
         self.space = sp
         self.steps_done = 0
-        self.max_penetration = 0.0  # 各步末接触点穿透深度的最大值（px，正数）
+        self.max_penetration = 0.0  # 各步末接触点穿透深度的最大值（px，正数），量化到 COORD_QUANTUM
 
     def step(self, n: int = 1) -> None:
         dt = PHYSICS_STEP_SECONDS / PHYSICS_SUBSTEPS
@@ -171,7 +208,7 @@ class Simulation:
             for b in self.bodies:
                 b.each_arbiter(_collect)
             if pens:
-                self.max_penetration = max(self.max_penetration, max(pens))
+                self.max_penetration = max(self.max_penetration, qcoord(max(pens)))
 
     def poses(self) -> list[tuple[float, float, float]]:
         """每个物体当前的 (cx, cy, angle 度)，量化后（与渲染一致）。"""
@@ -184,18 +221,43 @@ class Simulation:
         return SceneSpec(self.scene.height, self.scene.width, self.scene.background, objs, self.scene.ground)
 
     def speeds(self) -> list[float]:
+        """各物体当前的速率（px/s，未量化）。只供测试检查物体是否静止，不进判定与元数据。"""
         return [math.sqrt(b.velocity.x ** 2 + b.velocity.y ** 2) for b in self.bodies]
 
 
-def max_overlap_fraction(scene: SceneSpec) -> float:
-    """两两多边形重叠面积 / 较小者面积 的最大值（shapely，独立于 pymunk）。"""
-    polys = [shapely.polygons(o.polygon()) for o in scene.objects]
+def _pixel_box(o: ObjectSpec, height: int, width: int) -> tuple[int, int, int, int]:
+    """物体 mask 可能占据的像素窗口 [r0, r1) × [c0, c1)（由网格上的多边形顶点精确得出，保守）。"""
+    p = o.polygon()
+    return (
+        max(int(math.floor(p[:, 1].min())), 0),
+        min(int(math.ceil(p[:, 1].max())) + 1, height),
+        max(int(math.floor(p[:, 0].min())), 0),
+        min(int(math.ceil(p[:, 0].max())) + 1, width),
+    )
+
+
+def max_overlap_fraction(scene: SceneSpec, masks: np.ndarray | None = None) -> float:
+    """两两 mask 的公共像素数 / 较小者像素数 的最大值：精确整数计数之比，独立于 pymunk 与 GEOS。
+
+    masks 可以传入已算好的 object_masks(scene)。只在两物体的像素窗口相交时计数。
+    """
+    m = object_masks(scene) if masks is None else masks
+    boxes = [_pixel_box(o, scene.height, scene.width) for o in scene.objects]
+    area: dict[int, int] = {}
     worst = 0.0
-    for i in range(len(polys)):
-        for j in range(i + 1, len(polys)):
-            if shapely.intersects(polys[i], polys[j]):
-                a = shapely.intersection(polys[i], polys[j]).area
-                worst = max(worst, a / min(polys[i].area, polys[j].area))
+    for i in range(len(boxes)):
+        for j in range(i + 1, len(boxes)):
+            r0, r1 = max(boxes[i][0], boxes[j][0]), min(boxes[i][1], boxes[j][1])
+            c0, c1 = max(boxes[i][2], boxes[j][2]), min(boxes[i][3], boxes[j][3])
+            if r1 <= r0 or c1 <= c0:
+                continue
+            inter = int(np.count_nonzero(m[i, r0:r1, c0:c1] & m[j, r0:r1, c0:c1]))
+            if inter == 0:
+                continue
+            for k in (i, j):
+                if k not in area:
+                    area[k] = int(np.count_nonzero(m[k]))
+            worst = max(worst, inter / min(area[i], area[j]))
     return worst
 
 
@@ -205,10 +267,9 @@ def max_overlap_fraction(scene: SceneSpec) -> float:
 
 
 def _half_extents(family: str, variant: int, radius: float, angle: float) -> tuple[float, float, float]:
-    """旋转后形状相对质心的 (左伸, 右伸, 下伸)，像素。"""
+    """旋转后形状相对质心的 (左伸, 右伸, 下伸)，像素（确定的 rot_cs + 逐元素运算）。"""
     u = unit_polygon(family, variant) * radius
-    t = math.radians(angle)
-    c, s = math.cos(t), math.sin(t)
+    c, s = rot_cs(angle)
     x = u[:, 0] * c - u[:, 1] * s
     y = u[:, 0] * s + u[:, 1] * c
     return float(-x.min()), float(x.max()), float(y.max())
@@ -364,25 +425,29 @@ def _attempt(ctx: GenContext, action: str, k: int):
     scene = SceneSpec(h, w, Background("solid", bg_color, bg_color), tuple(objs), Ground(yg, tuple(PHYSICS_GROUND_COLOR)))
     velocities = {perm[idx]: (dirn * n * w / 100.0, 0.0) for idx, (dirn, n) in vel.items()}
 
-    # 第 0 步：完整在画布内、互不重叠
+    # 第 0 步：完整在画布内、mask 两两没有公共像素
     if not all(polygon_inside(o.polygon(), h, w, CANVAS_MARGIN_PX) for o in scene.objects):
         return None
-    if max_overlap_fraction(scene) > 0.0:
+    init_masks = object_masks(scene)
+    if max_overlap_fraction(scene, init_masks) > 0.0:
         return None
 
     sim = Simulation(scene, velocities)
     sim.step(k)
-    final = sim.scene_now()
+    final = sim.scene_now()  # 位姿已量化
     if not all(polygon_inside(o.polygon(), h, w, CANVAS_MARGIN_PX) for o in final.objects):
         return None
-    if sim.max_penetration > PHYSICS_PENETRATION_TOL_PX:
+    if sim.max_penetration > PHYSICS_PENETRATION_TOL_PX:  # 已量化
         return None
-    overlap = max_overlap_fraction(final)
+    final_masks = object_masks(final)
+    overlap = max_overlap_fraction(final, final_masks)
     if overlap > PHYSICS_OVERLAP_TOL:
         return None
     return {
         "scene": scene,
         "final": final,
+        "init_masks": init_masks,
+        "final_masks": final_masks,
         "sim": sim,
         "target": perm[target_k],
         "roles": {perm[i]: roles[i] for i in range(len(placed))},
@@ -428,8 +493,8 @@ def generate(ctx: GenContext) -> Sample:
     t = res["target"]
     h, w = ctx.height, ctx.width
 
-    init_masks = object_masks(scene)
-    final_masks = object_masks(final)
+    init_masks = res["init_masks"]
+    final_masks = res["final_masks"]
     image = render_image(scene, init_masks)
 
     template_id = int(rng.integers(len(TEMPLATES)))

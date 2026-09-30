@@ -17,11 +17,19 @@
 - target_mask / target_grid：变换后的目标；object_masks：变换后的整幅布局（其余物体不动）。
 - 平凡基线 "no_transform"：按文字直接放置、不做变换的目标。
 - 图像为 None。
+
+跨机器逐位复现（D24：e 在任何平台上逐位相同）
+- 三角函数（旋转、平移方向、由平均位移反解转角的 asin）只用 dmath；平均位移用 dmath.fixed_point_mean
+  （逐项量化到 MEAN_TERM_QUANTUM 后精确求和），不用 np.mean。
+- 物体之间至少隔 1 px：用 shapely.distance（GEOS）判定。顶点都在 1/256 px 网格上且在画布内，GEOS 点到线段距离里的
+  差、积、和都是精确的（< 2^53），只剩一次除法、一次开方、一次乘法，各自正确舍入，与平台无关。
+  DEV-0007 用的 buffer(1.0) 会用平台 libm 生成圆角、按版本相关的规则化简，已弃用。
 """
 
 from __future__ import annotations
 
 import math
+from fractions import Fraction
 
 import numpy as np
 import shapely
@@ -39,8 +47,10 @@ from src.synth.constants import (
     IMAGERY_SCALE_RANGE,
     IMAGERY_TRANSFORMS,
     MAX_ATTEMPTS,
+    MEAN_TERM_QUANTUM,
     SHAPE_FAMILIES,
 )
+from src.synth.dmath import asin_deg, fixed_point_mean, sin_deg
 from src.synth.sample import (
     GenContext,
     Sample,
@@ -112,7 +122,10 @@ def _transform_sentence(target: str, s_h: int | None, theta: int | None, t_h: tu
 
 
 class _Target:
-    """目标物体的像素中心与变换后的平均位移。"""
+    """目标物体的像素中心与变换后的平均位移。
+
+    逐元素的 numpy 初等运算（各自正确舍入）+ 确定的 rot_cs + fixed_point_mean：结果与平台无关。
+    """
 
     def __init__(self, mask: np.ndarray, cx: float, cy: float, short: int) -> None:
         rows, cols = np.nonzero(mask)
@@ -121,13 +134,13 @@ class _Target:
         self.dx = self.px - cx
         self.dy = self.py - cy
         self.short = float(short)
-        self.rho = float(np.mean(np.sqrt(self.dx * self.dx + self.dy * self.dy))) / self.short
+        self.rho = fixed_point_mean(np.sqrt(self.dx * self.dx + self.dy * self.dy), MEAN_TERM_QUANTUM) / self.short
 
     def mpd(self, s: float, theta_deg: float, tx_px: float, ty_px: float) -> float:
         c, sn = rot_cs(theta_deg)
         ex = s * (self.dx * c - self.dy * sn) - self.dx + tx_px
         ey = s * (self.dx * sn + self.dy * c) - self.dy + ty_px
-        return float(np.mean(np.sqrt(ex * ex + ey * ey))) / self.short
+        return fixed_point_mean(np.sqrt(ex * ex + ey * ey), MEAN_TERM_QUANTUM) / self.short
 
 
 def _place_objects(rng, ctx: GenContext):
@@ -154,7 +167,7 @@ def _place_objects(rng, ctx: GenContext):
             x_h, y_h = randint(rng, x_lo, x_hi), randint(rng, y_lo, y_hi)
             o = _spec(0, ident, x_h, y_h, r_h, a_deg, w, h, short)
             g = shapely.polygons(o.polygon())
-            if any(shapely.intersects(g.buffer(1.0), g2) for g2 in geoms):
+            if geoms and float(np.min(shapely.distance(g, geoms))) <= 1.0:  # 与已放的物体至少隔 1 px
                 continue
             geoms.append(g)
             taken.add(describe(*ident))
@@ -188,9 +201,9 @@ def _solve(rng, kind: str, tgt: _Target, period: float, m_star: float, ctx: GenC
     s_h = theta = None
     if kind == "rotate":
         x = m_star / (2.0 * tgt.rho)
-        if x >= math.sin(math.radians(th_max) / 2.0):
+        if x >= float(sin_deg(Fraction(th_max, 2))):
             return None
-        theta = int(round(math.degrees(2.0 * math.asin(x))))
+        theta = int(round(2.0 * float(asin_deg(x))))
         if theta < 1:
             return None
         return None, theta if coin(rng, 0.5) else -theta, None
@@ -214,8 +227,7 @@ def _solve(rng, kind: str, tgt: _Target, period: float, m_star: float, ctx: GenC
             break
     else:
         return None
-    phi = uniform(rng, 0.0, 2.0 * math.pi)
-    ux, uy = math.cos(phi), math.sin(phi)
+    ux, uy = rot_cs(uniform(rng, 0.0, 360.0))  # 随机方向；确定的三角函数
     lo, hi = 0.0, 1.5 * short
     for _ in range(IMAGERY_BISECTION_STEPS):
         mid = 0.5 * (lo + hi)

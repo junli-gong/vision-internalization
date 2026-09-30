@@ -4,8 +4,8 @@
 1. 目标：身份从该划分的身份池里抽（先族、再变体、再外观），每个样本只抽一次、不随重试改变（否则拒绝采样会让
    目标形状族偏向容易满足约束的非凸形状）；外接半径 OCC_TARGET_RADIUS × min(H, W)；任意角度；
    质心均匀落在使目标完整留在画布内的范围里。以下各步每次尝试重抽。
-2. 遮挡物 1–3 个（z 在目标之上）：身份的简称不得与目标相同；每个有随机方向 φ 与基础偏移
-   δ ∈ OCC_OFFSET_RANGE，圆心 = 目标质心 + λ·δ·(r_目标 + r_遮挡物)·(cos φ, sin φ)。
+2. 遮挡物 1–3 个（z 在目标之上）：身份的简称不得与目标相同；每个有随机方向 φ（度，均匀）与基础偏移
+   δ ∈ OCC_OFFSET_RANGE，圆心 = 目标质心 + λ·δ·(r_目标 + r_遮挡物)·rot_cs(φ)。
    在 [OCC_BIN_MARGIN 收窄后的档内] 均匀抽目标遮挡比例 f*，用 shapely 的面积对公共缩放 λ 二分，使几何遮挡比例 ≈ f*。
 3. 干扰物 0–2 个（z 在目标之下，不与目标相交），简称不得与目标相同。
 4. 光栅化后按像素重算遮挡比例 f = 1 - |可见| / |非模态|，不在档内就重来；全部物体必须完整留在画布内。
@@ -16,11 +16,20 @@
 - target_mask：目标的非模态 mask；object_masks：全部物体的非模态 mask（可见 mask 用 scene.visible_masks 重算）。
 - 平凡基线："visible"（目标的可见部分）、"convex_hull"（可见部分的凸包，见 convex_hull_mask）。
 - 目标在指令里用"外观 + 名词"指明，场景里没有别的物体有同样的简称。
+
+跨机器逐位复现（D24：c 在任何平台上逐位相同）
+- 位姿、方向都只经过量化与 dmath 的确定三角函数；mask 用 raster.py 的精确整数光栅化；遮挡比例、凸包 IoU 是整数计数之比。
+  写进样本与元数据的每个量都由这些确定的计算得出。
+- shapely（GEOS，编译过的 C++）还用在三处，都不会让结果随平台变化：
+  * λ 的二分、"遮挡比例 ≥ f*"的初判、非平凡预检，用的是 GEOS 算的面积之比，只拿来与随机抽的 f* 或固定阈值比大小，
+    本身不进样本。编译器是否融合 FMA 会让这个比值在两个平台上相差 ~1e-15，比较结果只有在比值与 f*（或阈值）
+    相差不到这个量级时才会翻转：每次比较的概率 ~1e-14，也没有量化或取整去放大它。
+    改成像素级的精确判定要在每次二分时光栅化遮挡物（平均约 5 次尝试 × 14 步），c 的速度会降到要求以下。
+  * 干扰物与目标不相交（intersects），是 GEOS 的鲁棒谓词，对网格上的精确坐标给出精确结果。
+  * 凸包：整数点集的凸包由精确的方向判定得出，顶点是输入点本身；光栅化只取决于凸包围成的区域。
 """
 
 from __future__ import annotations
-
-import math
 
 import numpy as np
 import shapely
@@ -56,7 +65,7 @@ from src.synth.sample import (
 )
 from src.synth.scene import Background, ObjectSpec, SceneSpec, object_masks, render_image, visible_masks
 from src.synth.seeding import coin, pick, randint, uniform
-from src.synth.shapes import describe, polygon_inside, pose_polygon, qcoord, quantize, rasterize, sample_identity
+from src.synth.shapes import describe, polygon_inside, pose_polygon, qcoord, quantize, rasterize, rot_cs, sample_identity
 
 TEMPLATES = (
     "The {obj} is partly hidden behind other objects. Draw its complete shape, including the hidden parts.",
@@ -137,11 +146,11 @@ def _attempt(ctx: GenContext, lo: float, hi: float, need_nontrivial: bool, t_ide
         ident = _other_identity(rng, ctx, t_desc)
         r_o = qcoord(uniform(rng, *OCC_OCCLUDER_RADIUS) * s)
         a_o = _angle(rng)
-        phi = uniform(rng, 0.0, 2 * math.pi)
+        cos_phi, sin_phi = rot_cs(uniform(rng, 0.0, 360.0))  # 随机方向；确定的三角函数
         delta = uniform(rng, *OCC_OFFSET_RANGE)
         base = pose_polygon(*ident[:2], 0.0, 0.0, r_o, a_o)
         step = delta * (r_t + r_o)
-        occ.append((ident, r_o, a_o, base, step * math.cos(phi), step * math.sin(phi)))
+        occ.append((ident, r_o, a_o, base, step * cos_phi, step * sin_phi))
     # 被要求非平凡时 f ≥ 1 - 阈值（凸目标的凸包 IoU ≥ 可见 IoU = 1 - f，f 更小必然不合格）
     f_lo = max(lo, 1.0 - OCC_NONTRIVIAL_HULL_IOU) if need_nontrivial else lo
     f_star = uniform(rng, f_lo + OCC_BIN_MARGIN, hi - OCC_BIN_MARGIN)

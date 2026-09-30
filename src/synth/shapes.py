@@ -1,4 +1,4 @@
-"""形状族、单位形状、外观、物体身份与身份划分、位姿变换与光栅化（无学习；numpy + pycocotools）。
+"""形状族、单位形状、外观、物体身份与身份划分、位姿变换（无学习；numpy + decimal）。光栅化规则在 raster.py。
 
 单位形状
 - 每个 (形状族, 变体) 有一个单位多边形：原点在它的面积质心，离原点最远的顶点距离为 1（外接半径 1），
@@ -13,12 +13,17 @@
   画布坐标 = R(angle) · (radius · 单位顶点) + (cx, cy)，R = [[c, -s], [s, c]]；y 向下时正角度即屏幕顺时针。
   与 pymunk 的 Body.angle 约定相同（physics.py 用同一变换）。
 
-跨机器逐位复现
-- 只有 +、-、×、÷、sqrt 是 IEEE 正确舍入的，任何机器上结果相同；三角函数与编译库可能差 1 ULP。
-  所以：单位形状顶点量化到 UNIT_SHAPE_QUANTUM；cos/sin 量化到 TRIG_QUANTUM（90° 的整数倍取精确值）；
-  画布顶点量化到 COORD_QUANTUM（1/256 px）。之后只做逐元素的初等运算（不用 BLAS 矩阵乘，避免 FMA 与求和顺序差异）。
-  1 ULP 的差异只有恰好跨过量化边界时才会传下去，概率可以忽略；tests/test_synth_repro.py 的钉住摘要在服务器上
-  跑一遍即是跨机器核对。
+跨机器逐位复现（DEV-0009，D24）
+- 只有 +、-、×、÷、sqrt 是 IEEE 正确舍入的，任何机器上结果相同。平台 libm、numpy 的 SIMD 三角函数、编译过的 C 库
+  （pycocotools、GEOS）的末位可能随平台不同，经过量化或取整后会放大成不同的样本（RUN-0006）。
+- 所以数据路径上：
+  * 三角函数只用 dmath（decimal，精确的参数约简）；rot_cs 量化到 TRIG_QUANTUM，90° 的整数倍给出精确值；
+  * 单位形状在 decimal 里构造（顶点、质心、归一化），再量化到 UNIT_SHAPE_QUANTUM；
+  * 画布顶点量化到 COORD_QUANTUM（1/256 px），之后只做逐元素的 numpy 初等运算
+    （每个 ufunc 单独正确舍入，不会被融合成 FMA；不用 BLAS 矩阵乘，不依赖求和顺序）；
+  * 光栅化用 raster.py 的精确整数规则。
+- tests/test_synth_repro.py 的钉住摘要在服务器上跑一遍即是跨机器核对；同一文件另把 math、numpy 的三角函数、np.mean
+  和 pycocotools 换成抛异常的桩再生成样本，证明它们不在数据路径上。
 
 物体身份与划分（规则固定，写死在这里）
 - 身份 = (形状族, 变体序号, 外观序号)。外观 = 图案（纯色、条纹、棋盘格）× 10 种颜色，共 30 种。
@@ -32,14 +37,16 @@
 
 from __future__ import annotations
 
+import decimal
 import functools
 import hashlib
 import math
 from dataclasses import dataclass
+from decimal import Decimal
+from fractions import Fraction
 
 import numpy as np
 
-from src.executors.raster import polygons_to_mask
 from src.synth.constants import (
     COLORS,
     COORD_QUANTUM,
@@ -60,9 +67,11 @@ from src.synth.constants import (
     STAR_INNER_RATIOS,
     STAR_POINTS,
     TRIANGLE_VARIANTS,
-    TRIG_QUANTUM,
     UNIT_SHAPE_QUANTUM,
 )
+from src.synth.dmath import CTX, atan2_deg, cos_sin_deg, quantize_dec
+from src.synth.dmath import rot_cs  # noqa: F401  转出给 scene、各任务模块与测试；定义只在 dmath.py
+from src.synth.raster import rasterize  # noqa: F401  同上；光栅化规则只在 raster.py 定义
 
 # ---------------------------------------------------------------------------
 # 量化
@@ -78,17 +87,6 @@ def quantize(x, step: float):
 
 def qcoord(x):
     return quantize(x, COORD_QUANTUM)
-
-
-def rot_cs(angle_deg: float) -> tuple[float, float]:
-    """(cos, sin)，量化到 TRIG_QUANTUM；90° 的整数倍给精确值。"""
-    a = float(angle_deg)
-    r = a % 360.0
-    exact = {0.0: (1.0, 0.0), 90.0: (0.0, 1.0), 180.0: (-1.0, 0.0), 270.0: (0.0, -1.0)}
-    if r in exact:
-        return exact[r]
-    t = math.radians(a)
-    return quantize(math.cos(t), TRIG_QUANTUM), quantize(math.sin(t), TRIG_QUANTUM)
 
 
 # ---------------------------------------------------------------------------
@@ -171,83 +169,110 @@ def rotation_period(family: str, index: int) -> float:
 # ---------------------------------------------------------------------------
 
 
-def _arc(cx: float, cy: float, r: float, a0: float, a1: float, include_end: bool) -> np.ndarray:
-    """从角度 a0 到 a1（弧度，a1 可小于 a0）的圆弧点，段数按 CURVE_SEGMENTS/整圆取整（至少 4 段）。"""
-    n = max(4, int(math.ceil(CURVE_SEGMENTS * abs(a1 - a0) / (2 * math.pi))))
-    k = np.arange(n + 1 if include_end else n, dtype=np.float64)
-    t = a0 + (a1 - a0) * k / n
-    return np.stack([cx + r * np.cos(t), cy + r * np.sin(t)], axis=1)
+def _dec(x) -> Decimal:
+    """形状常量 → Decimal：int 原样；float 取它的十进制写法（0.45 → Decimal('0.45')），即常量表里写的那个数。"""
+    if isinstance(x, (int, Decimal)):
+        return Decimal(x)
+    return Decimal(repr(float(x)))
 
 
-def _raw_polygon(v: Variant) -> np.ndarray:
+Point = tuple[Decimal, Decimal]
+
+
+def _arc(cx, cy, r, a0, a1, include_end: bool) -> list[Point]:
+    """圆心 (cx, cy)、半径 r 的圆弧点，角度从 a0 到 a1（度，a1 可小于 a0）。
+
+    段数 n = max(4, ceil(CURVE_SEGMENTS · |a1 - a0| / 360))，第 k 个点的角度 = a0 + (a1 - a0)·k/n。全程 decimal。
+    """
+    with decimal.localcontext(CTX):
+        a0, span = _dec(a0), _dec(a1) - _dec(a0)
+        n = max(4, int((CURVE_SEGMENTS * span.copy_abs() / 360).to_integral_value(rounding=decimal.ROUND_CEILING)))
+        pts = []
+        for k in range(n + 1 if include_end else n):
+            c, s = cos_sin_deg(a0 + span * k / n)
+            pts.append((cx + r * c, cy + r * s))
+        return pts
+
+
+def _on_unit_circle(angles, radii=None) -> list[Point]:
+    """角度（度，精确的有理数）→ 单位圆（或给定半径）上的点。"""
+    out = []
+    with decimal.localcontext(CTX):
+        for k, a in enumerate(angles):
+            c, s = cos_sin_deg(a)
+            r = Decimal(1) if radii is None else radii[k]
+            out.append((r * c, r * s))
+    return out
+
+
+def _raw_polygon(v: Variant) -> list[Point]:
+    """单位形状的原始顶点（Decimal），还没有移到质心、没有归一化。朝向约定见模块说明。"""
     f, p = v.family, v.params
-    if f == "circle":
-        return _arc(0.0, 0.0, 1.0, 0.0, 2 * math.pi, include_end=False)
-    if f == "ellipse":
-        c = _arc(0.0, 0.0, 1.0, 0.0, 2 * math.pi, include_end=False)
-        return c * np.array([1.0, p[0]])
-    if f == "rectangle":
-        a = p[0]
-        return np.array([[-1.0, -a], [1.0, -a], [1.0, a], [-1.0, a]])
-    if f == "triangle":
-        kind, q = p
-        if kind == "equilateral":
-            t = np.radians(-90.0 + 120.0 * np.arange(3))  # 顶点朝上
-            return np.stack([np.cos(t), np.sin(t)], axis=1)
-        if kind == "isosceles":  # 底边 1、高 q，顶点朝上
-            return np.array([[0.0, -q / 2], [0.5, q / 2], [-0.5, q / 2]])
-        # 直角三角形：竖直直角边 1 在左、水平直角边 q 在下，直角在左下
-        return np.array([[-q / 2, -0.5], [q / 2, 0.5], [-q / 2, 0.5]])
-    if f == "polygon":
-        n = p[0]
-        t = np.radians(-90.0 + 360.0 * np.arange(n) / n)
-        return np.stack([np.cos(t), np.sin(t)], axis=1)
-    if f == "star":
-        n, rho = p
-        k = np.arange(2 * n)
-        t = np.radians(-90.0 + 180.0 * k / n)
-        r = np.where(k % 2 == 0, 1.0, rho)
-        return np.stack([r * np.cos(t), r * np.sin(t)], axis=1)
-    if f == "cross":
-        w = p[0]
-        return np.array(
-            [[-w, -1], [w, -1], [w, -w], [1, -w], [1, w], [w, w], [w, 1], [-w, 1], [-w, w], [-1, w], [-1, -w], [-w, -w]],
-            dtype=np.float64,
-        )
-    if f == "l_shape":
-        t, wr = p  # 高 1（y ∈ [-0.5, 0.5]），宽 wr，臂宽 t；竖臂在左、横臂在下
-        x0, x1 = -wr / 2, wr / 2
-        return np.array([[x0, -0.5], [x0 + t, -0.5], [x0 + t, 0.5 - t], [x1, 0.5 - t], [x1, 0.5], [x0, 0.5]])
-    if f == "crescent":
-        rho, d = p  # 外圆半径 1、圆心原点；切割圆半径 rho、圆心 (d, 0)
-        xs = (1.0 - rho * rho + d * d) / (2.0 * d)
-        ys = math.sqrt(1.0 - xs * xs)
-        phi0 = math.atan2(ys, xs)
-        psi0 = math.atan2(ys, xs - d)
-        outer = _arc(0.0, 0.0, 1.0, phi0, 2 * math.pi - phi0, include_end=True)  # 左侧外弧，端点是两交点
-        inner = _arc(d, 0.0, rho, 2 * math.pi - psi0, psi0, include_end=False)[1:]  # 左侧内弧，去掉两端交点
-        return np.concatenate([outer, inner], axis=0)
+    half = Decimal("0.5")
+    with decimal.localcontext(CTX):
+        if f == "circle":
+            return _arc(0, 0, 1, 0, 360, include_end=False)
+        if f == "ellipse":
+            q = _dec(p[0])
+            return [(x, y * q) for x, y in _arc(0, 0, 1, 0, 360, include_end=False)]
+        if f == "rectangle":
+            a = _dec(p[0])
+            return [(Decimal(-1), -a), (Decimal(1), -a), (Decimal(1), a), (Decimal(-1), a)]
+        if f == "triangle":
+            kind, q = p
+            q = _dec(q)
+            if kind == "equilateral":  # 顶点朝上
+                return _on_unit_circle([-90 + 120 * k for k in range(3)])
+            if kind == "isosceles":  # 底边 1、高 q，顶点朝上
+                return [(Decimal(0), -q / 2), (half, q / 2), (-half, q / 2)]
+            # 直角三角形：竖直直角边 1 在左、水平直角边 q 在下，直角在左下
+            return [(-q / 2, -half), (q / 2, half), (-q / 2, half)]
+        if f == "polygon":
+            n = p[0]
+            return _on_unit_circle([Fraction(-90 * n + 360 * k, n) for k in range(n)])
+        if f == "star":
+            n, rho = p[0], _dec(p[1])
+            return _on_unit_circle(
+                [Fraction(-90 * n + 180 * k, n) for k in range(2 * n)], [Decimal(1) if k % 2 == 0 else rho for k in range(2 * n)]
+            )
+        if f == "cross":
+            w = _dec(p[0])
+            one = Decimal(1)
+            return [(-w, -one), (w, -one), (w, -w), (one, -w), (one, w), (w, w), (w, one), (-w, one), (-w, w), (-one, w), (-one, -w), (-w, -w)]
+        if f == "l_shape":
+            t, wr = _dec(p[0]), _dec(p[1])  # 高 1（y ∈ [-0.5, 0.5]），宽 wr，臂宽 t；竖臂在左、横臂在下
+            x0, x1 = -wr / 2, wr / 2
+            return [(x0, -half), (x0 + t, -half), (x0 + t, half - t), (x1, half - t), (x1, half), (x0, half)]
+        if f == "crescent":
+            rho, d = _dec(p[0]), _dec(p[1])  # 外圆半径 1、圆心原点；切割圆半径 rho、圆心 (d, 0)
+            xs = (1 - rho * rho + d * d) / (2 * d)
+            ys = (1 - xs * xs).sqrt()
+            phi0 = atan2_deg(ys, xs)
+            psi0 = atan2_deg(ys, xs - d)
+            outer = _arc(0, 0, 1, phi0, 360 - phi0, include_end=True)  # 左侧外弧，端点是两交点
+            inner = _arc(d, 0, rho, 360 - psi0, psi0, include_end=False)[1:]  # 左侧内弧，去掉两端交点
+            return outer + inner
     raise ValueError(f"未知形状族 {f!r}")  # pragma: no cover
-
-
-def _centroid(poly: np.ndarray) -> tuple[float, float, float]:
-    """简单多边形的 (面积, 质心 x, 质心 y)，鞋带公式；面积带符号。"""
-    x, y = poly[:, 0], poly[:, 1]
-    xn, yn = np.roll(x, -1), np.roll(y, -1)
-    cross = x * yn - xn * y
-    a = cross.sum() / 2.0
-    cx = ((x + xn) * cross).sum() / (6.0 * a)
-    cy = ((y + yn) * cross).sum() / (6.0 * a)
-    return float(a), float(cx), float(cy)
 
 
 @functools.lru_cache(maxsize=None)
 def _unit_polygon_cached(family: str, index: int) -> np.ndarray:
+    """原始顶点 → 移到面积质心（鞋带公式）→ 除以最远顶点的距离 → 量化到 UNIT_SHAPE_QUANTUM。全程 decimal。"""
     raw = _raw_polygon(variant(family, index))
-    _, cx, cy = _centroid(raw)
-    p = raw - np.array([cx, cy])
-    p = p / math.sqrt(float((p * p).sum(axis=1).max()))
-    p = quantize(p, UNIT_SHAPE_QUANTUM)
+    n = len(raw)
+    with decimal.localcontext(CTX):
+        a2 = sx = sy = Decimal(0)
+        for i in range(n):
+            (x0, y0), (x1, y1) = raw[i], raw[(i + 1) % n]
+            cr = x0 * y1 - x1 * y0
+            a2 += cr
+            sx += (x0 + x1) * cr
+            sy += (y0 + y1) * cr
+        cx, cy = sx / (3 * a2), sy / (3 * a2)
+        pts = [(x - cx, y - cy) for x, y in raw]
+        scale = 1 / max(x * x + y * y for x, y in pts).sqrt()
+        q = [(quantize_dec(x * scale, UNIT_SHAPE_QUANTUM), quantize_dec(y * scale, UNIT_SHAPE_QUANTUM)) for x, y in pts]
+    p = np.array(q, dtype=np.float64)
     p.setflags(write=False)
     return p
 
@@ -269,27 +294,8 @@ def pose_polygon(family: str, index: int, cx: float, cy: float, radius: float, a
 
 
 # ---------------------------------------------------------------------------
-# 光栅化
+# 画布内判定（光栅化见 raster.py）
 # ---------------------------------------------------------------------------
-
-
-def rasterize(poly: np.ndarray, height: int, width: int) -> np.ndarray:
-    """多边形 → (H, W) bool mask，规则与 src.executors.raster.polygons_to_mask（pycocotools）相同。
-
-    只在多边形的包围盒窗口里光栅化再贴回，与整幅光栅化逐位相同（窗口起点是整数像素，
-    tests/test_synth_framework.py 钉住）；多边形可以部分在画布外。
-    """
-    p = np.asarray(poly, dtype=np.float64)
-    out = np.zeros((int(height), int(width)), dtype=bool)
-    x0 = max(int(math.floor(p[:, 0].min())) - 2, 0)
-    y0 = max(int(math.floor(p[:, 1].min())) - 2, 0)
-    x1 = min(int(math.ceil(p[:, 0].max())) + 2, int(width))
-    y1 = min(int(math.ceil(p[:, 1].max())) + 2, int(height))
-    if x1 <= x0 or y1 <= y0:
-        return out
-    sub = p - np.array([float(x0), float(y0)])
-    out[y0:y1, x0:x1] = polygons_to_mask([sub.reshape(-1)], y1 - y0, x1 - x0)
-    return out
 
 
 def polygon_inside(poly: np.ndarray, height: int, width: int, margin: float) -> bool:
