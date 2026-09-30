@@ -227,3 +227,16 @@ def test_is_significant_input_checks():
         is_significant(np.zeros(10), np.zeros(10), statistic=mean_statistic, higher_is_better=True)
     with pytest.raises(TypeError):
         is_significant(np.zeros((10, 2)), np.zeros((10, 2)), statistic=mean_statistic)  # 方向必填
+
+
+def test_is_significant_rejects_transposed_input():
+    """D12，N7：把 (n_seeds, n_samples) 传成输入时报错，而不是当成几百个 seed。"""
+    rng = np.random.default_rng(0)
+    a = rng.uniform(0.4, 0.6, (400, 3))
+    b = a - 0.05
+    ok = is_significant(a, b, statistic=mean_statistic, higher_is_better=True, n_resamples=100)
+    assert ok.significantly_better
+    with pytest.raises(ValueError, match="传反"):
+        is_significant(a.T, b.T, statistic=mean_statistic, higher_is_better=True, n_resamples=100)
+    # n_seeds == n_samples 仍允许
+    is_significant(a[:3], b[:3], statistic=mean_statistic, higher_is_better=True, n_resamples=50)

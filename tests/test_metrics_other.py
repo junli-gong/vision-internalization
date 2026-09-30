@@ -191,15 +191,39 @@ def test_count_and_pair_accuracy():
      ("The answer is A", None), ("AB", None), ("", None), (None, None), ("A cat", None),
      # 审查 M2 的三个含糊回答：前缀后面还出现别的选项标记 → None
      ("(A) or (B)", None), ("A. No, the answer is B.", None), ("A) and C) are both right", None),
-     ("(a) cat (b) dog", None), ("B: not D:", None)],
+     ("(a) cat (b) dog", None), ("A. the answer: (c)", None), ("C. Answer is d.", None),
+     # D12(3)(6)：X. 与 X: 不再算其他选项标记
+     ("B: not D:", "B"), ("(B) the answer is a dog", "B"), ("(A) Answer is A.", "A")],
 )
 def test_normalize_choice(raw, letter):
     assert normalize_choice(raw) == letter
 
 
-def test_multiple_choice_accuracy():
-    assert multiple_choice_accuracy(["(A)", "b.", "The answer is C", None], ["A", "(B)", "C", "D"]) == 0.5
-    assert multiple_choice_accuracy(["(A) or (B)", "A"], ["A", "A"]) == 0.5
+# 复核 N2：9 个全对的回答（以前准确率只算出 0.444）
+N2_CORRECT = [
+    ("(A) U.S. flag", "A"),
+    ("A. U.S. flag", "A"),
+    ("(A) Point A is closer than point B.", "A"),
+    ("(B) B is closer to the camera than A.", "B"),
+    ("(D) none of the above: A, B, C.", "D"),
+    ("(A) A is closer", "A"),
+    ("(C) Washington D.C.", "C"),
+    ("(B) Plan B.", "B"),
+    ("(A) chair", "A"),
+]
+
+
+def test_n2_correct_answers_all_count():
+    preds, gts = zip(*N2_CORRECT)
+    r = multiple_choice_accuracy(list(preds), list(gts))
+    assert r.accuracy == 1.0 and r.none_rate == 0.0 and r.n == 9
+
+
+def test_multiple_choice_accuracy_and_none_rate():
+    r = multiple_choice_accuracy(["(A)", "b.", "The answer is C", None], ["A", "(B)", "C", "D"])
+    assert (r.accuracy, r.none_rate, r.n) == (0.5, 0.5, 4)
+    r = multiple_choice_accuracy(["(A) or (B)", "A", "B"], ["A", "A", "A"])
+    assert r.accuracy == pytest.approx(1 / 3) and r.none_rate == pytest.approx(1 / 3)
     assert multiple_choice_accuracy([], []) is None
     with pytest.raises(ValueError):
         multiple_choice_accuracy(["A"], ["??"])

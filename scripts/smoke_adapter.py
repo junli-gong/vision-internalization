@@ -7,8 +7,6 @@
     python scripts/smoke_adapter.py --model qwen3.5-0.8b --device cuda --dtype bf16 --image <图路径> --out <json>
 开发机彩排（本地构造的小型随机 Qwen3.5，CPU，只下载 tokenizer / 处理器 / config 小文件）：
     python scripts/smoke_adapter.py --tiny --out /tmp/smoke_tiny.json
-其他家族按 --model 的注册键分派（family_suite；--tiny 时从该键的固定 revision config 缩出小模型）：
-    InternVL3.5（DEV-0005）：--model internvl3.5-2b-hf [--tiny]；构造与检查项见 src/adapters/internvl35.py 的冒烟一节
 
 检查项（1–7 的编号同任务书；0、8 是附加项）：
   0 环境与模型事实（只记录）
@@ -23,6 +21,13 @@
   7 思考开启时 text 不含思考段、raw_text 含思考段（未闭合时 text 为空并标记）
   8 设备审计：参数与 buffer 全在目标设备；一次前向加一次生成里，每个子模块的张量输入都在目标设备
 执行顺序：0 1 2 5 6 7 3 4 8（会加 token / 注入查询的 3、4 放在后面；8 最后）。
+
+其他家族按 --model 的注册键分派；开发机彩排加 --tiny（--tiny 时 --model 选家族与小模型 config 的来源，不给 --model
+即 Qwen3.5）。按家族分派只在 family_suite() 一处；每个家族的 setup 返回 (adapter, ctx)，ctx["checks"] 是它的检查表：
+- Gemma 4（DEV-0004）：--model gemma-4-e2b-it。构造与 0、1、3–7 项检查在 src/adapters/gemma4.py（smoke_setup），
+  2、8 两项沿用本脚本的通用实现；编号与含义同上，Gemma 的差异写在那里。
+- InternVL3.5（DEV-0005）：--model internvl3.5-2b-hf。构造与 0、1、4–7 项检查，以及附加的 9（多 tile），在
+  src/adapters/internvl35.py（smoke_suite），2、3、8 三项沿用本脚本的通用实现；差异写在那里。
 """
 
 from __future__ import annotations
@@ -79,11 +84,11 @@ def parse_args(argv=None):
     p.add_argument("--out", required=True, help="输出 JSON 路径")
     p.add_argument("--image-size", nargs=2, type=int, default=[480, 640], metavar=("H", "W"),
                    help="固定分辨率，默认 480 640（与 RUN-0001 §5.7 的 300 个视觉 token 同设置）")
-    p.add_argument("--tiny", action="store_true", help="用本地构造的小型随机 Qwen3.5 在 CPU 上彩排")
+    p.add_argument("--tiny", action="store_true", help="用本地构造的小型随机模型在 CPU 上彩排（家族取 --model，不给即 Qwen3.5）")
     p.add_argument("--max-new-tokens", type=int, default=8, help="检查 1、3、7（关思考对照）的生成长度")
     p.add_argument("--think-max-new-tokens", type=int, help="检查 7 的思考生成长度；默认真模型 512、--tiny 16")
     args = p.parse_args(argv)
-    if args.tiny:
+    if args.tiny:  # --model 可省略（即 Qwen3.5）；给了就按它的家族彩排（DEV-0004）
         args.device = args.device or "cpu"
         args.dtype = args.dtype or "fp32"
         args.think_max_new_tokens = args.think_max_new_tokens or 16
@@ -108,10 +113,9 @@ def synthetic_image() -> Image.Image:
     return Image.fromarray(img.clip(0, 255).astype(np.uint8))
 
 
-def setup(args):
+def base_context(args):
+    """各家族共用的准备：固定种子、测试图（--image 或合成图）与第二张图。返回 ctx，各家族的 setup 在上面补充。"""
     torch.manual_seed(0)
-    dtype = DTYPES[args.dtype]
-    hw = tuple(args.image_size)
     if args.image:
         path = Path(args.image)
         img = Image.open(path).convert("RGB")
@@ -121,6 +125,14 @@ def setup(args):
         img = synthetic_image()
         image_info = {"path": None, "synthetic": True, "size_wh": list(img.size)}
     img2 = ImageOps.mirror(img)  # 多图检查用的第二张：左右翻转，内容不同
+    return {"img": img, "img2": img2, "image_info": image_info, "args": args}
+
+
+def setup(args):
+    """Qwen3.5 的构造（不给 --model 时的默认家族）。其他家族的构造见 family_suite。"""
+    ctx = base_context(args)
+    dtype = DTYPES[args.dtype]
+    hw = tuple(args.image_size)
     if args.tiny:
         comps = qwen35.load_pinned_components()
         model = qwen35.build_tiny_model(comps[0], tie_word_embeddings=True, dtype=dtype)
@@ -128,7 +140,7 @@ def setup(args):
     else:
         ad = qwen35.Qwen35Adapter(device=args.device, image_size=hw)
         ad.load(args.model, dtype)
-    return ad, {"img": img, "img2": img2, "image_info": image_info, "args": args}
+    return ad, {**ctx, "checks": CHECKS}
 
 
 def _layers(ad):
@@ -168,6 +180,8 @@ def check_0_facts(ad, ctx):
     from transformers.models.qwen3_5 import modeling_qwen3_5 as mq
 
     def fn_name(f):
+        # 穿过 transformers 的分派包装：包装的 __module__/__qualname__ 抄自 torch 原函数，只看名字分不出 fla 与 torch
+        f = qwen35.kernel_implementation(f)
         return f"{getattr(f, '__module__', '?')}.{getattr(f, '__qualname__', type(f).__name__)}"
 
     entry = registry.MODELS.get(ad.model_key) if ad.model_key in registry.MODELS else None
@@ -198,8 +212,12 @@ def check_0_facts(ad, ctx):
         "image": ctx["image_info"],
         "versions": {"python": platform.python_version(), "torch": torch.__version__,
                      "transformers": transformers.__version__},
+        # transformers 在 import 时的模块级绑定实际调用的函数（服务器装了 fla 时，GDN 两项是 fla 的 Triton 内核）
         "kernels": {n: fn_name(getattr(mq, n)) for n in ("torch_chunk_gated_delta_rule", "torch_recurrent_gated_delta_rule",
                                                           "causal_conv1d_fn", "causal_conv1d_update") if hasattr(mq, n)},
+        # 适配器的前向与生成实际走的 GDN 实现：CPU 上是切换之后的 torch 原函数，GPU 上同上面的绑定（DEV-0003-a1）。
+        # 只有带 GDN 的家族（Qwen3.5）的适配器有这个方法，其他家族记 None
+        "gdn_in_adapter_forward": ad.gdn_implementation() if hasattr(ad, "gdn_implementation") else None,
     }
 
 
@@ -351,6 +369,8 @@ def check_4_query_tokens(ad, ctx):
 
 
 def check_5_position_ids(ad, ctx):
+    import contextlib
+
     imgs = [ctx["img"], ctx["img2"]]
     layers = _layers(ad)
     out = {}
@@ -365,9 +385,12 @@ def check_5_position_ids(ad, ctx):
         kw = dict(output_hidden_states=True, logits_to_keep=1)
         with torch.no_grad():
             ours = ad.sequence_hidden_states(inp, layers)
-            auto = ad.model(**t, use_cache=False, **kw).hidden_states
-            given = ad.model(**t, position_ids=pos, use_cache=False, **kw).hidden_states
-            default = ad.model(**t, **kw).hidden_states  # HF 默认（use_cache 取 config），只记录
+            # 直接调 ad.model 的 HF 原生参照路径，与适配器走同一个 GDN 实现（Qwen3.5 在 CPU 上是 torch，DEV-0003-a1）；
+            # 适配器没有 gdn_scope 的家族（Gemma 4、InternVL3.5）不切换
+            with getattr(ad, "gdn_scope", contextlib.nullcontext)():
+                auto = ad.model(**t, use_cache=False, **kw).hidden_states
+                given = ad.model(**t, position_ids=pos, use_cache=False, **kw).hidden_states
+                default = ad.model(**t, **kw).hidden_states  # HF 默认（use_cache 取 config），只记录
         given_eq = [bool(torch.equal(auto[l][0], given[l][0])) for l in layers]
         ours_eq = [bool(torch.equal(auto[l][0], ours[l])) for l in layers]
         default_eq = [bool(torch.equal(default[l][0], ours[l])) for l in layers]
@@ -481,18 +504,27 @@ CHECKS = {
 
 
 def family_suite(args):
-    """按家族分派的唯一入口：返回 (setup, checks, check_names, run_order)。没给 --model（只有 --tiny）时是 Qwen3.5。
+    """按家族分派的唯一入口：返回 (setup, check_names, run_order)。没给 --model（只有 --tiny）时是 Qwen3.5。
 
-    其他家族的构造与检查逻辑放在各自的适配器模块里，这里只加入口；它们拿到本模块，复用通用检查与常量。
+    setup(args) 返回 (adapter, ctx)，ctx["checks"] 是该家族的检查表（名字 → 函数）。其他家族的构造与检查逻辑放在
+    各自的适配器模块里，这里只加入口；它们拿到本模块，复用 base_context、通用检查与常量。
     """
     family = registry.get_model(args.model).family if args.model else registry.FAMILY_QWEN35
-    if family == registry.FAMILY_INTERNVL35:  # DEV-0005
+    smoke = sys.modules[__name__]
+    if family == registry.FAMILY_GEMMA4:  # DEV-0004：构造与检查表在 gemma4.smoke_setup，检查项名字与顺序同 Qwen
+        from src.adapters import gemma4
+
+        def setup_gemma4(a):
+            return gemma4.smoke_setup(a, DTYPES[a.dtype], base_context(a), smoke)
+
+        return setup_gemma4, CHECK_NAMES, RUN_ORDER
+    if family == registry.FAMILY_INTERNVL35:  # DEV-0005：构造、检查表与附加的 9_multi_tile 在 internvl35.smoke_suite
         from src.adapters import internvl35
 
-        return internvl35.smoke_suite(sys.modules[__name__])
+        return internvl35.smoke_suite(smoke)
     if family != registry.FAMILY_QWEN35:
         raise ValueError(f"冒烟脚本还不支持 {family} 家族（{args.model}）")
-    return setup, CHECKS, CHECK_NAMES, RUN_ORDER
+    return setup, CHECK_NAMES, RUN_ORDER
 
 
 def main(argv=None) -> int:
@@ -504,7 +536,7 @@ def main(argv=None) -> int:
               "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
     t_all = time.perf_counter()
     try:
-        setup_fn, checks, check_names, run_order = family_suite(args)
+        setup_fn, check_names, run_order = family_suite(args)
         ad, ctx = setup_fn(args)
     except Exception as e:  # noqa: BLE001 — 失败也先落盘
         report.update(setup_error=repr(e), traceback=traceback.format_exc()[-4000:], all_ok=False)
@@ -515,7 +547,7 @@ def main(argv=None) -> int:
     for name in run_order:
         t0 = time.perf_counter()
         try:
-            r = checks[name](ad, ctx)
+            r = ctx["checks"][name](ad, ctx)
         except Exception as e:  # noqa: BLE001 — 单项失败不影响其他项，全部落盘后再判
             r = {"ok": False, "error": repr(e), "traceback": traceback.format_exc()[-4000:]}
         r["wall_time_s"] = round(time.perf_counter() - t0, 3)

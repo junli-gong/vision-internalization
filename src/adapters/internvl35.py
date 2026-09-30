@@ -26,9 +26,10 @@ tokenizer / config 读取并断言，不写死 token id，不写死层号（简�
 - 思考开关（D13-2、§7.2）：模板没有开关。enable_thinking=True = 在 user 轮之前加一轮 system，内容是 model card 的
   R1_SYSTEM_PROMPT（原文逐字，出处见 R1_SYSTEM_PROMPT_SOURCE）；False = 不加 system 轮。两种都用同一个 assistant 头。
   ModelInputs 只含 user 轮，system 轮由 generate 按开关加在最前面。
-- 思考段的剥离（D10）：与 Qwen 适配器同一条规则——text 取最后一个 `</think>` 之后的内容，去掉末尾的停止 token 与首尾换行；
-  开了思考却没有 `</think>` 时 text 为空、thinking_unclosed=True（包括模型根本没写 `<think>` 的情况，按 base.py 的字面定义；
-  raw_text 保留全文，事后可区分）。`<think>`、`</think>` 在这个 tokenizer 里是单个、非 special 的 token（§7.1 表）。
+- 思考段的剥离（D10；与 Gemma 适配器同一条规则，DEV-0005 第 1 轮审查）：思考段的开头 `<think>` 由模型自己写出（不在提示里），
+  所以规则只看输出：最后一个 `<think>` 之后没有 `</think>`（写了思考段却没关上，例如 max_new_tokens 用完）才算未闭合，
+  text 为空、thinking_unclosed=True；否则 text 取最后一个 `</think>` 之后的内容（模型没写思考段、直接作答时取全文），
+  去掉末尾的停止 token 与首尾换行。`<think>`、`</think>` 在这个 tokenizer 里是单个、非 special 的 token（§7.1 表）。
 - 生成（D13-3）：显式 greedy；停止 token 只有 `<|im_end|>`，pad 用 tokenizer 的 pad token（`<|endoftext|>`），id 都从 tokenizer 查。
 - 新增 token（D13-1）：先复用嵌入里超出 tokenizer 的 257 个预留行（id 151679–151935）；累计需要的行数超过现有行数时，把嵌入
   （不共享时连同 lm_head）扩到恰好需要的行数，已有行逐位不变；从不缩表，不调用 `resize_token_embeddings`。新 token 的嵌入行与
@@ -60,7 +61,7 @@ from typing import Any, Iterable, NamedTuple, Sequence
 
 import numpy as np
 import torch
-from PIL import Image, ImageOps
+from PIL import Image
 
 from src.adapters import registry
 from src.adapters.base import (
@@ -755,26 +756,26 @@ class InternVL35Adapter(ModelAdapter):
         )
 
     def split_answer(self, token_ids: Sequence[int], *, enable_thinking: bool) -> tuple[str, str, bool]:
-        """把生成的 token 拆成 (text, raw_text, thinking_unclosed)（D10；规则与 Qwen 适配器相同）。
+        """把生成的 token 拆成 (text, raw_text, thinking_unclosed)（D10；规则与 Gemma 适配器相同）。
 
         R1 system prompt 要求的写法（§7.2 的原文）："Enclose this entire thinking process within <think> and </think> tags"，
-        "Separate the answer from the think section with a newline"。据此：
+        "Separate the answer from the think section with a newline"。思考段的开头 <think> 由模型写出、不在提示里，
+        所以规则只看输出（按 token id 找标记），不看 enable_thinking（参数只为与其他家族的接口对称）：
+        - 最后一个 <think> 之后没有 </think>（思考段开了没关，例如 max_new_tokens 用完）：text 为空串，thinking_unclosed = True；
+        - 否则 text 取最后一个 </think> 之后的内容；没有思考段（模型没写 <think> 就直接作答，或关了思考）就取全部。
+          末尾的停止 token 去掉，其余特殊 token（包括 grid token）保留，首尾换行去掉；thinking_unclosed = False。
         raw_text：全部生成 token 的解码，含思考段与特殊 token。
-        text：最后一个 </think>（按 token id 找）之后的内容；末尾的停止 token 去掉，其余特殊 token（包括 grid token）保留，
-        首尾换行去掉。开了思考却没有 </think>：text 为空串，thinking_unclosed = True（模型没写 <think> 就直接回答也归这里，
-        按 base.py 的字面定义；raw_text 里看得出是哪一种）。关思考时没有 </think> 就取全部。
         """
         self._require_loaded()
+        if not isinstance(enable_thinking, bool):
+            raise TypeError(f"enable_thinking 必须是 bool，收到 {enable_thinking!r}")
         ids = [int(i) for i in token_ids]
         raw_text = self._tok.decode(ids, skip_special_tokens=False)
-        end = self._ids[THINK_END]
-        last = max((k for k, v in enumerate(ids) if v == end), default=None)
-        if last is not None:
-            ans = ids[last + 1 :]
-        elif enable_thinking:
+        last_open = max((k for k, v in enumerate(ids) if v == self._ids[THINK_START]), default=None)
+        last_close = max((k for k, v in enumerate(ids) if v == self._ids[THINK_END]), default=None)
+        if last_open is not None and (last_close is None or last_open > last_close):
             return "", raw_text, True
-        else:
-            ans = ids
+        ans = ids[last_close + 1 :] if last_close is not None else ids
         stop = {self._ids[s] for s in STOP_TOKENS}
         if ans and ans[-1] in stop:
             ans = ans[:-1]
@@ -1302,7 +1303,8 @@ def make_tiny_adapter(
 #   5 一维位置：自构 position_ids = 0..L-1；传它与让模型自己算、以及适配器整条路径与 HF 原生路径（input_ids + pixel_values），
 #     各层隐藏状态逐位相同（两张图、两种顺序）
 #   6 vision_features 与第 0 层图像位置的隐藏状态逐位相同
-#   7 思考：R1 system 轮在提示里；text 按剥离规则取自 raw_text；记录思考段的实际格式（服务器上确认 R1 写法）
+#   7 思考：R1 system 轮在提示里；text / thinking_unclosed 与独立重写的剥离规则一致（开、关思考各一次）；记录属于哪种情形
+#     （closed / unclosed / no_think）与思考段的实际格式（服务器上确认 R1 写法）
 #   8 设备审计——通用实现
 #   9 多 tile：另挂一个多 tile 策略的适配器（共享模型与 tokenizer，只读）：tile 数与处理器一致、grid_hw = (16·n, 16)、
 #     与官方处理器逐项相同、适配器路径 = HF 原生路径、generate 可用；hidden_states / vision_features 拒绝多 tile
@@ -1317,10 +1319,12 @@ SMOKE_RUN_ORDER = (
 _SMOKE_GENERIC = ("2_task_modulation", "3_grid_tokens", "8_device_audit")
 
 
-def smoke_suite(smoke: Any) -> tuple[Any, dict[str, Any], list[str], list[str]]:
-    """供冒烟脚本按家族分派调用：返回 (setup, checks, check_names, run_order)。
+def smoke_suite(smoke: Any) -> tuple[Any, list[str], list[str]]:
+    """供冒烟脚本的 family_suite 调用：返回 (setup, check_names, run_order)；setup(args) 返回 (adapter, ctx)，
+    ctx["checks"] 是 InternVL 的检查表。
 
-    smoke 是冒烟脚本模块本身：通用检查（2、3、8）与常量（INSTR_A、DTYPES、N_QUERY…）从它取，src 不 import scripts。
+    smoke 是冒烟脚本模块本身：共用的准备（base_context）、通用检查（2、3、8）与常量（INSTR_A、DTYPES、N_QUERY…）
+    从它取，src 不 import scripts。
     """
     checks = {name: smoke.CHECKS[name] for name in _SMOKE_GENERIC}
     checks.update({
@@ -1335,7 +1339,7 @@ def smoke_suite(smoke: Any) -> tuple[Any, dict[str, Any], list[str], list[str]]:
     names = list(smoke.CHECK_NAMES) + list(SMOKE_EXTRA_CHECKS)
     if set(names) != set(checks) or set(SMOKE_RUN_ORDER) != set(names):
         raise RuntimeError(f"InternVL 冒烟的检查项不齐：{sorted(set(names) ^ set(checks))}")
-    return functools.partial(_smoke_setup, smoke), checks, names, list(SMOKE_RUN_ORDER)
+    return functools.partial(_smoke_setup, smoke, checks), names, list(SMOKE_RUN_ORDER)
 
 
 def chat_messages(n_images: int, instruction: str, order: Order, *, enable_thinking: bool) -> list[dict[str, Any]]:
@@ -1390,17 +1394,9 @@ def compare_with_processor(ad: InternVL35Adapter, proc: Any, images: Sequence[An
     return {"ok": all(res.values()), **res}
 
 
-def _smoke_setup(smoke: Any, args: Any) -> tuple[InternVL35Adapter, dict[str, Any]]:
-    torch.manual_seed(0)
+def _smoke_setup(smoke: Any, checks: dict[str, Any], args: Any) -> tuple[InternVL35Adapter, dict[str, Any]]:
+    ctx = smoke.base_context(args)  # 固定种子、测试图与第二张图：三个家族共用同一份准备
     dtype = smoke.DTYPES[args.dtype]
-    if args.image:
-        path = Path(args.image)
-        img = Image.open(path).convert("RGB")
-        image_info = {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size_wh": list(img.size)}
-    else:
-        img = smoke.synthetic_image()
-        image_info = {"path": None, "synthetic": True, "size_wh": list(img.size)}
-    img2 = ImageOps.mirror(img)  # 多图检查用的第二张：左右翻转，内容不同
     if args.tiny:
         key = args.model or TINY_SOURCE_KEY
         comps = load_pinned_components(key)
@@ -1413,8 +1409,7 @@ def _smoke_setup(smoke: Any, args: Any) -> tuple[InternVL35Adapter, dict[str, An
         ad.load(args.model, dtype)
         ref = ad.hf_processor
         ref_kind = f"AutoProcessor（{type(ref).__name__} + {type(ref.image_processor).__name__}）"
-    return ad, {"img": img, "img2": img2, "image_info": image_info, "args": args, "smoke": smoke,
-                "ref_processor": ref, "ref_kind": ref_kind}
+    return ad, {**ctx, "smoke": smoke, "checks": checks, "ref_processor": ref, "ref_kind": ref_kind}
 
 
 def _all_layers(ad: InternVL35Adapter) -> list[int]:
@@ -1592,32 +1587,40 @@ def _smoke_thinking(ad: InternVL35Adapter, ctx: dict[str, Any]) -> dict[str, Any
     system_text = tok.decode(list(ad.system_prefix_ids(True)), skip_special_tokens=False)
     system_ok = (res.n_prompt_tokens == len(prompt) and R1_SYSTEM_PROMPT in system_text
                  and prompt[: len(ad.system_prefix_ids(True))] == list(ad.system_prefix_ids(True)))
-    closed = end in ids
+
+    def expected(out: list[int]) -> tuple[str, bool, str]:
+        """独立重写的剥离规则（与 split_answer 的 docstring 同义）：(text, unclosed, 属于哪种情形)。"""
+        lo = max((k for k, v in enumerate(out) if v == start), default=None)
+        lc = max((k for k, v in enumerate(out) if v == end), default=None)
+        if lo is not None and (lc is None or lo > lc):
+            return "", True, "unclosed"
+        ans = out[lc + 1 :] if lc is not None else list(out)
+        if ans and ans[-1] == stop:
+            ans = ans[:-1]
+        return tok.decode(ans, skip_special_tokens=False).strip("\n"), False, "closed" if lc is not None else "no_think"
+
+    want_text, want_unclosed, case = expected(ids)
     fmt: dict[str, Any] = {
         "first_token_is_think_start": bool(ids) and ids[0] == start,
         "n_think_start": ids.count(start), "n_think_end": ids.count(end),
         "ended_with_stop_token": bool(ids) and ids[-1] == stop,
     }
-    if closed:
+    if case == "closed":  # 服务器上用来确认 R1 写法：</think> 之后隔了什么
         k = len(ids) - 1 - ids[::-1].index(end)
-        ans = ids[k + 1 :]
-        if ans and ans[-1] == stop:
-            ans = ans[:-1]
-        after = tok.decode(ans, skip_special_tokens=False)
+        after = tok.decode([t for t in ids[k + 1 :] if t != stop], skip_special_tokens=False)
         fmt["separator_after_think_end"] = after[: len(after) - len(after.lstrip("\n"))]
         fmt["answer_starts_with_space"] = after.lstrip("\n")[:1] == " "
-        expect = after.strip("\n")
-        ok = raw_ok and not res.thinking_unclosed and res.text == expect and THINK_END not in res.text
-    else:
-        ok = raw_ok and res.thinking_unclosed and res.text == ""
+    ok = raw_ok and res.text == want_text and res.thinking_unclosed == want_unclosed and THINK_END not in res.text
     off = ad.generate(inp, enable_thinking=False, max_new_tokens=args.max_new_tokens)
-    off_ok = (not off.thinking_unclosed and THINK_END not in off.text
+    off_text, off_unclosed, off_case = expected(list(off.token_ids))
+    off_ok = (off.text == off_text and off.thinking_unclosed == off_unclosed and THINK_END not in off.text
               and off.n_prompt_tokens == len(ad.prompt_ids(inp, False)) == len(prompt) - len(ad.system_prefix_ids(True)))
-    return {"ok": bool(ok and off_ok and system_ok), "closed": closed, "closed_case_exercised": closed,
-            "system_turn_in_prompt": system_ok, "format_facts": fmt,
+    return {"ok": bool(ok and off_ok and system_ok), "case": case, "closed": case == "closed",
+            "closed_case_exercised": case == "closed", "system_turn_in_prompt": system_ok, "format_facts": fmt,
             "n_generated_tokens": res.n_generated_tokens, "max_new_tokens": args.think_max_new_tokens,
             "thinking_unclosed": res.thinking_unclosed, "text": res.text[:300], "raw_text": res.raw_text[:1500],
-            "thinking_off_control": {"ok": off_ok, "text": off.text[:200], "thinking_unclosed": off.thinking_unclosed}}
+            "thinking_off_control": {"ok": off_ok, "case": off_case, "text": off.text[:200],
+                                     "thinking_unclosed": off.thinking_unclosed}}
 
 
 def _smoke_multi_tile(ad: InternVL35Adapter, ctx: dict[str, Any]) -> dict[str, Any]:

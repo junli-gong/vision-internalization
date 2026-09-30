@@ -3,16 +3,25 @@
 模型用本地构造的小型随机 Qwen3.5：取固定 revision 的真实 config，缩到 4 层（3 linear + 1 full）、hidden 64、
 视觉塔 1 层；tokenizer / 图像处理器 / 聊天模板从固定 revision 下载（小文件，不含权重）。取不到就失败并说明原因，
 不静默跳过。fixture 的图 H≠W，两张图内容不同；两条指令内容不同、token 长度相同。
+GDN 一节（DEV-0003-a1）在开发机上模拟"服务器装了 fla"：假 fla 内核只收 GPU 张量，与服务器同构地绑到模块级函数上。
+整套测试按服务器口径跑：scripts/pytest_server_parity.sh（进程级的假 fla 包在 tests/_fakes，普通 pytest 不加载它）。
 """
 
 from __future__ import annotations
 
+import collections
 import copy
+import functools
+import importlib
+import importlib.metadata
+import importlib.util
 import inspect
 import json
+import os
 import re
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -409,7 +418,8 @@ def test_own_positions_and_merge_equal_model_path(adapter, images, order):
         image_grid_thw=inp.tensors["image_grid_thw"], attention_mask=inp.tensors["attention_mask"])
     assert torch.equal(pos[1:], ref_pos)
     layers = _all_layers(adapter)
-    with torch.no_grad():
+    # 绕过适配器直接调模型的参照路径，也套上适配器的 GDN 作用域：两边走同一个实现（CPU 上是 torch，DEV-0003-a1）
+    with torch.no_grad(), adapter.gdn_scope():
         ours = adapter.sequence_hidden_states(inp, layers)
         auto = adapter.model(**inp.tensors, output_hidden_states=True, logits_to_keep=1).hidden_states
         given = adapter.model(**inp.tensors, position_ids=pos, output_hidden_states=True, logits_to_keep=1).hidden_states
@@ -454,8 +464,8 @@ def test_vision_features_is_overridden_and_base_default_raises():
         def num_layers(self): return 1
         def hidden_size(self): return 1
 
-    with pytest.raises(NotImplementedError):
-        _Min().vision_features(None)
+    with pytest.raises(TypeError, match="vision_features"):  # D15-2：DEV-0004 起 vision_features 是抽象方法
+        _Min()
     sig = inspect.signature(ModelAdapter.hidden_states)
     assert sig.parameters["query_embeds"].kind is inspect.Parameter.KEYWORD_ONLY
     assert sig.parameters["query_embeds"].default is None
@@ -864,6 +874,405 @@ def test_bf16_model(components, images):
 
 
 # ---------------------------------------------------------------------------
+# GDN 实现：CPU 上显式走 torch（DEV-0003-a1；RUN-0003 服务器 16 failed 的原因）
+# ---------------------------------------------------------------------------
+
+TRITON_CPU_ERROR = "Pointer argument cannot be accessed from Triton (cpu tensor?)"  # RUN-0003 服务器上的原话
+# modeling_qwen3_5 的模块级函数 → 装了 fla 时 transformers 绑到的 fla 函数与模块（model_notes §5.6.3）
+FLA_KERNELS = {
+    "torch_chunk_gated_delta_rule": ("chunk_gated_delta_rule", "fla.ops.gated_delta_rule.chunk"),
+    "torch_recurrent_gated_delta_rule": ("fused_recurrent_gated_delta_rule", "fla.ops.gated_delta_rule.fused_recurrent"),
+}
+# 测试自己按 model_notes 钉住要换的函数名，不从被测代码 import（被测代码漏掉一个时，假 fla 仍然两个都装）
+GDN_NAMES = tuple(FLA_KERNELS)
+# 进程级的假 fla 包：只有 scripts/pytest_server_parity.sh 把它放进 PYTHONPATH，并设 PARITY_ENV=1
+FAKES_DIR = REPO_ROOT / "tests/_fakes"
+PARITY_ENV = "VISINT_FAKE_FLA"
+
+
+def test_gdn_functions_are_exactly_the_two_fla_bound_ones():
+    assert qwen35.GDN_FUNCTIONS == GDN_NAMES
+    mq = importlib.import_module(qwen35.QWEN35_MODELING)
+    for n in ("causal_conv1d_fn", "causal_conv1d_update"):  # 不换：两台机器上都走 torch（都没装 causal-conv1d）
+        binding = getattr(mq, n)
+        assert qwen35.kernel_implementation(binding) is binding.__wrapped__
+
+
+def _install_fake_fla(monkeypatch):
+    """在开发机上模拟"服务器装了 fla"。
+
+    用 transformers 在 import modeling_qwen3_5 时用的同一个装饰器（use_kernel_func_from_hub_with_fallback），在假的
+    `fla` 包可见时把两个 GDN 的 torch 原函数重新包一次，得到与服务器同构的分派包装：`__wrapped__` 是 torch 原函数，
+    实际调用的是假 fla 内核。假内核与 fla 的 Triton 内核一样只收 GPU 张量，见到 CPU 张量就抛服务器上的同一句错。
+    包装换到模块属性上；测试结束由 monkeypatch 恢复原绑定。
+    """
+    from transformers.integrations import use_kernel_func_from_hub_with_fallback
+
+    mq = importlib.import_module(qwen35.QWEN35_MODELING)
+    calls = collections.Counter()
+
+    def make_kernel(fla_name, fla_module):
+        def kernel(q, k, v, g=None, beta=None, **kwargs):
+            calls[fla_name] += 1
+            if any(torch.is_tensor(x) and x.device.type != "cuda" for x in (q, k, v, g, beta)):
+                raise ValueError(TRITON_CPU_ERROR)
+            raise AssertionError("假 fla 内核收到了 GPU 张量：开发机上不该发生")
+
+        kernel.__module__, kernel.__name__, kernel.__qualname__ = fla_module, fla_name, fla_name
+        return kernel
+
+    fla, ops, gdr = (types.ModuleType(n) for n in ("fla", "fla.ops", "fla.ops.gated_delta_rule"))
+    fla.ops, ops.gated_delta_rule = ops, gdr
+    kernels = {n: make_kernel(*FLA_KERNELS[n]) for n in GDN_NAMES}
+    for n, k in kernels.items():
+        setattr(gdr, k.__name__, k)
+    torch_fns = {n: getattr(mq, n).__wrapped__ for n in GDN_NAMES}
+    with monkeypatch.context() as m:  # 假 fla 只在包装时可见（transformers 也只在 import 时 import 一次）
+        for mod in (fla, ops, gdr):
+            m.setitem(sys.modules, mod.__name__, mod)
+        wrappers = {n: use_kernel_func_from_hub_with_fallback(FLA_KERNELS[n][0], "fla")(torch_fns[n])
+                    for n in GDN_NAMES}
+    for n, w in wrappers.items():
+        monkeypatch.setattr(mq, n, w)
+    return types.SimpleNamespace(mq=mq, calls=calls, kernels=kernels, torch=torch_fns, wrappers=wrappers)
+
+
+def _bindings(mq):
+    return {n: getattr(mq, n) for n in GDN_NAMES}
+
+
+def _gdn_layers(ad):
+    return [layer.linear_attn for layer in ad.model.model.language_model.layers if hasattr(layer, "linear_attn")]
+
+
+def _watch_bindings(ad, mq, seen):
+    """forward-pre-hook：GDN 层与视觉塔每次被调用时，记下 (部位, 序列长度, 此刻的模块级 GDN 绑定)。"""
+
+    def gdn_hook(mod, args, kwargs):
+        x = args[0] if args else kwargs["hidden_states"]
+        seen.append(("gdn", x.shape[1], _bindings(mq)))
+
+    def visual_hook(mod, args, kwargs):
+        seen.append(("visual", None, _bindings(mq)))
+
+    handles = [m.register_forward_pre_hook(gdn_hook, with_kwargs=True) for m in _gdn_layers(ad)]
+    handles.append(ad.model.model.visual.register_forward_pre_hook(visual_hook, with_kwargs=True))
+    return handles
+
+
+def _torch_gdn_report():
+    return {n: {"module": qwen35.QWEN35_MODELING, "name": n, "is_torch_reference": True, "switched_to_torch": True}
+            for n in GDN_NAMES}
+
+
+def test_fake_fla_reproduces_the_server_binding(fresh, images, monkeypatch):
+    """对照（证明模拟不是空的）：绑定与服务器同构、名字与 torch 原函数相同；绕过适配器直接调模型时，prefill 进 chunk 内核、
+    逐 token 解码进 fused_recurrent 内核，都在 CPU 张量上报服务器的同一句错。"""
+    ad = fresh()
+    inp = ad.build_inputs(images[:1], INSTR_A, "image_first")
+    fake = _install_fake_fla(monkeypatch)
+    mq = fake.mq
+    for n in GDN_NAMES:
+        w = getattr(mq, n)
+        assert qwen35.kernel_implementation(w) is fake.kernels[n]
+        assert w.__wrapped__ is fake.torch[n]
+        assert (w.__module__, w.__qualname__) == (qwen35.QWEN35_MODELING, n)  # 只看名字分不出实际调用的是 fla
+    gdn = _gdn_layers(ad)
+    assert len(gdn) == 3 and all(type(m).__module__ == qwen35.QWEN35_MODELING for m in gdn)  # 按名字查的就是这个模块
+
+    t = inp.tensors
+    with torch.no_grad(), pytest.raises(ValueError, match=re.escape(TRITON_CPU_ERROR)):
+        ad.model(**t, use_cache=False)
+    assert fake.calls == {"chunk_gated_delta_rule": 1}
+
+    header = torch.tensor([ad.assistant_header_ids(False)], dtype=torch.long)
+    ids = torch.cat([t["input_ids"], header], dim=1)
+    kw = dict(input_ids=ids, attention_mask=torch.ones_like(ids), pixel_values=t["pixel_values"],
+              image_grid_thw=t["image_grid_thw"],
+              mm_token_type_ids=torch.cat([t["mm_token_type_ids"], torch.zeros_like(header)], dim=1))
+    with monkeypatch.context() as m:  # prefill 临时换回 torch，第一步逐 token 解码就撞上假的 fused_recurrent
+        m.setattr(mq, "torch_chunk_gated_delta_rule", fake.torch["torch_chunk_gated_delta_rule"])
+        with torch.no_grad(), pytest.raises(ValueError, match=re.escape(TRITON_CPU_ERROR)):
+            ad.model.generate(**kw, max_new_tokens=3, min_new_tokens=3, do_sample=False)
+    assert fake.calls == {"chunk_gated_delta_rule": 1, "fused_recurrent_gated_delta_rule": 1}
+
+
+def test_cpu_forward_vision_and_generate_switch_to_torch_gdn(fresh, images, monkeypatch):
+    """模拟服务器（装了 fla）：CPU 适配器的前向、vision_features 与生成都把只收 GPU 张量的绑定换成 torch 原函数，
+    结果与没装 fla 时逐位相同，假内核一次都没被调用；每次调用结束绑定恢复成原来的分派包装。"""
+    ad = fresh()
+    inp = ad.build_inputs(images, INSTR_A, "instruction_first")
+    layers = _all_layers(ad)
+    allowed = ad.tokenizer(" A B C", add_special_tokens=False)["input_ids"]  # 不含停止 token：恰好生成 max_new_tokens 个
+    assert len(allowed) == 3 and not set(allowed) & {ad.token_id(IM_END), ad.token_id(END_OF_TEXT)}
+    with torch.no_grad():
+        ref_seq = ad.sequence_hidden_states(inp, layers)
+        ref_img = ad.hidden_states(inp, layers).image
+        ref_vf = ad.vision_features(inp)
+    ref_gen = ad.generate(inp, enable_thinking=False, max_new_tokens=4, allowed_token_ids=allowed)
+
+    fake = _install_fake_fla(monkeypatch)
+    mq = fake.mq
+    seen, phases, after = [], {}, {}
+    handles = _watch_bindings(ad, mq, seen)
+
+    def phase(name, fn):
+        start = len(seen)
+        out = fn()
+        phases[name], after[name] = seen[start:], _bindings(mq)
+        return out
+
+    try:
+        with torch.no_grad():
+            seq = phase("sequence_hidden_states", lambda: ad.sequence_hidden_states(inp, layers))
+            img = phase("hidden_states", lambda: ad.hidden_states(inp, layers).image)
+            vf = phase("vision_features", lambda: ad.vision_features(inp))
+        gen = phase("generate", lambda: ad.generate(inp, enable_thinking=False, max_new_tokens=4, allowed_token_ids=allowed))
+    finally:
+        for h in handles:
+            h.remove()
+
+    assert all(torch.equal(seq[l], ref_seq[l]) and torch.equal(img[l], ref_img[l]) for l in layers)
+    assert torch.equal(vf, ref_vf)
+    assert gen.token_ids == ref_gen.token_ids and gen.n_generated_tokens == 4
+    assert fake.calls == {}  # 假 fla 内核一次都没被调用
+    for name, records in phases.items():
+        assert records, name
+        assert all(b == fake.torch for _, _, b in records), name  # 调用期间绑定是 torch 原函数
+        assert after[name] == fake.wrappers, name  # 退出后恢复原绑定
+    kinds = {name: collections.Counter(kind for kind, _, _ in recs) for name, recs in phases.items()}
+    assert kinds["vision_features"] == {"visual": 1}
+    assert kinds["hidden_states"] == {"visual": 1, "gdn": 3}
+    gen_lens = [n for kind, n, _ in phases["generate"] if kind == "gdn"]
+    assert min(gen_lens) == 1 < max(gen_lens)  # 生成里既有 prefill（chunk）也有逐 token 解码（recurrent）
+    assert ad.gdn_implementation() == _torch_gdn_report()
+    assert _bindings(mq) == fake.wrappers
+
+
+def test_torch_gdn_nests_and_restores_on_exception(fresh, images, monkeypatch):
+    ad = fresh()
+    inp = ad.build_inputs(images[:1], INSTR_A, "image_first")
+    allowed = ad.tokenizer(" A B C", add_special_tokens=False)["input_ids"]
+    fake = _install_fake_fla(monkeypatch)
+    mq = fake.mq
+    with qwen35.torch_gdn():
+        assert _bindings(mq) == fake.torch
+        with qwen35.torch_gdn():
+            assert _bindings(mq) == fake.torch
+        assert _bindings(mq) == fake.torch  # 内层退出：外层仍然有效
+        with torch.no_grad():
+            ad.hidden_states(inp, [1])  # 适配器自己的作用域嵌套在外层里
+        ad.generate(inp, enable_thinking=False, max_new_tokens=2, allowed_token_ids=allowed)
+        assert _bindings(mq) == fake.torch
+    assert _bindings(mq) == fake.wrappers
+    with pytest.raises(KeyError, match="boom"):
+        with qwen35.torch_gdn():
+            raise KeyError("boom")
+    assert _bindings(mq) == fake.wrappers
+
+    # 非后进先出（例如两个线程交错进出）：先退外层时外层照常恢复；内层退出时发现绑定不是自己换上的，报错
+    outer, inner = qwen35.torch_gdn(), qwen35.torch_gdn()
+    outer.__enter__()
+    inner.__enter__()
+    outer.__exit__(None, None, None)
+    assert _bindings(mq) == fake.wrappers
+    with pytest.raises(qwen35.GDNKernelError, match="交错"):
+        inner.__exit__(None, None, None)
+    assert _bindings(mq) == fake.torch  # 已恢复成内层进入时看到的绑定：交错使用本身就恢复不对，所以要报错
+    for n, w in fake.wrappers.items():
+        setattr(mq, n, w)
+
+    # 适配器的前向或生成中途抛错：绑定照样恢复
+    def raise_in(stage):
+        def hook(mod, args, kwargs):
+            x = args[0] if args else kwargs["hidden_states"]
+            if stage == "any" or x.shape[1] == 1:
+                raise RuntimeError(f"boom in {stage}")
+        return _gdn_layers(ad)[-1].register_forward_pre_hook(hook, with_kwargs=True)
+
+    for stage, call in (("any", lambda: ad.hidden_states(inp, [1])),
+                        ("decode", lambda: ad.generate(inp, enable_thinking=False, max_new_tokens=3,
+                                                       allowed_token_ids=allowed))):
+        h = raise_in(stage)
+        try:
+            with torch.no_grad(), pytest.raises(RuntimeError, match=f"boom in {stage}"):
+                call()  # 解码那一例：prefill 已在 torch 上跑完，才走到逐 token 解码里的钩子
+        finally:
+            h.remove()
+        assert _bindings(mq) == fake.wrappers, stage
+    assert fake.calls == {}
+
+
+def test_torch_gdn_refuses_unrecognized_bindings(fresh, images, monkeypatch):
+    """取不到 __wrapped__、__wrapped__ 不是 modeling_qwen3_5 的 torch 原函数、换完不是预期的函数：一律报错，不静默继续，
+    也不留下换了一半的绑定。"""
+    ad = fresh()
+    inp = ad.build_inputs(images[:1], INSTR_A, "image_first")
+    fake = _install_fake_fla(monkeypatch)
+    mq = fake.mq
+    rec = "torch_recurrent_gated_delta_rule"
+
+    def bare(*a, **k):  # 没有 __wrapped__ 的替身
+        raise ValueError(TRITON_CPU_ERROR)
+
+    def torch_recurrent_gated_delta_rule(*a, **k):  # 同名，但定义在测试模块里
+        raise AssertionError
+
+    impostor = functools.wraps(torch_recurrent_gated_delta_rule)(lambda *a, **k: None)
+    wrong_name = functools.wraps(fake.torch["torch_chunk_gated_delta_rule"])(lambda *a, **k: None)
+    # 报错信息钉到换之前的那道校验（换完后的核对是第二道防线，信息不同）
+    for bad, msg in ((bare, "没有 __wrapped__"), (impostor, "__wrapped__ 是"), (wrong_name, "__wrapped__ 是")):
+        monkeypatch.setattr(mq, rec, bad)
+        before = _bindings(mq)
+        calls = [lambda: qwen35.torch_gdn().__enter__(), lambda: ad.hidden_states(inp, [1]),
+                 lambda: ad.vision_features(inp), lambda: ad.generate(inp, enable_thinking=False, max_new_tokens=1),
+                 ad.gdn_implementation]
+        for call in calls:
+            with pytest.raises(qwen35.GDNKernelError, match=msg):
+                call()
+            assert _bindings(mq) == before  # chunk 那项本来换得了，也没有动
+    # 不切换的设备上读实现：有 __wrapped__ 却不是认得的分派包装（闭包里没有 implementation），报错而不是猜
+    with pytest.raises(qwen35.GDNKernelError, match="认得"):
+        Qwen35Adapter(device="meta", image_size=IMG_HW).gdn_implementation()
+    monkeypatch.setattr(mq, rec, fake.wrappers[rec])
+
+    # 换完再核对：解析出来的目标若不是 torch 原函数（此处人为让解析返回替身），报错并恢复进入时的绑定
+    real = qwen35._torch_reference
+    monkeypatch.setattr(qwen35, "_torch_reference", lambda module, name: bare if name == rec else real(module, name))
+    with pytest.raises(qwen35.GDNKernelError, match="换完后"):
+        with qwen35.torch_gdn():
+            pass
+    assert _bindings(mq) == fake.wrappers and fake.calls == {}
+
+
+def test_gdn_implementation_reports_the_forward_path(adapter, monkeypatch):
+    """只读方法：CPU 适配器报切换之后的 torch 原函数；非 CPU 设备（开发机没有 CUDA，用 meta 代理）不切换，报
+    transformers 的绑定实际调用的函数。调用前后绑定不变。"""
+    gpu_like = Qwen35Adapter(device="meta", image_size=IMG_HW)
+    assert adapter.gdn_implementation() == _torch_gdn_report()
+    mq = importlib.import_module(qwen35.QWEN35_MODELING)
+    for n, v in gpu_like.gdn_implementation().items():  # 本机原样：开发机上是 torch，服务器上是 fla
+        binding = getattr(mq, n)
+        impl = qwen35.kernel_implementation(binding)
+        assert v == {"module": impl.__module__, "name": impl.__qualname__,
+                     "is_torch_reference": impl is binding.__wrapped__, "switched_to_torch": False}
+
+    fake = _install_fake_fla(monkeypatch)
+    assert adapter.gdn_implementation() == _torch_gdn_report()
+    assert gpu_like.gdn_implementation() == {
+        n: {"module": fake.kernels[n].__module__, "name": fake.kernels[n].__qualname__,
+            "is_torch_reference": False, "switched_to_torch": False} for n in GDN_NAMES}
+    with gpu_like.gdn_scope():
+        assert _bindings(fake.mq) == fake.wrappers  # GPU 上保持 transformers 的绑定（服务器上是 fla）
+    assert _bindings(fake.mq) == fake.wrappers
+
+
+def _load_smoke_script(monkeypatch):
+    """按文件路径 import 冒烟脚本（scripts 不是包），直接调它的检查函数。"""
+    monkeypatch.setattr(sys, "path", list(sys.path))  # 脚本 import 时会往 sys.path 插仓库根
+    spec = importlib.util.spec_from_file_location("_smoke_adapter_under_test", REPO_ROOT / "scripts/smoke_adapter.py")
+    smoke = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(smoke)
+    return smoke
+
+
+def test_smoke_check0_records_resolved_binding_and_forward_gdn(adapter, monkeypatch):
+    """冒烟检查 0 在模拟装了 fla 时：kernels 穿过分派包装报出 fla（不是抄来的 torch 名字），gdn_in_adapter_forward 报
+    CPU 上切换之后的 torch 原函数。"""
+    smoke = _load_smoke_script(monkeypatch)
+    fake = _install_fake_fla(monkeypatch)
+    facts = smoke.check_0_facts(adapter, {"args": types.SimpleNamespace(tiny=True), "image_info": {"synthetic": True}})
+    for n, k in fake.kernels.items():
+        assert facts["kernels"][n] == f"{k.__module__}.{k.__qualname__}"
+    assert facts["gdn_in_adapter_forward"] == _torch_gdn_report()
+    assert _bindings(fake.mq) == fake.wrappers
+
+
+class _WithoutGdnScope:
+    """代理一个适配器但藏起 gdn_scope：代表没有这个方法的家族（Gemma 4、InternVL3.5）。"""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        if name == "gdn_scope":
+            raise AttributeError(name)
+        return getattr(self._inner, name)
+
+
+def test_smoke_check5_reference_path_uses_the_adapter_gdn_scope(adapter, images, monkeypatch):
+    """冒烟检查 5 直接调 ad.model 做 HF 原生参照：模拟装了 fla 时，参照路径也套适配器的 GDN 作用域（CPU 上是 torch），
+    假内核一次都不被调用；适配器没有 gdn_scope 的家族取 contextlib.nullcontext，照样能跑。"""
+    smoke = _load_smoke_script(monkeypatch)
+    ctx = {"img": images[0], "img2": images[1]}
+    fake = _install_fake_fla(monkeypatch)
+    r = smoke.check_5_position_ids(adapter, ctx)
+    assert r["ok"] is True and fake.calls == {}
+    assert _bindings(fake.mq) == fake.wrappers
+
+    other = _WithoutGdnScope(adapter)
+    assert not hasattr(other, "gdn_scope")
+    with qwen35.torch_gdn():  # 只验空作用域那条分支能跑：内核由外层固定成 torch，与本机装没装 fla 无关
+        r = smoke.check_5_position_ids(other, ctx)
+    assert r["ok"] is True and fake.calls == {}
+    assert _bindings(fake.mq) == fake.wrappers
+
+
+def _under(path, root):
+    return isinstance(path, str) and Path(root).resolve() in Path(path).resolve().parents
+
+
+def _module_file(m):
+    try:
+        return getattr(m, "__file__", None)
+    except Exception:  # noqa: BLE001 — sys.modules 里偶有一访问属性就出错的惰性对象
+        return None
+
+
+def _defined_under(fn, root):
+    code = getattr(inspect.unwrap(fn), "__code__", None)
+    return code is not None and _under(code.co_filename, root)
+
+
+def test_fake_fla_package_is_visible_only_in_parity_runs():
+    """tests/_fakes/fla 只在 scripts/pytest_server_parity.sh 里可见（它把 tests/_fakes 放进 PYTHONPATH、设 VISINT_FAKE_FLA=1）。
+
+    普通的 pytest tests/：tests/_fakes 不在 sys.path 上，没有任何模块从那里 import，transformers 也没绑到它；
+    本机没装 fla 时 fla 不可见（开发机），装了时看到的是真 fla（服务器）。parity 口径下反过来核对它确实生效。
+    """
+    parity = os.environ.get(PARITY_ENV) == "1"
+    fakes = FAKES_DIR.resolve()
+    on_path = any(isinstance(p, str) and p and Path(p).resolve() == fakes for p in sys.path)
+    loaded = sorted(n for n, m in list(sys.modules.items()) if _under(_module_file(m), fakes))
+    mq = importlib.import_module(qwen35.QWEN35_MODELING)
+    bound = {n: qwen35.kernel_implementation(getattr(mq, n)) for n in GDN_NAMES}
+    spec = importlib.util.find_spec("fla")
+    installed = []
+    for dist in ("flash-linear-attention", "fla-core"):
+        try:
+            importlib.metadata.distribution(dist)
+            installed.append(dist)
+        except importlib.metadata.PackageNotFoundError:
+            pass
+    if parity:
+        assert on_path and spec is not None and _under(spec.origin, fakes)
+        for n, fn in bound.items():
+            assert _defined_under(fn, fakes), n
+            assert (fn.__module__, fn.__name__) == (FLA_KERNELS[n][1], FLA_KERNELS[n][0])
+            with pytest.raises(ValueError, match=re.escape(TRITON_CPU_ERROR)):  # 与服务器同样拒收 CPU 张量
+                fn(*(torch.zeros(1, 2, 1, 4) for _ in range(5)))
+    else:
+        assert not on_path and loaded == []
+        assert not any(_defined_under(fn, fakes) for fn in bound.values())
+        if installed:
+            assert spec is not None and not _under(spec.origin, fakes)  # 服务器：真 fla
+        else:
+            assert spec is None  # 开发机：fla 不可见
+    # 假包与这里的测试替身报同一句服务器原话
+    assert TRITON_CPU_ERROR in (FAKES_DIR / "fla/ops/gated_delta_rule/_gpu_only.py").read_text()
+
+
+# ---------------------------------------------------------------------------
 # 冒烟脚本的 CPU 彩排（端到端，与服务器同一流程）
 # ---------------------------------------------------------------------------
 
@@ -881,3 +1290,9 @@ def test_smoke_script_tiny(tmp_path):
         "0_facts", "1_build_generate", "2_task_modulation", "3_grid_tokens", "4_query_tokens",
         "5_position_ids", "6_vision_features", "7_thinking", "8_device_audit",
     ]
+    # 检查 0 记下的是 CPU 上切换之后的实现（DEV-0003-a1），不论本机是否装了 fla
+    assert report["checks"]["0_facts"]["gdn_in_adapter_forward"] == _torch_gdn_report()
+    if os.environ.get(PARITY_ENV) == "1":  # 服务器口径：子进程里 transformers 也绑到了假 fla，检查 0 如实记下
+        kernels = report["checks"]["0_facts"]["kernels"]
+        for n, (fla_name, fla_module) in FLA_KERNELS.items():
+            assert kernels[n] == f"{fla_module}.{fla_name}", n

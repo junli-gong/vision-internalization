@@ -6,13 +6,19 @@
 from __future__ import annotations
 
 import re
-from typing import Hashable, Sequence
+from typing import Hashable, NamedTuple, Sequence
 
 _LETTER_ALONE = re.compile(r"[\(\[]?\s*([A-Za-z])\s*[\)\]]?\s*[.:]?")
 _LETTER_BRACKETED_PREFIX = re.compile(r"[\(\[]\s*([A-Za-z])\s*[\)\]]\s")
 _LETTER_DELIM_PREFIX = re.compile(r"([A-Za-z])[.:)]\s")
-# 余下文本里的选项标记："(B)"/"[b]"（不分大小写），或独立的大写字母后接 . ) :（如 "B."、"C)"、"D:"）
-_OPTION_MARKER = re.compile(r"[\(\[]\s*([A-Za-z])\s*[\)\]]|(?<![A-Za-z])([A-Z])[.:)](?=\s|$)")
+# 前缀答案之后的余下文本里，只有这三种算"另一个选项"（D12，N2）；"X." 与 "X:" 不算（与 U.S.、句末提到选项无法区分）
+_OTHER_BRACKETED = re.compile(r"[\(\[]\s*([A-Za-z])\s*[\)\]]")  # "(B)"、"[b]"
+_OTHER_LISTED = re.compile(r"(?<![A-Za-z])([A-Za-z])\)")  # "C)"：独立字母后接右括号
+# "answer is X" / "answer: X"（短语不分大小写）。X 为括号里的任意字母、独立的大写字母，
+# 或后面紧跟句末标点/结尾的小写字母（避免把 "the answer is a dog" 里的冠词 a 当成选项）
+_OTHER_STATED = re.compile(
+    r"(?i:answer)\s*(?:(?i:is)|:)\s*(?:[\(\[]\s*([A-Za-z])\s*[\)\]]|([A-Z])(?![A-Za-z])|([a-z])(?=\s*(?:[.,;:!?]|$)))"
+)
 
 
 def _accuracy(correct: Sequence[bool]) -> float | None:
@@ -49,8 +55,11 @@ def normalize_choice(answer: str | None) -> str | None:
     """把多选题回答规范化成单个大写字母；认不出返回 None。
 
     接受："A"、"a"、"(A)"、"[b]"、"A."、"A:"、"A)"，以及带选项正文的 "(A) cat"、"A. cat"、"A) cat"。
-    前缀形式只在余下文本里不再出现其他选项的标记（"(B)"、"B."、"B)"、"B:"）时才接受，
-    否则是含糊回答，返回 None：如 "(A) or (B)"、"A. No, the answer is B."、"A) and C) are both right"。
+    前缀形式后面的余下文本里若出现另一个选项，是含糊回答，返回 None。"另一个选项"只认三种（D12，N2）：
+    - 括号形式 "(X)"/"[X]"，不分大小写：如 "(A) or (B)"；
+    - 列表式 "X)"，字母前面不是字母：如 "A) and C) are both right"；
+    - 明确给出另一个答案："answer is X"/"answer: X"：如 "A. No, the answer is B."。
+    X 等于所选字母的不算。"X." 与 "X:" 不算，所以 "(A) U.S. flag"、"(B) B is closer than A." 照常判为所选字母。
     不从长段自由文本里抽字母（那是解析器的事），例如 "The answer is A" 返回 None。
     """
     if answer is None:
@@ -64,13 +73,22 @@ def normalize_choice(answer: str | None) -> str | None:
         if m:
             letter = m.group(1).upper()
             rest = s[m.end():]
-            others = {(a or b).upper() for a, b in _OPTION_MARKER.findall(rest)} - {letter}
+            found = _OTHER_BRACKETED.findall(rest) + _OTHER_LISTED.findall(rest)
+            found += ["".join(g) for g in _OTHER_STATED.findall(rest)]
+            others = {x.upper() for x in found} - {letter}
             return None if others else letter
     return None
 
 
-def multiple_choice_accuracy(preds: Sequence[str | None], gts: Sequence[str]) -> float | None:
-    """多选题准确率：两边都经 normalize_choice 规范化后相等即对。空集合返回 None。
+class MultipleChoiceResult(NamedTuple):
+    accuracy: float
+    none_rate: float  # 预测规范化失败（含预测为 None）的比例；报告按系统分列（D12(3)(6)）
+    n: int
+
+
+def multiple_choice_accuracy(preds: Sequence[str | None], gts: Sequence[str]) -> MultipleChoiceResult | None:
+    """多选题准确率与 None 率：两边都经 normalize_choice 规范化后相等即对；规范化失败的预测记错并计入 None 率。
+    空集合返回 None。
 
     对齐 CV-Bench / EmbSpatial-Bench 的选项字母匹配判定。GT 规范化失败抛 ValueError。
     """
@@ -82,4 +100,11 @@ def multiple_choice_accuracy(preds: Sequence[str | None], gts: Sequence[str]) ->
         if ng is None:
             raise ValueError(f"GT 选项无法规范化: {g!r}")
         norm_gts.append(ng)
-    return _accuracy([normalize_choice(p) == g for p, g in zip(preds, norm_gts)])
+    if not preds:
+        return None
+    norm_preds = [normalize_choice(p) for p in preds]
+    return MultipleChoiceResult(
+        accuracy=_accuracy([p == g for p, g in zip(norm_preds, norm_gts)]),
+        none_rate=sum(1 for p in norm_preds if p is None) / len(norm_preds),
+        n=len(norm_preds),
+    )

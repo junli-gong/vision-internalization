@@ -1,0 +1,2826 @@
+............................F.FF.......FFF.F..FF......FF.....F..FF.....F [ 23%]
+F....................................................................... [ 46%]
+.................................................s...................... [ 69%]
+........................................................................ [ 92%]
+........................                                                 [100%]
+=================================== FAILURES ===================================
+____________________ test_empty_instruction_and_zero_images ____________________
+
+adapter = <src.adapters.qwen35.Qwen35Adapter object at 0x7efc03fbf7d0>
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+
+    def test_empty_instruction_and_zero_images(adapter, images):
+        for order in ("instruction_first", "image_first"):
+            inp = adapter.build_inputs(images, "", order)
+            assert len(inp.instruction_span) == 0
+        inp = adapter.build_inputs([], INSTR_A, "instruction_first")
+        assert inp.images == () and "pixel_values" not in inp.tensors
+        L = inp.tensors["input_ids"].shape[1]
+        assert torch.equal(adapter.position_ids(inp)[:, 0], torch.arange(L).expand(4, L))
+        with torch.no_grad():
+>           hs = adapter.hidden_states(inp, [0, 4])
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:328: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:590: in hidden_states
+    hs = self._run(inputs, query_embeds, where="hidden_states")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters/qwen35.py:931: in _run
+    out = self._model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1884: in _call_impl
+    return inner()
+           ^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1832: in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efbe01510a0>
+gridX = 3, gridY = 1, gridZ = 1, stream = 0, function = 94911631926336
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efbe0150fe0>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.1014e-04,  1.7555e-04,  3.1326e-05,  5.5321e-05, -5.2286e-03,
+          2.4400e-03,  1.6310e-03, -2.0278e...e+00, 1.2843e+00,
+        1.1903e+00, 1.3366e+00, 1.1879e+00, 1.0827e+00, 1.4466e+00, 1.3335e+00]), 1e-06, 18, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+----------------------------- Captured stderr call -----------------------------
+[transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+------------------------------ Captured log call -------------------------------
+WARNING  transformers.integrations.hub_kernels:logging.py:340 `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+___________ test_image_first_bitwise_equal_instruction_first_differs ___________
+
+adapter = <src.adapters.qwen35.Qwen35Adapter object at 0x7efc03fbf7d0>
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+
+    def test_image_first_bitwise_equal_instruction_first_differs(adapter, images):
+        layers = _all_layers(adapter)
+        got = {}
+        for order in ("image_first", "instruction_first"):
+            a = adapter.build_inputs(images, INSTR_A, order)
+            b = adapter.build_inputs(images, INSTR_B, order)
+            assert [i.span for i in a.images] == [i.span for i in b.images]
+            with torch.no_grad():
+>               ha, hb = adapter.hidden_states(a, layers), adapter.hidden_states(b, layers)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:354: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:590: in hidden_states
+    hs = self._run(inputs, query_embeds, where="hidden_states")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters/qwen35.py:931: in _run
+    out = self._model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1884: in _call_impl
+    return inner()
+           ^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1832: in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efbe01510a0>
+gridX = 16, gridY = 1, gridZ = 1, stream = 0, function = 94911631926336
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efbb4513e00>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.1014e-04,  1.7555e-04,  3.1326e-05,  ..., -2.6700e-03,
+          2.8580e-04, -3.4630e-04],
+        [-1.04...+00, 0.0000e+00,        nan,        nan, 0.0000e+00, 0.0000e+00,
+               nan,        nan]), 1e-06, 122, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+_________________ test_layer_numbering_matches_decoder_outputs _________________
+
+adapter = <src.adapters.qwen35.Qwen35Adapter object at 0x7efc03fbf7d0>
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+
+    def test_layer_numbering_matches_decoder_outputs(adapter, images):
+        inp = adapter.build_inputs(images, INSTR_A, "instruction_first")
+        lm = adapter.model.model.language_model
+        raw = {}
+        hooks = [layer.register_forward_hook(lambda m, a, o, i=i: raw.__setitem__(i, o)) for i, layer in enumerate(lm.layers)]
+        try:
+            with torch.no_grad():
+>               hs = adapter.sequence_hidden_states(inp, _all_layers(adapter))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:367: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:604: in sequence_hidden_states
+    hs = self._run(inputs, query_embeds, where="sequence_hidden_states")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters/qwen35.py:931: in _run
+    out = self._model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1884: in _call_impl
+    return inner()
+           ^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1832: in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efbe01510a0>
+gridX = 16, gridY = 1, gridZ = 1, stream = 0, function = 94911631926336
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efb76d45ca0>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.1014e-04,  1.7555e-04,  3.1326e-05,  ..., -2.6700e-03,
+          2.8580e-04, -3.4630e-04],
+        [-1.04...-01, 1.0377e+00, 1.1578e+00, 8.6084e-01, 8.2421e-01, 6.6917e-01,
+        7.6231e-43, 0.0000e+00]), 1e-06, 122, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+_____________________ test_hidden_states_shapes_and_order ______________________
+
+adapter = <src.adapters.qwen35.Qwen35Adapter object at 0x7efc03fbf7d0>
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+
+    def test_hidden_states_shapes_and_order(adapter, images):
+        inp = adapter.build_inputs(images, INSTR_A, "image_first")
+        with torch.no_grad():
+>           hs = adapter.hidden_states(inp, [4, 0, 2])
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:393: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:590: in hidden_states
+    hs = self._run(inputs, query_embeds, where="hidden_states")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters/qwen35.py:931: in _run
+    out = self._model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1884: in _call_impl
+    return inner()
+           ^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1832: in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efbe01510a0>
+gridX = 16, gridY = 1, gridZ = 1, stream = 0, function = 94911631926336
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efb76d4deb0>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.1014e-04,  1.7555e-04,  3.1326e-05,  ..., -2.6700e-03,
+          2.8580e-04, -3.4630e-04],
+        [-1.04...+00, 1.2843e+00, 1.1903e+00, 1.3366e+00, 1.1879e+00, 1.0827e+00,
+        6.9504e-43, 0.0000e+00]), 1e-06, 122, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+_______ test_own_positions_and_merge_equal_model_path[instruction_first] _______
+
+adapter = <src.adapters.qwen35.Qwen35Adapter object at 0x7efc03fbf7d0>
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+order = 'instruction_first'
+
+    @pytest.mark.parametrize("order", ["instruction_first", "image_first"])
+    def test_own_positions_and_merge_equal_model_path(adapter, images, order):
+        inp = adapter.build_inputs(images, INSTR_A, order)
+        pos = adapter.position_ids(inp)
+        L = inp.tensors["input_ids"].shape[1]
+        assert pos.shape == (4, 1, L) and torch.equal(pos[0, 0], torch.arange(L))
+        ref_pos, _ = adapter.model.model.get_rope_index(
+            inp.tensors["input_ids"], mm_token_type_ids=inp.tensors["mm_token_type_ids"],
+            image_grid_thw=inp.tensors["image_grid_thw"], attention_mask=inp.tensors["attention_mask"])
+        assert torch.equal(pos[1:], ref_pos)
+        layers = _all_layers(adapter)
+        with torch.no_grad():
+>           ours = adapter.sequence_hidden_states(inp, layers)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:413: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:604: in sequence_hidden_states
+    hs = self._run(inputs, query_embeds, where="sequence_hidden_states")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters/qwen35.py:931: in _run
+    out = self._model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1884: in _call_impl
+    return inner()
+           ^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1832: in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efbe01510a0>
+gridX = 16, gridY = 1, gridZ = 1, stream = 0, function = 94911631926336
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efb76dd1dc0>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.1014e-04,  1.7555e-04,  3.1326e-05,  ..., -2.6700e-03,
+          2.8580e-04, -3.4630e-04],
+        [-1.04...+00, 1.3410e+00, 1.4310e+00, 1.2135e+00, 1.1879e+00, 1.0827e+00,
+        7.6231e-43, 0.0000e+00]), 1e-06, 122, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+__________ test_own_positions_and_merge_equal_model_path[image_first] __________
+
+adapter = <src.adapters.qwen35.Qwen35Adapter object at 0x7efc03fbf7d0>
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+order = 'image_first'
+
+    @pytest.mark.parametrize("order", ["instruction_first", "image_first"])
+    def test_own_positions_and_merge_equal_model_path(adapter, images, order):
+        inp = adapter.build_inputs(images, INSTR_A, order)
+        pos = adapter.position_ids(inp)
+        L = inp.tensors["input_ids"].shape[1]
+        assert pos.shape == (4, 1, L) and torch.equal(pos[0, 0], torch.arange(L))
+        ref_pos, _ = adapter.model.model.get_rope_index(
+            inp.tensors["input_ids"], mm_token_type_ids=inp.tensors["mm_token_type_ids"],
+            image_grid_thw=inp.tensors["image_grid_thw"], attention_mask=inp.tensors["attention_mask"])
+        assert torch.equal(pos[1:], ref_pos)
+        layers = _all_layers(adapter)
+        with torch.no_grad():
+>           ours = adapter.sequence_hidden_states(inp, layers)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:413: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:604: in sequence_hidden_states
+    hs = self._run(inputs, query_embeds, where="sequence_hidden_states")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters/qwen35.py:931: in _run
+    out = self._model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1884: in _call_impl
+    return inner()
+           ^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1832: in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efbe01510a0>
+gridX = 16, gridY = 1, gridZ = 1, stream = 0, function = 94911631926336
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efc02ef2c30>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.1014e-04,  1.7555e-04,  3.1326e-05,  ..., -2.6700e-03,
+          2.8580e-04, -3.4630e-04],
+        [-1.04...-01, 9.6017e-01, 8.2771e-01, 1.0317e+00, 8.2421e-01, 6.6917e-01,
+        7.6231e-43, 0.0000e+00]), 1e-06, 122, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+______________ test_vision_features_equal_layer0_image_positions _______________
+
+adapter = <src.adapters.qwen35.Qwen35Adapter object at 0x7efc03fbf7d0>
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+
+    def test_vision_features_equal_layer0_image_positions(adapter, images):
+        for order in ("instruction_first", "image_first"):
+            inp = adapter.build_inputs(images, INSTR_A, order)
+            with torch.no_grad():
+                vf = adapter.vision_features(inp)
+>               h0 = adapter.hidden_states(inp, [0]).image[0]
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:439: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:590: in hidden_states
+    hs = self._run(inputs, query_embeds, where="hidden_states")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters/qwen35.py:931: in _run
+    out = self._model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1884: in _call_impl
+    return inner()
+           ^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1832: in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efbe01510a0>
+gridX = 16, gridY = 1, gridZ = 1, stream = 0, function = 94911631926336
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efc02b3a180>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.1014e-04,  1.7555e-04,  3.1326e-05,  ..., -2.6700e-03,
+          2.8580e-04, -3.4630e-04],
+        [-1.04...-45, 0.0000e+00, 1.4013e-45, 0.0000e+00, 2.8026e-45, 0.0000e+00,
+        2.8026e-45, 0.0000e+00]), 1e-06, 122, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+_____________ test_query_causal_prefix_bitwise_equal_across_modes ______________
+
+fresh = <function fresh.<locals>.<lambda> at 0x7efbb44f19e0>
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+
+    def test_query_causal_prefix_bitwise_equal_across_modes(fresh, images):
+        ad = fresh(image_size=(256, 192))  # 每张图 8×6 = 48 个视觉 token，前缀长 107
+        layers = _all_layers(ad)
+        torch.manual_seed(7)
+        qe = torch.randn(16, 64)
+        seq = {}
+        for mode in ("grid2d", "seq1d"):
+            ad.inject_query_tokens(16, mode)
+            inp = ad.build_inputs(images, INSTR_A, "instruction_first")
+            with torch.no_grad():
+>               seq[mode] = ad.sequence_hidden_states(inp, layers, query_embeds=qe)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:510: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:604: in sequence_hidden_states
+    hs = self._run(inputs, query_embeds, where="sequence_hidden_states")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters/qwen35.py:931: in _run
+    out = self._model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1884: in _call_impl
+    return inner()
+           ^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1832: in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efbe01510a0>
+gridX = 32, gridY = 1, gridZ = 1, stream = 0, function = 94911631926336
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efc02bf5b20>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.1014e-04,  1.7555e-04,  3.1326e-05,  ..., -2.6700e-03,
+          2.8580e-04, -3.4630e-04],
+        [-1.04....0000e+00,  1.0821e+15,
+         3.0966e-41,  2.8026e-45,  0.0000e+00,  4.2039e-45,  0.0000e+00]), 1e-06, 250, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+_____________ test_query_embeds_replace_placeholder_and_carry_grad _____________
+
+fresh = <function fresh.<locals>.<lambda> at 0x7efb75cba700>
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+
+    def test_query_embeds_replace_placeholder_and_carry_grad(fresh, images):
+        ad = fresh()
+        ad.inject_query_tokens(4, "grid2d")
+        inp = ad.build_inputs(images[:1], INSTR_A, "image_first")
+        qe = torch.randn(4, 64, requires_grad=True)
+>       hs = ad.hidden_states(inp, [0, 4], query_embeds=qe)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:526: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:590: in hidden_states
+    hs = self._run(inputs, query_embeds, where="hidden_states")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters/qwen35.py:931: in _run
+    out = self._model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1884: in _call_impl
+    return inner()
+           ^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1832: in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efbe01510a0>
+gridX = 10, gridY = 1, gridZ = 1, stream = 0, function = 94911631926336
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efb76d96420>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.1014e-04,  1.7555e-04,  3.1326e-05,  ..., -2.6700e-03,
+          2.8580e-04, -3.4630e-04],
+        [-1.04...3.3157e-19, -1.4508e-06, -3.7122e-04, -3.3147e-19,
+        -5.2779e-18,  1.3452e-43,  0.0000e+00]), 1e-06, 78, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+____________________ test_add_250_grows_to_exact_rows[True] ____________________
+
+fresh = <function fresh.<locals>.<lambda> at 0x7efb76daaf20>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7efb7604f0e0>
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+tied = True
+
+    @pytest.mark.parametrize("tied", [True, False])
+    def test_add_250_grows_to_exact_rows(fresh, monkeypatch, images, tied):
+        """管理员补充规则：累计需要的行数超过现有行数时扩表到恰好需要的行数；新 token 的行 = 基础行均值。
+    
+        注意（已上报待裁）："原有 248320 行逐位不变"按字面不成立：其中 243 个预留行正是前 243 个新 token 的行，
+        按 D9-3（预留行原有的值不用）要写成均值。这里钉住的解释是：已有 token 的行（前 len(tokenizer) 行）逐位不变，
+        全部新 token 行 = 均值；扩表这一步本身把原有 248320 行逐位拷贝（见下一个测试）。
+        """
+        ad = fresh(tied)
+        _forbid_resize(monkeypatch, ad)
+        emb0 = ad.model.get_input_embeddings().weight.detach().clone()
+        head0 = ad.model.get_output_embeddings().weight.detach().clone()
+        ids = ad.add_grid_tokens([f"<g{i}>" for i in range(250)])
+        emb = ad.model.get_input_embeddings().weight
+        head = ad.model.get_output_embeddings().weight
+        assert emb.shape == head.shape == (LEN_TOKENIZER + 250, 64) == (248327, 64)
+        assert ad.model.config.text_config.vocab_size == 248327
+        new = list(ids.values())
+        assert new == list(range(LEN_TOKENIZER, 248327))
+        assert torch.equal(emb[:LEN_TOKENIZER], emb0[:LEN_TOKENIZER])  # 已有 token 的行逐位不变
+        emb_mean = emb0[:N_BASE_VOCAB].double().mean(0).float()
+        assert torch.equal(emb[new], emb_mean.expand(250, -1))  # 复用的 243 个预留行与扩出的 7 行都 = 均值
+        assert not torch.equal(emb[LEN_TOKENIZER:N_ROWS], emb0[LEN_TOKENIZER:N_ROWS])  # 预留行原值不用（D9-3）
+        if tied:
+            assert head is emb
+        else:
+            assert torch.equal(head[:LEN_TOKENIZER], head0[:LEN_TOKENIZER])
+            assert torch.equal(head[new], head0[:N_BASE_VOCAB].double().mean(0).float().expand(250, -1))
+        # 扩出来的 id 能在前向与限制生成里正常使用
+        allowed = [ids["<g248>"], ids["<g249>"]]
+        assert min(allowed) >= N_ROWS
+        inp = ad.build_inputs(images[:1], INSTR_A, "image_first")
+>       res = ad.generate(inp, enable_thinking=False, max_new_tokens=3, allowed_token_ids=allowed)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:673: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:689: in generate
+    out = self._model.generate(
+../../env/lib/python3.12/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:2802: in generate
+    result = decoding_method(
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:3002: in _sample
+    outputs = self._prefill(
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:4109: in _prefill
+    return self(**model_inputs, return_dict=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efbe01510a0>
+gridX = 11, gridY = 1, gridZ = 1, stream = 0, function = 94911631926336
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efb76cf9c10>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.1014e-04,  1.7555e-04,  3.1326e-05,  ..., -2.6700e-03,
+          2.8580e-04, -3.4630e-04],
+        [-1.04...2.3451e-05, -3.7122e-04, -3.3148e-19,
+        -1.1621e-36, -9.2806e-05, -3.3147e-19, -2.1329e-17]), 1e-06, 84, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+___________________ test_add_250_grows_to_exact_rows[False] ____________________
+
+fresh = <function fresh.<locals>.<lambda> at 0x7efb76da9080>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7efb76cf8b60>
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+tied = False
+
+    @pytest.mark.parametrize("tied", [True, False])
+    def test_add_250_grows_to_exact_rows(fresh, monkeypatch, images, tied):
+        """管理员补充规则：累计需要的行数超过现有行数时扩表到恰好需要的行数；新 token 的行 = 基础行均值。
+    
+        注意（已上报待裁）："原有 248320 行逐位不变"按字面不成立：其中 243 个预留行正是前 243 个新 token 的行，
+        按 D9-3（预留行原有的值不用）要写成均值。这里钉住的解释是：已有 token 的行（前 len(tokenizer) 行）逐位不变，
+        全部新 token 行 = 均值；扩表这一步本身把原有 248320 行逐位拷贝（见下一个测试）。
+        """
+        ad = fresh(tied)
+        _forbid_resize(monkeypatch, ad)
+        emb0 = ad.model.get_input_embeddings().weight.detach().clone()
+        head0 = ad.model.get_output_embeddings().weight.detach().clone()
+        ids = ad.add_grid_tokens([f"<g{i}>" for i in range(250)])
+        emb = ad.model.get_input_embeddings().weight
+        head = ad.model.get_output_embeddings().weight
+        assert emb.shape == head.shape == (LEN_TOKENIZER + 250, 64) == (248327, 64)
+        assert ad.model.config.text_config.vocab_size == 248327
+        new = list(ids.values())
+        assert new == list(range(LEN_TOKENIZER, 248327))
+        assert torch.equal(emb[:LEN_TOKENIZER], emb0[:LEN_TOKENIZER])  # 已有 token 的行逐位不变
+        emb_mean = emb0[:N_BASE_VOCAB].double().mean(0).float()
+        assert torch.equal(emb[new], emb_mean.expand(250, -1))  # 复用的 243 个预留行与扩出的 7 行都 = 均值
+        assert not torch.equal(emb[LEN_TOKENIZER:N_ROWS], emb0[LEN_TOKENIZER:N_ROWS])  # 预留行原值不用（D9-3）
+        if tied:
+            assert head is emb
+        else:
+            assert torch.equal(head[:LEN_TOKENIZER], head0[:LEN_TOKENIZER])
+            assert torch.equal(head[new], head0[:N_BASE_VOCAB].double().mean(0).float().expand(250, -1))
+        # 扩出来的 id 能在前向与限制生成里正常使用
+        allowed = [ids["<g248>"], ids["<g249>"]]
+        assert min(allowed) >= N_ROWS
+        inp = ad.build_inputs(images[:1], INSTR_A, "image_first")
+>       res = ad.generate(inp, enable_thinking=False, max_new_tokens=3, allowed_token_ids=allowed)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:673: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:689: in generate
+    out = self._model.generate(
+../../env/lib/python3.12/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:2802: in generate
+    result = decoding_method(
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:3002: in _sample
+    outputs = self._prefill(
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:4109: in _prefill
+    return self(**model_inputs, return_dict=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efbe01510a0>
+gridX = 11, gridY = 1, gridZ = 1, stream = 0, function = 94911631926336
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efb76ce1280>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.1014e-04,  1.7555e-04,  3.1326e-05,  ..., -2.6700e-03,
+          2.8580e-04, -3.4630e-04],
+        [-1.04...e+00, 0.0000e+00,
+        0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00]), 1e-06, 84, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+__________________ test_allowed_token_ids_restrict_generation __________________
+
+fresh = <function fresh.<locals>.<lambda> at 0x7efb75fb79c0>
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+
+    def test_allowed_token_ids_restrict_generation(fresh, images):
+        ad = fresh()
+        ids = list(ad.add_grid_tokens(["<g0>", "<g1>"]).values())
+        inp = ad.build_inputs(images, INSTR_A, "instruction_first")
+>       res = ad.generate(inp, enable_thinking=False, max_new_tokens=6, allowed_token_ids=ids)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:743: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:689: in generate
+    out = self._model.generate(
+../../env/lib/python3.12/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:2802: in generate
+    result = decoding_method(
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:3002: in _sample
+    outputs = self._prefill(
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:4109: in _prefill
+    return self(**model_inputs, return_dict=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efbe01510a0>
+gridX = 17, gridY = 1, gridZ = 1, stream = 0, function = 94911631926336
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efb7600d700>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.1014e-04,  1.7555e-04,  3.1326e-05,  ..., -2.6700e-03,
+          2.8580e-04, -3.4630e-04],
+        [-1.04...-01, 8.4316e-01, 1.0192e+00, 1.0578e+00,
+        9.9814e-01, 1.1261e+00, 1.0192e+00, 1.0578e+00]), 1e-06, 136, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+_____________________ test_generation_result_fields[False] _____________________
+
+adapter = <src.adapters.qwen35.Qwen35Adapter object at 0x7efc03fbf7d0>
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+thinking = False
+
+    @pytest.mark.parametrize("thinking", [False, True])
+    def test_generation_result_fields(adapter, images, thinking):
+        inp = adapter.build_inputs(images, INSTR_A, "image_first")
+>       res = adapter.generate(inp, enable_thinking=thinking, max_new_tokens=4)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:776: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:689: in generate
+    out = self._model.generate(
+../../env/lib/python3.12/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:2802: in generate
+    result = decoding_method(
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:3002: in _sample
+    outputs = self._prefill(
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:4109: in _prefill
+    return self(**model_inputs, return_dict=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1884: in _call_impl
+    return inner()
+           ^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1832: in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efbe01510a0>
+gridX = 17, gridY = 1, gridZ = 1, stream = 0, function = 94911631926336
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efb76d958e0>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.1014e-04,  1.7555e-04,  3.1326e-05,  ..., -2.6700e-03,
+          2.8580e-04, -3.4630e-04],
+        [-1.04...-43, 0.0000e+00, 4.4842e-44, 0.0000e+00,
+        1.0365e-02, 3.0973e-41, 5.2272e+37, 4.5558e-41]), 1e-06, 136, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+_____________________ test_generation_result_fields[True] ______________________
+
+adapter = <src.adapters.qwen35.Qwen35Adapter object at 0x7efc03fbf7d0>
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+thinking = True
+
+    @pytest.mark.parametrize("thinking", [False, True])
+    def test_generation_result_fields(adapter, images, thinking):
+        inp = adapter.build_inputs(images, INSTR_A, "image_first")
+>       res = adapter.generate(inp, enable_thinking=thinking, max_new_tokens=4)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:776: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:689: in generate
+    out = self._model.generate(
+../../env/lib/python3.12/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:2802: in generate
+    result = decoding_method(
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:3002: in _sample
+    outputs = self._prefill(
+../venv/lib/python3.12/site-packages/transformers/generation/utils.py:4109: in _prefill
+    return self(**model_inputs, return_dict=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1884: in _call_impl
+    return inner()
+           ^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1832: in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efbe01510a0>
+gridX = 17, gridY = 1, gridZ = 1, stream = 0, function = 94911631926336
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efb760da450>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.1014e-04,  1.7555e-04,  3.1326e-05,  ..., -2.6700e-03,
+          2.8580e-04, -3.4630e-04],
+        [-1.04...-44, 0.0000e+00,
+        2.8026e-45, 0.0000e+00, 5.2271e+37, 4.5558e-41, 4.6588e+20, 3.0966e-41]), 1e-06, 132, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+_______________________________ test_bf16_model ________________________________
+
+components = (Qwen3_5Config {
+  "architectures": [
+    "Qwen3_5ForConditionalGeneration"
+  ],
+  "image_token_id": 248056,
+  "model_...   {{- '<think>\\n' }}\n    {%- else %}\n        {{- '<think>\\n\\n</think>\\n\\n' }}\n    {%- endif %}\n{%- endif %}")
+images = [array([[[ 17,  12,  13],
+        [ 11,  22,   9],
+        [ 26,   9,  11],
+        ...,
+        [255,  26,  15],
+    ... [255,   7,   2]]], shape=(100, 150, 3), dtype=uint8), <PIL.Image.Image image mode=RGB size=100x150 at 0x7EFC02B8FE60>]
+
+    def test_bf16_model(components, images):
+        model = qwen35.build_tiny_model(components[0], tie_word_embeddings=True, dtype=torch.bfloat16)
+        ad = qwen35.make_tiny_adapter(components, image_size=IMG_HW, model=model)
+        assert ad.dtype == torch.bfloat16
+        inp = ad.build_inputs(images, INSTR_A, "instruction_first")
+        assert inp.tensors["pixel_values"].dtype == torch.bfloat16
+        with torch.no_grad():
+>           hs = ad.hidden_states(inp, [0, 4])
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_adapter_qwen35.py:861: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/adapters/qwen35.py:590: in hidden_states
+    hs = self._run(inputs, query_embeds, where="hidden_states")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/adapters/qwen35.py:931: in _run
+    out = self._model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1855: in forward
+    outputs = self.model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:939: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1648: in forward
+    outputs = self.language_model(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/generic.py:1068: in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py:286: in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1292: in forward
+    hidden_states = decoder_layer(
+../venv/lib/python3.12/site-packages/transformers/modeling_layers.py:109: in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1884: in _call_impl
+    return inner()
+           ^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1832: in inner
+    result = forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:889: in forward
+    hidden_states = self.linear_attn(
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1778: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/nn/modules/module.py:1789: in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py:1010: in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:639: in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+../venv/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py:885: in wrapped
+    return implementation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:567: in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+../../env/lib/python3.12/site-packages/torch/autograd/function.py:625: in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/amp/autocast_mode.py:481: in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py:282: in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446: in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/backends/__init__.py:214: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/modules/l2norm.py:178: in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.12/site-packages/fla/ops/utils/cache.py:378: in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:238: in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:202: in check_disk_cache
+    bench_fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:229: in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:164: in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../env/lib/python3.12/site-packages/triton/testing.py:149: in do_bench
+    fn()
+../../env/lib/python3.12/site-packages/triton/runtime/autotuner.py:150: in kernel_call
+    self.fn.run(
+../../env/lib/python3.12/site-packages/triton/runtime/jit.py:761: in run
+    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.backends.nvidia.driver.CudaLauncher object at 0x7efc02b8d820>
+gridX = 16, gridY = 1, gridZ = 1, stream = 0, function = 94911753217136
+kernel_metadata = (1, 1, 0)
+launch_metadata = <triton.compiler.compiler.LazyDict object at 0x7efc02b8d0a0>
+launch_enter_hook = <triton.knobs.HookChain object at 0x7efe21f3dac0>
+launch_exit_hook = <triton.knobs.HookChain object at 0x7efe21f3da30>
+args = (tensor([[ 2.0313e-04,  1.7548e-04,  3.1233e-05,  ..., -2.6855e-03,
+          2.8419e-04, -3.4714e-04],
+        [-1.03...+00, 1.3405e+00, 1.4313e+00, 1.2138e+00, 1.1879e+00, 1.0832e+00,
+        7.6231e-43, 0.0000e+00]), 1e-06, 122, 16, ...)
+
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
+    
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+    
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+    
+>       self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
+                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+E       ValueError: Pointer argument cannot be accessed from Triton (cpu tensor?)
+
+../../env/lib/python3.12/site-packages/triton/backends/nvidia/driver.py:328: ValueError
+____________________________ test_smoke_script_tiny ____________________________
+
+tmp_path = PosixPath('/home/ubuntu/workspace/wzg/gjl/vision-internalization/tmp/pytest-of-root/pytest-0/test_smoke_script_tiny0')
+
+    def test_smoke_script_tiny(tmp_path):
+        out = tmp_path / "smoke_tiny.json"
+        proc = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "scripts/smoke_adapter.py"), "--tiny", "--out", str(out)],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=600,
+        )
+        assert out.exists(), proc.stderr[-3000:]
+        report = json.loads(out.read_text())
+>       assert proc.returncode == 0 and report["all_ok"] is True, json.dumps(report.get("ok"), ensure_ascii=False)
+E       AssertionError: {"0_facts": true, "1_build_generate": false, "2_task_modulation": false, "3_grid_tokens": false, "4_query_tokens": false, "5_position_ids": false, "6_vision_features": false, "7_thinking": false, "8_device_audit": false}
+E       assert (1 == 0)
+E        +  where 1 = CompletedProcess(args=['/home/ubuntu/workspace/wzg/gjl/vision-internalization/venv/bin/python', '/home/ubuntu/workspac...causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.\n').returncode
+
+tests/test_adapter_qwen35.py:879: AssertionError
+=============================== warnings summary ===============================
+tests/test_adapter_qwen35.py: 14 warnings
+  /home/ubuntu/workspace/wzg/gjl/env/lib/python3.12/site-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_adapter_qwen35.py::test_empty_instruction_and_zero_images
+FAILED tests/test_adapter_qwen35.py::test_image_first_bitwise_equal_instruction_first_differs
+FAILED tests/test_adapter_qwen35.py::test_layer_numbering_matches_decoder_outputs
+FAILED tests/test_adapter_qwen35.py::test_hidden_states_shapes_and_order - Va...
+FAILED tests/test_adapter_qwen35.py::test_own_positions_and_merge_equal_model_path[instruction_first]
+FAILED tests/test_adapter_qwen35.py::test_own_positions_and_merge_equal_model_path[image_first]
+FAILED tests/test_adapter_qwen35.py::test_vision_features_equal_layer0_image_positions
+FAILED tests/test_adapter_qwen35.py::test_query_causal_prefix_bitwise_equal_across_modes
+FAILED tests/test_adapter_qwen35.py::test_query_embeds_replace_placeholder_and_carry_grad
+FAILED tests/test_adapter_qwen35.py::test_add_250_grows_to_exact_rows[True]
+FAILED tests/test_adapter_qwen35.py::test_add_250_grows_to_exact_rows[False]
+FAILED tests/test_adapter_qwen35.py::test_allowed_token_ids_restrict_generation
+FAILED tests/test_adapter_qwen35.py::test_generation_result_fields[False] - V...
+FAILED tests/test_adapter_qwen35.py::test_generation_result_fields[True] - Va...
+FAILED tests/test_adapter_qwen35.py::test_bf16_model - ValueError: Pointer ar...
+FAILED tests/test_adapter_qwen35.py::test_smoke_script_tiny - AssertionError:...
+16 failed, 295 passed, 1 skipped, 14 warnings in 37.64s
+
+real	0m39.290s
+user	1m17.787s
+sys	0m7.384s

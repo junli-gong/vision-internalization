@@ -232,3 +232,36 @@
    - 已有 token 的行（id < 原 len(tokenizer)）逐位不变；
    - 新 token 的行不论来自预留行还是扩出来的行，一律写成基础词表行的精确均值。
 
+## D16 — DEV-0001 addendum-2 合入，DEV-0001 结案（2026-09-30）
+
+1. **合入**：addendum-2 合入，是第 2 轮、也是最后一轮返工。
+   - 管理员读完 diff，全仓库 331 passed。
+   - 开发在新代码上重跑了独立审查的复核脚本；61 个变异全部被抓住，其中本轮新增 15 个，前两轮的 46 个仍被抓住。
+   - 已到返工上限，不再加独立审查轮次。以后在这些函数上发现问题，一律开新任务。
+2. **7 条偏离全部接受**：
+   - (1) "answer is X" 中 X 的认定规则：偏向接受前缀答案；
+   - (2) `multiple_choice_accuracy` 改为返回 `MultipleChoiceResult(accuracy, none_rate, n)`，报告要分系统列出 None 率；
+   - (3) `f1_statistic` 放在 stats，`per_image_counts` 放在 detection；
+   - (4) `per_image` 覆盖 GT 里的每一张图，两个系统能按行对齐；
+   - (5) `ADE_REDUCE_ZERO_LABEL` 由调用方显式传入；
+   - (6) 数字不足 ⌈N/2⌉ 的带注释短行仍算文本行，已知局限，有测试钉住；
+   - (7) 允许 n_seeds == n_samples。
+3. **解除 D12 的禁用**：`intersect_and_union`/`mean_iou`、`normalize_choice`/`multiple_choice_accuracy`、`parse_grid_text`、`detection_bootstrap_statistic` 可以使用。
+4. **DEV-0001 结案**：原开发 CC 会话（cvpr2027-48）退役。以后的开发任务一律按模式 B 派发 worktree agent。
+
+## D17 — DEV-0004（Gemma 4 适配器）合入与偏离裁定（2026-09-30）
+
+1. **合入**：DEV-0004 由 worktree 开发 agent 完成，合入 main（2463c02）。
+   - 管理员读了模块说明和 Gemma 特有的核心代码：思考 system 轮的拼接、思考段剥离、`<unusedN>` 注册、主嵌入与 PLE 的初始化、输入嵌入与 per-layer 输入、前向。
+   - 合入后在干净的 worktree 里 424 passed；Gemma 与 Qwen 的 `--tiny` 冒烟都通过。
+2. **偏离裁定**：
+   - (1) 越界改了 `tests/test_adapter_qwen35.py` 两行：接受。`vision_features` 改成抽象方法后，那个测试替身必然失败，是我授权时漏列了它。
+   - (2) 一维位置的家族遇到 grid2d 直接报错，不静默当成 seq1d：接受。E3a/E6 的配置按家族选位置模式；以后可在 base 加一个"支持哪些位置模式"的查询接口。
+   - (3) `vision_features` 与第 0 层图像位置逐位相同，PLE 的精确作用方式写进了模块说明：接受。
+   - (4) 复用 `<unusedN>`：grid token 从最小 id 取，查询占位符取最大 id，主嵌入和 PLE 行都用基础行的精确均值初始化：接受。
+   - (5) 思考段格式 `<|channel>thought\n…<channel|>` 取自固定 revision 的 tokenizer_config：暂定接受，要在真实权重的冒烟里看到思考段闭合才算核实。
+   - (6) 注册键用 `gemma-4-e2b-it`：接受。我任务书里写成了 `gemma4-e2b-it`，DEV-0005 同类。
+   - (7)(8)(10)(12) 冒烟脚本的小改动；不预先缩放图像（按档位保持宽高比，D13-5）；小模型的层结构；其他细节：都接受。
+   - (9) 从 qwen35 导入共用件：暂时接受，以后挪到公共模块。
+   - (11) 查询位置的 PLE 身份用占位符自己的行：暂定接受，到 E6 用 Gemma 做 E3a 时再定。
+

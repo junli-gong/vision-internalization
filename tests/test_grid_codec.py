@@ -239,6 +239,49 @@ def test_m1_thinking_draft_is_not_parser_business():
 
 
 def test_m1_all_rows_bracketed_is_illegal_char_not_no_grid():
+    """每行都写成 [0,1,…] 的网格：没有纯网格行，但污染行 ≥ ⌈N/2⌉ 条，是候选块 → ILLEGAL_CHAR（D12，N4）。"""
     rows = _rows(4)
-    text = "\n".join("[" + ",".join(r[:4]) + "]" for r in rows)
-    assert parse_grid_text(text, 4).failure is GridParseFailure.ILLEGAL_CHAR
+    assert parse_grid_text("\n".join("[" + ",".join(r[:4]) + "]" for r in rows), 4).failure is GridParseFailure.ILLEGAL_CHAR
+    rows16 = _rows(16)
+    text16 = "\n".join("[" + ", ".join(r) + "]" for r in rows16)
+    assert parse_grid_text(text16, N16).failure is GridParseFailure.ILLEGAL_CHAR
+
+
+def _perfect16(seed=4):
+    rng = np.random.default_rng(seed)
+    return "\n".join("".join(rng.choice(["0", "1"], N16)) for _ in range(N16))
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda g: "Bounding box (0-1000 scale): [100, 110, 1000, 1010]\n\n" + g,
+        lambda g: g + "\n\nIn 0-1000 coordinates the box is [100, 110, 1000, 1010].",
+        lambda g: "Legend: 1 = object, 0 = background; 16 x 16 = 256 cells, 100 of them are 1:\n" + g,
+    ],
+    ids=["bbox_line_blank_grid", "grid_blank_bbox_line", "legend_right_above_grid"],
+)
+def test_n4_description_lines_do_not_break_perfect_grid(make):
+    """复核 N4 表里的三种输出：网格本身完美，坐标说明行与图例行不是污染行，都能解析成功。"""
+    g = _perfect16()
+    p = parse_grid_text(make(g), N16)
+    assert p.failure is None
+    assert grid_to_text(p.grid) == g
+
+
+def test_n4_short_dirty_segment_is_not_a_candidate():
+    """只含一两条污染行的段不是候选块：与网格隔空行的一行 "Answer: 0 1 1 0 1 0 1 1" 被忽略。"""
+    g = _perfect16()
+    assert parse_grid_text("Answer: 0 1 1 0 1 0 1 1\n\n" + g, N16).failure is None
+    # 但紧贴网格时归入网格块 → ILLEGAL_CHAR
+    assert parse_grid_text("Answer: 0 1 1 0 1 0 1 1\n" + g, N16).failure is GridParseFailure.ILLEGAL_CHAR
+
+
+def test_n4_short_numeric_line_next_to_grid_is_text():
+    """0/1 数字不足 ⌈N/2⌉ 的短行（如脚注标记 "1."、"(10)"）即使 0/1 占多数也是文本行，不污染紧邻的网格。
+    已知局限：一条被截断、只剩不到 ⌈N/2⌉ 个数字的第 17 行（如 "0000000 <- end"）同样被当作文本，网格照常解析。"""
+    g = _perfect16()
+    for tail in ("1.", "(10)", "0000000 <- end"):
+        p = parse_grid_text(g + "\n" + tail, N16)
+        assert p.failure is None, tail
+        assert grid_to_text(p.grid) == g

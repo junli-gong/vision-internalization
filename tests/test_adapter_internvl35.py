@@ -1065,11 +1065,14 @@ def test_generation_result_fields(adapter, images, thinking):
     assert res.n_visual_tokens == 2 * 256
     assert 1 <= res.n_generated_tokens <= 4 and res.wall_time_s > 0
     assert res.raw_text == adapter.tokenizer.decode(list(res.token_ids), skip_special_tokens=False)
-    if thinking and adapter.token_id(THINK_END) not in res.token_ids:
-        assert res.thinking_unclosed and res.text == ""
-    stop = adapter.token_id(IM_END)
+    assert (res.text, res.raw_text, res.thinking_unclosed) == adapter.split_answer(res.token_ids, enable_thinking=thinking)
+    stop, start, end = adapter.token_id(IM_END), adapter.token_id(THINK_START), adapter.token_id(THINK_END)
     forced = adapter.generate(inp, enable_thinking=thinking, max_new_tokens=3, allowed_token_ids=[stop])
-    assert forced.token_ids == (stop,) and forced.text == "" and forced.thinking_unclosed is thinking
+    assert forced.token_ids == (stop,) and forced.text == "" and forced.thinking_unclosed is False  # 没写思考段
+    opened = adapter.generate(inp, enable_thinking=thinking, max_new_tokens=3, allowed_token_ids=[start])
+    assert opened.token_ids == (start,) * 3 and opened.text == "" and opened.thinking_unclosed is True  # 开了没关
+    closed = adapter.generate(inp, enable_thinking=thinking, max_new_tokens=2, allowed_token_ids=[end])
+    assert closed.token_ids == (end,) * 2 and closed.text == "" and closed.thinking_unclosed is False
 
 
 @pytest.mark.parametrize("thinking", [False, True])
@@ -1113,10 +1116,30 @@ def test_split_answer_r1_format(adapter, components):
     assert text == "C"  # 取最后一个 </think> 之后
     text, raw, unclosed = adapter.split_answer(_enc(tok, "<think>\nstill going"), enable_thinking=True)
     assert (text, unclosed) == ("", True) and raw == "<think>\nstill going"  # max_new_tokens 用完
-    text, raw, unclosed = adapter.split_answer(_enc(tok, "Blue.") + [stop], enable_thinking=True)
-    assert (text, unclosed) == ("", True) and raw == "Blue.<|im_end|>"  # 没写思考段：按 base.py 字面定义记未闭合
-    text, _, unclosed = adapter.split_answer(_enc(tok, "Blue.") + [stop], enable_thinking=False)
-    assert (text, unclosed) == ("Blue.", False)
+    text, raw, unclosed = adapter.split_answer(_enc(tok, "</think>\nBlue."), enable_thinking=True)
+    assert (text, unclosed) == ("Blue.", False)  # 只有 </think>：取它之后
+
+
+def test_split_answer_unclosed_only_when_think_opened(adapter, components):
+    """第 1 轮审查（与 Gemma 同一条规则）：只有写了 <think>、之后没有 </think> 才算未闭合；模型没写思考段就直接作答时
+    取全文，不论 enable_thinking；规则只看输出。"""
+    tok = components[1]
+    stop = adapter.token_id(IM_END)
+    for thinking in (False, True):
+        text, raw, unclosed = adapter.split_answer(_enc(tok, "Blue.") + [stop], enable_thinking=thinking)
+        assert (text, unclosed) == ("Blue.", False) and raw == "Blue.<|im_end|>"  # 没写思考段：取全文
+        text, _, unclosed = adapter.split_answer(_enc(tok, "<think>a</think>\nB<think>c"), enable_thinking=thinking)
+        assert (text, unclosed) == ("", True)  # 最后一个 <think> 在最后一个 </think> 之后：又开了一段没关
+        text, _, unclosed = adapter.split_answer(_enc(tok, "<think>a"), enable_thinking=thinking)
+        assert (text, unclosed) == ("", True)
+        assert adapter.split_answer([], enable_thinking=thinking) == ("", "", False)
+    with pytest.raises(TypeError):
+        adapter.split_answer([stop], enable_thinking=None)
+
+
+def test_split_answer_keeps_special_tokens(adapter, components):
+    tok = components[1]
+    stop = adapter.token_id(IM_END)
     box = "<ref>the cat</ref><box>[[1, 2, 3, 4]]</box>"
     assert adapter.split_answer(_enc(tok, box) + [stop], enable_thinking=False)[0] == box  # 特殊 token 保留
     eot = adapter.token_id(END_OF_TEXT)
@@ -1315,6 +1338,10 @@ def test_smoke_script_tiny_internvl(tmp_path):
     assert checks["4_query_tokens"]["grid2d"]["rejected"] is True
     assert checks["9_multi_tile"]["n_tiles"] == 7 and checks["9_multi_tile"]["grid_hw"] == [112, 16]
     assert all(c["processor_compare"]["ok"] for c in checks["1_build_generate"]["cases"])
+    think = checks["7_thinking"]  # 随机小模型写不写 <think> 取决于权重，这里只核对情形与标记一致
+    assert think["case"] in ("closed", "unclosed", "no_think")
+    assert think["thinking_unclosed"] is (think["case"] == "unclosed")
+    assert (think["text"] == "") if think["case"] == "unclosed" else think["system_turn_in_prompt"]
 
 
 def test_smoke_inputs_are_modelinputs(adapter, images):

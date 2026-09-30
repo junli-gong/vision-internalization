@@ -100,8 +100,14 @@
   1. 在 worktree 里逐文件 `git add`（只加审查过的文件），commit `[dev] NNNN: 摘要`，
      message 里写偏离裁定；
   2. 回到主工作区 `git merge --ff-only <分支>`；main 已前进就 `git merge --no-ff <分支>`。
-     冲突只在非功能性（文档、台账）时自己解，功能代码冲突发回 agent 在它的分支上 rebase；
-  3. 在 main 上再跑一遍测试 → push → `git worktree remove <wt>` → `git branch -d <分支>`；
+     冲突只在非功能性（文档、台账）时自己解。功能代码冲突交回 agent，做法：
+     - 先在它的分支上提交它交付的原样改动；
+     - 再在它的 worktree 里 `git merge --no-commit main`，让冲突出现在那里；
+     - 用 SendMessage 把冲突和要保留的两边意图告诉它，在 worktree 里解完、跑测试，不提交；
+     - 管理员审查后提交这次合并，再把分支合入 main。
+     有好几个分支都要合时，先合小的、改动面窄的，再把最新的 main 一次性合进大分支，免得同一处冲突解两遍；
+  3. 在干净的临时 worktree 里对合入 commit 跑全量测试（主工作区可能有别人的半成品）→ push →
+     `git worktree remove <wt>` → `git branch -d <分支>`；
   4. run 任务书里写的校验 hash 取 main 上合入后的那个 commit。
 
 ### 7.3 服务器与结果监听

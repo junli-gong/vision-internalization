@@ -12,12 +12,7 @@ from typing import Iterable, NamedTuple, Sequence
 import numpy as np
 from scipy import ndimage
 
-from src.constants import (
-    ADE_IGNORE_INDEX,
-    ADE_NUM_CLASSES,
-    ADE_REDUCE_ZERO_LABEL,
-    BOUNDARY_IOU_DILATION_RATIO,
-)
+from src.constants import ADE_IGNORE_INDEX, ADE_NUM_CLASSES, BOUNDARY_IOU_DILATION_RATIO
 from src.grid.codec import as_binary_mask
 
 
@@ -167,11 +162,16 @@ def intersect_and_union(
     label: np.ndarray,
     num_classes: int = ADE_NUM_CLASSES,
     ignore_index: int = ADE_IGNORE_INDEX,
-    reduce_zero: bool = ADE_REDUCE_ZERO_LABEL,
+    *,
+    reduce_zero: bool,
 ) -> tuple[np.ndarray, np.ndarray]:
     """单张图逐类的 (交, 并) 像素数，形状各为 (num_classes,)。
 
-    label 是原始标注；reduce_zero=True 时先做 reduce_zero_label（ADE20K 默认，对齐 mmseg ADE20KDataset）。
+    reduce_zero 是必填的关键字参数，没有默认值（D12，N1）：
+    - reduce_zero=True：label 是原始 ADE20K 标注，这里先做 reduce_zero_label。ADE 调用方传
+      reduce_zero=constants.ADE_REDUCE_ZERO_LABEL（对齐 mmseg ADE20KDataset）。
+    - reduce_zero=False：label 已经是 0..num_classes-1 加忽略值（已 reduce 过的 ADE 标签、二类或其他数据集）。
+    已 reduce 过的标签再传 True 会减两次，完美预测的 mIoU 算成 0，所以不给默认值。
     之后对齐 open-mmlab/mmsegmentation mmseg/evaluation/metrics/iou_metric.py IoUMetric.intersect_and_union：
     去掉 label == ignore_index 的像素；histc 只统计 [0, num_classes-1] 内的值（越界预测不计入任何类）；
     并 = 预测面积 + 标签面积 - 交。

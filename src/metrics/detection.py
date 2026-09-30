@@ -9,6 +9,18 @@
   在 K 次里正反各占一半，消掉了"哪条预测排在列表前面"带来的蒙特卡洛偏向（两条预测时这种偏向可达 0.13）。
 - 有的有分数、有的没有：抛 ValueError，不猜。
 标题数字用 mAP 还是 F1@0.5 待 N9 裁定，两者都给。
+
+使用约定与口径（D12）：
+- 预测列表按规范顺序传入：先按 image_id、同一张图内保持模型的输出顺序（稳定排序），用 canonical_order。
+  antithetic 平局打破的结果依赖列表顺序（蒙特卡洛误差量级，复核实测 sd 约 0.0008）；规范顺序让它只取决于
+  图像编号与模型输出，不取决于调用方怎么拼列表。
+- AP 与 F1 对"幻觉类别"的口径不同（N6）：COCOeval 忽略全集里没有 GT 的类别（包括类别 id 不在 categories
+  里的框），这些框不影响 AP；operating_point 把它们算作 FP，会拉低 P 与 F1。
+- 检测 bootstrap（detection_bootstrap_statistic）的每次重采样默认只做 n_tiebreaks=1 次平局打破（N5），
+  所以它的 estimate 不是标题数字。标题 AP 取 detection_map（K = DETECTION_TIEBREAK_K），CI 取 bootstrap；
+  bootstrap 分布里混进了单次打破平局的噪声，CI 偏宽，方向是保守的。
+- 两个系统比 F1 的配对路径（N8）：operating_point 返回逐图计数 per_image，per_image_counts 取成数组，
+  交给 stats.paired_bootstrap_ci / stats.is_significant，statistic 用 stats.f1_statistic。
 """
 
 from __future__ import annotations
@@ -77,6 +89,11 @@ def _tiebreak_scores(n: int, k: int, seed: int) -> list[np.ndarray]:
     return [(perm + 1) / n for perm in perms]
 
 
+def canonical_order(preds: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """预测的规范顺序：按 image_id 稳定排序，同一张图内保持原来的（模型输出）顺序。"""
+    return sorted(preds, key=lambda p: p["image_id"])
+
+
 def operating_point(gt: dict, preds: Sequence[dict[str, Any]], xywh: list[list[float]], iou_thr: float) -> dict[str, Any]:
     """单一工作点：把全部预测当作"检出"，在 IoU ≥ iou_thr 下数 TP/FP/FN。
 
@@ -84,6 +101,9 @@ def operating_point(gt: dict, preds: Sequence[dict[str, Any]], xywh: list[list[f
     IoU 用 pycocotools mask.iou（与 COCOeval 相同，连续坐标、xywh）。crowd GT 与 COCOeval 一样当作忽略区：
     不计入 GT 数；没匹配上非 crowd GT、但与某个 crowd 区域的 IoU（crowd 口径：交/预测面积）≥ 阈值的预测不算 FP。
     P = TP/(TP+FP)（没有有效预测时为 None），R = TP/n_gt，F1 = 2TP/(2TP+FP+n_gt−TP)。
+    只有一个框同时与两个以上同类 GT 的 IoU ≥ 阈值时，最大匹配才与 COCOeval 的按分数贪心不同，
+    这时给出贪心 TP 的上界（D12(3)(4)）。
+    另返回 per_image：GT 里每张图的 (image_id, tp, fp, n_gt)，按 image_id 排序（没有预测也没有 GT 的图记 0）。
     """
     groups: dict[tuple, dict[str, list]] = {}
     for ann in gt["annotations"]:
@@ -91,9 +111,10 @@ def operating_point(gt: dict, preds: Sequence[dict[str, Any]], xywh: list[list[f
         g["crowd" if ann.get("iscrowd", 0) else "gt"].append(list(map(float, ann["bbox"])))
     for p, b in zip(preds, xywh):
         groups.setdefault((p["image_id"], p["category_id"]), {"gt": [], "crowd": [], "det": []})["det"].append(b)
-    tp = fp = n_gt = 0
-    for g in groups.values():
-        n_gt += len(g["gt"])
+    counts = {img["id"]: [0, 0, 0] for img in gt["images"]}  # image_id -> [tp, fp, n_gt]
+    for (image_id, _), g in groups.items():
+        c = counts[image_id]
+        c[2] += len(g["gt"])
         dets = g["det"]
         if not dets:
             continue
@@ -104,13 +125,17 @@ def operating_point(gt: dict, preds: Sequence[dict[str, Any]], xywh: list[list[f
             rows, cols = linear_sum_assignment(-adj.astype(np.float64))
             hit = adj[rows, cols]
             matched[rows[hit]] = True
-            tp += int(hit.sum())
+            c[0] += int(hit.sum())
         rest = [d for d, m in zip(dets, matched) if not m]
         if rest and g["crowd"]:
             ious_c = np.asarray(mask_utils.iou(rest, g["crowd"], [1] * len(g["crowd"])))
-            fp += int((ious_c.max(axis=1) < iou_thr).sum())
+            c[1] += int((ious_c.max(axis=1) < iou_thr).sum())
         else:
-            fp += len(rest)
+            c[1] += len(rest)
+    per_image = [(image_id, *counts[image_id]) for image_id in sorted(counts)]
+    tp = sum(c[0] for c in counts.values())
+    fp = sum(c[1] for c in counts.values())
+    n_gt = sum(c[2] for c in counts.values())
     n_pred = tp + fp
     return {
         "P50": None if n_pred == 0 else tp / n_pred,
@@ -119,7 +144,17 @@ def operating_point(gt: dict, preds: Sequence[dict[str, Any]], xywh: list[list[f
         "n_tp": tp,
         "n_fp": fp,
         "n_gt": n_gt,
+        "per_image": per_image,
     }
+
+
+def per_image_counts(result: dict[str, Any]) -> tuple[tuple, np.ndarray]:
+    """detection_map / operating_point 结果里的 per_image → (image_id 元组, (n_images, 3) 的 (tp, fp, n_gt) 数组)。
+
+    两个系统配对前先比较 image_id 元组是否相同（同一份 GT 时必然相同）。
+    """
+    rows = result["per_image"]
+    return tuple(r[0] for r in rows), np.array([r[1:] for r in rows], dtype=np.int64).reshape(-1, 3)
 
 
 def detection_map(
@@ -191,9 +226,11 @@ def detection_bootstrap_statistic(
     statistic 收到一组（有放回的）图像下标，把被抽中的图像连同它们的标注与预测重新编号后调用 detection_map，
     返回 key 对应的值（"AP"、"AP50"、"AP75"、"F1_50" 等）；值为 None 时返回 nan（bootstrap_ci 会因此报错）。
     每次重采样都跑 COCOeval，代价高：n_tiebreaks 默认 1（重采样本身已覆盖打破平局的随机性），
-    重采样次数由调用方用 bootstrap_ci 的 n_resamples 控制。
+    重采样次数由调用方用 bootstrap_ci 的 n_resamples 控制。它的 estimate 不是标题数字（见模块说明，N5）。
+    预测的 image_id 必须都在 GT 里，否则与 detection_map 一样抛 ValueError（N3）。
     """
     gt = _prepare_gt(gt_coco)
+    _to_xywh(preds, {img["id"] for img in gt["images"]})
     images = list(gt["images"])
     anns_by_img: dict[Any, list] = {}
     for ann in gt["annotations"]:
