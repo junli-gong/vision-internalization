@@ -164,6 +164,17 @@ def rotation_period(family: str, index: int) -> float:
     return variant(family, index).period_deg
 
 
+def max_equivalent_rotation(period_deg: float) -> int:
+    """按对称性约简后的旋转角上限（整数度）：|θ| 不超过半个周期（最多 180°），任意角度不变（周期 0）时为 0。
+
+    e（绕质心的平面旋转）与 a（出平面三维旋转，周期由 solids.rotation_period_about 给出）共用这条约定：
+    结果与更小的等价旋转相同时，只报告最小的等价角。
+    """
+    if period_deg == 0.0:
+        return 0
+    return int(math.floor(min(180.0, period_deg / 2.0)))
+
+
 # ---------------------------------------------------------------------------
 # 单位多边形
 # ---------------------------------------------------------------------------
@@ -369,6 +380,22 @@ def _split_counts(n: int) -> dict[str, int]:
     return {"train": n - n_val - n_test, "val": n_val, "test": n_test}
 
 
+def assign_splits(ids: list[Identity]) -> dict[Identity, str]:
+    """一个 (族, 变体) 的全部身份 → 划分：按 sha256(IDENTITY_SPLIT_SALT | 身份键) 升序，依次取 train、val、test 的个数。
+
+    2D（本模块）与 3D（solids.py）共用这一条规则。
+    """
+    ordered = sorted(ids, key=lambda i: hashlib.sha256(f"{IDENTITY_SPLIT_SALT}|{identity_key(i)}".encode()).hexdigest())
+    cnt = _split_counts(len(ordered))
+    out: dict[Identity, str] = {}
+    start = 0
+    for split in SPLITS:
+        for i in ordered[start : start + cnt[split]]:
+            out[i] = split
+        start += cnt[split]
+    return out
+
+
 @functools.lru_cache(maxsize=None)
 def identity_split_table(holdout_family: str | None = None) -> dict[Identity, str]:
     """身份 → 划分。规则见模块说明；holdout_family 的全部身份进 test。"""
@@ -381,13 +408,7 @@ def identity_split_table(holdout_family: str | None = None) -> dict[Identity, st
             if f == holdout_family:
                 table.update({i: "test" for i in ids})
                 continue
-            ids.sort(key=lambda i: hashlib.sha256(f"{IDENTITY_SPLIT_SALT}|{identity_key(i)}".encode()).hexdigest())
-            cnt = _split_counts(len(ids))
-            start = 0
-            for split in SPLITS:
-                for i in ids[start : start + cnt[split]]:
-                    table[i] = split
-                start += cnt[split]
+            table.update(assign_splits(ids))
     return table
 
 

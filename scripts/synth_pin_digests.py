@@ -1,17 +1,23 @@
 #!/usr/bin/env python
-"""生成 / 核对 tests/data/synth_digests_v2.json：E5 生成器钉住的样本摘要（DEV-0009，D24）。
+"""生成 / 核对 tests/data/synth_digests_v2.json：E5 生成器钉住的样本摘要（DEV-0009、DEV-0010，D24）。
 
-清单：三个任务 × 三个划分 × 序号 0..INDICES_PER_SPLIT-1，档位按默认轮转（bin = 序号 % 档数）。
-- c（occlusion）、e（imagery）：共 120 个，任何平台上都必须逐位相同。
-- d（physics）：60 个，只在规范平台（src.synth.constants.CANONICAL_PLATFORM，x86_64 Linux）上比对。
+清单：每个任务 × 三个划分 × 序号 0..INDICES_PER_SPLIT-1（每个任务 60 个），档位按默认轮转（bin = 序号 % 档数）。
+- a（rotation3d）、b（viewpoint）、c（occlusion）、e（imagery）：任何平台上都必须逐位相同。
+- d（physics）：只在规范平台（src.synth.constants.CANONICAL_PLATFORM，x86_64 Linux）上比对。
 核对规则与失败时的处理见 tests/test_synth_repro.py 的模块说明。
 
+版本（DEV-0010 起按任务记）：文件顶层的 generator_version = 生成器整体版本（SYNTH_GENERATOR_VERSION），
+每个任务的清单另记 generator_version = 生成这份清单时该任务的版本（TASK_GENERATOR_VERSIONS）。
+代码里某个任务的版本与它清单里的不同，就是改了版本却没有重新钉住：check 报 STALE（计为不同）。
+DEV-0009 格式的文件（清单里没有 generator_version）读入时按顶层版本补上，写回时顶层改成当前的整体版本。
+
 用法（在仓库根目录；服务器用 $PROJ/venv 的 python）：
-  python scripts/synth_pin_digests.py check                  # 逐个比对，打印不同的 case，不改文件；有不同时退出码 1
-  python scripts/synth_pin_digests.py write                  # 重写整个文件（生成器输出变了、版本加一之后，在开发机上）
-  python scripts/synth_pin_digests.py write --only physics   # 只重写 d 的清单（在规范平台上填入 d 的摘要）
+  python scripts/synth_pin_digests.py check                    # 逐个比对，打印不同的 case，不改文件；有不同时退出码 1
+  python scripts/synth_pin_digests.py write --only rotation3d  # 只重写一个任务的清单（该任务版本加一、或新增任务之后）
+  python scripts/synth_pin_digests.py write --only physics     # 在规范平台上填入 d 的摘要
   python scripts/synth_pin_digests.py write --only physics --out experiments/P0/NNNN_x/synth_digests_v2.json
       # 服务器 CC 不改 tests/：以仓库里的文件为底、只换 d 的清单，写到运行目录，由管理员复制回 tests/data/
+  python scripts/synth_pin_digests.py write                    # 重写整个文件。非规范平台上，已是 canonical 且任务版本没变的 d 清单原样保留
 
 写 d 的清单时记下平台与 pymunk 版本：在规范平台上写，状态为 canonical；在其他平台上写，状态为 pending_canonical（待服务器填入）。
 """
@@ -30,12 +36,22 @@ sys.path.insert(0, str(REPO))
 import numpy as np  # noqa: E402
 
 from src.synth import generate  # noqa: E402
-from src.synth.constants import CANONICAL_PLATFORM, SPLITS, SYNTH_GENERATOR_VERSION, TASKS  # noqa: E402
+from src.synth.constants import (  # noqa: E402
+    ANY_PLATFORM_TASKS,
+    CANONICAL_PLATFORM,
+    CANONICAL_PLATFORM_TASKS,
+    SPLITS,
+    SYNTH_GENERATOR_VERSION,
+    TASK_GENERATOR_VERSIONS,
+    TASKS,
+)
 
 DIGEST_FILE = REPO / "tests" / "data" / "synth_digests_v2.json"
 INDICES_PER_SPLIT = 20  # 任务书 DEV-0009 §5：每个划分 20 个序号
-ANY_PLATFORM_TASKS = ("occlusion", "imagery")
-PHYSICS = "physics"
+ABOUT = (
+    "E5 生成器钉住的样本摘要（DEV-0009、DEV-0010，D24）。由 scripts/synth_pin_digests.py 生成；核对规则见 tests/test_synth_repro.py。"
+    "顶层 generator_version 是生成器整体版本，各任务的 generator_version 是生成该清单时该任务的版本。"
+)
 
 
 def case_keys() -> list[str]:
@@ -56,7 +72,7 @@ def on_canonical_platform() -> bool:
 
 def platform_info(task: str) -> dict:
     info = {"machine": platform.machine(), "system": platform.system(), "python": platform.python_version(), "numpy": np.__version__}
-    if task == PHYSICS:
+    if task in CANONICAL_PLATFORM_TASKS:
         import pymunk
 
         # Chipmunk 调用系统 libm（cos/sin 等），libc 版本也是"规范平台"的一部分
@@ -65,8 +81,8 @@ def platform_info(task: str) -> dict:
 
 
 def task_block(task: str) -> dict:
-    block = {"generated_on": platform_info(task), "digests": digests_for(task, case_keys())}
-    if task == PHYSICS:
+    block = {"generator_version": TASK_GENERATOR_VERSIONS[task], "generated_on": platform_info(task), "digests": digests_for(task, case_keys())}
+    if task in CANONICAL_PLATFORM_TASKS:
         canonical = on_canonical_platform()
         block.update(
             {
@@ -77,7 +93,7 @@ def task_block(task: str) -> dict:
                     "规范平台上生成的摘要。"
                     if canonical
                     else "待服务器填入：当前是非规范平台（见 generated_on）上的值，只作占位。在服务器上运行 "
-                    "`python scripts/synth_pin_digests.py write --only physics` 替换（D24）。"
+                    f"`python scripts/synth_pin_digests.py write --only {task}` 替换（D24）。"
                 ),
             }
         )
@@ -86,28 +102,60 @@ def task_block(task: str) -> dict:
     return block
 
 
+def migrate(data: dict) -> dict:
+    """DEV-0009 格式 → 按任务记版本：清单里没有 generator_version 的，按文件顶层版本补上（放在最前面）。摘要不动。"""
+    top = int(data["generator_version"])
+    tasks = {}
+    for task, block in data["tasks"].items():
+        if "generator_version" not in block:
+            block = {"generator_version": top, **block}
+        tasks[task] = block
+    data["tasks"] = tasks
+    return data
+
+
 def load() -> dict:
-    return json.loads(DIGEST_FILE.read_text(encoding="utf-8"))
+    return migrate(json.loads(DIGEST_FILE.read_text(encoding="utf-8")))
 
 
 def save(data: dict, out: Path) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(data, indent=1, ensure_ascii=False, sort_keys=False) + "\n", encoding="utf-8")
+    body = {"generator_version": SYNTH_GENERATOR_VERSION, "about": ABOUT, "indices_per_split": INDICES_PER_SPLIT, "tasks": data["tasks"]}
+    out.write_text(json.dumps(body, indent=1, ensure_ascii=False, sort_keys=False) + "\n", encoding="utf-8")
+
+
+def stale_tasks(data: dict) -> list[str]:
+    """清单的版本与代码里该任务的版本不同的任务。"""
+    return [t for t, b in data["tasks"].items() if t in TASK_GENERATOR_VERSIONS and b["generator_version"] != TASK_GENERATOR_VERSIONS[t]]
 
 
 def cmd_write(only: str | None, out: Path) -> None:
     if only is None:
-        data = {
-            "generator_version": SYNTH_GENERATOR_VERSION,
-            "about": "E5 生成器钉住的样本摘要（DEV-0009，D24）。由 scripts/synth_pin_digests.py 生成；核对规则见 tests/test_synth_repro.py。",
-            "indices_per_split": INDICES_PER_SPLIT,
-            "tasks": {task: task_block(task) for task in TASKS},
-        }
+        old = load() if DIGEST_FILE.exists() else {"tasks": {}}
+        tasks = {}
+        for task in TASKS:
+            prev = old["tasks"].get(task)
+            keep = (
+                task in CANONICAL_PLATFORM_TASKS
+                and not on_canonical_platform()
+                and prev is not None
+                and prev.get("status") == "canonical"
+                and prev["generator_version"] == TASK_GENERATOR_VERSIONS[task]
+            )
+            if keep:
+                print(f"{task}: 保留规范平台上的清单（任务版本 {prev['generator_version']} 没变，本机不是规范平台）")
+                tasks[task] = prev
+            else:
+                tasks[task] = task_block(task)
+        data = {"tasks": tasks}
     else:
         data = load()
-        if data["generator_version"] != SYNTH_GENERATOR_VERSION:
-            raise SystemExit(f"文件是生成器版本 {data['generator_version']}，代码是 {SYNTH_GENERATOR_VERSION}：先在开发机上重写整个文件")
-        data["tasks"][only] = task_block(only)
+        others = [t for t in stale_tasks(data) if t != only]
+        if others:
+            raise SystemExit(f"这些任务的清单版本与代码不同：{others}。先分别用 --only 重写它们（或不带 --only 重写整个文件）")
+        tasks = dict(data["tasks"])
+        tasks[only] = task_block(only)
+        data["tasks"] = {t: tasks[t] for t in TASKS if t in tasks}
     save(data, out)
     print(f"wrote {out}", {t: len(b["digests"]) for t, b in data["tasks"].items()})
 
@@ -115,15 +163,25 @@ def cmd_write(only: str | None, out: Path) -> None:
 def cmd_check() -> int:
     data = load()
     bad_total = 0
-    print(f"platform {platform.machine()} {platform.system()}; canonical: {on_canonical_platform()}; "
-          f"file version {data['generator_version']}, code version {SYNTH_GENERATOR_VERSION}")
+    print(f"platform {platform.machine()} {platform.system()}; canonical: {on_canonical_platform()}; code version {SYNTH_GENERATOR_VERSION}")
+    missing = [t for t in TASKS if t not in data["tasks"]]
+    for t in missing:
+        print(f"{t}: MISSING（文件里没有这个任务的清单）")
+        bad_total += 1
     for task, block in data["tasks"].items():
+        applies = task in ANY_PLATFORM_TASKS or on_canonical_platform()
+        want_v = TASK_GENERATOR_VERSIONS.get(task)
+        if block["generator_version"] != want_v:
+            print(f"{task}: STALE 清单版本 {block['generator_version']}，代码版本 {want_v}：重新钉住（见 tests/test_synth_repro.py）")
+            bad_total += 1 if applies else 0
+            continue
         got = digests_for(task, block["digests"])
         bad = [k for k in block["digests"] if got[k] != block["digests"][k]]
-        applies = task in ANY_PLATFORM_TASKS or on_canonical_platform()
         status = block.get("status", "")
-        print(f"{task}: {len(block['digests']) - len(bad)}/{len(block['digests'])} equal {status}"
-              + ("" if applies else "（非规范平台，不计）"))
+        print(
+            f"{task}: {len(block['digests']) - len(bad)}/{len(block['digests'])} equal (task version {want_v}) {status}"
+            + ("" if applies else "（非规范平台，不计）")
+        )
         for k in bad:
             print(f"  DIFF {task}/{k} file={block['digests'][k]} here={got[k]}")
         if applies:

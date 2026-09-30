@@ -1,27 +1,31 @@
-"""可复现：样本 = 纯函数(任务, 划分, 序号, 生成器版本)，以及跨机器逐位复现的核对（D24，生成器版本 2）。
+"""可复现：样本 = 纯函数(任务, 划分, 序号, 该任务的生成器版本)，以及跨机器逐位复现的核对（D24；DEV-0010 起版本按任务记）。
 
 同机
 - 同一输入两次生成逐字节相同；不同序号不同；与全局随机状态、字符串哈希随机化无关（子进程换 PYTHONHASHSEED）。
+  五个任务（a、b、c、d、e）都跑。
 - d 的 60 个钉住 case 在本进程与一个新进程里各生成一次，逐个相同（任何平台都跑，包括开发机）。
-- 把 math / numpy 的三角函数、np.mean、pycocotools 换成抛异常的桩，再生成样本：摘要不变，
-  证明这些随平台变化的实现不在数据路径上（开发机上唯一能做的跨平台检查，见 lessons "跨机器差异"）。
+- 把 math / numpy 的三角函数与其他超越函数、np.mean、np.linalg / np.dot / np.matmul / np.einsum、pycocotools
+  换成抛异常的桩，再生成样本：摘要不变，证明这些随平台变化的实现不在数据路径上（开发机上唯一能做的跨平台检查，
+  见 lessons "跨机器差异"）。
 
 钉住的摘要：tests/data/synth_digests_v2.json（由 scripts/synth_pin_digests.py 生成），
-三个任务 × 三个划分 × 序号 0–19，档位按默认轮转。
-- c（occlusion）、e（imagery），共 120 个：在任何平台上都必须逐位相同。
+每个任务 × 三个划分 × 序号 0–19（每个任务 60 个），档位按默认轮转。文件顶层记生成器整体版本，
+每个任务的清单另记生成它时该任务的版本（TASK_GENERATOR_VERSIONS）。
+- a（rotation3d）、b（viewpoint）、c（occlusion）、e（imagery），共 240 个：在任何平台上都必须逐位相同。
 - d（physics），60 个：只在规范平台（src.synth.constants.CANONICAL_PLATFORM = x86_64 Linux）上比对，
   其他平台跳过（D24：Chipmunk 的浮点行为随平台不同，d 的数据只在规范平台上生成）。
   文件里 d 的 status 为 pending_canonical 时，清单是开发机的占位值：规范平台上不同记为 xfail，
   由管理员在下一个 RUN 之后用服务器上的值替换（常量级修改）；status 为 canonical 以后，不同即失败。
 
 失败时的处理
-- c、e 在开发机上不同：生成器的输出变了。确认改动是有意的，就把 SYNTH_GENERATOR_VERSION 加一，
-  再运行 `python scripts/synth_pin_digests.py write` 重写整个文件（d 的状态随之回到 pending_canonical，等服务器重新填入）。
-- c、e 只在别的平台上不同（开发机上相同）：跨平台不能逐位复现，是缺陷。不要改摘要，上报管理员；
+- a、b、c、e 在开发机上不同：该任务的生成器输出变了。确认改动是有意的，就把 TASK_GENERATOR_VERSIONS 里该任务的版本加一
+  （SYNTH_GENERATOR_VERSION 随之取最大值），再运行 `python scripts/synth_pin_digests.py write --only <任务>` 只重写它的清单。
+  改的是 d：同样只重写 d，状态回到 pending_canonical，等服务器重新填入。
+- a、b、c、e 只在别的平台上不同（开发机上相同）：跨平台不能逐位复现，是缺陷。不要改摘要，上报管理员；
   用 `python scripts/synth_pin_digests.py check` 列出不同的 case。
 - d 在规范平台上不同（status 为 canonical）：先看 generated_on 里的 pymunk 版本与本机是否相同。
   版本不同，是依赖变了；版本相同，是生成器的输出变了。两种都上报管理员，不要自行改摘要。
-- 生成器版本与文件里的 generator_version 不同：改了版本号却没有重新钉住，按第一条处理。
+- 某个任务的版本与它清单里的 generator_version 不同：改了版本号却没有重新钉住，按第一条处理。
 """
 
 import json
@@ -39,13 +43,21 @@ import pytest
 from src.synth import generate
 from src.synth import dmath
 from src.synth import shapes as S
-from src.synth.constants import CANONICAL_PLATFORM, SPLITS, SYNTH_GENERATOR_VERSION, TASKS
+from src.synth import solids as SO
+from src.synth.constants import (
+    ANY_PLATFORM_TASKS,
+    CANONICAL_PLATFORM,
+    CANONICAL_PLATFORM_TASKS,
+    SPLITS,
+    SYNTH_GENERATOR_VERSION,
+    TASK_GENERATOR_VERSIONS,
+    TASKS,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 DIGEST_FILE = REPO / "tests" / "data" / "synth_digests_v2.json"
 PINNED = json.loads(DIGEST_FILE.read_text(encoding="utf-8"))
 INDICES_PER_SPLIT = 20  # 任务书 DEV-0009 §5
-ANY_PLATFORM_TASKS = ("occlusion", "imagery")
 
 
 def _cases(task: str) -> list[tuple[str, str, int]]:
@@ -75,7 +87,7 @@ SMALL = [(t, s, i) for t in TASKS for s in SPLITS for i in range(3)]
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("task", ["occlusion", "physics", "imagery"])
+@pytest.mark.parametrize("task", TASKS)
 def test_same_input_gives_identical_bytes(task):
     for split, index in (("train", 5), ("val", 6), ("test", 7)):
         a, b = generate(task, split, index), generate(task, split, index)
@@ -85,9 +97,10 @@ def test_same_input_gives_identical_bytes(task):
         assert a.object_masks.tobytes() == b.object_masks.tobytes()
         if a.image is not None:
             assert a.image.tobytes() == b.image.tobytes()
+        assert sorted(a.extras) == sorted(b.extras) and all(a.extras[k].tobytes() == b.extras[k].tobytes() for k in a.extras)
 
 
-@pytest.mark.parametrize("task", ["occlusion", "physics", "imagery"])
+@pytest.mark.parametrize("task", TASKS)
 def test_different_index_gives_different_sample(task):
     digests = {generate(task, "train", i).digest() for i in range(8)}
     assert len(digests) == 8
@@ -125,9 +138,10 @@ def test_physics_same_machine_determinism():
 
 
 def test_generation_does_not_touch_platform_dependent_math(monkeypatch):
-    """把随平台变化的实现换成抛异常的桩，清空缓存后重新生成：c、e 的摘要仍等于钉住值，d 的摘要不变。
+    """把随平台变化的实现换成抛异常的桩，清空缓存后重新生成：a、b、c、e 的摘要仍等于钉住值，d 的摘要不变。
 
-    桩：math 与 numpy 的三角函数、np.mean / np.average、pycocotools（src.executors.raster 的多边形光栅化也走它）。
+    桩：math 与 numpy 的三角函数和其他超越函数、np.mean / np.average、np.linalg 与 np.dot / np.matmul / np.einsum 等
+    （BLAS 的求和顺序与 FMA 随平台不同）、pycocotools（src.executors.raster 的多边形光栅化也走它）。
     """
     cases_ce = [c for c in SMALL if c[0] in ANY_PLATFORM_TASKS]
     cases_d = [c for c in SMALL if c[0] == "physics"]
@@ -139,10 +153,13 @@ def test_generation_does_not_touch_platform_dependent_math(monkeypatch):
 
         return f
 
-    for name in ("sin", "cos", "tan", "asin", "acos", "atan", "atan2", "hypot"):
+    for name in ("sin", "cos", "tan", "asin", "acos", "atan", "atan2", "hypot", "exp", "log", "log2", "log10", "pow"):
         monkeypatch.setattr(math, name, poison(f"math.{name}"))
-    for name in ("sin", "cos", "tan", "arcsin", "arccos", "arctan", "arctan2", "hypot", "mean", "average"):
+    for name in ("sin", "cos", "tan", "arcsin", "arccos", "arctan", "arctan2", "hypot", "exp", "log", "log2", "log10", "mean", "average",
+                 "dot", "matmul", "einsum", "inner", "tensordot", "vdot", "cross"):  # fmt: skip
         monkeypatch.setattr(np, name, poison(f"numpy.{name}"))
+    for name in ("inv", "solve", "eig", "eigh", "svd", "norm", "det", "cholesky", "lstsq", "pinv", "qr"):
+        monkeypatch.setattr(np.linalg, name, poison(f"numpy.linalg.{name}"))
     from pycocotools import mask as mask_utils
 
     import src.executors.raster as exec_raster
@@ -150,14 +167,15 @@ def test_generation_does_not_touch_platform_dependent_math(monkeypatch):
     for name in ("frPyObjects", "merge", "decode", "encode"):
         monkeypatch.setattr(mask_utils, name, poison(f"pycocotools.mask.{name}"))
     monkeypatch.setattr(exec_raster, "polygons_to_mask", poison("src.executors.raster.polygons_to_mask"))
-    dmath._rot_cs_cached.cache_clear()  # 缓存里的值要在桩下重新算一遍
-    S._unit_polygon_cached.cache_clear()
+    caches = (dmath._rot_cs_cached, S._unit_polygon_cached, SO._unit_mesh_cached, SO.discrete_symmetry_axes)
+    for c in caches:  # 缓存里的值要在桩下重新算一遍
+        c.cache_clear()
     try:
         got_ce = {(t, s, i): generate(t, s, i).digest() for t, s, i in cases_ce}
         got_d = [generate(t, s, i).digest() for t, s, i in cases_d]
     finally:
-        dmath._rot_cs_cached.cache_clear()
-        S._unit_polygon_cached.cache_clear()
+        for c in caches:
+            c.cache_clear()
     for t, s, i in cases_ce:
         assert got_ce[(t, s, i)] == PINNED["tasks"][t]["digests"][f"{s}/{i}"], (t, s, i)
     assert got_d == want_d
@@ -169,13 +187,15 @@ def test_generation_does_not_touch_platform_dependent_math(monkeypatch):
 
 
 def test_digest_file_matches_generator_version_and_coverage():
-    assert PINNED["generator_version"] == SYNTH_GENERATOR_VERSION, "改了生成器版本却没有重新钉住：见模块说明"
+    assert PINNED["generator_version"] == SYNTH_GENERATOR_VERSION == max(TASK_GENERATOR_VERSIONS.values())
     keys = [f"{s}/{i}" for s in SPLITS for i in range(INDICES_PER_SPLIT)]
-    assert set(PINNED["tasks"]) == set(TASKS)
+    assert list(PINNED["tasks"]) == list(TASKS)
     for task in TASKS:
         block = PINNED["tasks"][task]
+        assert block["generator_version"] == TASK_GENERATOR_VERSIONS[task], f"{task}：改了该任务的版本却没有重新钉住，见模块说明"
         assert list(block["digests"]) == keys, task
         assert block["compare_on"] == ("any_platform" if task in ANY_PLATFORM_TASKS else "canonical_platform")
+    assert set(ANY_PLATFORM_TASKS) | set(CANONICAL_PLATFORM_TASKS) == set(TASKS)
     d = PINNED["tasks"]["physics"]
     assert d["status"] in ("canonical", "pending_canonical")
     assert (d["canonical_platform"]["machine"], d["canonical_platform"]["system"]) == CANONICAL_PLATFORM

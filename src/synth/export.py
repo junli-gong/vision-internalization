@@ -2,7 +2,8 @@
 
 每个样本的文件名主干 stem = "{task}_{split}_{index:09d}"：
 - {stem}.png：图像（e 没有图像，不写）；
-- {stem}.npz：target_mask、target_grid、object_masks、baseline_<名>_mask、baseline_<名>_grid（压缩）；
+- {stem}.npz：target_mask、target_grid、object_masks、baseline_<名>_mask、baseline_<名>_grid，
+  以及 extras 的 extra_<名>（a、b 的深度图、ID 图等；c、d、e 没有），压缩；
 - manifest.jsonl：每个样本一行，{"stem", "task", "split", "index", "instruction", "image", "arrays", "digest", "meta"}。
 PNG 的字节依赖 zlib 版本，逐字节复现以解码后的数组（与 Sample.digest）为准。
 """
@@ -28,6 +29,8 @@ def sample_arrays(s: Sample) -> dict[str, np.ndarray]:
     for name, p in sorted(s.baselines.items()):
         arrays[f"baseline_{name}_mask"] = p.mask
         arrays[f"baseline_{name}_grid"] = p.grid
+    for name, a in sorted(s.extras.items()):
+        arrays[f"extra_{name}"] = a
     return arrays
 
 

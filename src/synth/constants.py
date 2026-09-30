@@ -4,10 +4,12 @@
 src/grid/codec.py，这里不重述。多边形光栅化是例外：E5 合成数据用 src/synth/raster.py 的精确整数规则（DEV-0009、D24），
 不走 src/executors/raster.py 的 pycocotools（后者仍用于对齐 COCO/RefCOCO 真值）。
 
-本文件的数值都是 DEV-0007 的暂定默认值（DEV-0009 只加了确定性相关的几项），最终以 E5 预注册为准，由项目负责人确认。
-改动任何一个会改变生成结果的数值，都必须同时把 SYNTH_GENERATOR_VERSION 加一，并重新钉住
-tests/data/synth_digests_v2.json 里的样本摘要（样本 = 纯函数(任务, 划分, 序号, 生成器版本)；
-核对规则见 tests/test_synth_repro.py，重新生成用 scripts/synth_pin_digests.py）。
+本文件的数值都是 DEV-0007 的暂定默认值（DEV-0009 只加了确定性相关的几项，DEV-0010 加了 3D 的 a、b），
+最终以 E5 预注册为准，由项目负责人确认。
+改动任何一个会改变生成结果的数值，都必须同时把受影响任务的 TASK_GENERATOR_VERSIONS 加一（SYNTH_GENERATOR_VERSION
+随之更新为各任务版本的最大值），并重新钉住 tests/data/synth_digests_v2.json 里该任务的样本摘要
+（样本 = 纯函数(任务, 划分, 序号, 该任务的生成器版本)；核对规则见 tests/test_synth_repro.py，
+重新生成用 scripts/synth_pin_digests.py）。
 """
 
 from __future__ import annotations
@@ -16,18 +18,25 @@ from __future__ import annotations
 # 版本与种子
 # ---------------------------------------------------------------------------
 
-# 生成器版本：进入每个样本的种子，也写进样本元数据。
-# 1：DEV-0007（作废，没有产出过数据，D24）；2：DEV-0009，跨机器逐位复现的修复。
-SYNTH_GENERATOR_VERSION = 2
+# 生成器版本（DEV-0010 起按任务记）。
+# - TASK_GENERATOR_VERSIONS[任务]：进入该任务每个样本的种子，也写进样本元数据（meta["generator_version"]）。
+# - SYNTH_GENERATOR_VERSION：生成器整体的版本 = 各任务版本的最大值（tests/data/synth_digests_v2.json 顶层记它）。
+# 历史：1 = DEV-0007（作废，没有产出过数据，D24）；2 = DEV-0009，跨机器逐位复现的修复；
+# 3 = DEV-0010，新增 a、b（3D）。c、d、e 的输出在版本 3 里没有变，仍记 2：版本号进种子，整体加一会改变它们已钉住的
+# 180 个摘要，所以改为按任务记版本（任务书 DEV-0010 的后备方案）。
+TASK_GENERATOR_VERSIONS = {"occlusion": 2, "physics": 2, "imagery": 2, "rotation3d": 3, "viewpoint": 3}
+SYNTH_GENERATOR_VERSION = 3
+if SYNTH_GENERATOR_VERSION != max(TASK_GENERATOR_VERSIONS.values()):  # pragma: no cover - 常量写错
+    raise ImportError("SYNTH_GENERATOR_VERSION 必须等于各任务版本的最大值")
 
 # 种子树的根，固定不变；与版本一起进入 numpy.random.SeedSequence 的 entropy。
 SYNTH_SEED_ROOT = 20260930
 
-# 任务名。字母与简报 §7.4 表格一致；a（出平面旋转）、b（视角变化）留给第二部分（3D）。
-TASKS = ("occlusion", "physics", "imagery")
-TASK_ALIASES = {"c": "occlusion", "d": "physics", "e": "imagery"}
-# 任务 → 固定整数，进入种子。不用 hash()（字符串哈希每个进程随机化）。1、2 留给 a、b。
-TASK_CODES = {"occlusion": 3, "physics": 4, "imagery": 5}
+# 任务名。字母与简报 §7.4 表格一致：a 出平面三维旋转、b 视角变化（第二部分，3D）、c 遮挡补全、d 短时物理、e 文本到意象。
+TASKS = ("occlusion", "physics", "imagery", "rotation3d", "viewpoint")
+TASK_ALIASES = {"a": "rotation3d", "b": "viewpoint", "c": "occlusion", "d": "physics", "e": "imagery"}
+# 任务 → 固定整数，进入种子。不用 hash()（字符串哈希每个进程随机化）。
+TASK_CODES = {"rotation3d": 1, "viewpoint": 2, "occlusion": 3, "physics": 4, "imagery": 5}
 
 SPLITS = ("train", "val", "test")
 SPLIT_CODES = {"train": 0, "val": 1, "test": 2}
@@ -39,8 +48,10 @@ SCENE_SEED_STRIDE = 1 << 48
 MAX_ATTEMPTS = 400
 
 # d（短时物理）的规范平台（D24）：(platform.machine(), platform.system())。d 的数据只在这里生成，
-# 钉住的 d 摘要也只在这里比对。c、e 在任何平台上都必须逐位相同。
+# 钉住的 d 摘要也只在这里比对。其余任务（a、b、c、e）在任何平台上都必须逐位相同。
 CANONICAL_PLATFORM = ("x86_64", "Linux")
+CANONICAL_PLATFORM_TASKS = ("physics",)
+ANY_PLATFORM_TASKS = tuple(t for t in TASKS if t not in CANONICAL_PLATFORM_TASKS)
 
 # ---------------------------------------------------------------------------
 # 物体身份与划分
@@ -187,3 +198,91 @@ IMAGERY_SCALE_RANGE = (0.5, 2.0)
 IMAGERY_TRANSFORMS = ("translate", "rotate", "scale", "rotate_translate", "scale_translate", "scale_rotate_translate")
 IMAGERY_BIN_MARGIN = 0.002
 IMAGERY_BISECTION_STEPS = 30
+
+# ===========================================================================
+# 第二部分（DEV-0010）：3D 实体、相机与渲染；a 出平面三维旋转、b 视角变化
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 3D 实体（程序化低面数网格，solids.py 详述）
+# ---------------------------------------------------------------------------
+
+SOLID_FAMILIES = ("box", "sphere", "cylinder", "cone", "torus", "prism", "l_prism")
+BOX_DIMS = ((1.0, 1.0, 1.0), (1.0, 0.5, 0.75), (0.6, 1.5, 0.6), (1.6, 0.6, 0.8))  # (x 宽, y 高, z 深)；(1,1,1) 即立方体
+SPHERE_SUBDIVISIONS = 2  # 二十面体细分次数：320 个三角面
+SPHERE_Y_RATIOS = (1.0, 0.6, 1.5)  # y 方向缩放：1.0 = 球，其余为旋转椭球
+CYLINDER_HEIGHT_RATIOS = (0.5, 1.0, 2.0)  # 高 / 底面直径
+CONE_HEIGHT_RATIOS = (0.75, 1.5)  # 高 / 底面直径
+TORUS_TUBE_RATIOS = (0.25, 0.45)  # 管半径 / 中心圆半径
+PRISM_VARIANTS = ((3, 0.6), (3, 1.6), (6, 0.6), (6, 1.6))  # (底面边数, 高 / 底面外接圆直径)
+# 拉伸的 L 形：侧面是高 1、宽 L_PRISM_WIDTH 的 L（竖臂在左、横臂在下；两臂不等长，没有旋转对称），
+# 变体 = (臂宽, 厚度)，都相对高
+L_PRISM_WIDTH = 0.75
+L_PRISM_VARIANTS = ((0.30, 0.30), (0.30, 0.60), (0.45, 0.30), (0.45, 0.60))
+ROUND_SEGMENTS = 16  # 圆柱、圆锥、圆环的周向段数
+TORUS_TUBE_SEGMENTS = 8  # 圆环管截面的段数
+# 摆放姿态（局部坐标到世界坐标先做的旋转）：直立；绕 z 轴转 90°；绕 x 轴转 90°。三者分别让局部 y、x、z 方向朝上
+SOLID_REST_POSES = ("upright", "side_z", "side_x")
+# 实体的外观 = COLORS 里的 10 种纯色（shapes.APPEARANCES 的前 10 个，即图案 solid），平面着色
+
+# ---------------------------------------------------------------------------
+# 相机与渲染（render3d.py 详述）
+# ---------------------------------------------------------------------------
+
+# 针孔相机，固定内参：焦距 f = CAMERA_FOCAL_FRAC × min(H, W) 像素，主点在画布中心 (W/2, H/2)，无畸变。
+# min(H, W) = 512 时 f = 512，短边方向的视场角约 53°。
+CAMERA_FOCAL_FRAC = 1.0
+# 量化步长（都是 2 的负整数次幂）
+SCENE_QUANTUM_M = 2.0**-10  # 场景规格里的位置、距离、尺寸（米）
+VERTEX_QUANTUM_M = 2.0**-20  # 相机坐标系里的顶点坐标（米）
+DEPTH_QUANTUM_M = 2.0**-12  # 深度图与深度网格（米）；10 m 以内的深度都是 < 2^16 的整数单位
+NORMAL_QUANTUM = 2.0**-16  # 面法向与光照方向的分量
+# 平行光：相机坐标系（x 右、y 下、z 前）里指向光源的方向（左上方、相机这一侧），归一化后量化到 NORMAL_QUANTUM
+LIGHT_DIR_CAM = (-1.0, -2.0, -1.5)
+# Lambert 平面着色：亮度 = (SHADE_AMBIENT_256 + SHADE_DIFFUSE_256 · max(0, n·l)) / 256，颜色 = 底色 × 亮度（整数运算）
+SHADE_AMBIENT_256 = 96
+SHADE_DIFFUSE_256 = 160
+# 物体 ID 图（uint8）：0 = 没有表面，k + 1 = 第 k 个物体（obj_id = k），FLOOR_ID = b 的地板
+FLOOR_ID = 255
+
+# ---------------------------------------------------------------------------
+# a 出平面三维旋转（rotation3d.py 详述）
+# ---------------------------------------------------------------------------
+
+# 难度 = 报告的旋转角 |θ|（整数度，按对称性约简后的最小等价角）。前三档 [lo, hi)，最后一档 [90, 180] 两端都含。
+ROT3D_BINS = ((15, 30), (30, 60), (60, 90), (90, 180))
+# 旋转轴只取相机坐标系的水平轴（x）或竖直轴（y），过物体中心；物体中心在光轴上，所以轴与视线严格垂直（夹角 90°）
+ROT3D_AXES = ("horizontal", "vertical")
+ROT3D_RADIUS_M = (0.40, 0.65)  # 实体外接半径（中心到最远顶点）
+ROT3D_DISTANCE_M = (1.8, 2.8)  # 相机到物体中心
+ROT3D_ELEVATION_DEG = (15, 45)  # 相机俯角（整数度，闭区间）；物体中心在世界原点，相机方位角恒为 0，物体偏航角均匀
+# 真值拟合的二维仿射上界（warp2d.moment_matched_affine）：A = Σ_gt^{1/2} Q Σ^{-1/2}，正交因子 Q 在 O(2) 上搜索：
+# 转角每 AFFINE_SEARCH_COARSE_DEG 度一个（两种镜像），按每隔 AFFINE_SEARCH_STRIDE 像素抽样的 IoU 粗选，
+# 在最好的 AFFINE_SEARCH_TOP 个附近按 1° 细化（隔 2 像素抽样），最后按全分辨率 IoU 取最好的。
+AFFINE_SEARCH_COARSE_DEG = 10
+AFFINE_SEARCH_STRIDE = 4
+AFFINE_SEARCH_TOP = 3
+
+# ---------------------------------------------------------------------------
+# b 视角变化（viewpoint.py 详述）
+# ---------------------------------------------------------------------------
+
+# 相机移动：绕地板中心水平环绕（orbit），或不转向地平移：向右/左（相机的水平轴）、向上/下（竖直）、
+# 向前/后（沿视线）。每个样本先以 VIEW_ORBIT_PROB 的概率选环绕，否则在 6 种平移里均匀选。
+VIEW_MOVES = ("orbit", "right", "left", "up", "down", "forward", "backward")
+VIEW_ORBIT_PROB = 0.5
+# 难度档：第 k 档 = 环绕角的第 k 档或平移量的第 k 档（看移动类型）。前三档 [lo, hi)，最后一档两端都含。
+VIEW_ORBIT_BINS = ((10, 20), (20, 40), (40, 80), (80, 180))  # 整数度
+VIEW_SHIFT_BINS_CM = ((10, 20), (20, 40), (40, 80), (80, 120))  # 整数厘米
+VIEW_NUM_OBJECTS = (3, 4)  # 闭区间
+VIEW_RADIUS_M = (0.30, 0.50)  # 实体外接半径
+VIEW_PLACE_RADIUS_M = 1.1  # 物体中心离地板中心的最大水平距离
+VIEW_MIN_GAP_M = 0.05  # 物体水平外接圆之间的最小间隙（外接圆不相交，所以物体互不穿插）
+VIEW_FLOOR_RADIUS_M = 1.7  # 圆形地板：世界原点为中心、y = 0，折线化为 VIEW_FLOOR_SEGMENTS 边形
+VIEW_FLOOR_SEGMENTS = 64
+VIEW_FLOOR_COLOR = (190, 184, 172)
+VIEW_DISTANCE_M = (4.0, 5.0)  # 相机到地板中心（相机看向地板中心）
+VIEW_ELEVATION_DEG = (20, 40)  # 相机俯角（整数度，闭区间）
+VIEW_MIN_CAMERA_HEIGHT_M = 0.3  # 两个视角里相机都至少这么高
+VIEW_MIN_VISIBLE_FRAC = 0.5  # 被点名的物体在两个视角里：可见像素 / 自身完整轮廓的像素 的下限
+VIEW_MIN_VISIBLE_PX = 64  # 以及可见像素数的下限
