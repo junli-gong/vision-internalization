@@ -77,13 +77,48 @@ def test_tiny_acceptance_all_tasks_cpu_agreement_is_total(tmp_path):
         tmp_path)
     base = out / "qwen3.5-0.8b" / "acceptance"
     doc = json.loads((base / "acceptance.json").read_text())
-    assert doc["all_pass"] and len(doc["tasks"]) == 9
+    assert doc["all_pass"] and len(doc["tasks"]) == 9 and doc["agreement"] == "bitwise"  # 默认口径（D32）
     for r in doc["tasks"]:
         assert r["answer_agreement"] == 1.0 and r["raw_text_equal_rate"] == 1.0, r["task"]
         assert r["diff"] in (0.0, None)
+        for m in ("bitwise", "iou90"):
+            assert r["agreement_by_mode"][m]["rate"] == 1.0 and r["agreement_by_mode"][m]["pass"], (r["task"], m)
+        oc = r["agreement_by_mode"]["outcome"]
+        assert (oc["rate"], oc["pass"]) == ((None, None) if r["task"] == "ovd" else (1.0, True)), r["task"]
+    assert {m: v["all_pass"] for m, v in doc["all_pass_by_agreement"].items()} == {"bitwise": True, "iou90": True,
+                                                                                   "outcome": True}
+    assert doc["all_pass_by_agreement"]["outcome"]["not_evaluated"] == ["ovd"]  # 检测的开发子集没有 GT
     md = (base / "acceptance.md").read_text()
     assert md.count("\n| ") >= 10  # 表头 + 9 行
+    assert "(a) 逐位 一致率" in md and "(b) IoU ≥ 0.9 一致率" in md and "(c) 按判定结果 一致率" in md
     assert (base / "bs1" / "qwen3.5-0.8b" / "count__dev" / "predictions.jsonl").exists()
+    # 换口径重算：--resume 跳过已完成的两遍，只重新比较（不再生成）
+    leaf3 = base / "bs3" / "qwen3.5-0.8b" / "refexp_box__dev"
+    before = (leaf3 / "predictions.jsonl").read_bytes()
+    for mode in ("iou90", "outcome"):
+        run(["--acceptance", "--model", "qwen3.5-0.8b", "--task", "all", "--batch-size", "3", "--limit", "3", "--out",
+             str(out), "--resume", "--agreement", mode], tmp_path)
+        d = json.loads((base / "acceptance.json").read_text())
+        assert d["agreement"] == mode and d["all_pass"] is True and d["tasks"][0]["agreement"] == mode
+        assert d["not_evaluated"] == (["ovd"] if mode == "outcome" else [])
+        assert "（本次采用）" in (base / "acceptance.md").read_text()
+    assert (leaf3 / "predictions.jsonl").read_bytes() == before
+    runs = sorted((leaf3 / "logs").glob("run_*.json"))
+    assert len(runs) == 3 and all(json.loads(p.read_text())["n_remaining"] == 0 for p in runs[1:])
+
+
+def test_tiny_count_with_countbenchqa_questions(tmp_path):
+    """--count-questions countbenchqa：fixture 里落地的人工问句进指令（tests/fixtures/e1/root/countbenchqa_questions）。"""
+    out = tmp_path / "cq"
+    run(["--model", "gemma-4-e2b-it", "--task", "count", "--limit", "2", "--batch-size", "2", "--count-questions",
+         "countbenchqa", "--out", str(out)], tmp_path)
+    leaf = out / "gemma-4-e2b-it" / "count"
+    recs = [json.loads(line) for line in (leaf / "predictions.jsonl").read_text().splitlines()]
+    qs = json.loads((REPO / "tests/fixtures/e1/root/countbenchqa_questions/countbench_paired_questions.json").read_text())
+    rows = [int(r["id"].rsplit("/", 1)[1]) for r in recs]
+    assert [r["instruction"] for r in recs] == [qs[k]["question"] + " Answer with a single number." for k in rows]
+    assert [r["extras"]["object_rule"] for r in recs] == ["countbenchqa", "countbenchqa_free_form"]  # 第 0、3 行
+    assert "count_questions: countbenchqa" in (leaf / "config.yaml").read_text()
 
 
 def test_tiny_estimate_writes_table(tmp_path):
@@ -116,6 +151,9 @@ def test_parse_args_rules(cli, monkeypatch):
         ["--model", "qwen3.5-0.8b", "--task", "count", "--out", "experiments/E1/0011_x"],  # 没有数据目录
         ["--tiny", "--acceptance", "--model", "qwen3.5-0.8b", "--task", "count", "--batch-size", "1", "--out", "x"],
         ["--tiny", "--model", "unknown-model", "--task", "count", "--out", "x"],
+        ["--tiny", "--model", "qwen3.5-0.8b", "--task", "count", "--agreement", "outcome", "--out", "x"],  # 只用于验收
+        ["--tiny", "--acceptance", "--model", "qwen3.5-0.8b", "--task", "count", "--agreement", "nope", "--out", "x"],
+        ["--tiny", "--model", "qwen3.5-0.8b", "--task", "count", "--count-questions", "manual", "--out", "x"],
     ]
     for argv in bad:
         with pytest.raises(SystemExit):
@@ -123,6 +161,10 @@ def test_parse_args_rules(cli, monkeypatch):
     ok = cli.parse_args(["--tiny", "--model", "internvl3.5-2b-hf", "--task", "ovd", "--subset", "extra",
                          "--policy", "internvl:native", "--out", "x"])
     assert ok.policy == "internvl:native"
+    assert (ok.agreement, ok.count_questions) == ("bitwise", "heuristic")  # 默认值：D32 的逐位；启发式问句
+    acc = cli.parse_args(["--tiny", "--acceptance", "--model", "qwen3.5-0.8b", "--task", "all", "--agreement", "outcome",
+                          "--count-questions", "countbenchqa", "--out", "x"])
+    assert (acc.agreement, acc.count_questions) == ("outcome", "countbenchqa")
     from src.adapters.image_policy import INTERNVL_NATIVE_TILES, PixelBudget
 
     assert cli.resolve_policy("internvl:native", "internvl3.5") == INTERNVL_NATIVE_TILES

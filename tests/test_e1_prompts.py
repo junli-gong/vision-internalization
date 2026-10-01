@@ -1,4 +1,5 @@
-"""DEV-0014：E1 提示配置 configs/e1_prompts.json（结构、出处字段、sha256、渲染、CountBench 问句规则）。"""
+"""DEV-0014：E1 提示配置 configs/e1_prompts.json（结构、出处字段、sha256、渲染、CountBench 问句规则）。
+DEV-0015：按 RUN-0012 截断率调整的 max_new_tokens 与调整记录；CountBench 人工问句（countbenchqa）的渲染规则。"""
 
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ REPO = Path(__file__).resolve().parents[1]
 CFG_PATH = REPO / "configs" / "e1_prompts.json"
 # 配置的 sha256：配置改了（包括按截断率调 max_new_tokens）就要更新这里，并在 max_new_tokens_adjustments 里记理由；
 # 冻结后写进 PREREGISTRATION.md 的 E1 条目。
-E1_PROMPTS_SHA256 = "974d3d730e903a6f0a0727a13fceaa52437b3a048914b90836f8b918afcdc0fa"
+E1_PROMPTS_SHA256 = "e9fade2b64ecf337db03585ef3206ed8b90c523e4bec2b42dae8f0b6890744c6"  # DEV-0015（DEV-0014 为 974d3d73…）
 FAM = registry.FAMILIES
 
 
@@ -50,16 +51,67 @@ def test_structure_tasks_by_family_with_sources(cfg):
                 assert "非原生" in e["note"] or "统一提示" in e["note"], (t, fam)  # 非原生的一律标明
 
 
-def test_max_new_tokens_match_preregistration_draft(cfg):
-    """预注册草稿 §3：定位 128；检测 512；多边形 1024；数字网格 1024；计数、二选一、多选 64。思考 4096 / 8192（D28-10）。"""
-    want = {"refexp_box": 128, "ovd": 512, "refexp_poly": 1024, "grid16": 1024, "count": 64, "rel_depth_nyu": 64,
-            "rel_depth_blink": 64, "spatial_cvbench": 64, "spatial_embspatial": 64}
-    for t, n in want.items():
+# 预注册草稿 §3 的原值（定位 128；检测 512；多边形 1024；数字网格 1024；计数、二选一、多选 64）与 DEV-0015 §1 的新值
+PREREG_DRAFT_MAX_NEW = {"refexp_box": 128, "ovd": 512, "refexp_poly": 1024, "grid16": 1024, "count": 64, "rel_depth_nyu": 64,
+                        "rel_depth_blink": 64, "spatial_cvbench": 64, "spatial_embspatial": 64}
+DEV0015_MAX_NEW = {"refexp_box": 256, "ovd": 2048, "refexp_poly": 1024, "grid16": 1024, "count": 256, "rel_depth_nyu": 1024,
+                   "rel_depth_blink": 1024, "spatial_cvbench": 1024, "spatial_embspatial": 1024}
+RUN0012_MODELS = ("qwen3.5-0.8b", "qwen3.5-2b", "qwen3.5-4b", "qwen3.5-9b", "gemma-4-e2b-it", "gemma-4-e4b-it",
+                  "internvl3.5-2b-hf", "internvl3.5-4b-hf")
+
+
+def test_max_new_tokens_after_dev0015_adjustment(cfg):
+    """DEV-0015 §1：按 RUN-0012 开发子集的截断率调整后的生成上限（三个家族相同）；思考 4096 / 8192 不变（D28-10）。"""
+    for t, n in DEV0015_MAX_NEW.items():
         for fam in FAM:
             assert cfg.max_new_tokens(t, fam, "eval") == n
             assert cfg.max_new_tokens(t, fam, "dev") == n and cfg.max_new_tokens(t, fam, "extra") == n
             assert cfg.max_new_tokens(t, fam, "think") == 4096 and cfg.max_new_tokens(t, fam, "think8192") == 8192
-    assert cfg.data["max_new_tokens_adjustments"] == []
+
+
+def test_max_new_tokens_adjustment_record(cfg):
+    """调整记录：每个任务一条（含不调的多边形与网格），原值 = 预注册草稿，新值 = 配置里的值，依据按模型列出截断率。"""
+    adj = cfg.data["max_new_tokens_adjustments"]
+    assert sorted(a["task"] for a in adj) == sorted(P.TASKS)  # 每个任务恰好一条
+    for a in adj:
+        t = a["task"]
+        assert set(a) == {"date", "task", "families", "from", "to", "basis", "source", "decided_by", "rule"}, t
+        assert a["date"] == "2026-10-01" and sorted(a["families"]) == sorted(FAM)
+        assert a["from"] == PREREG_DRAFT_MAX_NEW[t] and a["to"] == DEV0015_MAX_NEW[t]
+        assert all(cfg.max_new_tokens(t, f, "eval") == a["to"] for f in FAM)
+        assert "截断率" in a["rule"] and "不看准确率" in a["rule"] and "RUN-0012" in a["basis"]
+        if a["from"] == a["to"]:  # 不调的两项只写最大值与例外，数字由下一个测试核对
+            assert a["basis"].startswith("不调")
+        elif "8 个模型全部" not in a["basis"]:  # 调了的逐模型列出（8 个模型全部截断的一句话写全部）
+            assert all(m in a["basis"] for m in RUN0012_MODELS), t
+
+
+def test_max_new_tokens_basis_matches_run0012_metrics(cfg):
+    """依据里的截断条数与 RUN-0012 各模型 bs1、bs16 两遍的 metrics.json 逐个相符（产物不在仓库里时跳过）。"""
+    base = REPO / "experiments" / "E1" / "0012_acceptance"
+    if not base.exists():
+        pytest.skip("RUN-0012 的产物不在")
+    for a in cfg.data["max_new_tokens_adjustments"]:
+        t, basis = a["task"], a["basis"]
+        got = {}
+        for m in RUN0012_MODELS:
+            pair = []
+            for bs in ("bs1", "bs16"):
+                d = json.loads((base / m / "acceptance" / bs / m / f"{t}__dev" / "metrics.json").read_text())
+                assert d["generation"]["max_new_tokens"] == a["from"], (t, m)
+                pair.append((d["truncation"]["n_truncated"], d["n"]))
+            got[m] = pair
+        if "8 个模型全部" in basis:
+            assert all(p[0][0] == p[0][1] and p[1][0] == p[1][1] for p in got.values()), t
+        elif t == "refexp_poly":
+            assert got["internvl3.5-4b-hf"] == [(4, 100), (6, 100)] and "4/100、6/100（internvl3.5-4b-hf）" in basis
+            assert all(x <= 2 and y <= 2 for m, ((x, _), (y, _)) in got.items() if m != "internvl3.5-4b-hf")
+        elif t == "grid16":
+            assert got["qwen3.5-0.8b"] == [(100, 100)] * 2 and got["qwen3.5-2b"] == [(99, 100)] * 2
+            assert all(p == [(0, 100)] * 2 for m, p in got.items() if m not in ("qwen3.5-0.8b", "qwen3.5-2b"))
+        else:
+            for m, ((x, n), (y, _)) in got.items():
+                assert f"{m} {x}/{n}、{y}/{n}" in basis, (t, m)
 
 
 def test_thinking_only_on_think_subsets_and_greedy(cfg):
@@ -187,6 +239,85 @@ def test_count_rule_text_matches_code(cfg):
         assert re.search(rf"(?<![a-z]){w}(?![a-z])", text), w
     assert set(P.COUNT_RULE_BRANCHES) == {"after_number", "before_number", "fallback_no_phrase", "fallback_no_mention"}
     assert "How many {object class} are there in the image?" in cfg.entry("count", FAM[0])["source_quote"]
+
+
+# ---------------------------------------------------------------------------
+# CountBench 的人工问句（DEV-0015 §4）
+# ---------------------------------------------------------------------------
+
+
+def test_countbenchqa_config_points_at_pinned_source(cfg):
+    from src.data.land import countbenchqa as CQ
+
+    q = cfg.data["countbenchqa_questions"]
+    assert q["question_part"] == "How many {object} are there in the image?"
+    for fam in FAM:
+        assert cfg.entry("count", fam)["template"].startswith(q["question_part"])
+    assert CQ.SPEC["repo"] in q["source"] and CQ.SPEC["path"] in q["source"] and "Apache-2.0" in q["source"]
+    assert CQ.SPEC["commit"] in CQ.SPEC["url"] and CQ.SPEC["path"] in CQ.SPEC["url"]
+    assert f"{CQ.SPEC['n_questions']} 条" in q["pairing"]
+    assert P.DEFAULT_COUNT_QUESTIONS == "heuristic" and "默认关" in q["status"]
+    assert all(r in q["rule"] for r in P.COUNTBENCHQA_RULES) and "extras.question" in q["rule"]
+
+
+@pytest.mark.parametrize("obj", ["headsets", "light bulbs", "aum symbols", "Chardonnay glasses"])
+def test_countbenchqa_full_question_equals_object_substitution(cfg, obj):
+    """问句恰是模板的问句句式时：整句替换 = 把 {object} 换成问句里的对象（逐字相同），分支 countbenchqa。"""
+    qpart = cfg.data["countbenchqa_questions"]["question_part"]
+    for fam in FAM:
+        tpl = cfg.entry("count", fam)["template"]
+        text, got, rule = P.countbenchqa_instruction(tpl, qpart, f"How many {obj} are there in the image?")
+        assert text == tpl.format(object=obj).strip() and got == obj and rule == "countbenchqa"
+
+
+def test_countbenchqa_free_form_question_used_verbatim(cfg):
+    qpart = cfg.data["countbenchqa_questions"]["question_part"]
+    tpl = cfg.entry("count", FAM[0])["template"]
+    q = "How many petals does each flower have in this image?"
+    assert P.countbenchqa_instruction(tpl, qpart, "  " + q + " ") == (q + " Answer with a single number.", None,
+                                                                     "countbenchqa_free_form")
+    with pytest.raises(ValueError):
+        P.countbenchqa_instruction(tpl, qpart, "   ")
+    with pytest.raises(P.PromptConfigError):
+        P.countbenchqa_instruction("Count the {object}.", qpart, q)
+
+
+def test_countbenchqa_render_uses_question_field(cfg):
+    s = Sample(id="countbench/all/9", task="count", images=("x",), image_keys=("k",),
+               fields={"text": "Set of six gift boxes. Vector.", P.COUNTBENCHQA_FIELD: "How many boxes are there in the image?"},
+               gt={"count": 6}, source="countbench", split="all")
+    r = cfg.render("count", registry.FAMILY_GEMMA4, s)
+    assert r.text == "How many boxes are there in the image? Answer with a single number."
+    assert r.extras == {"object": "boxes", "object_rule": "countbenchqa", "question": "How many boxes are there in the image?"}
+
+
+def test_validate_rejects_bad_countbenchqa_question_part(cfg):
+    bad = copy.deepcopy(dict(cfg.data))
+    bad["countbenchqa_questions"]["question_part"] = "How many things?"
+    with pytest.raises(P.PromptConfigError, match="question_part"):
+        P.validate(bad)
+    bad = copy.deepcopy(dict(cfg.data))
+    bad["countbenchqa_questions"]["question_part"] = "How many {object} are in the picture?"
+    with pytest.raises(P.PromptConfigError, match="count/qwen3.5: 模板必须以"):
+        P.validate(bad)
+
+
+def test_select_attaches_countbenchqa_questions_from_fixture():
+    paths = DataPaths.fixtures()
+    plain = select("count", "eval", paths)
+    qa = select("count", "eval", paths, count_questions="countbenchqa")
+    assert [s.id for s in plain.samples] == [s.id for s in qa.samples]
+    assert all(P.COUNTBENCHQA_FIELD not in s.fields for s in plain.samples) and "count_questions" not in plain.stats
+    doc = json.loads((paths.root / "countbenchqa_questions" / "countbench_paired_questions.json").read_text())
+    for s in qa.samples:
+        assert s.fields[P.COUNTBENCHQA_FIELD] == doc[int(s.fields["row"])]["question"]
+    st = qa.stats["count_questions"]
+    assert st["source"] == "countbenchqa" and st["n_questions"] == len(doc) and len(st["sha256"]) == 64
+    with pytest.raises(ValueError):
+        select("count", "eval", paths, count_questions="nope")
+    # 别的任务不受影响
+    assert select("spatial_cvbench", "eval", paths, count_questions="countbenchqa").samples == select(
+        "spatial_cvbench", "eval", paths).samples
 
 
 def test_count_render_records_object_and_branch(cfg):

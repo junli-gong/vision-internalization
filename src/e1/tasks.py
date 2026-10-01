@@ -7,11 +7,16 @@
   做格式核对，没有 GT，不算指标（偏离，见完成总结）。
 - think / think8192：think:<任务> / think8192:<任务>（每任务 200 / 50 条），开思考。
 - extra：附加对照的子集（extra:refcoco_unc_val → 定位，extra:coco_val2017 → 检测），配 --policy qwen:1024 或 internvl:native。
+计数的问句来源（count_questions，DEV-0015 §4）：heuristic（默认）不动样本；countbenchqa 把落地的人工问句
+（<root>/countbenchqa_questions/，scripts/data/land_e1.py countbenchqa_questions）按行号放进 fields[COUNTBENCHQA_FIELD]，
+问句文件的 sha256 记进选择统计（因而进 config.yaml，续跑不能混用两种问句）。
 样本顺序固定：多划分的任务按 POLY_SPLITS 的划分顺序，划分内按加载器的 id 自然顺序；断点续传与逐字节复现都依赖它。
 """
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import json
 import os
 from dataclasses import dataclass, field
@@ -23,7 +28,7 @@ from src.data.eval_subsets import EVAL_SUBSETS_PATH, POLY_SPLITS, subset_ids
 from src.data.nyu_pairs import PAIRS_PATH
 from src.data.records import Sample
 from src.data.subsets import DEV_SUBSETS_PATH
-from src.e1.prompts import SUBSET_KINDS, TASKS
+from src.e1.prompts import COUNT_QUESTION_SOURCES, COUNTBENCHQA_FIELD, DEFAULT_COUNT_QUESTIONS, SUBSET_KINDS, TASKS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "e1"
@@ -184,7 +189,31 @@ def _select_ovd(subset: str, paths: DataPaths) -> Selection:
     return Selection("ovd", subset, samples, True, st)
 
 
-def _select_simple(task: str, subset: str, paths: DataPaths) -> Selection:
+def load_count_questions(root: Path) -> tuple[list[str], dict[str, Any]]:
+    """落地的 CountBench 人工问句 → (第 k 行的问句, 统计)。核对：文件 sha256 = 该源 MANIFEST 登记的值；结构与条数 =
+    countbench.jsonl 的行数（第 k 条对应第 k 行，src/data/land/countbenchqa.py）。不合格就抛错，不静默退回启发式。"""
+    from src.data.land.countbenchqa import FILE_NAME, SOURCE, check_questions
+    from src.data.land.manifest import read_manifest
+
+    src = Path(root) / SOURCE
+    man = read_manifest(src)
+    raw = (src / FILE_NAME).read_bytes()
+    sha = hashlib.sha256(raw).hexdigest()
+    want = man["files"].get(FILE_NAME, {}).get("sha256")
+    if sha != want:
+        raise ValueError(f"{src / FILE_NAME}：sha256 {sha} 与 MANIFEST 登记的 {want} 不符")
+    doc = json.loads(raw.decode("utf-8"))
+    n_rows = sum(1 for line in (Path(root) / "countbench" / "countbench.jsonl").read_text().splitlines() if line.strip())
+    problems = check_questions(doc, n_rows)
+    if problems:
+        raise ValueError(f"{src / FILE_NAME} 不合格（应与 countbench.jsonl 的 {n_rows} 行一一对应）：{problems[:5]}")
+    up = (man.get("upstream") or [{}])[0]
+    stats = {"source": "countbenchqa", "file": f"{SOURCE}/{FILE_NAME}", "sha256": sha, "n_questions": len(doc),
+             "upstream_commit": up.get("commit")}
+    return [e["question"] for e in doc], stats
+
+
+def _select_simple(task: str, subset: str, paths: DataPaths, count_questions: str = DEFAULT_COUNT_QUESTIONS) -> Selection:
     """计数、BLINK、CV-Bench、EmbSpatial、NYU 点对：eval / dev 直接取加载器的子集，think 按清单筛 eval。"""
     if task == "rel_depth_nyu":
         load = lambda sub: L.load_nyu_pairs(paths.root, subset=sub, pairs_config=paths.nyu_pairs,  # noqa: E731
@@ -205,21 +234,27 @@ def _select_simple(task: str, subset: str, paths: DataPaths) -> Selection:
         name = f"{subset}:{task}"
         st["subset_name"] = name
         samples = _pick(samples, subset_ids(name, paths.eval_subsets), unit, name)
+    if task == "count" and count_questions == "countbenchqa":
+        qs, qst = load_count_questions(paths.root)
+        samples = [dataclasses.replace(s, fields={**s.fields, COUNTBENCHQA_FIELD: qs[int(s.fields["row"])]}) for s in samples]
+        st["count_questions"] = qst
     return Selection(task, subset, samples, True, st)
 
 
-def select(task: str, subset: str, paths: DataPaths) -> Selection:
-    """任务 × 子集 → 样本（顺序固定）。不支持的组合报错。"""
+def select(task: str, subset: str, paths: DataPaths, *, count_questions: str = DEFAULT_COUNT_QUESTIONS) -> Selection:
+    """任务 × 子集 → 样本（顺序固定）。不支持的组合报错。count_questions 只影响计数（见模块说明）。"""
     if task not in TASKS:
         raise ValueError(f"未知任务 {task!r}；可用：{TASKS}")
     if subset not in SUBSET_KINDS or subset not in TASK_SUBSETS[task]:
         raise ValueError(f"{task} 不支持子集 {subset!r}；可用：{TASK_SUBSETS[task]}")
+    if count_questions not in COUNT_QUESTION_SOURCES:
+        raise ValueError(f"count_questions 必须是 {COUNT_QUESTION_SOURCES} 之一，收到 {count_questions!r}")
     if task in ("refexp_box", "refexp_poly", "grid16"):
         sel = _select_refexp(task, subset, paths)
     elif task == "ovd":
         sel = _select_ovd(subset, paths)
     else:
-        sel = _select_simple(task, subset, paths)
+        sel = _select_simple(task, subset, paths, count_questions)
     ids = [s.id for s in sel.samples]
     if len(set(ids)) != len(ids):
         raise RuntimeError(f"{task}/{subset}：样本 id 有重复")
@@ -268,6 +303,7 @@ __all__ = [
     "TASK_SUBSETS",
     "default_nyu_cache",
     "groups_of",
+    "load_count_questions",
     "odinw_configs",
     "select",
 ]

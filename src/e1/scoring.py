@@ -12,6 +12,9 @@ grid_to_mask 回填到原图。
   不在给定类别表里，按框计比例；没有标签的框单列，同样记为 FP；
 - 每个任务：bootstrap 95% CI（按样本重采样；检测按图），ParseTally 分原因，截断率，思考段未闭合率，生成 token 数分布，
   实际看到的像素数分布（D28-3），坐标诊断（全部坐标 ≤1 且含小数的条数，D22-2 / D30）。
+- 失败的诊断（DEV-0015 §3；只描述失败长什么样，失败原因不变）：failure_detail 给每条失败记一个标签——多边形任务给出了
+  框或点（wrong_shape:<键名>）、拒绝作答（refusal）；另记关思考时输出里自发出现思考标记的条数（think_marker_when_off）。
+  规则与正则见 failure_detail、think_marker_when_off；只读 predictions.jsonl 的 failure、text、raw_text，旧的输出也能重算。
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from typing import Any, Callable, Iterable, Mapping, NamedTuple, Sequence
 
 import numpy as np
 
+from src.adapters import gemma4, internvl35, qwen35
 from src.constants import BOX_ACC_IOU_THRESHOLD, GRID_SIZE_E1
 from src.data.records import Sample
 from src.e1.tasks import groups_of
@@ -114,6 +118,71 @@ def coord_all_le1_decimal(text: str) -> bool:
     if not nums:
         return False
     return all(float(v) <= 1.0 for v in nums) and any("." in v for v in nums)
+
+
+# ---------------------------------------------------------------------------
+# 失败的诊断（DEV-0015 §3）：只作诊断，不改失败原因；规则一改就把 DIAG_RULE_VERSION 加一
+# ---------------------------------------------------------------------------
+
+DIAG_RULE_VERSION = 1
+# 多边形任务里"给错了形状"：malformed 的回答里出现这些 JSON 键（框或点）。按键在回答里第一次出现的位置取一个。
+WRONG_SHAPE_KEYS: tuple[str, ...] = ("bbox_2d", "box_2d", "point_2d", "bbox", "box", "point")
+WRONG_SHAPE_RE = re.compile(r'"(' + "|".join(re.escape(k) for k in WRONG_SHAPE_KEYS) + r')"\s*:')
+# 拒绝作答：失败、回答（text）里一个阿拉伯数字都没有、且含下列任一句式（不分大小写，整词）
+REFUSAL_RE = re.compile(r"\b(?:I['’]m sorry|I am sorry|I apologi[sz]e|unable to|not able to|can['’]?t|cannot|can not)\b",
+                        re.IGNORECASE)
+_DIGIT = re.compile(r"[0-9]")
+# 三个家族的思考段标记（字面量取自各适配器）：关思考时 raw_text 里出现任何一个，就记为"自发写出思考标记"
+THINK_MARKERS: tuple[str, ...] = tuple(sorted({qwen35.THINK_END, internvl35.THINK_START, internvl35.THINK_END,
+                                               gemma4.CHANNEL_OPEN, gemma4.CHANNEL_CLOSE}))
+DIAG_IDS_MAX = 20  # metrics.json 里每个标签最多列多少个样本 id
+
+
+def failure_detail(task: str, rec: Mapping[str, Any]) -> str | None:
+    """一条记录的失败诊断标签（成功的记录为 None）：
+    - wrong_shape:<键名>：多边形任务（refexp_poly）、失败原因是 malformed、且回答里有 WRONG_SHAPE_KEYS 里的键（正则 WRONG_SHAPE_RE）；
+    - refusal：任何任务、任何失败原因，回答里没有阿拉伯数字（[0-9]）且 REFUSAL_RE 能匹配；
+    - 两条都不满足：None。先判 wrong_shape（它的回答里有坐标，不会同时是 refusal）。"""
+    f = rec["failure"]
+    if f is None:
+        return None
+    text = rec.get("text") or ""
+    if task == "refexp_poly" and f == ParseFailure.MALFORMED.value:
+        m = WRONG_SHAPE_RE.search(text)
+        if m:
+            return f"wrong_shape:{m.group(1)}"
+    if _DIGIT.search(text) is None and REFUSAL_RE.search(text):
+        return "refusal"
+    return None
+
+
+def think_marker_when_off(rec: Mapping[str, Any], enable_thinking: bool) -> bool | None:
+    """关思考时 raw_text 里是否出现任一思考标记（THINK_MARKERS）；开思考时不适用，返回 None。"""
+    if enable_thinking:
+        return None
+    raw = rec.get("raw_text") or ""
+    return any(m in raw for m in THINK_MARKERS)
+
+
+def failure_diagnostics(task: str, records: Sequence[Mapping[str, Any]], *, enable_thinking: bool | None) -> dict[str, Any]:
+    """metrics.json 的 diagnostics 里新增的两项：failure_detail（标签 → 条数、按失败原因分、前几个 id）与
+    think_marker_when_off（enable_thinking 未知或为 True 时为 None）。"""
+    labels: dict[str, list[Mapping[str, Any]]] = {}
+    for r in records:
+        lab = failure_detail(task, r)
+        if lab is not None:
+            labels.setdefault(lab, []).append(r)
+    fd = {"rule_version": DIAG_RULE_VERSION, "n": sum(len(v) for v in labels.values()),
+          "counts": {k: len(labels[k]) for k in sorted(labels)},
+          "by_failure": {k: dict(sorted(Counter(r["failure"] for r in labels[k]).items())) for k in sorted(labels)},
+          "ids": {k: [r["id"] for r in labels[k][:DIAG_IDS_MAX]] for k in sorted(labels)}}
+    tm = None
+    if enable_thinking is False:
+        hit = [r for r in records if think_marker_when_off(r, False)]
+        tm = {"n": len(hit), "rate": _rate(len(hit), len(records)),
+              "n_thinking_unclosed": sum(1 for r in hit if r["thinking_unclosed"]),
+              "markers": list(THINK_MARKERS), "ids": [r["id"] for r in hit[:DIAG_IDS_MAX]]}
+    return {"failure_detail": fd, "think_marker_when_off": tm}
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +350,9 @@ def _ovd_gt(samples: Sequence[Sample]) -> dict[str, Any]:
     return {"images": images, "annotations": anns, "categories": [{"id": k, "name": v} for k, v in sorted(cats.items())]}
 
 
+ovd_gt = _ovd_gt  # acceptance 的 (c) 口径也用这份 GT（同一份构造，不另写）
+
+
 def _ovd_dataset_metrics(samples: Sequence[Sample], recs: Sequence[Mapping[str, Any]], *, map_ci_resamples: int) -> dict:
     preds = []
     for s, r in zip(samples, recs):
@@ -336,8 +408,9 @@ def per_sample_metric(task: str, recs: Sequence[Mapping[str, Any]]):
 
 
 def aggregate(task: str, samples: Sequence[Sample], records: Sequence[Mapping[str, Any]], *, has_gt: bool,
-              map_ci_resamples: int = 0) -> dict[str, Any]:
-    """predictions.jsonl 的记录（与 samples 同序）→ metrics.json 的内容（不含运行标识，调用方补）。"""
+              map_ci_resamples: int = 0, enable_thinking: bool | None = None) -> dict[str, Any]:
+    """predictions.jsonl 的记录（与 samples 同序）→ metrics.json 的内容（不含运行标识，调用方补）。
+    enable_thinking：这次运行是否开思考（runner 从 config 传入）；None 时不算 think_marker_when_off。"""
     if [s.id for s in samples] != [r["id"] for r in records]:
         raise ValueError("records 与 samples 的 id 不同序或不一致")
     n = len(records)
@@ -361,6 +434,7 @@ def aggregate(task: str, samples: Sequence[Sample], records: Sequence[Mapping[st
     if task in COORD_TASKS:
         k = sum(1 for r in records if r.get("coord_le1_decimal"))
         m["diagnostics"]["coord_all_le1_with_decimal"] = {"n": k, "rate": _rate(k, n)}
+    m["diagnostics"].update(failure_diagnostics(task, records, enable_thinking=enable_thinking))
     groups = _groups(task, samples)
 
     if task == "ovd":
@@ -453,15 +527,24 @@ def aggregate(task: str, samples: Sequence[Sample], records: Sequence[Mapping[st
 
 __all__ = [
     "COORD_TASKS",
+    "DIAG_RULE_VERSION",
     "MCQParse",
     "MCQ_TASKS",
+    "REFUSAL_RE",
+    "THINK_MARKERS",
     "UNKNOWN_CATEGORY_ID",
+    "WRONG_SHAPE_KEYS",
+    "WRONG_SHAPE_RE",
     "aggregate",
     "coord_all_le1_decimal",
     "distribution",
+    "failure_detail",
+    "failure_diagnostics",
     "failure_enum",
     "gt_mask",
     "parse_mcq",
     "per_sample_metric",
+    "ovd_gt",
     "score_generation",
+    "think_marker_when_off",
 ]

@@ -6,7 +6,10 @@
         --data-root $PROJ/data --out experiments/E1/0011_e1_main [--resume] [--limit N]
     # 思考子集：--subset think（预算 4096）/ think8192；附加对照：--subset extra --policy qwen:1024（或 internvl:native）
 批处理验收（D28-5；开发子集，batch=1 与 --batch-size 各跑一遍）：
-    python scripts/run_e1.py --acceptance --model qwen3.5-0.8b --task all --batch-size 16 --data-root $PROJ/data --out <dir>
+    python scripts/run_e1.py --acceptance --model qwen3.5-0.8b --task all --batch-size 16 --data-root $PROJ/data --out <dir> \\
+        [--agreement bitwise|iou90|outcome]
+    # 三种一致口径（N15）都算、都写进表；--agreement 只决定 all_pass 用哪一种（默认 bitwise，D32）。
+    # 已跑完的验收换口径重算：同一条命令加 --resume（两遍都已完成，不再生成，只重新比较）。
 吞吐与算力估算（开发子集，每个 --batch-sizes 各测一遍，外推到各子集的 n）：
     python scripts/run_e1.py --estimate --model qwen3.5-0.8b --task all --batch-sizes 1 8 16 32 --data-root $PROJ/data \\
         --out <dir> [--estimate-think]
@@ -15,6 +18,8 @@
 --task：一个或多个任务名，或 all（refexp_box refexp_poly grid16 count ovd rel_depth_nyu rel_depth_blink spatial_cvbench
 spatial_embspatial）。--policy：default（E1 冻结的口径，D28-3）、qwen:1024（Qwen 约 1K token）、internvl:native（InternVL 原生
 动态 tile）；后两个只用于 --subset extra 的附加对照（也可用于 --estimate 量它们的吞吐）。
+--count-questions：计数的问句来源，heuristic（默认，从 caption 取对象）或 countbenchqa（big_vision 的人工问句，要先落地
+countbenchqa_questions；DEV-0015 §4，项目负责人批准前不改默认）。只影响 count。
 退出码：0 = 跑完；2 = 出错（报错先写进 <out>/<模型>/errors/，再退出；argparse 用法错误也是 2）。
 """
 
@@ -43,7 +48,14 @@ from src.adapters.image_policy import (  # noqa: E402
 )
 from src.e1 import acceptance as A  # noqa: E402
 from src.e1 import estimate as EST  # noqa: E402
-from src.e1.prompts import PROMPTS_PATH, SUBSET_KINDS, TASKS, load_prompt_config  # noqa: E402
+from src.e1.prompts import (  # noqa: E402
+    COUNT_QUESTION_SOURCES,
+    DEFAULT_COUNT_QUESTIONS,
+    PROMPTS_PATH,
+    SUBSET_KINDS,
+    TASKS,
+    load_prompt_config,
+)
 from src.e1.runner import RunSpec, leaf_dir, policy_dirname, read_jsonl_tolerant, run_task  # noqa: E402
 from src.e1.tasks import TASK_SUBSETS, DataPaths, default_nyu_cache, select  # noqa: E402
 
@@ -91,7 +103,14 @@ def parse_args(argv=None):
     p.add_argument("--estimate-n", type=int, default=64, help="--estimate：每个任务最多用多少条开发样本（默认 64）")
     p.add_argument("--estimate-think", action="store_true", help="--estimate：另测开思考（预算 4096）的吞吐")
     p.add_argument("--estimate-think-n", type=int, default=8, help="--estimate-think 用的开发样本数（默认 8）")
+    p.add_argument("--agreement", choices=A.AGREEMENTS,
+                   help=f"--acceptance：all_pass 用哪种一致口径（默认 {A.DEFAULT_AGREEMENT}，D32；三种都会算出来）")
+    p.add_argument("--count-questions", choices=COUNT_QUESTION_SOURCES, default=DEFAULT_COUNT_QUESTIONS,
+                   help=f"计数的问句来源（默认 {DEFAULT_COUNT_QUESTIONS}；countbenchqa = big_vision 的人工问句）")
     a = p.parse_args(argv)
+    if a.agreement is not None and not a.acceptance:
+        p.error("--agreement 只用于 --acceptance")
+    a.agreement = a.agreement or A.DEFAULT_AGREEMENT
     if a.task == ["all"]:
         a.task = list(TASKS)
     bad = [t for t in a.task if t not in TASKS]
@@ -154,11 +173,11 @@ def make_spec(a, entry, policy, ad, task: str, subset: str, batch_size: int) -> 
     return RunSpec(model_key=entry.key, family=entry.family, repo=entry.repo, revision=entry.revision,
                    adapter_model_key=str(getattr(ad, "model_key", entry.key)), task=task, subset=subset,
                    policy_tag=a.policy, policy={"type": type(policy).__name__, **policy.as_dict()}, batch_size=batch_size,
-                   limit=a.limit, tiny=a.tiny, map_ci_resamples=a.map_ci_resamples)
+                   limit=a.limit, tiny=a.tiny, map_ci_resamples=a.map_ci_resamples, count_questions=a.count_questions)
 
 
-def selection(task: str, subset: str, paths: DataPaths, limit: int | None):
-    sel = select(task, subset, paths)
+def selection(task: str, subset: str, paths: DataPaths, limit: int | None, count_questions: str = DEFAULT_COUNT_QUESTIONS):
+    sel = select(task, subset, paths, count_questions=count_questions)
     if limit is not None:
         sel.samples = sel.samples[:limit]
         sel.stats["limit"] = limit
@@ -175,7 +194,7 @@ def cmd_run(a, argv) -> int:
     paths = data_paths(a)
     entry, policy, ad = build_adapter(a)
     for task in a.task:
-        sel = selection(task, a.subset, paths, a.limit)
+        sel = selection(task, a.subset, paths, a.limit, a.count_questions)
         spec = make_spec(a, entry, policy, ad, task, a.subset, a.batch_size)
         m = run_task(ad, spec, sel, prompts, paths, a.out, resume=a.resume, argv=argv)
         print(f"{entry.key} {task}/{a.subset} n={m['n']} parse_fail={m['parse']['failure_rate']} "
@@ -190,7 +209,7 @@ def cmd_acceptance(a, argv) -> int:
     base = Path(a.out) / entry.key / ("acceptance" if a.policy == "default" else f"acceptance__{policy_dirname(a.policy)}")
     rows = []
     for task in a.task:
-        sel = selection(task, "dev", paths, a.limit)
+        sel = selection(task, "dev", paths, a.limit, a.count_questions)
         recs = {}
         for bs in (1, a.batch_size):
             spec = make_spec(a, entry, policy, ad, task, "dev", bs)
@@ -198,20 +217,29 @@ def cmd_acceptance(a, argv) -> int:
             run_task(ad, spec, sel, prompts, paths, sub, resume=a.resume, argv=argv)
             recs[bs] = read_jsonl_tolerant(leaf_dir(sub, entry.key, task, "dev", a.policy) / "predictions.jsonl",
                                            repair=False)
-        row = A.compare(task, sel.samples, recs[1], recs[a.batch_size], has_gt=sel.has_gt, batch_size=a.batch_size)
+        row = A.compare(task, sel.samples, recs[1], recs[a.batch_size], has_gt=sel.has_gt, batch_size=a.batch_size,
+                        agreement=a.agreement)
         rows.append(row)
-        print(f"[acceptance {entry.key} {task}] agree={row['answer_agreement']} raw_equal={row['raw_text_equal_rate']} "
-              f"diff={row['diff']} ci0={row['diff_ci_contains_0']} pass={row['pass']}")
+        by = " ".join(f"{m}={row['agreement_by_mode'][m]['rate']}/{row['agreement_by_mode'][m]['pass']}" for m in A.AGREEMENTS)
+        print(f"[acceptance {entry.key} {task}] agree({a.agreement})={row['answer_agreement']} [{by}] "
+              f"raw_equal={row['raw_text_equal_rate']} diff={row['diff']} ci0={row['diff_ci_contains_0']} pass={row['pass']}")
     header = {"model": entry.key, "revision": entry.revision, "policy": a.policy, "device": a.device, "dtype": a.dtype,
-              "tiny": a.tiny, "prompt_config_sha256": prompts.sha256, "batch_size": a.batch_size}
-    doc = {"header": header, "criteria": {"answer_agreement_min": A.AGREEMENT_MIN, "mask_iou_agree": A.AGREE_MASK_IOU,
-                                          "metric": "配对差的 95% CI 含 0"},
-           "all_pass": all(r["pass"] for r in rows), "tasks": rows,
+              "tiny": a.tiny, "prompt_config_sha256": prompts.sha256, "batch_size": a.batch_size,
+              "agreement": a.agreement, "count_questions": a.count_questions}
+    by_mode = {m: A.overall(rows, m) for m in A.AGREEMENTS}
+    doc = {"header": header,
+           "criteria": {"answer_agreement_min": A.AGREEMENT_MIN, "mask_iou_agree": A.AGREE_MASK_IOU,
+                        "box_iou_agree": A.AGREE_BOX_IOU, "metric": "配对差的 95% CI 含 0",
+                        "agreement": a.agreement, "agreement_rules": dict(A.AGREEMENT_RULES)},
+           "agreement": a.agreement, "all_pass": by_mode[a.agreement]["all_pass"],
+           "not_evaluated": by_mode[a.agreement]["not_evaluated"], "all_pass_by_agreement": by_mode, "tasks": rows,
            "written_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
     base.mkdir(parents=True, exist_ok=True)
     (base / "acceptance.json").write_text(json.dumps(doc, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    (base / "acceptance.md").write_text(A.summary_markdown(entry.key, rows, header=header), encoding="utf-8")
-    print(f"all_pass={doc['all_pass']} -> {base / 'acceptance.json'}")
+    (base / "acceptance.md").write_text(A.summary_markdown(entry.key, rows, header=header, agreement=a.agreement),
+                                        encoding="utf-8")
+    print(f"all_pass({a.agreement})={doc['all_pass']} not_evaluated={doc['not_evaluated']} "
+          f"by_agreement={ {m: v['all_pass'] for m, v in by_mode.items()} } -> {base / 'acceptance.json'}")
     return 0
 
 
@@ -224,8 +252,9 @@ def cmd_estimate(a, argv) -> int:
     for task in a.task:
         rows.append(EST.estimate_task(ad, task, entry.family, prompts, paths, batch_sizes=a.batch_sizes,
                                       n_dev=a.estimate_n, think=a.estimate_think, n_think=a.estimate_think_n,
-                                      policy_tag=a.policy, log=lambda m: print(m, file=sys.stderr, flush=True)))
-    header = {"model": entry.key, "revision": entry.revision, "policy": a.policy,
+                                      policy_tag=a.policy, count_questions=a.count_questions,
+                                      log=lambda m: print(m, file=sys.stderr, flush=True)))
+    header = {"model": entry.key, "revision": entry.revision, "policy": a.policy, "count_questions": a.count_questions,
               "image_policy": {"type": type(policy).__name__, **policy.as_dict()}, "device": a.device, "dtype": a.dtype,
               "tiny": a.tiny, "prompt_config_sha256": prompts.sha256, "batch_sizes": a.batch_sizes,
               "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() and a.device.startswith("cuda") else None}
