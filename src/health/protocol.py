@@ -1,11 +1,16 @@
-"""健康检查的协议常量与提示模板（简报 §8.11；DEV-0008；协议 v2：DEV-0013，D28-7）。约定只在这里定义一处，其余模块与脚本 import。
+"""健康检查的协议常量与提示模板（简报 §8.11；DEV-0008；协议 v2：DEV-0013，D28-7；协议 v3：DEV-0016，D36-4）。
+约定只在这里定义一处，其余模块与脚本 import。
 
 协议全文见 src/health/__init__.py 的模块说明；这里的数字由 tests/test_health_items.py 与 tests/test_health_scoring.py 钉住。
 
 版本：
 - v1（D26）：MMLU-Pro 最多生成 32 个 token，那一个读数就是标题。RUN-0007、RUN-0009 的输出是 v1。
-- v2（D28-7，取代 D26 的 32 token）：MMLU-Pro 最多生成 256 个 token，标题读数 mmlu_pro 取全部生成；
-  诊断读数 mmlu_pro_fmt32 取同一次生成的前 32 个 token（格式诊断，不标红）。题目文件与其余协议不变。
+- v2（D28-7，取代 D26 的 32 token）：MMLU-Pro 最多生成 256 个 token，标题读数（v2 输出里的键 "mmlu_pro"）取全部生成；
+  诊断读数 mmlu_pro_fmt32 取同一次生成的前 32 个 token（格式诊断，不标红）。RUN-0011 的输出是 v2。
+- v3（D36-4，取代 D28-7 的标题读数；**冻结，G3 之前不再动**）：MMLU-Pro 的标题读数改为受限字母读数 mmlu_pro_letter：
+  适配器的 option_logits 只看第一个生成位置，限制在本题的选项字母上，每个字母取 "X" 与 " X" 两种写法里较大的 logit；
+  准确率是标题（标红只看它），另记正确选项在选项集合上的平均概率（诊断，给差值与 CI）。v2 的 256 token 自由作答
+  （v3 的名字 mmlu_pro_free256）与同一次生成的 32 token 前缀（mmlu_pro_fmt32）保留为诊断，不标红。题目文件与其余协议不变。
 """
 
 from __future__ import annotations
@@ -13,9 +18,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-PROTOCOL_VERSION = 2
-# 能读、能 --rescore、能 --compare 的输出版本（v1 的输出按 v1 的布局读，见 RECORD_KEYS_BY_VERSION）
-SUPPORTED_PROTOCOL_VERSIONS: tuple[int, ...] = (1, 2)
+PROTOCOL_VERSION = 3  # D36-4：冻结为健康检查 v3，G3 之前不再动
+# 能读、能 --rescore、能 --compare 的输出版本（v1、v2 的输出按各自的布局读，见 RECORD_KEYS_BY_VERSION）
+SUPPORTED_PROTOCOL_VERSIONS: tuple[int, ...] = (1, 2, 3)
 
 # ---------------------------------------------------------------------------
 # 题目来源（HF 数据集，固定 revision；原始文件的 sha256 在开发机上实测）
@@ -110,8 +115,10 @@ GREEDY_KWARGS: Mapping[str, Any] = {
     "repetition_penalty": 1.0,
     "no_repeat_ngram_size": 0,
 }
-# 每项一次生成的上限（v2）。MMLU-Pro 256（D28-7；v1 是 32，见 RECORD_KEYS_BY_VERSION）
+# 每项一次自由生成的上限（v2 起）。MMLU-Pro 256（D28-7；v1 是 32，见 RECORD_KEYS_BY_VERSION；v3 里它是诊断读数 mmlu_pro_free256）
 MAX_NEW_TOKENS: Mapping[str, int] = {"mmlu_pro": 256, "gsm8k": 512, "ifeval": 1024}
+# 受限字母读数（v3，D36-4）：只看第一个生成位置，相当于只生成 1 个 token
+LETTER_MAX_NEW_TOKENS = 1
 # MMLU-Pro 的格式诊断：同一次生成的前 32 个 token（D28-7）
 FMT32_MAX_NEW_TOKENS = 32
 WARMUP_PROMPT = "Reply with the word OK."  # 计时前的预热调用（不计入记账，D21）
@@ -180,13 +187,17 @@ TRUNCATION_NOTICE_PP = 10
 ROLE_HEADLINE = "headline"  # 标题读数：标题口径参与标红
 ROLE_DIAGNOSTIC = "diagnostic"  # 诊断读数：给出差值、CI 与符号检验，不标红
 
+KIND_GENERATE = "generate"  # 自由生成（greedy，最多 max_new_tokens 个 token）；prefix_of 不为 None 时是它的前缀读数
+KIND_OPTION_LETTER = "option_letter"  # 受限字母读数（v3，D36-4）：adapter.option_logits，选项为本题的实际字母
+
 
 @dataclass(frozen=True)
 class Reading:
     """一个读数：题目、提示与评分规则取自 benchmark，生成上限 max_new_tokens。
 
-    prefix_of 不为 None 时是前缀读数：不另外生成，取 prefix_of 那个读数的同一次 greedy 生成的前 max_new_tokens 个 token，
-    按"只生成 max_new_tokens 个"重建生成部分（run.prefix_generation）。greedy 下两者的 token 逐个相同。
+    kind = KIND_GENERATE：自由生成。prefix_of 不为 None 时是前缀读数：不另外生成，取 prefix_of 那个读数的同一次 greedy 生成的
+    前 max_new_tokens 个 token，按"只生成 max_new_tokens 个"重建生成部分（run.prefix_generation）。greedy 下两者的 token 逐个相同。
+    kind = KIND_OPTION_LETTER：受限字母读数，一次 option_logits（max_new_tokens 记 1），不解析文本。
     """
 
     name: str
@@ -194,24 +205,43 @@ class Reading:
     max_new_tokens: int
     role: str
     prefix_of: str | None = None
+    kind: str = KIND_GENERATE
+
+    def __post_init__(self) -> None:
+        if self.kind not in (KIND_GENERATE, KIND_OPTION_LETTER):
+            raise ValueError(f"未知的读数类型 {self.kind!r}")
+        if self.kind == KIND_OPTION_LETTER and (self.prefix_of is not None or self.max_new_tokens != LETTER_MAX_NEW_TOKENS
+                                                or self.benchmark != "mmlu_pro"):
+            raise ValueError(f"受限字母读数 {self.name} 只用于 MMLU-Pro，max_new_tokens 为 {LETTER_MAX_NEW_TOKENS}，不能是前缀读数")
 
 
+MMLU_PRO_LETTER = "mmlu_pro_letter"
+MMLU_PRO_FREE256 = "mmlu_pro_free256"
 MMLU_PRO_FMT32 = "mmlu_pro_fmt32"
 
-# v2 的读数，按输出里的顺序。比较的行名就是这里的 name；口径（benchmark 与 max_new_tokens）相同才可比
+# v3 的读数，按输出里的顺序。比较的行名就是这里的 name；口径（读数名所指的项、类型与 max_new_tokens）相同才可比
 READINGS: tuple[Reading, ...] = (
-    Reading("mmlu_pro", "mmlu_pro", MAX_NEW_TOKENS["mmlu_pro"], ROLE_HEADLINE),
-    Reading(MMLU_PRO_FMT32, "mmlu_pro", FMT32_MAX_NEW_TOKENS, ROLE_DIAGNOSTIC, prefix_of="mmlu_pro"),
+    Reading(MMLU_PRO_LETTER, "mmlu_pro", LETTER_MAX_NEW_TOKENS, ROLE_HEADLINE, kind=KIND_OPTION_LETTER),
+    Reading(MMLU_PRO_FREE256, "mmlu_pro", MAX_NEW_TOKENS["mmlu_pro"], ROLE_DIAGNOSTIC),
+    Reading(MMLU_PRO_FMT32, "mmlu_pro", FMT32_MAX_NEW_TOKENS, ROLE_DIAGNOSTIC, prefix_of=MMLU_PRO_FREE256),
     Reading("gsm8k", "gsm8k", MAX_NEW_TOKENS["gsm8k"], ROLE_HEADLINE),
     Reading("ifeval", "ifeval", MAX_NEW_TOKENS["ifeval"], ROLE_HEADLINE),
 )
 READINGS_BY_NAME: Mapping[str, Reading] = {r.name: r for r in READINGS}
 
-# 各版本输出里 records / scores / diagnostics 的键 → 它对应的 v2 读数。
-# v1 的 "mmlu_pro" 是 32 个 token 的那一个读数，口径与 v2 的 mmlu_pro_fmt32 相同；v1 没有 256 的读数。
+# 各版本输出里 records / scores / diagnostics 的键 → 它对应的 v3 读数。
+# v1 的 "mmlu_pro" 是 32 个 token 的那一个读数，口径与 mmlu_pro_fmt32 相同；v1 没有 256 的读数。
+# v2 的 "mmlu_pro" 是 256 token 的自由作答，口径与 v3 的 mmlu_pro_free256 相同。v1、v2 都没有受限字母读数。
 RECORD_KEYS_BY_VERSION: Mapping[int, Mapping[str, str]] = {
     1: {"mmlu_pro": MMLU_PRO_FMT32, "gsm8k": "gsm8k", "ifeval": "ifeval"},
-    2: {r.name: r.name for r in READINGS},
+    2: {"mmlu_pro": MMLU_PRO_FREE256, MMLU_PRO_FMT32: MMLU_PRO_FMT32, "gsm8k": "gsm8k", "ifeval": "ifeval"},
+    3: {r.name: r.name for r in READINGS},
+}
+# 各版本自己的汇总里，headline 每项取哪个记录键（v1、v2 照当时的规则：键名就是项名；重评 v1、v2 的输出时汇总逐字节不变）
+HEADLINE_KEYS_BY_VERSION: Mapping[int, Mapping[str, str]] = {
+    1: {"mmlu_pro": "mmlu_pro", "gsm8k": "gsm8k", "ifeval": "ifeval"},
+    2: {"mmlu_pro": "mmlu_pro", "gsm8k": "gsm8k", "ifeval": "ifeval"},
+    3: {"mmlu_pro": MMLU_PRO_LETTER, "gsm8k": "gsm8k", "ifeval": "ifeval"},
 }
 
 
@@ -228,11 +258,36 @@ def record_readings(version: int) -> dict[str, Reading]:
 
 
 def readings_of(benchmark: str) -> tuple[Reading, ...]:
-    """v2 里由 benchmark 那一次生成得到的全部读数：先是生成本身的读数，再是它的前缀读数。"""
-    own = [r for r in READINGS if r.benchmark == benchmark and r.prefix_of is None]
-    if len(own) != 1:
-        raise KeyError(f"{benchmark} 应恰有一个生成读数，找到 {[r.name for r in own]}")
-    return (own[0], *(r for r in READINGS if r.prefix_of == own[0].name))
+    """v3 里 benchmark 的全部读数，按 READINGS 的顺序（前缀读数排在它截取的读数之后）。"""
+    out = tuple(r for r in READINGS if r.benchmark == benchmark)
+    if not out:
+        raise KeyError(f"没有 {benchmark} 的读数")
+    return out
+
+
+def _check_readings() -> None:
+    names = [r.name for r in READINGS]
+    if len(set(names)) != len(names):
+        raise RuntimeError(f"读数名重复：{names}")
+    for k, r in enumerate(READINGS):
+        if r.prefix_of is not None:
+            src = [s for s in READINGS[:k] if s.name == r.prefix_of]
+            if not (src and src[0].benchmark == r.benchmark and src[0].kind == KIND_GENERATE and src[0].prefix_of is None
+                    and r.max_new_tokens < src[0].max_new_tokens):
+                raise RuntimeError(f"前缀读数 {r.name} 必须排在它截取的同一项自由生成读数之后，且更短")
+    for bench in BENCHMARKS:
+        heads = [r for r in READINGS if r.benchmark == bench and r.role == ROLE_HEADLINE]
+        if [r.name for r in heads] != [HEADLINE_KEYS_BY_VERSION[PROTOCOL_VERSION][bench]]:
+            raise RuntimeError(f"{bench} 应恰有一个标题读数 {HEADLINE_KEYS_BY_VERSION[PROTOCOL_VERSION][bench]}")
+        if sum(r.kind == KIND_GENERATE and r.prefix_of is None for r in READINGS if r.benchmark == bench) != 1:
+            raise RuntimeError(f"{bench} 应恰有一次自由生成")
+    for v in SUPPORTED_PROTOCOL_VERSIONS:
+        if set(HEADLINE_KEYS_BY_VERSION[v].values()) - set(RECORD_KEYS_BY_VERSION[v]):
+            raise RuntimeError(f"v{v} 的标题键不在它的记录键里")
+
+
+_check_readings()
+
 LANGDETECT_SEED = 0  # IFEval 的语言判定（langdetect）默认每次随机；固定种子使评分可复现
 
 # IFEval 的句子切分用 nltk 的 punkt_tab（english）。nltk_data 不分版本，这里钉住开发机 2026-09-30 下载的文件哈希；

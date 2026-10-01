@@ -64,6 +64,7 @@ from src.adapters.base import (
     ImageTokenInfo,
     ModelAdapter,
     ModelInputs,
+    OptionScores,
     Order,
     PositionMode,
     Span,
@@ -915,13 +916,7 @@ class Qwen35Adapter(ModelAdapter):
         batching.check_reserved(gen_kwargs, _RESERVED_GEN_KWARGS)
         for inp in items:
             self._check_entry(inp, None, where=where)
-        rows = [self._prompt_row(inp, enable_thinking) for inp in items]
-        kw: dict[str, Any] = batching.batch_prompt(rows, pad_id=self._ids[END_OF_TEXT], device=self._device)
-        with_images = [inp for inp in items if inp.images]
-        if with_images:
-            kw["pixel_values"] = torch.cat([inp.tensors["pixel_values"] for inp in with_images], dim=0)
-            kw["image_grid_thw"] = torch.cat([inp.tensors["image_grid_thw"] for inp in with_images], dim=0)
-        self._check_batch_positions(kw, items)
+        rows, kw = self._batch_kw(items, enable_thinking)
         processors = list(gen_kwargs.pop("logits_processor", None) or [])
         if allowed_token_ids is not None:
             vocab_rows = self._model.get_output_embeddings().weight.shape[0]
@@ -935,6 +930,40 @@ class Qwen35Adapter(ModelAdapter):
         return batching.make_results(rows, out, kw["input_ids"].shape[1], wall=wall, stop_ids=stop_ids, pad_id=pad_id,
                                      max_new_tokens=max_new_tokens, split_answer=self.split_answer,
                                      enable_thinking=enable_thinking)
+
+    def _batch_kw(self, items: Sequence[ModelInputs],
+                  enable_thinking: bool) -> tuple[list[batching.PromptRow], dict[str, Any]]:
+        """generate / generate_batch / option_logits 共用的拼批：每行的提示（_prompt_row）左填充成一批，各行的图像张量按行的顺序
+        拼接，并逐行核对 M-RoPE 位置（_check_batch_positions）。"""
+        rows = [self._prompt_row(inp, enable_thinking) for inp in items]
+        kw: dict[str, Any] = batching.batch_prompt(rows, pad_id=self._ids[END_OF_TEXT], device=self._device)
+        with_images = [inp for inp in items if inp.images]
+        if with_images:
+            kw["pixel_values"] = torch.cat([inp.tensors["pixel_values"] for inp in with_images], dim=0)
+            kw["image_grid_thw"] = torch.cat([inp.tensors["image_grid_thw"] for inp in with_images], dim=0)
+        self._check_batch_positions(kw, items)
+        return rows, kw
+
+    def option_logits(
+        self,
+        inputs_list: Sequence[ModelInputs],
+        options: Sequence[Sequence[str]],
+        *,
+        enable_thinking: bool,
+    ) -> list[OptionScores]:
+        """受限选项读数（约定见 base.ModelAdapter.option_logits；DEV-0016）。提示与左填充同 generate_batch（_batch_kw，含 M-RoPE
+        逐行核对）；第一个生成位置 = assistant 头最后一个 token 之后：关思考时 assistant 头以空思考块 `<think>\\n\\n</think>\\n\\n`
+        结尾，开思考时以 `<think>\\n` 结尾。前向套 gdn_scope()（CPU 上显式走 torch 的 GDN 实现）。"""
+        self._require_loaded()
+        batching.check_enable_thinking(enable_thinking)
+        items = batching.check_inputs_list(inputs_list, where="option_logits")
+        opts = batching.check_options(options, len(items))
+        for inp in items:
+            self._check_entry(inp, None, where="option_logits")
+        rows, kw = self._batch_kw(items, enable_thinking)
+        return batching.option_logits_rows(self._model, self._tok, rows, kw, opts, device=self._device,
+                                           stop_ids=[self._ids[s] for s in STOP_TOKENS], pad_id=self._ids[END_OF_TEXT],
+                                           scope=self.gdn_scope())
 
     def _check_batch_positions(self, kw: dict[str, Any], items: Sequence[ModelInputs]) -> None:
         """有填充的批：HF 的 get_rope_index（带 attention_mask，与 generate 内部同一种调用）在每行非填充位置上的 (T, H, W)

@@ -18,10 +18,14 @@
 另列截断率提示）：
     python scripts/health_check.py --compare <基座 json> <合并后 json> [--out <json>]
 
-协议 v2（D28-7，DEV-0013）：MMLU-Pro 生成到 256 个 token，标题读数 mmlu_pro 取全部，诊断读数 mmlu_pro_fmt32 取同一次
-生成的前 32 个 token（不标红）。v1 的输出（RUN-0007/0009）照旧可读、可 --rescore、可 --compare；与 v2 比较时 MMLU-Pro
-只比 v1 的 32 对 v2 的 fmt32，输出里写明"口径不同、标题不可比"。算力机上可加 --audit-fmt32 N：MMLU-Pro 前 N 题再真的用
-max_new_tokens=32 各生成一次，与截出的读数逐字段比较（GPU bf16 上"前缀相同"的运行期核对；不计入记账，不改分数）。
+协议 v3（D36-4，DEV-0016；冻结，G3 之前不再动）：MMLU-Pro 的标题读数是受限字母读数 mmlu_pro_letter（适配器的
+option_logits：只看第一个生成位置，限制在本题的选项字母上，每个字母取 "X" 与 " X" 里较大的 logit），标红只看它的准确率；
+另记正确选项在选项集合上的平均概率 mean_p_gold（诊断，给差值与 CI）。v2 的两个读数保留为诊断、不标红：256 token 的自由
+作答 mmlu_pro_free256 与同一次生成的前 32 个 token mmlu_pro_fmt32。输出的 option_spellings 记下这次运行 A–J 实际用到的
+写法与 token id。v1（RUN-0007/0009）、v2（RUN-0011）的输出照旧可读、可 --rescore、可 --compare：按口径对上 v3 的读数
+（v1 的 MMLU-Pro → fmt32；v2 的 mmlu_pro → free256），只有一边有的读数写明"口径不同、标题不可比"。
+算力机上可加 --audit-fmt32 N：MMLU-Pro 前 N 题再真的用 max_new_tokens=32 各生成一次，与截出的读数逐字段比较
+（GPU bf16 上"前缀相同"的运行期核对；不计入记账，不改分数）。
 
 退出码：0 = 完成（分数高低不影响）；2 = 出错（运行模式下已有结果与报错先写进 --out 再退出；重评模式写出报错）；
 argparse 用法错误也是 2。--limit N：每项只跑前 N 题（调试用；这样的结果不能拿去比较）。
@@ -50,6 +54,7 @@ import torch  # noqa: E402
 
 from src import runlog  # noqa: E402
 from src.adapters import factory, registry  # noqa: E402
+from src.adapters.base import OPTION_SPELLING_TEMPLATES  # noqa: E402
 from src.adapters.image_policy import FixedSize, SoftTokenBudget, TilePolicy  # noqa: E402
 from src.health import protocol as P  # noqa: E402
 from src.health.items import load_items  # noqa: E402
@@ -179,13 +184,20 @@ def _write(path: Path, obj: dict) -> None:
 
 
 def _print_summary(report: dict, out_path: Path) -> None:
-    layout = P.record_readings(report["protocol_version"])
+    version = report["protocol_version"]
+    layout = P.record_readings(version)
+    heads = set(P.HEADLINE_KEYS_BY_VERSION[version].values())
     for key, reading in layout.items():
         note = "  (未评分)" if key in report["unscored"] else ""
         metric = P.HEADLINE[reading.benchmark]
-        kind = "诊断" if key not in report["headline"] else "标题"
+        kind = "标题" if key in heads else "诊断"
         diag = report["diagnostics"][key]
-        print(f"{key:15s} {metric:20s} {report['scores'][key][metric]['pct']}  [{kind}, max_new_tokens="
+        if reading.kind == P.KIND_OPTION_LETTER:
+            mp = report["scores"][key]["mean_p_gold"]["pct"]
+            print(f"{key:17s} {metric:20s} {report['scores'][key][metric]['pct']}  [{kind}, 受限字母读数]  "
+                  f"mean_p_gold={mp}  (n={diag['n']})")
+            continue
+        print(f"{key:17s} {metric:20s} {report['scores'][key][metric]['pct']}  [{kind}, max_new_tokens="
               f"{reading.max_new_tokens}]  (n={diag['n']}, 写满 {diag['n_reached_max_new_tokens']}){note}")
     for name, t in report["parse_tally"].items():
         print(f"parse {name:21s} n={t['n']} failed={t['n_failed']} {t['failures']}")
@@ -205,13 +217,14 @@ def main_compare(args) -> int:
         if not r["scored"]:
             print(f"{head} 未评分（{r['reading']} 在 unscored 里）")
             continue
-        mark = "  <-- 标红" if r["flag"] else ("  [诊断，不标红]" if r["diagnostic"] else "")
+        mark = "  <-- 标红" if r["flag"] else ("  [诊断，不标红]" if r["diagnostic"] or r["metric"] == "mean_p_gold" else "")
         delta = "n/a" if r["delta_pp"] is None else f"{r['delta_pp']:+.1f}"
         ci = "n/a" if r["ci95_pp"] is None else f"[{r['ci95_pp'][0]:+.1f}, {r['ci95_pp'][1]:+.1f}]"
         st = r["sign_test"]
+        sign = "" if st is None else f"  sign test {st['n_better']}+/{st['n_worse']}- p={st['p_value']:.3g}"
+        paired = "" if r["lost"] is None else f"lost {r['lost']}, gained {r['gained']}, "
         print(f"{head} base={r['base_pct']} merged={r['merged_pct']} "
-              f"delta={delta} pp  CI95={ci}  sign test {st['n_better']}+/{st['n_worse']}- p={st['p_value']:.3g}  "
-              f"(lost {r['lost']}, gained {r['gained']}, n={r['n']}){mark}")
+              f"delta={delta} pp  CI95={ci}{sign}  ({paired}n={r['n']}){mark}")
     for t in res["truncation"]["rows"]:
         mark = "  <-- 截断率提示" if t["notice"] else ""
         delta = "n/a" if t["delta_pp"] is None else f"{t['delta_pp']:+.1f}"
@@ -295,8 +308,13 @@ def main(argv=None) -> int:
         }
         report["generation"] = {"order": P.ORDER, "n_images": 0, "enable_thinking": P.ENABLE_THINKING,
                                 "greedy_kwargs": dict(P.GREEDY_KWARGS), "max_new_tokens": dict(P.MAX_NEW_TOKENS),
-                                "readings": {r.name: {"benchmark": r.benchmark, "max_new_tokens": r.max_new_tokens,
-                                                      "role": r.role, "prefix_of": r.prefix_of} for r in P.READINGS}}
+                                "readings": {r.name: {"benchmark": r.benchmark, "kind": r.kind,
+                                                      "max_new_tokens": r.max_new_tokens, "role": r.role,
+                                                      "prefix_of": r.prefix_of} for r in P.READINGS},
+                                "option_letters": {"method": "adapter.option_logits (first generated position, raw fp32 "
+                                                             "logits, max over single-token spellings, softmax over the "
+                                                             "item's letters)",
+                                                   "spelling_templates": list(OPTION_SPELLING_TEMPLATES)}}
         _log(f"模型 {entry.key}（{report['mode']}，{ad.device}，{ad.dtype}）已就绪，开始跑题"
              + ("；IFEval 只生成、不评分" if not score_ifeval else ""))
         run_items(ad, items_obj, limit=args.limit, score_ifeval=score_ifeval, state=state, progress=_log)

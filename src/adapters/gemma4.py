@@ -72,6 +72,7 @@ from src.adapters.base import (
     ImageTokenInfo,
     ModelAdapter,
     ModelInputs,
+    OptionScores,
     Order,
     PositionMode,
     Span,
@@ -810,12 +811,7 @@ class Gemma4Adapter(ModelAdapter):
         batching.check_reserved(gen_kwargs, _RESERVED_GEN_KWARGS)
         for inp in items:
             self._check_entry(inp, None, where=where)
-        rows = [self._prompt_row(inp, enable_thinking) for inp in items]
-        kw: dict[str, Any] = batching.batch_prompt(rows, pad_id=self._ids[PAD], device=self._device)
-        with_images = [inp for inp in items if inp.images]
-        if with_images:
-            kw["pixel_values"] = torch.cat([inp.tensors["pixel_values"] for inp in with_images], dim=0)
-            kw["image_position_ids"] = torch.cat([inp.tensors["image_position_ids"] for inp in with_images], dim=0)
+        rows, kw = self._batch_kw(items, enable_thinking)
         processors = list(gen_kwargs.pop("logits_processor", None) or [])
         if allowed_token_ids is not None:
             vocab_rows = self._model.get_output_embeddings().weight.shape[0]
@@ -828,6 +824,36 @@ class Gemma4Adapter(ModelAdapter):
         return batching.make_results(rows, out, kw["input_ids"].shape[1], wall=wall, stop_ids=stop_ids, pad_id=pad_id,
                                      max_new_tokens=max_new_tokens, split_answer=self.split_answer,
                                      enable_thinking=enable_thinking)
+
+    def _batch_kw(self, items: Sequence[ModelInputs],
+                  enable_thinking: bool) -> tuple[list[batching.PromptRow], dict[str, Any]]:
+        """generate / generate_batch / option_logits 共用的拼批：每行的提示（prompt_ids）左填充成一批，各行的图按行的顺序拼接。"""
+        rows = [self._prompt_row(inp, enable_thinking) for inp in items]
+        kw: dict[str, Any] = batching.batch_prompt(rows, pad_id=self._ids[PAD], device=self._device)
+        with_images = [inp for inp in items if inp.images]
+        if with_images:
+            kw["pixel_values"] = torch.cat([inp.tensors["pixel_values"] for inp in with_images], dim=0)
+            kw["image_position_ids"] = torch.cat([inp.tensors["image_position_ids"] for inp in with_images], dim=0)
+        return rows, kw
+
+    def option_logits(
+        self,
+        inputs_list: Sequence[ModelInputs],
+        options: Sequence[Sequence[str]],
+        *,
+        enable_thinking: bool,
+    ) -> list[OptionScores]:
+        """受限选项读数（约定见 base.ModelAdapter.option_logits；DEV-0016）。提示与左填充同 generate_batch（_batch_kw）；
+        第一个生成位置 = 生成提示 `<|turn>model\\n` 之后（两种思考开关相同；开思考时 system 轮插在 `<bos>` 之后）。"""
+        self._require_loaded()
+        batching.check_enable_thinking(enable_thinking)
+        items = batching.check_inputs_list(inputs_list, where="option_logits")
+        opts = batching.check_options(options, len(items))
+        for inp in items:
+            self._check_entry(inp, None, where="option_logits")
+        rows, kw = self._batch_kw(items, enable_thinking)
+        return batching.option_logits_rows(self._model, self._tok, rows, kw, opts, device=self._device,
+                                           stop_ids=[self._ids[s] for s in STOP_TOKENS], pad_id=self._ids[PAD])
 
     def split_answer(self, token_ids: Sequence[int], *, enable_thinking: bool) -> tuple[str, str, bool]:
         """把生成的 token 拆成 (text, raw_text, thinking_unclosed)（D10）。

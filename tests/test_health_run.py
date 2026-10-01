@@ -11,6 +11,9 @@
 - 协议 v2（DEV-0013，D28-7）：MMLU-Pro 生成一次（256），截出前 32 个 token 的诊断读数 mmlu_pro_fmt32。三家族的 --tiny 上，
   截出的读数与真的用 max_new_tokens=32 生成的结果逐字段相同（停止 token 用 logits 处理器强制放在第 1、6、32、33、34、101 步，
   或一直禁止）；--audit-fmt32 的运行期审计；RUN-0009 的 v1 输出照旧能重评、能比较。
+- 协议 v3（DEV-0016，D36-4）：MMLU-Pro 另有受限字母读数 mmlu_pro_letter（标题）：每题一次 option_logits，选项为本题的实际字母；
+  256 的自由作答改名 mmlu_pro_free256（诊断）。预热时查一次 A–J 的写法，写进输出的 option_spellings，每题核对相同。
+  RUN-0011 的 v2 输出照旧能重评（逐字节相同）、能比较。
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import subprocess
 import sys
@@ -27,11 +31,12 @@ from pathlib import Path
 import pytest
 import torch
 
-from src.adapters import gemma4, internvl35, qwen35, registry
-from src.adapters.base import GenerationResult, ModelInputs, Span
+from src.adapters import batching, gemma4, internvl35, qwen35, registry
+from src.adapters.base import GenerationResult, ModelInputs, OptionSpelling, Span
 from src.health import protocol as P
 from src.health.items import load_items
 from src.health.run import (
+    LetterReadingError,
     PrefixReadingError,
     RescoreError,
     TextOnlyViolation,
@@ -50,11 +55,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts/health_check.py"
 SYNTHETIC_NLTK_DATA = REPO_ROOT / "tests/fixtures/health/nltk_data"
 FAMILY_KEYS = ("qwen3.5-0.8b", "gemma-4-e2b-it", "internvl3.5-2b-hf")
-FMT32 = P.MMLU_PRO_FMT32
+LETTER, FREE256, FMT32 = P.MMLU_PRO_LETTER, P.MMLU_PRO_FREE256, P.MMLU_PRO_FMT32
 K32 = P.FMT32_MAX_NEW_TOKENS
 READING_NAMES = [r.name for r in P.READINGS]
 RUN0009 = REPO_ROOT / "experiments/P0/0009_ifeval_rescore"
 V1_FILES = sorted(RUN0009.glob("health_*.json"))
+RUN0011 = REPO_ROOT / "experiments/P0/0011_health_v2_base"
+V2_FILES = sorted(RUN0011.glob("health_*.json"))
 
 
 @pytest.fixture(scope="module")
@@ -72,15 +79,33 @@ FAKE_STOP = 0  # 假 tokenizer：一个字符一个 token（码位），0 是停
 
 
 class FakeAdapter:
-    """只实现 build_inputs / generate / split_answer：回答由 responder(prompt) 给出，调用逐条记下。
+    """只实现 build_inputs / generate / option_logits / split_answer：回答由 responder(prompt) 给出，受限字母读数选
+    letter(prompt, options)（默认第一个选项），调用逐条记下。
 
     一个字符一个 token；回答写完再生成停止 token，被 max_new_tokens 截断时没有停止 token（与适配器的 token_ids 约定相同：
     截到第一个停止 token 为止，含）。split_answer 去掉末尾的停止 token 得 text，raw_text 在末尾记 "<stop>"。
+    option_logits：字母 X 的写法 "X"（id 1000 + 码位）与 " X"（id 2000 + 码位）；选中的字母两种写法的 logit 是 2、1，其余 0、-1；
+    经 batching.make_option_scores 组装（与真适配器同一段代码）。
     """
 
-    def __init__(self, responder, *, visual_tokens=0, fail_on_call=None):
+    def __init__(self, responder, *, letter=None, visual_tokens=0, fail_on_call=None):
         self.responder, self.visual_tokens, self.fail_on_call = responder, visual_tokens, fail_on_call
+        self.letter = letter or (lambda prompt, options: options[0])
         self.calls = []
+
+    def option_logits(self, inputs_list, options, *, enable_thinking):
+        rows, table = [], []
+        logits = torch.zeros(len(inputs_list), FAKE_VOCAB, dtype=torch.float32)
+        for b, (inp, opts) in enumerate(zip(inputs_list, options)):
+            prompt = inp.tensors["prompt"]
+            self.calls.append(("option_logits", prompt, tuple(opts), enable_thinking))
+            pick = self.letter(prompt, list(opts))
+            table.append([((OptionSpelling(o, 1000 + ord(o)), OptionSpelling(" " + o, 2000 + ord(o))), ()) for o in opts])
+            for o in opts:
+                logits[b, 1000 + ord(o)], logits[b, 2000 + ord(o)] = (2.0, 1.0) if o == pick else (0.0, -1.0)
+            rows.append(batching.PromptRow(ids=(1,) * (5 + len(prompt) // 4), n_visual_tokens=self.visual_tokens,
+                                           n_image_pixels=1024 * self.visual_tokens))
+        return batching.make_option_scores(rows, logits, [tuple(o) for o in options], table, wall=0.001)
 
     def build_inputs(self, images, instruction, order):
         self.calls.append(("build_inputs", list(images), instruction, order))
@@ -105,6 +130,18 @@ class FakeAdapter:
         return body, body + ("<stop>" if stopped else ""), False
 
 
+FAKE_VOCAB = 2100
+
+
+def canned_letter(items):
+    """受限字母读数：偶数位置选答案字母，奇数位置选第一个不是答案的字母（准确率恰为 50%）。"""
+    pick = {}
+    for k, it in enumerate(items["items"]["mmlu_pro"]):
+        letters = P.option_letters(len(it["options"]))
+        pick[P.mmlu_pro_prompt(it)] = it["answer"] if k % 2 == 0 else next(x for x in letters if x != it["answer"])
+    return lambda prompt, options: pick.get(prompt, options[0])
+
+
 def canned_responder(items):
     """MMLU-Pro：偶数位置答对；GSM8K：每 3 题一轮（带 ####、不带 ####、答错）；IFEval：空回答（官方规则下全部未遵循）。"""
     answers = {P.WARMUP_PROMPT: "OK"}
@@ -119,42 +156,63 @@ def canned_responder(items):
 
 
 def test_full_run_follows_protocol(items):
-    ad = FakeAdapter(canned_responder(items))
+    ad = FakeAdapter(canned_responder(items), letter=canned_letter(items))
     state = run_items(ad, items)
     builds = [c for c in ad.calls if c[0] == "build_inputs"]
     gens = [c for c in ad.calls if c[0] == "generate"]
-    assert len(builds) == len(gens) == 201  # 预热 1 次 + 200 题
+    letters = [c for c in ad.calls if c[0] == "option_logits"]
+    assert len(gens) == 201 and len(letters) == 101  # 预热各 1 次 + 200 次生成 + MMLU-Pro 的 100 次受限字母读数
+    assert len(builds) == 302
     assert gens[0][1:4] == (P.WARMUP_PROMPT, False, P.WARMUP_MAX_NEW_TOKENS)
+    assert letters[0] == ("option_logits", P.WARMUP_PROMPT, tuple(P.OPTION_LETTERS), False)
     expected = [(b, P.PROMPT_BUILDERS[b](it)) for b in P.BENCHMARKS for it in items["items"][b]]
-    for (bench, prompt), build, g in zip(expected, builds[1:], gens[1:]):
-        assert build == ("build_inputs", [], prompt, "instruction_first")
+    for (bench, prompt), g in zip(expected, gens[1:]):
         assert g[1:4] == (prompt, False, P.MAX_NEW_TOKENS[bench])
+    for it, c in zip(items["items"]["mmlu_pro"], letters[1:]):  # 选项为本题的实际字母，关思考
+        assert c == ("option_logits", P.mmlu_pro_prompt(it), tuple(P.option_letters(len(it["options"]))), False)
+    assert all(b[1:] == ([], b[2], "instruction_first") for b in builds)
     for g in gens:
         assert g[4] == dict(P.GREEDY_KWARGS) and g[4]["do_sample"] is False  # 每次都显式给 greedy
-    assert P.MAX_NEW_TOKENS["mmlu_pro"] == 256  # v2：MMLU-Pro 只生成一次，256
-    # 逐题记录按读数分键、按题目文件的顺序；MMLU-Pro 的回答都在 32 个 token 内写完，两个读数只差墙钟
+    assert P.MAX_NEW_TOKENS["mmlu_pro"] == 256  # MMLU-Pro 只自由生成一次，256
+    # 逐题记录按读数分键、按题目文件的顺序；MMLU-Pro 的回答都在 32 个 token 内写完，两个自由生成读数只差墙钟
     assert list(state["records"]) == READING_NAMES
     for name in READING_NAMES:
         bench = P.READINGS_BY_NAME[name].benchmark
         assert [r["id"] for r in state["records"][name]] == [it["id"] for it in items["items"][bench]]
-    for full, short in zip(state["records"]["mmlu_pro"], state["records"][FMT32]):
+    for full, short in zip(state["records"][FREE256], state["records"][FMT32]):
         assert full["stopped"] is True and full["n_generated_tokens"] < K32
         assert {**full, "wall_time_s": None} == short
+    rec = state["records"][LETTER][0]
+    assert list(rec) == ["id", "prompt_sha256", "options", "token_ids", "logits", "probs", "choice", "n_prompt_tokens",
+                         "wall_time_s", "letters", "gold", "correct", "p_gold"]
+    assert rec["prompt_sha256"] == state["records"][FREE256][0]["prompt_sha256"]
+    assert rec["choice"] == rec["gold"] and rec["correct"] is True and rec["token_ids"][0] == 1000 + ord("A")
     s = summarize(state["records"])
     assert s["headline"] == {"mmlu_pro": 50.0, "gsm8k": 68.0, "ifeval": 0.0}
-    assert s["scores"][FMT32]["accuracy"] == {"n": 100, "n_correct": 50, "pct": 50.0}
+    # 正确选项的概率：选中的字母 logit 2、其余 0，n 个选项时选中的概率 e²/(e² + n − 1)，没选中的 1/(e² + n − 1)
+    want = []
+    for k, it in enumerate(items["items"]["mmlu_pro"]):
+        z = math.exp(2) + len(it["options"]) - 1
+        want.append(math.exp(2) / z if k % 2 == 0 else 1 / z)
+    assert s["scores"][LETTER]["mean_p_gold"]["mean"] == pytest.approx(sum(want) / 100, abs=1e-6)
+    assert s["scores"][LETTER]["accuracy"] == {"n": 100, "n_correct": 50, "pct": 50.0}
+    assert s["scores"][FREE256]["accuracy"] == s["scores"][FMT32]["accuracy"] == {"n": 100, "n_correct": 50, "pct": 50.0}
     assert s["scores"]["gsm8k"]["strict"] == {"n": 50, "n_correct": 17, "pct": 34.0}
-    assert s["parse_tally"]["mmlu_pro"]["failures"] == {"no_choice": 50}
+    assert s["parse_tally"][FREE256]["failures"] == {"no_choice": 50}
     assert s["parse_tally"]["gsm8k_strict"]["failures"] == {"no_marker": 17}
     assert s["scores"]["ifeval"]["instruction_level_loose"]["n"] == 77
-    # 记账：每题一个样本、一次调用、一轮；预热不计入
+    # 记账：每题一个样本；MMLU-Pro 每题两次调用（option_logits 与 generate），各算一轮；预热不计入
     comp = state["compute"]
     assert [comp[b]["n_samples"] for b in P.BENCHMARKS] == [100, 50, 50]
-    assert comp["total"]["n_calls"] == comp["total"]["n_rounds"] == comp["total"]["n_samples"] == 200
+    assert comp["mmlu_pro"]["n_calls"] == comp["mmlu_pro"]["n_rounds"] == 200
+    assert comp["total"]["n_calls"] == comp["total"]["n_rounds"] == 300 and comp["total"]["n_samples"] == 200
     assert comp["total"]["visual_tokens"] == 0
-    assert comp["total"]["generated_tokens"] == sum(r["n_generated_tokens"] for b in P.BENCHMARKS
-                                                     for r in state["records"][b])
+    assert comp["total"]["generated_tokens"] == 100 + sum(r["n_generated_tokens"] for b in (FREE256, "gsm8k", "ifeval")
+                                                           for r in state["records"][b])
     assert state["warmup"]["counted_in_compute"] is False
+    assert state["option_spellings"] == {x: {"spellings": [{"text": x, "token_id": 1000 + ord(x)},
+                                                           {"text": " " + x, "token_id": 2000 + ord(x)}], "skipped": []}
+                                         for x in P.OPTION_LETTERS}
 
 
 def test_limited_run_records(items):
@@ -165,24 +223,25 @@ def test_limited_run_records(items):
     ad = FakeAdapter(lambda p: responses.get(p, "B"))
     msgs = []
     state = run_items(ad, items, limit=3, progress=msgs.append)
-    assert {b: len(v) for b, v in state["records"].items()} == {"mmlu_pro": 3, FMT32: 3, "gsm8k": 3, "ifeval": 3}
+    assert {b: len(v) for b, v in state["records"].items()} == {LETTER: 3, FREE256: 3, FMT32: 3, "gsm8k": 3, "ifeval": 3}
     for it, rec in zip(items["items"]["ifeval"][:3], state["records"]["ifeval"]):
         assert {k: rec[k] for k in ("strict", "loose")} == ifeval_follow(it, rec["text"])
         assert rec["instruction_id_list"] == it["instruction_id_list"]
-    rec = state["records"]["mmlu_pro"][0]
+    rec = state["records"][FREE256][0]
     assert rec["raw_text"] == "B<stop>" and rec["text"] == "B" and rec["parsed"] == "B"
     assert rec["reached_max_new_tokens"] is False and len(rec["prompt_sha256"]) == 64
     assert rec["stopped"] is True and rec["n_generated_tokens"] == 2
-    assert msgs == ["mmlu_pro 3/3  生成 token 累计 6", "gsm8k 3/3  生成 token 累计 6",
+    assert msgs == ["mmlu_pro 3/3  生成 token 累计 9", "gsm8k 3/3  生成 token 累计 6",  # MMLU-Pro：3 × (2 + 受限字母读数 1)
                     f"ifeval 3/3  生成 token 累计 {sum(r['n_generated_tokens'] for r in state['records']['ifeval'])}"]
 
 
 def test_failure_keeps_partial_results(items):
-    ad = FakeAdapter(lambda p: "A", fail_on_call=5)  # 预热是第 1 次，第 4 题出错
+    ad = FakeAdapter(lambda p: "A", fail_on_call=5)  # 预热是第 1 次 generate，第 4 题出错（它的受限字母读数已做完）
     state = {}
     with pytest.raises(RuntimeError, match="boom"):
         run_items(ad, items, state=state)
-    assert len(state["records"]["mmlu_pro"]) == 3 and state["compute"]["mmlu_pro"]["n_samples"] == 3
+    assert len(state["records"][LETTER]) == len(state["records"][FREE256]) == 3
+    assert state["compute"]["mmlu_pro"]["n_samples"] == 3
     assert "warmup" in state and "total" not in state["compute"]
 
 
@@ -228,10 +287,10 @@ def test_fmt32_is_the_32_token_prefix_on_fake(items):
     rows = []
     for it in mm:
         recs, compute = run_one(ad, "mmlu_pro", it)
-        assert list(recs) == ["mmlu_pro", FMT32]
-        full, short = recs["mmlu_pro"], recs[FMT32]
+        assert list(recs) == [LETTER, FREE256, FMT32]
+        full, short = recs[FREE256], recs[FMT32]
         assert short == _real_32(ad, it)
-        assert compute.n_calls == 1  # 截出的读数不另调用模型
+        assert compute.n_calls == 2  # 受限字母读数一次、自由生成一次；截出的读数不另调用模型
         rows.append((full["n_generated_tokens"], full["stopped"], short["n_generated_tokens"], short["stopped"],
                      short["reached_max_new_tokens"], full["correct"], short["correct"], short["failure"]))
     assert rows == [
@@ -360,7 +419,7 @@ def test_tiny_fmt32_equals_real_32_token_generation(script, items, key, monkeypa
 
         monkeypatch.setattr(ad, "generate", forced)
         recs, _ = run_one(ad, "mmlu_pro", it)
-        full, short = recs["mmlu_pro"], recs[FMT32]
+        full, short = recs[FREE256], recs[FMT32]
         assert short == _real_32(ad, it), (key, step)
         n_full = 256 if step is None else step + 1
         assert (full["n_generated_tokens"], full["stopped"]) == (n_full, step is not None), (key, step)
@@ -419,26 +478,44 @@ def test_tiny_end_to_end(tiny_run, items, key):
     entry = registry.get_model(key)
     assert (rep["model"]["key"], rep["model"]["family"], rep["model"]["revision"]) == (entry.key, entry.family, entry.revision)
     assert rep["model"]["device"] == "cpu" and rep["model"]["dtype"] == "torch.float32"
-    assert rep["generation"] == {
+    gen = rep["generation"]
+    assert {k: gen[k] for k in ("order", "n_images", "enable_thinking", "greedy_kwargs", "max_new_tokens")} == {
         "order": "instruction_first", "n_images": 0, "enable_thinking": False, "greedy_kwargs": dict(P.GREEDY_KWARGS),
-        "max_new_tokens": {"mmlu_pro": 256, "gsm8k": 512, "ifeval": 1024},
-        "readings": {"mmlu_pro": {"benchmark": "mmlu_pro", "max_new_tokens": 256, "role": "headline", "prefix_of": None},
-                     FMT32: {"benchmark": "mmlu_pro", "max_new_tokens": 32, "role": "diagnostic", "prefix_of": "mmlu_pro"},
-                     "gsm8k": {"benchmark": "gsm8k", "max_new_tokens": 512, "role": "headline", "prefix_of": None},
-                     "ifeval": {"benchmark": "ifeval", "max_new_tokens": 1024, "role": "headline", "prefix_of": None}}}
+        "max_new_tokens": {"mmlu_pro": 256, "gsm8k": 512, "ifeval": 1024}}
+    assert gen["readings"] == {
+        LETTER: {"benchmark": "mmlu_pro", "kind": "option_letter", "max_new_tokens": 1, "role": "headline",
+                 "prefix_of": None},
+        FREE256: {"benchmark": "mmlu_pro", "kind": "generate", "max_new_tokens": 256, "role": "diagnostic",
+                  "prefix_of": None},
+        FMT32: {"benchmark": "mmlu_pro", "kind": "generate", "max_new_tokens": 32, "role": "diagnostic",
+                "prefix_of": FREE256},
+        "gsm8k": {"benchmark": "gsm8k", "kind": "generate", "max_new_tokens": 512, "role": "headline", "prefix_of": None},
+        "ifeval": {"benchmark": "ifeval", "kind": "generate", "max_new_tokens": 1024, "role": "headline",
+                   "prefix_of": None}}
+    assert gen["option_letters"]["spelling_templates"] == ["{}", " {}"]
     assert rep["items_file"] == {"path": P.ITEMS_PATH, "sha256": P.ITEMS_SHA256}
     assert list(rep["records"]) == list(rep["scores"]) == list(rep["diagnostics"]) == READING_NAMES
     for reading in P.READINGS:
         recs = rep["records"][reading.name]
         assert [r["id"] for r in recs] == [it["id"] for it in items["items"][reading.benchmark][:3]]
-        for r in recs:
+        for r, it in zip(recs, items["items"][reading.benchmark]):
+            if reading.kind == P.KIND_OPTION_LETTER:  # 选项为本题的实际字母；概率在选项集合上
+                assert r["options"] == list(P.option_letters(len(it["options"]))) and r["choice"] in r["options"]
+                assert abs(sum(r["probs"]) - 1) < 1e-5 and r["p_gold"] == r["probs"][r["options"].index(it["answer"])]
+                assert r["correct"] == (r["choice"] == it["answer"])
+                continue
             assert isinstance(r["raw_text"], str) and isinstance(r["text"], str) and isinstance(r["stopped"], bool)
             assert 1 <= r["n_generated_tokens"] <= reading.max_new_tokens
-    for full, short in zip(rep["records"]["mmlu_pro"], rep["records"][FMT32]):
+    for full, short in zip(rep["records"][FREE256], rep["records"][FMT32]):
         assert short["n_generated_tokens"] == min(full["n_generated_tokens"], K32) and short["wall_time_s"] is None
     assert list(rep["headline"]) == list(P.BENCHMARKS)
-    assert {k: v["n"] for k, v in rep["parse_tally"].items()} == {"mmlu_pro": 3, FMT32: 3, "gsm8k_strict": 3,
+    assert rep["headline"]["mmlu_pro"] == rep["scores"][LETTER]["accuracy"]["pct"]
+    assert {k: v["n"] for k, v in rep["parse_tally"].items()} == {FREE256: 3, FMT32: 3, "gsm8k_strict": 3,
                                                                    "gsm8k_flexible": 3}
+    # 这次运行实际用到的字母写法：A–J 各有 "X" 与 " X" 两个单 token 写法（id 见 test_adapter_option_logits）
+    sp = rep["option_spellings"]
+    assert list(sp) == list(P.OPTION_LETTERS)
+    assert all([x["text"] for x in v["spellings"]] == [k, " " + k] and v["skipped"] == [] for k, v in sp.items())
     # --audit-fmt32 3：截出的读数与真的只生成 32 个逐字段相同；审计的调用不计入记账
     audit = rep["prefix_audit"][FMT32]
     assert (audit["n"], audit["n_identical"], audit["mismatches"], audit["counted_in_compute"]) == (3, 3, [], False)
@@ -447,7 +524,7 @@ def test_tiny_end_to_end(tiny_run, items, key):
     assert rep["scores"]["ifeval"]["instruction_level_strict"]["n"] == sum(
         len(it["instruction_id_list"]) for it in items["items"]["ifeval"][:3])
     total = rep["compute"]["total"]
-    assert (total["n_samples"], total["n_calls"], total["visual_tokens"]) == (9, 9, 0)
+    assert (total["n_samples"], total["n_calls"], total["visual_tokens"]) == (9, 12, 0)  # MMLU-Pro 每题两次调用
     assert rep["warmup"]["counted_in_compute"] is False
     scoring = rep["scoring"]
     assert (scoring["mode"], scoring["benchmarks_scored"], scoring["source"]) == ("inline", list(P.BENCHMARKS), None)
@@ -473,11 +550,14 @@ def test_compare_cli(tiny_run, tmp_path):
     assert proc.returncode == 0, proc.stderr[-2000:]
     res = json.loads(cmp_out.read_text(encoding="utf-8"))
     assert res["any_flag"] is False and res["partial_run"] is True and res["unscored"] == []
-    assert res["protocol_versions"] == {"base": 2, "merged": 2} and res["incomparable"] == [] and res["notes"] == []
-    assert [r["reading"] for r in res["rows"]] == ["mmlu_pro", FMT32, "gsm8k", "gsm8k"] + ["ifeval"] * 4
+    assert res["protocol_versions"] == {"base": 3, "merged": 3} and res["incomparable"] == [] and res["notes"] == []
+    assert [(r["reading"], r["metric"]) for r in res["rows"]][:4] == [(LETTER, "accuracy"), (LETTER, "mean_p_gold"),
+                                                                      (FREE256, "accuracy"), (FMT32, "accuracy")]
+    assert [r["reading"] for r in res["rows"]][4:] == ["gsm8k", "gsm8k"] + ["ifeval"] * 4
     assert all(r["comparable"] and r["delta_pp"] == 0.0 and r["ci95_pp"] == [0.0, 0.0] for r in res["rows"])
-    assert all(r["sign_test"] == {"n_better": 0, "n_worse": 0, "p_value": 1.0} for r in res["rows"])
-    assert [t["reading"] for t in res["truncation"]["rows"]] == READING_NAMES and res["truncation"]["notices"] == []
+    assert all(r["sign_test"] == ({"n_better": 0, "n_worse": 0, "p_value": 1.0} if r["metric"] != "mean_p_gold" else None)
+               for r in res["rows"])
+    assert [t["reading"] for t in res["truncation"]["rows"]] == READING_NAMES[1:] and res["truncation"]["notices"] == []
     assert "any_flag=False" in proc.stdout and "CI95=[+0.0, +0.0]" in proc.stdout and "[诊断，不标红]" in proc.stdout
 
 
@@ -539,7 +619,8 @@ def test_skip_ifeval_scoring_needs_no_ifeval_dependencies(skip_run, items):
         len(it["instruction_id_list"]) for it in items["items"]["ifeval"][:3])
     # 另两项照常评分
     assert rep["headline"]["mmlu_pro"] is not None and rep["headline"]["gsm8k"] is not None
-    assert rep["parse_tally"]["mmlu_pro"]["n"] == 3
+    assert len(rep["records"][LETTER]) == 3
+    assert rep["parse_tally"][FREE256]["n"] == 3 and rep["headline"]["mmlu_pro"] is not None
     ifeval = rep["scoring"]["ifeval"]
     assert rep["scoring"]["benchmarks_scored"] == ["mmlu_pro", "gsm8k"]
     assert (ifeval["scored"], ifeval["skip_reason"], ifeval["punkt_tab"], ifeval["langdetect_seed"]) == (
@@ -572,8 +653,9 @@ def test_rescore_is_byte_identical_to_inline_scoring(tiny_run, skip_run, tmp_pat
     # 2) 先生成（不评 IFEval）、后评分：与一次跑完的评分逐字节相同（两次运行只差逐题墙钟）
     _, skip_path = skip_run
     skipped = json.loads(skip_path.read_text(encoding="utf-8"))
-    for bench in P.BENCHMARKS:  # 前提：两次运行的生成相同
-        assert [r["raw_text"] for r in skipped["records"][bench]] == [r["raw_text"] for r in inline["records"][bench]]
+    for name in READING_NAMES:  # 前提：两次运行的生成相同
+        field = "logits" if name == LETTER else "raw_text"
+        assert [r[field] for r in skipped["records"][name]] == [r[field] for r in inline["records"][name]]
     for extra in ([], ["--only-ifeval"]):
         out = tmp_path / f"rescored_skip{'_ifeval' if extra else ''}.json"
         proc = _run_script(["--rescore", str(skip_path), "--out", str(out), *extra], timeout=300)
@@ -611,7 +693,7 @@ def test_rescore_rejects_mismatched_records(items):
     with pytest.raises(RescoreError, match="prompt_sha256"):
         rescore_records(bad, items)
     bad = copy.deepcopy(records)
-    bad["mmlu_pro"].reverse()
+    bad[FREE256].reverse()
     with pytest.raises(RescoreError, match="前 2 题"):
         rescore_records(bad, items)
     bad = copy.deepcopy(records)
@@ -631,17 +713,31 @@ def test_rescore_rejects_mismatched_records(items):
     with pytest.raises(RescoreError, match="截取"):
         rescore_records(bad, items)
     bad = copy.deepcopy(records)
-    del bad["mmlu_pro"][0]["stopped"]  # v2 的记录必须有 stopped
+    del bad[FREE256][0]["stopped"]  # v2 起的记录必须有 stopped
     with pytest.raises(RescoreError, match="stopped"):
         rescore_records(bad, items)
     bad = copy.deepcopy(records)
     del bad[FMT32]
-    with pytest.raises(RescoreError, match="v2"):
+    with pytest.raises(RescoreError, match="v3"):
         rescore_records(bad, items)
-    with pytest.raises(RescoreError, match="v1"):  # v2 的记录不能按 v1 的布局读
+    with pytest.raises(RescoreError, match="v1"):  # v3 的记录不能按 v1、v2 的布局读
         rescore_records(records, items, protocol_version=1)
+    with pytest.raises(RescoreError, match="v2"):
+        rescore_records(records, items, protocol_version=2)
     with pytest.raises(RescoreError, match="不受支持"):
-        rescore_records(records, items, protocol_version=3)
+        rescore_records(records, items, protocol_version=4)
+    # v3 的受限字母读数：生成部分的字段齐全、选项是本题的实际字母
+    bad = copy.deepcopy(records)
+    del bad[LETTER][0]["probs"]
+    with pytest.raises(RescoreError, match="probs"):
+        rescore_records(bad, items)
+    bad = copy.deepcopy(records)
+    bad[LETTER][1]["options"] = bad[LETTER][1]["options"][:-1]
+    with pytest.raises(RescoreError, match="实际字母"):
+        rescore_records(bad, items)
+    bad = copy.deepcopy(records)  # 评分部分被改过：重评从生成部分重新算出来
+    bad[LETTER][0]["correct"], bad[LETTER][0]["p_gold"] = not bad[LETTER][0]["correct"], -1.0
+    assert rescore_records(bad, items) == records
 
 
 def test_rescore_in_process_equals_inline(items):
@@ -750,33 +846,33 @@ def test_v1_rescore_cli_keeps_v1(tmp_path):
     assert new["parse_tally"] == rep["parse_tally"] and new["scoring_history"][-1] == rep["scoring"]
 
 
-def _v2_report(items, key="fake-v2"):
-    """假适配器在全部 200 题上跑出的 v2 输出（与 RUN-0009 同一题目文件）。"""
-    state = run_items(FakeAdapter(canned_responder(items)), items)
-    return {"protocol_version": 2, "items_file": {"sha256": P.ITEMS_SHA256}, "limit": None, "model": {"key": key},
+def _v3_report(items, key="fake-v3"):
+    """假适配器在全部 200 题上跑出的 v3 输出（与 RUN-0009、RUN-0011 同一题目文件）。"""
+    state = run_items(FakeAdapter(canned_responder(items), letter=canned_letter(items)), items)
+    return {"protocol_version": 3, "items_file": {"sha256": P.ITEMS_SHA256}, "limit": None, "model": {"key": key},
             "records": state["records"], **summarize(state["records"])}
 
 
 @needs_v1
-def test_compare_v1_with_v2_only_matches_same_reading(items):
-    """v1 对 v2：MMLU-Pro 只比 v1 的 32 对 v2 的 fmt32（诊断，不标红）；256 的标题读数写明"口径不同、标题不可比"。"""
+def test_compare_v1_with_v3_only_matches_same_reading(items):
+    """v1 对 v3：MMLU-Pro 只比 v1 的 32 对 fmt32（诊断，不标红）；受限字母读数与 256 的自由作答写明"口径不同、标题不可比"。"""
     v1 = json.loads(V1_FILES[0].read_text(encoding="utf-8"))
-    v2 = _v2_report(items)
-    for base, merged, (vb, vm) in ((v1, v2, (1, 2)), (v2, v1, (2, 1))):
+    v3 = _v3_report(items)
+    for base, merged, (vb, vm) in ((v1, v3, (1, 3)), (v3, v1, (3, 1))):
         res = compare(base, merged)
         assert res["protocol_versions"] == {"base": vb, "merged": vm}
-        assert res["incomparable"] == ["mmlu_pro"] and len(res["notes"]) == 1
-        assert "口径不同、标题不可比" in res["notes"][0] and "协议 v1" in res["notes"][0]
-        head = next(r for r in res["rows"] if r["reading"] == "mmlu_pro")
+        assert res["incomparable"] == [LETTER, FREE256] and len(res["notes"]) == 2
+        assert all("口径不同、标题不可比" in n and "协议 v1" in n for n in res["notes"])
+        head = next(r for r in res["rows"] if r["reading"] == LETTER)
         assert (head["comparable"], head["flag"], head["delta_pp"], head["ci95_pp"]) == (False, None, None, None)
         assert head["note"] == res["notes"][0] and head["headline"] is True
-        v2_side, v1_side = ("merged_pct", "base_pct") if vm == 2 else ("base_pct", "merged_pct")
-        assert head[v2_side] == v2["headline"]["mmlu_pro"] and head[v1_side] is None
+        v3_side, v1_side = ("merged_pct", "base_pct") if vm == 3 else ("base_pct", "merged_pct")
+        assert head[v3_side] == v3["headline"]["mmlu_pro"] and head[v1_side] is None
         fmt = next(r for r in res["rows"] if r["reading"] == FMT32)
         assert fmt["comparable"] and fmt["diagnostic"] and fmt["flag"] is None and fmt["ci95_pp"] is not None
-        v1_pct, v2_pct = v1["scores"]["mmlu_pro"]["accuracy"]["pct"], v2["scores"][FMT32]["accuracy"]["pct"]
-        assert (fmt["base_pct"], fmt["merged_pct"]) == ((v1_pct, v2_pct) if vb == 1 else (v2_pct, v1_pct))
-        assert "mmlu_pro" not in res["flagged"] and FMT32 not in res["flagged"]
+        v1_pct, v3_pct = v1["scores"]["mmlu_pro"]["accuracy"]["pct"], v3["scores"][FMT32]["accuracy"]["pct"]
+        assert (fmt["base_pct"], fmt["merged_pct"]) == ((v1_pct, v3_pct) if vb == 1 else (v3_pct, v1_pct))
+        assert LETTER not in res["flagged"] and FMT32 not in res["flagged"]
         assert [t["reading"] for t in res["truncation"]["rows"]] == [FMT32, "gsm8k", "ifeval"]
 
 
@@ -789,7 +885,7 @@ def test_compare_cli_on_two_v1_outputs(tmp_path):
     assert proc.returncode == 0, proc.stderr[-2000:]
     res = json.loads(out.read_text(encoding="utf-8"))
     ra, rb = (json.loads(p.read_text(encoding="utf-8")) for p in (a, b))
-    assert res["protocol_versions"] == {"base": 1, "merged": 1} and res["incomparable"] == ["mmlu_pro"]
+    assert res["protocol_versions"] == {"base": 1, "merged": 1} and res["incomparable"] == [LETTER, FREE256]
     fmt = next(r for r in res["rows"] if r["reading"] == FMT32)
     assert (fmt["base_pct"], fmt["merged_pct"]) == (ra["scores"]["mmlu_pro"]["accuracy"]["pct"],
                                                      rb["scores"]["mmlu_pro"]["accuracy"]["pct"])
@@ -799,3 +895,91 @@ def test_compare_cli_on_two_v1_outputs(tmp_path):
     trunc = {t["reading"]: t for t in res["truncation"]["rows"]}
     assert trunc[FMT32]["base_n_reached"] == ra["diagnostics"]["mmlu_pro"]["n_reached_max_new_tokens"]
     assert "口径不同、标题不可比" in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# 兼容 v2 的输出（RUN-0011，入库的 8 个基座）：能读、能重评（逐字节相同）、能比较
+# ---------------------------------------------------------------------------
+
+needs_v2 = pytest.mark.skipif(not V2_FILES, reason="RUN-0011 的输出不在仓库里")
+
+
+@needs_v2
+def test_v2_outputs_rescore_byte_identically(items):
+    """当前代码按 v2 的布局重评 RUN-0011 的 8 份输出：MMLU-Pro 的两个读数与 GSM8K 的逐题记录、以及全部汇总，与文件里的
+    逐字节相同（IFEval 的重评要钉住的 punkt_tab，开发机上没有，这里原样保留；它的规则没有变）。"""
+    assert len(V2_FILES) == 8
+    for path in V2_FILES:
+        rep = json.loads(path.read_text(encoding="utf-8"))
+        assert rep["protocol_version"] == 2 and list(rep["records"]) == ["mmlu_pro", FMT32, "gsm8k", "ifeval"], path.name
+        recs = rescore_records(rep["records"], items, benchmarks=("mmlu_pro", "gsm8k"), protocol_version=2)
+        assert _dump(recs) == _dump(rep["records"]), path.name
+        assert _dump(summarize(recs, protocol_version=2)) == _dump({k: rep[k] for k in SUMMARY_KEYS}), path.name
+
+
+@needs_v2
+def test_v2_rescore_cli_keeps_v2(tmp_path):
+    rep = json.loads(V2_FILES[0].read_text(encoding="utf-8"))
+    src = tmp_path / "v2.json"
+    src.write_text(json.dumps({**rep, "mode": "tiny"}), encoding="utf-8")  # 只为走通命令行路径（见 v1 的同名用例）
+    out = tmp_path / "v2_rescored.json"
+    proc = _run_script(["--rescore", str(src), "--out", str(out)], timeout=300)
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    new = json.loads(out.read_text(encoding="utf-8"))
+    assert new["protocol_version"] == 2 and list(new["records"]) == ["mmlu_pro", FMT32, "gsm8k", "ifeval"]
+    for key in ("mmlu_pro", FMT32, "gsm8k"):
+        assert _dump(new["records"][key]) == _dump(rep["records"][key])
+        assert new["scores"][key] == rep["scores"][key]
+    assert new["headline"]["mmlu_pro"] == rep["headline"]["mmlu_pro"] and new["parse_tally"] == rep["parse_tally"]
+    assert "mmlu_pro" in proc.stdout and "mmlu_pro_letter" not in proc.stdout
+
+
+@needs_v2
+def test_compare_cli_on_two_v2_outputs(tmp_path):
+    """RUN-0011 的一对 v2 输出：受限字母读数两边都没有，写明不可比；256 的自由作答（v3 的 free256）与 fmt32 照比，不标红。"""
+    a, b = V2_FILES[0], V2_FILES[1]
+    out = tmp_path / "cmp_v2.json"
+    proc = _run_script(["--compare", str(a), str(b), "--out", str(out)], timeout=300)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    res = json.loads(out.read_text(encoding="utf-8"))
+    ra, rb = (json.loads(p.read_text(encoding="utf-8")) for p in (a, b))
+    assert res["protocol_versions"] == {"base": 2, "merged": 2} and res["incomparable"] == [LETTER]
+    free = next(r for r in res["rows"] if r["reading"] == FREE256)
+    assert (free["base_pct"], free["merged_pct"]) == (ra["headline"]["mmlu_pro"], rb["headline"]["mmlu_pro"])
+    assert free["diagnostic"] and free["flag"] is None and free["n"] == 100
+    assert LETTER not in res["flagged"] and FREE256 not in res["flagged"] and FMT32 not in res["flagged"]
+    gs = next(r for r in res["rows"] if r["reading"] == "gsm8k" and r["metric"] == "flexible")
+    assert (gs["base_pct"], gs["merged_pct"]) == (ra["headline"]["gsm8k"], rb["headline"]["gsm8k"])
+    trunc = {t["reading"]: t for t in res["truncation"]["rows"]}
+    assert trunc[FREE256]["base_n_reached"] == ra["diagnostics"]["mmlu_pro"]["n_reached_max_new_tokens"]
+    assert "口径不同、标题不可比" in proc.stdout
+
+
+@needs_v2
+def test_compare_v2_with_v3(items):
+    """v2 对 v3：v2 的 "mmlu_pro"（256）对上 free256（诊断），fmt32 照比；受限字母读数只在 v3 一边：不可比、不标红。"""
+    v2 = json.loads(V2_FILES[0].read_text(encoding="utf-8"))
+    v3 = _v3_report(items)
+    for base, merged, (vb, vm) in ((v2, v3, (2, 3)), (v3, v2, (3, 2))):
+        res = compare(base, merged)
+        assert res["protocol_versions"] == {"base": vb, "merged": vm} and res["incomparable"] == [LETTER]
+        head = next(r for r in res["rows"] if r["reading"] == LETTER and r["metric"] == "accuracy")
+        v3_side = "merged_pct" if vm == 3 else "base_pct"
+        assert head["comparable"] is False and head[v3_side] == v3["headline"]["mmlu_pro"]
+        free = next(r for r in res["rows"] if r["reading"] == FREE256)
+        v2_pct, v3_pct = v2["scores"]["mmlu_pro"]["accuracy"]["pct"], v3["scores"][FREE256]["accuracy"]["pct"]
+        assert (free["base_pct"], free["merged_pct"]) == ((v2_pct, v3_pct) if vb == 2 else (v3_pct, v2_pct))
+        assert free["comparable"] and free["flag"] is None
+        assert [t["reading"] for t in res["truncation"]["rows"]] == [FREE256, FMT32, "gsm8k", "ifeval"]
+
+
+def test_letter_reading_checks_spellings_against_warmup(items):
+    """每题各字母用到的写法必须与预热时查到的（输出里的 option_spellings）相同。"""
+    ad = FakeAdapter(lambda p: "A")
+    state = run_items(ad, items, limit=1, score_ifeval=False)
+    table = copy.deepcopy(state["option_spellings"])
+    it = items["items"]["mmlu_pro"][0]
+    run_one(ad, "mmlu_pro", it, spellings=table)  # 相同：通过
+    table["A"]["spellings"][1]["token_id"] += 1
+    with pytest.raises(LetterReadingError, match="写法"):
+        run_one(ad, "mmlu_pro", it, spellings=table)

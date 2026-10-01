@@ -1,14 +1,17 @@
-"""健康检查（简报 §8.11；DEV-0008；协议 v2：DEV-0013，D28-7）。
+"""健康检查（简报 §8.11；DEV-0008；协议 v2：DEV-0013，D28-7；协议 v3：DEV-0016，D36-4）。
 
 每个门在合并后的单一权重上跑一个固定的约 200 题集合（MMLU-Pro 100、GSM8K 50、IFEval 50），同时报告基座在同一集合上的
 分数；任何一项下降超过 5 个点，在门报告里标红。本说明就是协议全文，在看到任何分数之前固定；数字与字符串只在
 protocol.py 定义一处，tests/test_health_*.py 钉住。
 
-协议版本 2（protocol.PROTOCOL_VERSION；D28-7 取代 D26 的 MMLU-Pro 32 token）：MMLU-Pro 的标题读数改为最多 256 个新
-token；32 token 的读数保留为格式诊断 mmlu_pro_fmt32，取同一次生成的前 32 个 token；标红只作用于 256 的读数；截断率变化
-超过 10 个点另行提示。理由（D28-7）：训练一定会改变输出的长度与格式，32 token 的读数会把"变啰嗦了"误报成"知识退化了"；
-现在还没有训练过的模型，修的是仪器，不是看过处理效应之后挑指标。题目文件与其余协议不变。v1 的输出照旧可读、可重评、
-可比较（第 6 节）。
+协议版本 3（protocol.PROTOCOL_VERSION；D36-4 取代 D28-7 的 MMLU-Pro 标题读数；**改完即冻结为健康检查 v3，G3 之前不再动**）：
+MMLU-Pro 的标题读数改为受限字母读数 mmlu_pro_letter——只看第一个生成位置（相当于只生成一个 token），限制在本题的选项字母上；
+同一字母常有带空格与不带空格两种 token，取两者中较大的 logit。准确率是标题，标红只看它；同时记录正确选项的平均概率
+（选项集合上的 softmax），连续读数对退化更敏感，作诊断（差值与配对 bootstrap CI，不标红）。v2 的两个读数保留为诊断、
+不参与标红：256 token 的自由作答（v3 里叫 mmlu_pro_free256）与同一次生成的 32 token 前缀 mmlu_pro_fmt32。GSM8K、IFEval、
+题目文件与其余协议不变。这是 MMLU-Pro 第二次改口径：v1（D26）32 token → v2（D28-7）256 token → v3（D36-4）受限字母读数。
+v2 的理由仍然成立（训练会改变输出的长度与格式，自由作答的读数会把"变啰嗦了"误报成"知识退化了"），受限字母读数没有截断与
+解析问题。v1、v2 的输出照旧可读、可重评、可比较（第 6 节）。
 
 1. 题目（configs/health_check_items.json，入库；运行时不下载数据集）
    - 来源（HF 数据集，固定 commit；许可取自 HF API 的 card license）：
@@ -35,8 +38,16 @@ token；32 token 的读数保留为格式诊断 mmlu_pro_fmt32，取同一次生
    - generate：enable_thinking=False；greedy，每次显式传 do_sample=False、num_beams=1、repetition_penalty=1.0、
      no_repeat_ngram_size=0（transformers 5.x 里没有显式给出的生成参数取仓库的 generation_config，Gemma 仓库默认采样）；
      max_new_tokens：MMLU-Pro 256（v1 为 32）、GSM8K 512、IFEval 1024。单轮，每题一次调用。
-   - 读数（protocol.READINGS）：每题一次生成，MMLU-Pro 由它得到两个读数——
-     - mmlu_pro（标题）：全部生成，最多 256 个 token；
+   - option_logits（v3，只用于 MMLU-Pro）：enable_thinking=False，选项为本题的实际字母（A 起，最多到 J）。适配器的接口约定见
+     src/adapters/base.py（ModelAdapter.option_logits、OptionScores）：提示、助手头、思考开关、左填充与 generate 共用；
+     一次前向，取第一个生成位置的原始 logits（HF generate 的 output_logits，logits 处理器之前，fp32；bf16 模型即 lm_head
+     输出转成的 fp32）；每个字母的写法 "X" 与 " X" 由 tokenizer 查出，不是单个 token 的不用（记下来），取可用写法 logit 的
+     最大值；softmax 在 fp32 下、只在本题的字母上做；argmax 的平局取 token id 小的，与 generate(allowed_token_ids=全部写法,
+     max_new_tokens=1) 的 greedy 选择逐个相同（tests/test_adapter_option_logits.py 在三家族上核对）。单轮，每题一次调用。
+     A–J 实际用到的写法与 token id 在预热时查一次，写进输出的 option_spellings，每题核对相同。
+   - 读数（protocol.READINGS）：MMLU-Pro 每题一次 option_logits、一次生成，得到三个读数——
+     - mmlu_pro_letter（标题，v3）：option_logits 的 argmax 字母；
+     - mmlu_pro_free256（诊断；v2 的标题 "mmlu_pro"）：自由生成的全部，最多 256 个 token；
      - mmlu_pro_fmt32（诊断）：同一次生成的前 32 个 token（run.prefix_generation）。greedy 下生成 32 个 token 与生成 256 个
        的前 32 个逐个相同，所以只生成一次，再截出 32 的读数：token 取 token_ids 的前 32 个（适配器把 token_ids 截到第一个
        停止 token 为止，含）；raw_text、text、thinking_unclosed 由适配器的 split_answer 对这 32 个 token 解码（与适配器生成时
@@ -52,12 +63,17 @@ token；32 token 的读数保留为格式诊断 mmlu_pro_fmt32，取同一次生
      - GSM8K："{题干}\\nSolve the problem step by step. On the last line, write the final answer as '#### <number>'."；
      - IFEval：原始 prompt 去掉首尾空白（50 题里只影响 key 1999：末尾两个换行。Qwen3.5 与 Gemma 4 的模板本来就 trim，
        适配器拒绝带首尾空白的指令）；评分时官方 checker 仍拿到原始 prompt。
-   - 计时前先做一次预热调用（不计入记账，D21）。记账按 src/accounting.py：每题记一次调用、一轮、一个样本，样本墙钟 =
-     build_inputs + generate。
+   - 计时前先做预热调用（generate 一次、option_logits 一次，不计入记账，D21）。记账按 src/accounting.py：每次模型调用记一次
+     调用、一轮（各读数都是单轮流程），每题一个样本，样本墙钟 = 各次 build_inputs + 模型调用之和；option_logits 的计算量
+     记作生成 1 个 token。MMLU-Pro 每题两次调用，GSM8K 与 IFEval 各一次。
 
 3. 评分（scoring.py）
-   - MMLU-Pro：parse_generation（先判思考段未闭合与空回答）+ src.parsing.parse_choice，letters = 本题实际的选项字母；
-     解析出的字母等于答案字母即对，解析失败记错。两个读数用同一个评分函数，规则与 v1 的 32 token 口径完全相同。
+   - MMLU-Pro 受限字母读数（v3）：不解析文本。逐题记录的生成部分是 option_logits 的一行（选项、各选项所用 token、logit、
+     选项集合上的概率、argmax 字母；run.LETTER_GENERATION_FIELDS），评分只读其中的 options、probs 与 choice
+     （scoring.score_mmlu_pro_letter）：choice 等于答案字母即对；p_gold = 答案字母的概率。口径：accuracy（标题）与
+     mean_p_gold（p_gold 的精确平均，百分数一位小数，另记不舍入的 mean）。没有 ParseTally。
+   - MMLU-Pro 自由作答：parse_generation（先判思考段未闭合与空回答）+ src.parsing.parse_choice，letters = 本题实际的选项字母；
+     解析出的字母等于答案字母即对，解析失败记错。free256 与 fmt32 用同一个评分函数，规则与 v1 的 32 token 口径完全相同。
    - 逐题记录（v2）多记 stopped（生成是否停在停止 token 上），只记录，不进入评分：与 v1 相同，评分只读 text 与
      thinking_unclosed，截断的回答照样解析（E1 的"截断判失败"不用于健康检查；改动它会改变 v1 的口径）。
    - GSM8K：两种口径都去掉千分位逗号，按精确数值与参考整数比较，相等即对（"18.00" 对 18 算对，"18.5" 算错）：
@@ -72,7 +88,8 @@ token；32 token 的读数保留为格式诊断 mmlu_pro_fmt32，取同一次生
          export NLTK_DATA=$PROJ/nltk_data
      标题口径 prompt-level strict；另报 instruction-level strict、prompt-level loose、instruction-level loose。
    - 分数一律是百分数，一位小数（四舍五入），全部从逐题记录重新数出来；空集合为 null。scores、parse_tally、diagnostics
-     按读数给出（v2：mmlu_pro、mmlu_pro_fmt32、gsm8k、ifeval）；headline 每项一个数（mmlu_pro 为 256 的读数）。附
+     按读数给出（v3：mmlu_pro_letter、mmlu_pro_free256、mmlu_pro_fmt32、gsm8k、ifeval）；headline 每项一个数（v3 的 mmlu_pro
+     为受限字母读数的准确率）。附
      ParseTally（MMLU-Pro 的两个读数，GSM8K 的 strict 与 flexible 各一份）与诊断计数（思考段未闭合、空回答、生成数达到该
      读数的 max_new_tokens，后者是截断的上界）。
    - 先生成、后评分（审查第 1 轮；punkt_tab 的许可待项目负责人答复，N12）：
@@ -86,14 +103,16 @@ token；32 token 的读数保留为格式诊断 mmlu_pro_fmt32，取同一次生
        重评的输出还记下输入文件的路径与 sha256，输入原来的 scoring 段放进 scoring_history。
 
 4. 比较（scoring.compare；命令行 scripts/health_check.py --compare）
-   - 只比较同一题目文件、同一批题目的两次运行，协议版本须为 1 或 2，否则报错。比较的单位是读数；两边的版本可以不同
+   - 只比较同一题目文件、同一批题目的两次运行，协议版本须为 1、2 或 3，否则报错。比较的单位是读数；两边的版本可以不同
      （第 6 节）。
    - 每个读数每个口径给出两边的分数、差值（合并后 − 基座，百分点，按精确分数算后保留一位）、丢题数（基座对、合并后错）
      与得题数。
-   - 标红只看标题读数（mmlu_pro 为 256 token、gsm8k、ifeval）的标题口径：下降严格大于 5 个百分点即 flag = True（门报告里
-     标红）；非标题口径只报差值（flag = None）。诊断读数 mmlu_pro_fmt32 的准确率照样给出差值、CI 与符号检验，flag = None。
-   - 截断率提示（D28-7，与标红分开）：每个读数给出两边写满该读数 max_new_tokens 的题所占比例（reached_max_new_tokens）
-     与差值，差值的绝对值严格大于 10 个百分点（protocol.TRUNCATION_NOTICE_PP）即列进 truncation.notices。IFEval 未评分时
+   - 标红只看标题读数（v3：mmlu_pro_letter 的 accuracy、gsm8k 的 flexible、ifeval 的 prompt_level_strict）：下降严格大于 5 个
+     百分点即 flag = True（门报告里标红）；非标题口径只报差值（flag = None）。诊断读数 mmlu_pro_free256 与 mmlu_pro_fmt32 的
+     准确率照样给出差值、CI 与符号检验，flag = None。mmlu_pro_letter 的 mean_p_gold 给出两边的平均（百分数）、按精确平均算的
+     差值（百分点）与按题配对的 bootstrap 95% CI，flag = None，没有丢题 / 得题与符号检验（连续读数）。
+   - 截断率提示（D28-7，与标红分开）：每个自由生成读数（受限字母读数没有截断）给出两边写满该读数 max_new_tokens 的题所占
+     比例（reached_max_new_tokens）与差值，差值的绝对值严格大于 10 个百分点（protocol.TRUNCATION_NOTICE_PP）即列进 truncation.notices。IFEval 未评分时
      照样给出。
    - 与 flag 并列给出两项统计（审查第 1 轮；不改变标红规则）：
      - ci95_pp：按题配对的 bootstrap 95% CI（src.stats.paired_bootstrap_ci，percentile 法；重采样次数、置信水平与种子
@@ -105,19 +124,23 @@ token；32 token 的读数保留为格式诊断 mmlu_pro_fmt32，取同一次生
 
 5. 输出（scripts/health_check.py --out）：运行记录（src/runlog.py 的 config 与 meta：种子、git commit、题目文件 sha256、
    主机、GPU、包版本；另记 nltk / langdetect / immutabledict 的版本）、模型与适配器、生成参数与仓库 generation_config
-   （v2 另记 generation.readings：各读数的项、max_new_tokens、角色与 prefix_of）、逐题的原始输出与解析结果（records 按
-   读数分键）、分数、未评分的项及原因、ParseTally、诊断、记账、scoring 段（见第 3 节）。
+   （v2 起另记 generation.readings：各读数的项、类型、max_new_tokens、角色与 prefix_of；v3 另记 generation.option_letters
+   与 option_spellings：A–J 实际用到的写法与 token id）、逐题的原始输出与解析结果（records 按读数分键）、分数、未评分的项
+   及原因、ParseTally、诊断、记账、scoring 段（见第 3 节）。
    中途出错时先把已有结果与报错写出，退出码 2。
    - --audit-fmt32 N（可选，算力机用）：跑完后 MMLU-Pro 前 N 题再真的用 max_new_tokens=32 各生成一次，按同一套规则记录与
      评分，与截出的 mmlu_pro_fmt32 逐字段比较（墙钟除外），结果写进 prefix_audit（一致题数与不一致的字段）。它核对的是
      开发机上验证不了的一件事：GPU bf16 上生成 256 的前 32 个 token 与只生成 32 个是否逐个相同。审计的调用单独记账，
      不计入 compute，不改任何记录与分数。
 
-6. 版本与兼容（protocol.SUPPORTED_PROTOCOL_VERSIONS = (1, 2)；protocol.RECORD_KEYS_BY_VERSION）
+6. 版本与兼容（protocol.SUPPORTED_PROTOCOL_VERSIONS = (1, 2, 3)；protocol.RECORD_KEYS_BY_VERSION、HEADLINE_KEYS_BY_VERSION）
    - v1 的输出（RUN-0007、RUN-0009）：records 只有 mmlu_pro（32 token）、gsm8k、ifeval 三个键，记录里没有 stopped。
      按 v1 的布局读：--rescore 照旧（输出仍记 protocol_version 1，汇总的结构与 v1 逐字节相同），--compare 照旧。
-   - 比较时两边各按自己的版本取读数，口径（项与 max_new_tokens）相同才比：v1 的 mmlu_pro 是 32 token，对上 v2 的
-     mmlu_pro_fmt32；v2 的 256 标题读数在 v1 里没有。只要有一边没有某个读数，该读数各行 comparable = False、数值为 null，
-     note 与 notes 写明"口径不同、标题不可比"，读数名列进 incomparable，不参与标红。两边都是 v1 时也如此：D28-7 起 32 token
-     只是格式诊断，v1 的 MMLU-Pro 按 mmlu_pro_fmt32 比较、不标红。
+   - v2 的输出（RUN-0011）：records 是 mmlu_pro（256 token）、mmlu_pro_fmt32、gsm8k、ifeval 四个键。按 v2 的布局读：--rescore
+     照旧（输出仍记 protocol_version 2，汇总的结构与 v2 逐字节相同，tests 对 RUN-0011 的 8 份输出核对），--compare 照旧。
+   - 比较时两边各按自己的版本取读数，口径（项、类型与 max_new_tokens）相同才比：v1 的 mmlu_pro 是 32 token，对上
+     mmlu_pro_fmt32；v2 的 mmlu_pro 是 256 token 的自由作答，对上 mmlu_pro_free256；受限字母读数 mmlu_pro_letter 只有 v3 有。
+     只要有一边没有某个读数，该读数各行 comparable = False、数值为 null，note 与 notes 写明"口径不同、标题不可比"，读数名
+     列进 incomparable，不参与标红。两边都是 v1 或都是 v2 时也如此：v3 起 MMLU-Pro 的标题是受限字母读数，自由作答与 32 token
+     前缀只是诊断，按 free256 / fmt32 比较、不标红（与 D31 对两边都是 v1 的裁定同一做法）。
 """
