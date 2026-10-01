@@ -1,0 +1,55 @@
+experiment: E1
+framework: src/e1（DEV-0014）
+model:
+  key: gemma-4-e4b-it
+  family: gemma4
+  repo: google/gemma-4-E4B-it
+  revision: ee0ef6023621cff504d758262d4e04895a5af4a2
+  adapter_model_key: gemma-4-e4b-it
+  tiny: false
+image_policy:
+  tag: default
+  type: SoftTokenBudget
+  max_soft_tokens: 280
+task: ovd
+subset: dev
+generation:
+  enable_thinking: false
+  max_new_tokens: 2048
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: e9fade2b64ecf337db03585ef3206ed8b90c523e4bec2b42dae8f0b6890744c6
+  entry:
+    template: detect {categories}
+    native: true
+    provenance: official_doc
+    source_url: https://ai.google.dev/gemma/docs/capabilities/vision/image
+    parse: boxes
+    max_new_tokens: 2048
+data:
+  n_samples: 100
+  sample_ids_sha256: ff5e94e59b57a9ec05a3b2a36b865f3f50431d7af2a9bec6d9ec5e9dcaef73c2
+  has_gt: false
+  selection_stats:
+    refcoco/val/dev:
+      n_total: 10834
+      n_kept: 200
+      excluded_by_reason: {}
+    note: 检测没有开发子集：用 RefCOCO unc val 开发子集的图（去重）配 COCO 80 类，只核对格式，没有 GT
+    n: 100
+    limit: 100
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: 100
+map_ci_resamples: 0
+batch_size: 1

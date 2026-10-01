@@ -1,0 +1,62 @@
+experiment: E1
+framework: src/e1（DEV-0014）
+model:
+  key: internvl3.5-4b-hf
+  family: internvl3.5
+  repo: OpenGVLab/InternVL3_5-4B-HF
+  revision: 6bd4487402110ef9889ba50eb7aefeb302526fed
+  adapter_model_key: internvl3.5-4b-hf
+  tiny: false
+image_policy:
+  tag: default
+  type: TilePolicy
+  crop_to_patches: false
+  max_patches: 1
+task: rel_depth_nyu
+subset: dev
+generation:
+  enable_thinking: false
+  max_new_tokens: 1024
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: e9fade2b64ecf337db03585ef3206ed8b90c523e4bec2b42dae8f0b6890744c6
+  entry:
+    template: 'Two points are circled on the image, labeled by A and B beside each
+      circle. Which point is closer to the camera?
+
+      Select from the following choices.
+
+      (A) A is closer
+
+      (B) B is closer'
+    native: false
+    provenance: unified_benchmark_wording
+    source_url: https://huggingface.co/datasets/BLINK-Benchmark/BLINK/tree/a3666eb249237ba3d5eca8db21176cc47967e040/Relative_Depth
+    parse: choice
+    max_new_tokens: 1024
+data:
+  n_samples: 100
+  sample_ids_sha256: b1605ec56f9cd8d78e73850ffe72e51ed0922e2309ee98731f6846a28921172b
+  has_gt: true
+  selection_stats:
+    population:
+      n_total: 250
+      n_kept: 250
+      excluded_by_reason: {}
+    n: 100
+    limit: 100
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: 100
+map_ci_resamples: 0
+batch_size: 16
