@@ -136,7 +136,7 @@ def build_items(mmlu_pro_rows: Sequence[Mapping[str, Any]], gsm8k_rows: Sequence
     ]
     return {
         "schema_version": P.ITEMS_SCHEMA_VERSION,
-        "protocol_version": P.PROTOCOL_VERSION,
+        "protocol_version": P.ITEMS_PROTOCOL_VERSION,
         "generator": "scripts/build_health_items.py (DEV-0008)",
         "seed": seed,
         "sampling": {
@@ -220,7 +220,9 @@ def sha256_text(text: str) -> str:
 
 def validate_items(obj: Mapping[str, Any]) -> None:
     """结构校验：数量、分层、字段齐全、类型。不合格抛 ValueError。"""
-    if obj.get("schema_version") != P.ITEMS_SCHEMA_VERSION or obj.get("protocol_version") != P.PROTOCOL_VERSION:
+    # 题目文件记的是建题时的协议版本（ITEMS_PROTOCOL_VERSION = 1）；协议 v2 的题目不变（D28-7）
+    if (obj.get("schema_version") != P.ITEMS_SCHEMA_VERSION
+            or obj.get("protocol_version") != P.ITEMS_PROTOCOL_VERSION):
         raise ValueError(f"题目文件版本 {obj.get('schema_version')}/{obj.get('protocol_version')} 与代码不一致")
     items = obj["items"]
     if list(items) != list(P.BENCHMARKS):

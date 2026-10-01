@@ -158,9 +158,14 @@ def _rec(benchmark: str, i: int, ok: bool, **extra):
     return base
 
 
-def _records(n_ok: dict[str, int], n: dict[str, int] | None = None):
+def _records(n_ok: dict[str, int], n: dict[str, int] | None = None, *, version: int = P.PROTOCOL_VERSION):
+    """按 version 的布局造逐题记录。v2 的 mmlu_pro_fmt32 默认与 mmlu_pro 相同（n_ok 里可另给）。"""
     n = n or dict(P.COUNTS)
-    return {b: [_rec(b, i, i < n_ok[b]) for i in range(n[b])] for b in P.BENCHMARKS}
+    out = {}
+    for key, reading in P.record_readings(version).items():
+        b = reading.benchmark
+        out[key] = [_rec(b, i, i < n_ok.get(key, n_ok[b])) for i in range(n[b])]
+    return out
 
 
 def test_summarize_counts_everything_from_records():
@@ -222,13 +227,14 @@ def test_unknown_failure_string_is_rejected():
 
 
 def _report(n_ok, *, sha="a" * 64, version=P.PROTOCOL_VERSION, n=None, key="m"):
-    recs = _records(n_ok, n)
+    recs = _records(n_ok, n, version=version if version in P.SUPPORTED_PROTOCOL_VERSIONS else P.PROTOCOL_VERSION)
+    summary = S.summarize(recs, protocol_version=version) if version in P.SUPPORTED_PROTOCOL_VERSIONS else {}
     return {"protocol_version": version, "items_file": {"sha256": sha}, "limit": None, "model": {"key": key},
-            "records": recs, **S.summarize(recs)}
+            "records": recs, **summary}
 
 
-def _row(res, bench, metric):
-    return next(r for r in res["rows"] if r["benchmark"] == bench and r["metric"] == metric)
+def _row(res, reading, metric):
+    return next(r for r in res["rows"] if r["reading"] == reading and r["metric"] == metric)
 
 
 def test_compare_flags_drops_strictly_greater_than_5pp():
@@ -325,6 +331,7 @@ def test_compare_ci_and_sign_test_are_reported_alongside_flag():
 def test_compare_with_unscored_ifeval():
     base = _report({"mmlu_pro": 60, "gsm8k": 30, "ifeval": 25})
     merged_recs = _unscore_ifeval(_records({"mmlu_pro": 50, "gsm8k": 30, "ifeval": 0}))
+    merged_recs["ifeval"][0]["reached_max_new_tokens"] = True
     merged = {**base, "records": merged_recs, **S.summarize(merged_recs)}
     res = S.compare(base, merged)
     assert res["unscored"] == ["ifeval"] and res["flagged"] == ["mmlu_pro"]
@@ -332,14 +339,102 @@ def test_compare_with_unscored_ifeval():
     assert len(rows) == 4 and all(not r["scored"] and r["flag"] is None and r["ci95_pp"] is None
                                   and r["sign_test"] is None and r["delta_pp"] is None for r in rows)
     assert rows[0]["base_pct"] == 50.0 and rows[0]["merged_pct"] is None  # 评了分的一边照常给出
+    # 截断率与评分无关：未评分的项照样给出
+    t = next(t for t in res["truncation"]["rows"] if t["reading"] == "ifeval")
+    assert (t["base_n_reached"], t["merged_n_reached"], t["delta_pp"], t["notice"]) == (0, 1, 2.0, False)
+
+
+# ---------------------------------------------------------------------------
+# 协议 v2（D28-7）：读数、诊断读数不标红、截断率提示、与 v1 的输出比较
+# ---------------------------------------------------------------------------
+
+FMT32 = P.MMLU_PRO_FMT32
+
+
+def test_summarize_v2_has_both_mmlu_pro_readings():
+    recs = _records({"mmlu_pro": 57, FMT32: 31, "gsm8k": 31, "ifeval": 20})
+    s = S.summarize(recs)
+    assert list(s["scores"]) == list(s["diagnostics"]) == [r.name for r in P.READINGS]
+    assert s["headline"] == {"mmlu_pro": 57.0, "gsm8k": 62.0, "ifeval": 40.0}  # 标题：MMLU-Pro 取 256 的读数
+    assert s["scores"][FMT32]["accuracy"] == {"n": 100, "n_correct": 31, "pct": 31.0}
+    assert list(s["parse_tally"]) == ["mmlu_pro", FMT32, "gsm8k_strict", "gsm8k_flexible"]
+    assert s["parse_tally"][FMT32]["failures"] == {"no_choice": 69}
+    with pytest.raises(ValueError, match="v2"):
+        S.summarize({**recs, "mmlu_pro_fmt64": []})
+
+
+def test_fmt32_is_diagnostic_never_flagged():
+    """MMLU-Pro 的 256 读数不变、32 读数掉 20 个点（"变啰嗦了"）：fmt32 给出差值、CI 与符号检验，不标红。"""
+    base = _report({"mmlu_pro": 60, FMT32: 50, "gsm8k": 30, "ifeval": 25})
+    merged = _report({"mmlu_pro": 60, FMT32: 30, "gsm8k": 30, "ifeval": 25})
+    res = S.compare(base, merged)
+    fmt = _row(res, FMT32, "accuracy")
+    assert (fmt["delta_pp"], fmt["flag"], fmt["headline"], fmt["diagnostic"], fmt["max_new_tokens"]) == (
+        -20.0, None, False, True, 32)
+    assert fmt["ci95_pp"][1] < 0 and fmt["sign_test"]["n_worse"] == 20
+    head = _row(res, "mmlu_pro", "accuracy")
+    assert (head["delta_pp"], head["flag"], head["headline"], head["max_new_tokens"]) == (0.0, False, True, 256)
+    assert res["any_flag"] is False and res["flagged"] == []
+    # 256 的读数掉 6 个点：标红
+    res = S.compare(base, _report({"mmlu_pro": 54, FMT32: 50, "gsm8k": 30, "ifeval": 25}))
+    assert res["flagged"] == ["mmlu_pro"] and _row(res, FMT32, "accuracy")["flag"] is None
+
+
+def _set_reached(report, reading, k):
+    for i, r in enumerate(report["records"][reading]):
+        r["reached_max_new_tokens"] = i < k
+    return report
+
+
+def test_truncation_notice_strictly_more_than_10pp():
+    """写满 max_new_tokens 的比例变化：恰好 10 个点不提示，超过 10 个点（任一方向）提示；与标红分开。"""
+    base = _report({"mmlu_pro": 60, "gsm8k": 30, "ifeval": 25})
+    _set_reached(base, FMT32, 40)
+    _set_reached(base, "gsm8k", 10)
+    merged = _report({"mmlu_pro": 60, "gsm8k": 30, "ifeval": 25})
+    _set_reached(merged, FMT32, 30)  # 100 题少 10 题：-10.0，不提示
+    _set_reached(merged, "gsm8k", 16)  # 50 题多 6 题：+12.0，提示
+    _set_reached(merged, "ifeval", 6)  # 50 题多 6 题：+12.0，提示（基座 0）
+    res = S.compare(base, merged)
+    tr = {t["reading"]: t for t in res["truncation"]["rows"]}
+    assert (tr[FMT32]["delta_pp"], tr[FMT32]["notice"]) == (-10.0, False)
+    assert (tr["gsm8k"]["base_pct"], tr["gsm8k"]["merged_pct"], tr["gsm8k"]["delta_pp"], tr["gsm8k"]["notice"]) == (
+        20.0, 32.0, 12.0, True)
+    assert (tr["mmlu_pro"]["delta_pp"], tr["mmlu_pro"]["max_new_tokens"]) == (0.0, 256)
+    assert res["truncation"]["notices"] == ["gsm8k", "ifeval"] and res["truncation"]["threshold_pp"] == 10
+    assert res["any_flag"] is False  # 截断率提示不是标红
+    _set_reached(merged, FMT32, 29)  # -11.0：提示
+    assert S.compare(base, merged)["truncation"]["notices"] == [FMT32, "gsm8k", "ifeval"]
+
+
+def test_compare_v1_reports_map_32_to_fmt32():
+    """v1 的 MMLU-Pro（32 token）按口径对上 v2 的 mmlu_pro_fmt32；256 的标题读数只在 v2 一边：不可比，写明原因。"""
+    v1 = _report({"mmlu_pro": 40, "gsm8k": 30, "ifeval": 25}, version=1)
+    assert list(v1["records"]) == list(P.BENCHMARKS) and v1["headline"]["mmlu_pro"] == 40.0
+    v2 = _report({"mmlu_pro": 70, FMT32: 30, "gsm8k": 30, "ifeval": 25})
+    res = S.compare(v1, v2)
+    assert res["protocol_versions"] == {"base": 1, "merged": 2} and res["incomparable"] == ["mmlu_pro"]
+    head = _row(res, "mmlu_pro", "accuracy")
+    assert (head["comparable"], head["base_pct"], head["merged_pct"], head["flag"]) == (False, None, 70.0, None)
+    assert S.INCOMPARABLE in head["note"] and head["note"] == res["notes"][0]
+    fmt = _row(res, FMT32, "accuracy")
+    assert (fmt["base_pct"], fmt["merged_pct"], fmt["delta_pp"], fmt["flag"]) == (40.0, 30.0, -10.0, None)
+    assert res["any_flag"] is False  # v1 的 32 掉 10 个点：只是诊断
+    # 两边都是 v1：同样不标红（D28-7 起 32 token 只是格式诊断），256 的标题两边都没有
+    res = S.compare(v1, _report({"mmlu_pro": 20, "gsm8k": 30, "ifeval": 25}, version=1))
+    assert res["incomparable"] == ["mmlu_pro"] and res["any_flag"] is False
+    assert _row(res, FMT32, "accuracy")["delta_pp"] == -20.0
+    assert "没有这个读数" in res["notes"][0] and "协议 v1" in res["notes"][0]
+    assert [t["reading"] for t in res["truncation"]["rows"]] == [FMT32, "gsm8k", "ifeval"]
 
 
 def test_compare_refuses_incomparable_runs(tmp_path):
     base = _report({"mmlu_pro": 50, "gsm8k": 25, "ifeval": 25})
     with pytest.raises(ValueError, match="题目文件"):
         S.compare(base, _report({"mmlu_pro": 50, "gsm8k": 25, "ifeval": 25}, sha="b" * 64))
-    with pytest.raises(ValueError, match="协议版本"):
-        S.compare(base, _report({"mmlu_pro": 50, "gsm8k": 25, "ifeval": 25}, version=P.PROTOCOL_VERSION + 1))
+    for bad_version in (P.PROTOCOL_VERSION + 1, 0, None, True):
+        with pytest.raises(ValueError, match="协议版本"):
+            S.compare(base, _report({"mmlu_pro": 50, "gsm8k": 25, "ifeval": 25}, version=bad_version))
     limited = _report({"mmlu_pro": 3, "gsm8k": 3, "ifeval": 3}, n={"mmlu_pro": 3, "gsm8k": 3, "ifeval": 3})
     with pytest.raises(ValueError, match="limit"):
         S.compare(base, limited)

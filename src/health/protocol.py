@@ -1,6 +1,11 @@
-"""健康检查的协议常量与提示模板（简报 §8.11；DEV-0008）。约定只在这里定义一处，其余模块与脚本 import。
+"""健康检查的协议常量与提示模板（简报 §8.11；DEV-0008；协议 v2：DEV-0013，D28-7）。约定只在这里定义一处，其余模块与脚本 import。
 
 协议全文见 src/health/__init__.py 的模块说明；这里的数字由 tests/test_health_items.py 与 tests/test_health_scoring.py 钉住。
+
+版本：
+- v1（D26）：MMLU-Pro 最多生成 32 个 token，那一个读数就是标题。RUN-0007、RUN-0009 的输出是 v1。
+- v2（D28-7，取代 D26 的 32 token）：MMLU-Pro 最多生成 256 个 token，标题读数 mmlu_pro 取全部生成；
+  诊断读数 mmlu_pro_fmt32 取同一次生成的前 32 个 token（格式诊断，不标红）。题目文件与其余协议不变。
 """
 
 from __future__ import annotations
@@ -8,7 +13,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
+# 能读、能 --rescore、能 --compare 的输出版本（v1 的输出按 v1 的布局读，见 RECORD_KEYS_BY_VERSION）
+SUPPORTED_PROTOCOL_VERSIONS: tuple[int, ...] = (1, 2)
 
 # ---------------------------------------------------------------------------
 # 题目来源（HF 数据集，固定 revision；原始文件的 sha256 在开发机上实测）
@@ -84,6 +91,8 @@ STAGE_UNIFORM = "uniform"
 
 ITEMS_PATH = "configs/health_check_items.json"  # 相对仓库根
 ITEMS_SCHEMA_VERSION = 1
+# 题目文件里记的协议版本：题目建于 v1，v2 的题目不变（D28-7），所以题目文件仍是 1，与 PROTOCOL_VERSION 分开
+ITEMS_PROTOCOL_VERSION = 1
 # 入库的题目文件的 sha256：运行脚本加载时核对，防止题目被静默改动（重建题目文件后必须同步更新，见 build_health_items.py）
 ITEMS_SHA256 = "0239675f9c226f17963419e2e12a282dd4ced8ed42452b53a939145372a525df"
 
@@ -101,7 +110,10 @@ GREEDY_KWARGS: Mapping[str, Any] = {
     "repetition_penalty": 1.0,
     "no_repeat_ngram_size": 0,
 }
-MAX_NEW_TOKENS: Mapping[str, int] = {"mmlu_pro": 32, "gsm8k": 512, "ifeval": 1024}
+# 每项一次生成的上限（v2）。MMLU-Pro 256（D28-7；v1 是 32，见 RECORD_KEYS_BY_VERSION）
+MAX_NEW_TOKENS: Mapping[str, int] = {"mmlu_pro": 256, "gsm8k": 512, "ifeval": 1024}
+# MMLU-Pro 的格式诊断：同一次生成的前 32 个 token（D28-7）
+FMT32_MAX_NEW_TOKENS = 32
 WARMUP_PROMPT = "Reply with the word OK."  # 计时前的预热调用（不计入记账，D21）
 WARMUP_MAX_NEW_TOKENS = 2
 
@@ -158,6 +170,69 @@ HEADLINE: Mapping[str, str] = {
     "ifeval": "prompt_level_strict",
 }
 RED_FLAG_DROP_PP = 5  # 合并后比基座低超过 5 个百分点（严格大于）即标红
+# 截断率提示（D28-7）：某读数写满 max_new_tokens 的题所占比例，基座与合并后相差超过 10 个百分点（严格大于）即列出，与标红分开
+TRUNCATION_NOTICE_PP = 10
+
+# ---------------------------------------------------------------------------
+# 读数（D28-7）：逐题记录、分数、诊断与比较的单位
+# ---------------------------------------------------------------------------
+
+ROLE_HEADLINE = "headline"  # 标题读数：标题口径参与标红
+ROLE_DIAGNOSTIC = "diagnostic"  # 诊断读数：给出差值、CI 与符号检验，不标红
+
+
+@dataclass(frozen=True)
+class Reading:
+    """一个读数：题目、提示与评分规则取自 benchmark，生成上限 max_new_tokens。
+
+    prefix_of 不为 None 时是前缀读数：不另外生成，取 prefix_of 那个读数的同一次 greedy 生成的前 max_new_tokens 个 token，
+    按"只生成 max_new_tokens 个"重建生成部分（run.prefix_generation）。greedy 下两者的 token 逐个相同。
+    """
+
+    name: str
+    benchmark: str
+    max_new_tokens: int
+    role: str
+    prefix_of: str | None = None
+
+
+MMLU_PRO_FMT32 = "mmlu_pro_fmt32"
+
+# v2 的读数，按输出里的顺序。比较的行名就是这里的 name；口径（benchmark 与 max_new_tokens）相同才可比
+READINGS: tuple[Reading, ...] = (
+    Reading("mmlu_pro", "mmlu_pro", MAX_NEW_TOKENS["mmlu_pro"], ROLE_HEADLINE),
+    Reading(MMLU_PRO_FMT32, "mmlu_pro", FMT32_MAX_NEW_TOKENS, ROLE_DIAGNOSTIC, prefix_of="mmlu_pro"),
+    Reading("gsm8k", "gsm8k", MAX_NEW_TOKENS["gsm8k"], ROLE_HEADLINE),
+    Reading("ifeval", "ifeval", MAX_NEW_TOKENS["ifeval"], ROLE_HEADLINE),
+)
+READINGS_BY_NAME: Mapping[str, Reading] = {r.name: r for r in READINGS}
+
+# 各版本输出里 records / scores / diagnostics 的键 → 它对应的 v2 读数。
+# v1 的 "mmlu_pro" 是 32 个 token 的那一个读数，口径与 v2 的 mmlu_pro_fmt32 相同；v1 没有 256 的读数。
+RECORD_KEYS_BY_VERSION: Mapping[int, Mapping[str, str]] = {
+    1: {"mmlu_pro": MMLU_PRO_FMT32, "gsm8k": "gsm8k", "ifeval": "ifeval"},
+    2: {r.name: r.name for r in READINGS},
+}
+
+
+def check_protocol_version(version: Any) -> int:
+    """输出文件的协议版本必须是 SUPPORTED_PROTOCOL_VERSIONS 之一，否则 ValueError。"""
+    if isinstance(version, bool) or version not in SUPPORTED_PROTOCOL_VERSIONS:
+        raise ValueError(f"协议版本 {version!r} 不受支持（支持 {list(SUPPORTED_PROTOCOL_VERSIONS)}）")
+    return version
+
+
+def record_readings(version: int) -> dict[str, Reading]:
+    """某版本输出的 records 键 → 读数（按输出里的顺序）。"""
+    return {key: READINGS_BY_NAME[name] for key, name in RECORD_KEYS_BY_VERSION[check_protocol_version(version)].items()}
+
+
+def readings_of(benchmark: str) -> tuple[Reading, ...]:
+    """v2 里由 benchmark 那一次生成得到的全部读数：先是生成本身的读数，再是它的前缀读数。"""
+    own = [r for r in READINGS if r.benchmark == benchmark and r.prefix_of is None]
+    if len(own) != 1:
+        raise KeyError(f"{benchmark} 应恰有一个生成读数，找到 {[r.name for r in own]}")
+    return (own[0], *(r for r in READINGS if r.prefix_of == own[0].name))
 LANGDETECT_SEED = 0  # IFEval 的语言判定（langdetect）默认每次随机；固定种子使评分可复现
 
 # IFEval 的句子切分用 nltk 的 punkt_tab（english）。nltk_data 不分版本，这里钉住开发机 2026-09-30 下载的文件哈希；
