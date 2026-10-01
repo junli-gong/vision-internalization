@@ -15,6 +15,9 @@ tokenizer / config 读取并断言，不写死 token id，不写死层号（简�
   - `crop_to_patches=False`（或 `max_patches=1`）：整图直接缩放到 TILE_PX×TILE_PX，1 个 tile。
   - `crop_to_patches=True` 且 `max_patches>1`：处理器用 `get_optimal_tiled_canvas` 选 cols×rows 画布（tile 数 ≤ max_patches），
     画布 tile 按行主序排列；画布 tile 多于 1 个时末尾再加一张整图缩略图。所以同一策略下 tile 数随图的宽高比与面积而变。
+  - 口径对象是 image_policy.TilePolicy（DEV-0011）。E1 用单 tile `TilePolicy(False, 1)`；原生动态 tile
+    `INTERNVL_NATIVE_TILES = TilePolicy(True, 12)`（preprocessor_config 的 12；640×480 切成 13 个 tile、3328 个 token）只用于
+    子集对照（D28-3）：生成可用，探针类方法照旧拒绝多 tile。ImageTokenInfo.n_pixels = tile 数 × 448²（含缩略图）。
 - `ImageTokenInfo`：span 是一张图的 `<IMG_CONTEXT>` 连续段（不含两侧的 `<img>`、`</img>`）；grid_hw 的含义：
   - 单 tile：(16, 16)，就是整图（缩放到 448×448 之后）的视觉 token 网格，行主序；
   - n 个 tile（n > 1）：(16·n, 16)，是 n 个 16×16 的 tile **纵向堆叠**，第 16t–16t+15 行是第 t 个 tile，tile 按处理器的顺序
@@ -31,6 +34,8 @@ tokenizer / config 读取并断言，不写死 token id，不写死层号（简�
   text 为空、thinking_unclosed=True；否则 text 取最后一个 `</think>` 之后的内容（模型没写思考段、直接作答时取全文），
   去掉末尾的停止 token 与首尾换行。`<think>`、`</think>` 在这个 tokenizer 里是单个、非 special 的 token（§7.1 表）。
 - 生成（D13-3）：显式 greedy；停止 token 只有 `<|im_end|>`，pad 用 tokenizer 的 pad token（`<|endoftext|>`），id 都从 tokenizer 查。
+  generate 与 generate_batch 走同一条路径（src/adapters/batching.py；DEV-0011）：左填充用 pad，各行的 tile 按行的顺序拼进
+  同一个 pixel_values（每行的 tile 数可以不同），一维位置由 HF 按 attention_mask 推出（cumsum − 1）。
 - 新增 token（D13-1）：先复用嵌入里超出 tokenizer 的 257 个预留行（id 151679–151935）；累计需要的行数超过现有行数时，把嵌入
   （不共享时连同 lm_head）扩到恰好需要的行数，已有行逐位不变；从不缩表，不调用 `resize_token_embeddings`。新 token 的嵌入行与
   lm_head 行各自写成自己基础词表行的精确均值。lm_head 是否与嵌入共享以运行时为准：真实 2B 的 config 顶层写 tie，但 checkpoint
@@ -55,7 +60,6 @@ import hashlib
 import json
 import platform
 import re
-import time
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -63,7 +67,8 @@ import numpy as np
 import torch
 from PIL import Image
 
-from src.adapters import registry
+from src.adapters import batching, registry
+from src.adapters.image_policy import TilePolicy
 from src.adapters.base import (
     ORDERS,
     POSITION_MODES,
@@ -140,6 +145,10 @@ TINY_SOURCE_KEY = "internvl3.5-2b-hf"
 _SENTINEL = "VISINTINSTRUCTIONSLOT"
 _MEAN_CHUNK_BYTES = 1 << 28  # 求基础行均值时每块 float64 的字节上限
 
+# generate / generate_batch 的 gen_kwargs 不能覆盖的参数（适配器自己控制）
+_RESERVED_GEN_KWARGS = frozenset({"input_ids", "attention_mask", "pixel_values", "position_ids", "inputs_embeds",
+                                  "max_new_tokens", "eos_token_id", "pad_token_id"})
+
 _GRID2D_UNSUPPORTED = (
     "InternVL3.5 的 LLM 是一维 RoPE（model_notes §7.4），没有二维网格位置；grid2d 只对 M-RoPE 模型有定义（简报 §12）。"
     "本适配器不把 grid2d 静默当作 seq1d，请显式用 seq1d。"
@@ -170,7 +179,7 @@ def tiles_of(info: ImageTokenInfo) -> int:
 
 
 class InternVL35Adapter(ModelAdapter):
-    """InternVL3.5-HF（2B/4B）适配器。单条样本（batch = 1）；批处理和 vLLM 另开任务。
+    """InternVL3.5-HF（2B/4B）适配器。ModelInputs 是单条样本；generate_batch 左填充拼批（DEV-0011）。vLLM 另开任务。
 
     设备与 tile 策略在构造时给定，dtype 在 load 时给定。进入任何模型算子之前，入口断言检查输入与模型的 device/dtype，
     不一致就抛 AdapterDeviceError 并报出两个值。
@@ -229,6 +238,11 @@ class InternVL35Adapter(ModelAdapter):
     def always_single_tile(self) -> bool:
         """策略本身保证每张图只有 1 个 tile（crop_to_patches=False 或 max_patches=1）。否则 tile 数随图而变。"""
         return (not self._crop) or self._max_patches == 1
+
+    @property
+    def image_policy(self) -> TilePolicy:
+        """构造时给定的图像口径（src/adapters/image_policy.py）。"""
+        return TilePolicy(self._crop, self._max_patches)
 
     @property
     def tile_policy(self) -> dict[str, Any]:
@@ -541,7 +555,7 @@ class InternVL35Adapter(ModelAdapter):
         for (s, e), n in zip(runs, n_tiles):
             if ids[s - 1] != self._ids[IMG_START] or ids[e] != self._ids[IMG_END]:
                 raise RuntimeError(f"图像段 [{s}, {e}) 前后不是 {IMG_START} / {IMG_END}")
-            infos.append(ImageTokenInfo(Span(s, e), (TILE_GRID_HW[0] * n, TILE_GRID_HW[1])))
+            infos.append(ImageTokenInfo(Span(s, e), (TILE_GRID_HW[0] * n, TILE_GRID_HW[1]), n_pixels=n * TILE_PX * TILE_PX))
 
         # 5. 查询区间
         query_span = None
@@ -700,61 +714,60 @@ class InternVL35Adapter(ModelAdapter):
         enable_thinking=True 时在 user 轮之前加 R1 system 轮（D13-2）。allowed_token_ids 非空时，每一步把其他 id 的 logits
         置为 -inf；这时若希望能停下，调用方要把停止 token 放进允许集合。返回的 token_ids 含生成出的停止 token；
         n_prompt_tokens 含 system 轮与 assistant 头；n_visual_tokens 只数 <IMG_CONTEXT>。
+        与 generate_batch 走同一条路径（一行的批，没有填充）；stopped、n_image_pixels 等字段见 base.GenerationResult。
         """
-        self._require_loaded()
-        if not isinstance(enable_thinking, bool):
-            raise TypeError(f"enable_thinking 必须是 bool，收到 {enable_thinking!r}")
-        if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or max_new_tokens < 1:
-            raise ValueError(f"max_new_tokens 必须是正整数，收到 {max_new_tokens!r}")
-        if inputs.query_span is not None:
-            raise ValueError("带查询 token 的输入不能用于 generate（查询 token 只供 hidden_states 读出）")
-        reserved = {"input_ids", "attention_mask", "pixel_values", "position_ids", "inputs_embeds",
-                    "max_new_tokens", "eos_token_id", "pad_token_id"}
-        clash = sorted(reserved & set(gen_kwargs))
-        if clash:
-            raise ValueError(f"gen_kwargs 不能覆盖适配器控制的参数：{clash}")
-        self._check_entry(inputs, None, where="generate")
-        from transformers import LogitsProcessorList
+        (res,) = self._generate_rows([inputs], enable_thinking=enable_thinking, allowed_token_ids=allowed_token_ids,
+                                     max_new_tokens=max_new_tokens, gen_kwargs=gen_kwargs, where="generate")
+        return res
 
-        input_ids = torch.tensor([self.prompt_ids(inputs, enable_thinking)], dtype=torch.long, device=self._device)
-        kw: dict[str, Any] = {"input_ids": input_ids, "attention_mask": torch.ones_like(input_ids)}
-        if inputs.images:
-            kw["pixel_values"] = inputs.tensors["pixel_values"]
+    def generate_batch(
+        self,
+        inputs_list: Sequence[ModelInputs],
+        *,
+        enable_thinking: bool,
+        max_new_tokens: int,
+        allowed_token_ids: Sequence[int] | None = None,
+        **gen_kwargs: Any,
+    ) -> list[GenerationResult]:
+        """批量生成（约定见 base.ModelAdapter.generate_batch）。每行的提示 = prompt_ids（system 轮只在开思考时加）；
+        左填充用 pad（`<|endoftext|>`）；各行的 tile 按行的顺序拼接，每行的 tile 数可以不同（多 tile 策略下生成可用）。
+        """
+        return self._generate_rows(inputs_list, enable_thinking=enable_thinking, allowed_token_ids=allowed_token_ids,
+                                   max_new_tokens=max_new_tokens, gen_kwargs=gen_kwargs, where="generate_batch")
+
+    def _prompt_row(self, inputs: ModelInputs, enable_thinking: bool) -> batching.PromptRow:
+        return batching.PromptRow(
+            ids=tuple(self.prompt_ids(inputs, enable_thinking)),
+            n_visual_tokens=sum(len(i.span) for i in inputs.images),
+            n_image_pixels=batching.image_pixels(inputs),
+        )
+
+    def _generate_rows(self, inputs_list: Sequence[ModelInputs], *, enable_thinking: bool,
+                       allowed_token_ids: Sequence[int] | None, max_new_tokens: int, gen_kwargs: dict[str, Any],
+                       where: str) -> list[GenerationResult]:
+        self._require_loaded()
+        batching.check_generate_args(enable_thinking, max_new_tokens)
+        items = batching.check_inputs_list(inputs_list, where=where)
+        batching.check_reserved(gen_kwargs, _RESERVED_GEN_KWARGS)
+        for inp in items:
+            self._check_entry(inp, None, where=where)
+        rows = [self._prompt_row(inp, enable_thinking) for inp in items]
+        pad_id = self._ids[END_OF_TEXT]
+        kw: dict[str, Any] = batching.batch_prompt(rows, pad_id=pad_id, device=self._device)
+        with_images = [inp for inp in items if inp.images]
+        if with_images:
+            kw["pixel_values"] = torch.cat([inp.tensors["pixel_values"] for inp in with_images], dim=0)
         processors = list(gen_kwargs.pop("logits_processor", None) or [])
         if allowed_token_ids is not None:
             vocab_rows = self._model.get_output_embeddings().weight.shape[0]
             processors.insert(0, _AllowedTokensProcessor(allowed_token_ids, vocab_rows))
         gen_kwargs.setdefault("do_sample", False)
         stop_ids = [self._ids[s] for s in STOP_TOKENS]
-
-        if self._device.type == "cuda":
-            torch.cuda.synchronize(self._device)
-        t0 = time.perf_counter()
-        with torch.no_grad():
-            out = self._model.generate(
-                **kw,
-                max_new_tokens=max_new_tokens,
-                eos_token_id=stop_ids,
-                pad_token_id=self._ids[END_OF_TEXT],
-                logits_processor=LogitsProcessorList(processors),
-                **gen_kwargs,
-            )
-        new_ids = out[0, input_ids.shape[1] :].tolist()
-        wall = time.perf_counter() - t0
-        if out.shape[0] != 1 or not torch.equal(out[0, : input_ids.shape[1]], input_ids[0]):
-            raise RuntimeError("generate 的输出不以输入为前缀")
-
-        text, raw_text, unclosed = self.split_answer(new_ids, enable_thinking=enable_thinking)
-        return GenerationResult(
-            text=text,
-            token_ids=tuple(new_ids),
-            n_generated_tokens=len(new_ids),
-            n_prompt_tokens=int(input_ids.shape[1]),
-            n_visual_tokens=sum(len(i.span) for i in inputs.images),
-            wall_time_s=wall,
-            raw_text=raw_text,
-            thinking_unclosed=unclosed,
-        )
+        out, wall = batching.run_generate(self._model, kw, device=self._device, max_new_tokens=max_new_tokens,
+                                          stop_ids=stop_ids, pad_id=pad_id, processors=processors, gen_kwargs=gen_kwargs)
+        return batching.make_results(rows, out, kw["input_ids"].shape[1], wall=wall, stop_ids=stop_ids, pad_id=pad_id,
+                                     max_new_tokens=max_new_tokens, split_answer=self.split_answer,
+                                     enable_thinking=enable_thinking)
 
     def split_answer(self, token_ids: Sequence[int], *, enable_thinking: bool) -> tuple[str, str, bool]:
         """把生成的 token 拆成 (text, raw_text, thinking_unclosed)（D10；规则与 Gemma 适配器相同）。
@@ -1403,18 +1416,16 @@ def compare_with_processor(ad: InternVL35Adapter, proc: Any, images: Sequence[An
 
 
 def _smoke_setup(smoke: Any, checks: dict[str, Any], args: Any) -> tuple[InternVL35Adapter, dict[str, Any]]:
+    from src.adapters.factory import make_adapter  # 函数内 import：factory 按家族 import 本模块
+
     ctx = smoke.base_context(args)  # 固定种子、测试图与第二张图：三个家族共用同一份准备
     dtype = smoke.DTYPES[args.dtype]
+    key = args.model or TINY_SOURCE_KEY
+    ad = make_adapter(key, device=args.device, dtype=dtype, image_policy=TilePolicy(**SMOKE_POLICY), tiny=args.tiny)
     if args.tiny:
-        key = args.model or TINY_SOURCE_KEY
-        comps = load_pinned_components(key)
-        model = build_tiny_model(comps[0], dtype=dtype)
-        ad = make_tiny_adapter(comps, **SMOKE_POLICY, device=args.device, model=model, source_key=key)
-        ref = reference_processor(comps, key)
+        ref = reference_processor((None, ad.tokenizer, ad.image_processor, ad.chat_template), key)
         ref_kind = "InternVLProcessor 官方类（开发机：绕过视频处理器的类型检查）+ GotOcr2ImageProcessorPil"
     else:
-        ad = InternVL35Adapter(device=args.device, **SMOKE_POLICY)
-        ad.load(args.model, dtype)
         ref = ad.hf_processor
         ref_kind = f"AutoProcessor（{type(ref).__name__} + {type(ref.image_processor).__name__}）"
     return ad, {**ctx, "smoke": smoke, "checks": checks, "ref_processor": ref, "ref_kind": ref_kind}

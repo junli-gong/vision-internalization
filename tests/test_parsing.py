@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from typing import NamedTuple
 
 import numpy as np
 import pytest
@@ -47,6 +48,7 @@ def test_failure_value_table_is_pinned():
         "no_box", "unbalanced_tags", "malformed", "out_of_range", "inverted", "multiple_boxes",
         "empty", "thinking_unclosed", "ambiguous", "no_json",
         "no_number", "multiple_numbers", "no_choice", "multiple_choices", "no_polygon", "too_few_points",
+        "truncated",  # DEV-0011：追加在末尾
     ]
     assert all(isinstance(m, str) and m == m.value for m in ParseFailure)
     # 与网格解析的失败原因不重名：两者可以记进同一个 ParseTally 而不混淆
@@ -143,6 +145,42 @@ def test_parse_generation_prechecks_keep_the_result_type(fn, kw, cls):
     for blank in ("", " \n\t "):
         empty = parse_generation(_gen(blank), fn, **kw)
         assert type(empty) is cls and empty.failure is PF.EMPTY and all(v is None for v in empty[:-1])
+
+
+def _stopped_gen(text, *, stopped, unclosed=False):
+    return GenerationResult(text, (1,), 1, 5, 0, 0.0, raw_text=text, thinking_unclosed=unclosed, stopped=stopped)
+
+
+@pytest.mark.parametrize("fn, kw, cls, text", [
+    (parse_count, {}, ParseResult, "3 cats"),
+    (parse_choice, {"letters": "AB"}, ParseResult, "(B)"),
+    (parse_polygons, {"width": 4, "height": 3}, ParseResult, "[[0, 0], [1000, 0], [1000, 1000]]"),
+    (extract_json, {}, ParseResult, "[1, 2]"),
+    (parse_grid_text, {"n": 2}, GridParse, "01\n10"),
+])
+def test_truncated_output_is_a_failure_even_if_it_would_parse(fn, kw, cls, text):
+    """DEV-0011（E1 的协议）：stopped is False → truncated，不尝试解析；这些文本在 stopped=True 时都能解析成功。"""
+    assert fn(text, **kw).failure is None
+    assert parse_generation(_stopped_gen(text, stopped=True), fn, **kw).failure is None
+    cut = parse_generation(_stopped_gen(text, stopped=False), fn, **kw)
+    assert type(cut) is cls and cut.failure is PF.TRUNCATED and all(v is None for v in cut[:-1])
+    # 判定顺序：思考段未闭合在截断之前；截断在空回答之前
+    both = parse_generation(_stopped_gen("", stopped=False, unclosed=True), fn, **kw)
+    assert both.failure is PF.THINKING_UNCLOSED
+    assert parse_generation(_stopped_gen("  ", stopped=False), fn, **kw).failure is PF.TRUNCATED
+
+
+def test_stopped_none_or_missing_keeps_the_old_behaviour():
+    """stopped 未记录（None：旧的构造方式；或对象没有这个字段，例如健康检查的 _Answer）时跳过截断判定。"""
+    assert _gen("3 cats").stopped is None
+    assert parse_generation(_gen("3 cats"), parse_count) == (3, None)
+
+    class _Answer(NamedTuple):
+        text: str
+        thinking_unclosed: bool
+
+    assert parse_generation(_Answer("3 cats", False), parse_count) == (3, None)
+    assert parse_generation(_Answer(" ", False), parse_count).failure is PF.EMPTY
 
 
 def test_parse_generation_rejects_parse_fns_that_break_the_contract():

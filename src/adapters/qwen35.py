@@ -5,9 +5,15 @@
 
 - 加载类：`AutoModelForImageTextToText` → `Qwen3_5ForConditionalGeneration`，`attn_implementation="sdpa"`，
   eval 模式；processor 由 `AutoProcessor` 加载（§5.1）。load 一律带注册表里的 revision（D9-2）。
-- 固定分辨率（§5.3、简报 §12）：每个 LLM 视觉 token 对应缩放后图像的 32×32 像素（patch 16 × merge 2）。
-  先用 PIL 把图缩放到构造时给定的 (H, W)，再以 min_pixels = max_pixels = H·W 调图像处理器，处理器不再缩放；
-  视觉网格 = (H/32, W/32)。
+- 图像口径（§5.3、简报 §12、D28-3；src/adapters/image_policy.py）：每个 LLM 视觉 token 对应缩放后图像的 32×32 像素
+  （patch 16 × merge 2）。构造时二选一：
+  - 固定尺寸 `image_size=(H, W)`（= FixedSize）：先用 PIL 把图缩放到 (H, W)，再以 min_pixels = max_pixels = H·W 调图像处理器，
+    处理器不再缩放；全部图的网格都是 (H/32, W/32)，`llm_grid_hw` 只在这个模式下可用。
+  - 像素预算 `image_policy=PixelBudget(n)`（DEV-0011，E1 用 n=300）：不预先缩放，以 min_pixels = max_pixels = n·32² 调图像处理器，
+    由它的 smart resize 保持长宽比；每张图有自己的网格（ImageTokenInfo.grid_hw，取自 image_grid_thw，并与 smart_resize 的结果核对）。
+    位置编码、hidden_states、vision_features、查询 token 都按每张图自己的网格工作，多张图网格不同也可以（测试核对
+    position_ids 与 get_rope_index 逐项相同、vision_features 与第 0 层逐位相同）。
+  ImageTokenInfo.n_pixels = 缩放后的像素数 = (grid_h·16)·(grid_w·16)。
 - M-RoPE（§5.4）：文本 token 的 (T, H, W) 都等于顺序位置；图像 token 的 T = s、H = s + 行、W = s + 列；
   图像之后从 s + max(h, w) 接着编号。position_ids 形状 (4, B, L)，第 0 行是 0..L-1 的文本位置，
   第 1–3 行是 M-RoPE 位置，与 generate 内部的做法相同。本适配器自己构造并显式传入，
@@ -25,11 +31,14 @@
   `torch_gdn()`，显式换成 torch 原函数；GPU 上不动，保持 transformers 的绑定。实际走哪个见 `gdn_implementation()`。
 - 坐标（D13-4、§5.5；DEV-0006）：JSON `[{"bbox_2d": [x1, y1, x2, y2], "label": …}, …]`，0–1000，x 在前，按原图宽高
   换算成内部的绝对像素 xyxy，见 parse_boxes / parse_one_box（模块级函数，也是适配器方法；通用 JSON 规则在 src/parsing）。
+- 生成（DEV-0011）：generate 与 generate_batch 走同一条路径（src/adapters/batching.py；generate 是一行的批）。批量时左填充，
+  M-RoPE 位置由 HF 按 attention_mask 跳过填充计算；生成前逐行核对"非填充 token 的三维位置 = 本适配器自己按规则构造的位置"
+  （_check_batch_positions），不一致就报错。
 
 处理器的用法：本适配器只用处理器的三个部件——tokenizer、image_processor、chat_template——自己完成图像占位符的
 展开与 mm_token_type_ids，做法与 `ProcessorMixin.__call__` 相同。原因：开发机没有 torchvision，
 `Qwen3VLProcessor` 的视频部件在那里构造不出来，测试没法走官方处理器。服务器上 load() 仍用官方
-`AutoProcessor` 加载，并把它留在 `hf_processor` 上；冒烟脚本逐项比对两者的输出。
+`AutoProcessor` 加载，并把它留在 `hf_processor` 上；冒烟脚本逐项比对两者的输出。开发机上的比对对象见 reference_processor()。
 """
 
 from __future__ import annotations
@@ -37,7 +46,6 @@ from __future__ import annotations
 import contextlib
 import importlib
 import math
-import time
 import types
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
@@ -46,7 +54,8 @@ import torch
 from PIL import Image
 from transformers import LogitsProcessor
 
-from src.adapters import registry
+from src.adapters import batching, registry
+from src.adapters.image_policy import QWEN_PIXELS_PER_TOKEN, FixedSize, PixelBudget
 from src.adapters.base import (
     ORDERS,
     POSITION_MODES,
@@ -85,8 +94,12 @@ _STRUCTURAL_TOKENS: tuple[str, ...] = (IM_START, IM_END, END_OF_TEXT, IMAGE_PAD,
 QUERY_PLACEHOLDER = "<|visint_query|>"
 
 # 每个 LLM 视觉 token 对应缩放后图像的边长（像素），= patch_size × spatial_merge_size（§5.1）。
-# 构造时用它检查 image_size；attach 时与 config 比对。
-PIXELS_PER_LLM_TOKEN = 32
+# 定义在 image_policy（FixedSize 用它检查 image_size）；attach 时与 config 比对。
+PIXELS_PER_LLM_TOKEN = QWEN_PIXELS_PER_TOKEN
+
+# generate / generate_batch 的 gen_kwargs 不能覆盖的参数（适配器自己控制）
+_RESERVED_GEN_KWARGS = frozenset({"input_ids", "attention_mask", "pixel_values", "image_grid_thw", "mm_token_type_ids",
+                                  "position_ids", "inputs_embeds", "max_new_tokens", "eos_token_id", "pad_token_id"})
 
 # 小型随机模型：从哪个登记模型的真实 config 缩出来（任务书：取固定 revision 的真实 config）
 TINY_SOURCE_KEY = "qwen3.5-0.8b"
@@ -102,6 +115,32 @@ class AdapterDeviceError(RuntimeError):
 def _canonical_device(device: str | torch.device) -> torch.device:
     """把 "cuda" 这类不带下标的写法规范成张量实际报告的设备（如 cuda:0），便于逐项比较。"""
     return torch.empty(0, device=device).device
+
+
+def mrope_rows(seq_len: int, segments: Iterable[tuple[int, int, tuple[int, int]]]) -> torch.Tensor:
+    """本适配器自己的 M-RoPE 规则（§5.4），与 HF 的 get_rope_index 无关地构造 (3, seq_len) 的 (T, H, W) 位置。
+
+    segments：若干 (start, end, (gh, gw))，每段是一块按行主序排成 gh×gw 网格的 token（图像，或 grid2d 的查询块）。
+    文本 token 三维都等于顺序位置；网格块的 T = s、H = s + 行、W = s + 列（s 是块前的下一个位置），块之后从 s + max(gh, gw)
+    接着编号。position_ids 与 generate_batch 的逐行核对都用它。
+    """
+    rows = torch.empty((3, seq_len), dtype=torch.long)
+    cur = 0
+    i = 0
+    for s, e, (gh, gw) in sorted(segments):
+        if s < i or e - s != gh * gw or e > seq_len:
+            raise RuntimeError(f"段 [{s}, {e}) 与网格 {gh}×{gw}、前一段或序列长度 {seq_len} 不相容")
+        rows[:, i:s] = torch.arange(cur, cur + (s - i))
+        cur += s - i
+        r = torch.arange(gh).repeat_interleave(gw)
+        c = torch.arange(gw).repeat(gh)
+        rows[0, s:e] = cur
+        rows[1, s:e] = cur + r
+        rows[2, s:e] = cur + c
+        cur += max(gh, gw)
+        i = e
+    rows[:, i:] = torch.arange(cur, cur + (seq_len - i))
+    return rows
 
 
 def _runs(ids: Sequence[int], token_id: int) -> list[tuple[int, int]]:
@@ -259,24 +298,32 @@ def torch_gdn() -> Iterator[None]:
 
 
 class Qwen35Adapter(ModelAdapter):
-    """Qwen3.5（0.8B/2B/4B/9B）适配器。单条样本（batch = 1）；批处理和 vLLM 另开任务。
+    """Qwen3.5（0.8B/2B/4B/9B）适配器。ModelInputs 是单条样本；generate_batch 左填充拼批（DEV-0011）。vLLM 另开任务。
 
-    设备在构造时给定，dtype 在 load 时给定。进入任何模型算子之前，入口断言检查输入与模型的 device/dtype，
+    设备与图像口径在构造时给定，dtype 在 load 时给定。图像口径二选一：`image_size=(H, W)`（固定尺寸，= FixedSize）或
+    `image_policy=PixelBudget(n)`（像素预算；也接受 FixedSize）。进入任何模型算子之前，入口断言检查输入与模型的 device/dtype，
     不一致就抛 AdapterDeviceError 并报出两个值。设备是 CPU 时，前向与生成显式走 GDN 的 torch 实现（gdn_scope）。
     """
 
     family = registry.FAMILY_QWEN35
 
-    def __init__(self, *, device: str | torch.device, image_size: tuple[int, int]):
-        if not isinstance(image_size, (tuple, list)) or len(image_size) != 2:
-            raise ValueError(f"image_size 必须是 (H, W)，收到 {image_size!r}")
-        h, w = image_size
-        for name, v in (("H", h), ("W", w)):
-            if isinstance(v, bool) or not isinstance(v, (int, np.integer)) or v <= 0:
-                raise ValueError(f"image_size 的 {name} 必须是正整数，收到 {v!r}")
-            if int(v) % PIXELS_PER_LLM_TOKEN != 0:
-                raise ValueError(f"image_size 的 {name}={v} 不是 {PIXELS_PER_LLM_TOKEN} 的倍数")
-        self._image_size = (int(h), int(w))
+    def __init__(self, *, device: str | torch.device, image_size: tuple[int, int] | None = None,
+                 image_policy: FixedSize | PixelBudget | None = None):
+        if (image_size is None) == (image_policy is None):
+            raise ValueError("image_size（固定尺寸）与 image_policy 必须恰好给一个")
+        if image_size is not None:
+            if not isinstance(image_size, (tuple, list)) or len(image_size) != 2:
+                raise ValueError(f"image_size 必须是 (H, W)，收到 {image_size!r}")
+            h, w = image_size
+            for name, v in (("H", h), ("W", w)):
+                if isinstance(v, bool) or not isinstance(v, (int, np.integer)) or v <= 0:
+                    raise ValueError(f"image_size 的 {name} 必须是正整数，收到 {v!r}")
+                if int(v) % PIXELS_PER_LLM_TOKEN != 0:
+                    raise ValueError(f"image_size 的 {name}={v} 不是 {PIXELS_PER_LLM_TOKEN} 的倍数")
+            image_policy = FixedSize(int(h), int(w))
+        if not isinstance(image_policy, (FixedSize, PixelBudget)):
+            raise TypeError(f"Qwen3.5 的 image_policy 必须是 FixedSize 或 PixelBudget，收到 {image_policy!r}")
+        self._policy: FixedSize | PixelBudget = image_policy
         self._device = _canonical_device(device)
         self._dtype: torch.dtype | None = None
         self._model: Any = None
@@ -310,13 +357,35 @@ class Qwen35Adapter(ModelAdapter):
         return self._dtype
 
     @property
+    def image_policy(self) -> FixedSize | PixelBudget:
+        """构造时给定的图像口径（FixedSize 或 PixelBudget）。"""
+        return self._policy
+
+    @property
+    def fixed_size(self) -> bool:
+        return isinstance(self._policy, FixedSize)
+
+    @property
     def image_size(self) -> tuple[int, int]:
-        return self._image_size
+        """固定尺寸 (H, W)。只在固定尺寸模式下可用；像素预算模式下每张图的尺寸不同，报错。"""
+        self._require_fixed("image_size")
+        return (self._policy.h, self._policy.w)
 
     @property
     def llm_grid_hw(self) -> tuple[int, int]:
-        """每张图送进 LLM 的视觉 token 网格 (H/32, W/32)。"""
-        return (self._image_size[0] // PIXELS_PER_LLM_TOKEN, self._image_size[1] // PIXELS_PER_LLM_TOKEN)
+        """每张图送进 LLM 的视觉 token 网格 (H/32, W/32)。只在固定尺寸模式下可用：像素预算模式下每张图有自己的网格，
+        请读 ModelInputs.images[k].grid_hw。"""
+        self._require_fixed("llm_grid_hw")
+        return (self._policy.h // PIXELS_PER_LLM_TOKEN, self._policy.w // PIXELS_PER_LLM_TOKEN)
+
+    def _require_fixed(self, what: str) -> None:
+        if not isinstance(self._policy, FixedSize):
+            raise ValueError(f"{what} 只在固定尺寸模式下有定义；当前是 {self._policy!r}，每张图的网格见 ImageTokenInfo.grid_hw")
+
+    @property
+    def chat_template(self) -> str:
+        self._require_loaded()
+        return self._template
 
     @property
     def model(self) -> Any:
@@ -362,9 +431,20 @@ class Qwen35Adapter(ModelAdapter):
         return self._query_token_id
 
     def token_id(self, token: str) -> int:
-        """attach 时查好的特殊 token id（如 IM_END、THINK_END）。"""
+        """词表里任意一个 token 的 id（DEV-0011；RUN-0005 发现原来只认 attach 时缓存的那几个）。
+
+        attach 时查好的特殊 token（IM_END、THINK_END 等）直接返回；其他按 token 的字面（词表里的写法，如 `<think>`、`Ġthe`）
+        经 tokenizer 查，要求 id → token 能原样转回，查不到报 KeyError。注意它查的是词表项，不是"这段文字分词后的 id"。
+        """
         self._require_loaded()
-        return self._ids[token]
+        if token in self._ids:
+            return self._ids[token]
+        if not isinstance(token, str) or not token:
+            raise KeyError(f"token 必须是非空字符串，收到 {token!r}")
+        i = self._tok.convert_tokens_to_ids(token)
+        if isinstance(i, bool) or not isinstance(i, int) or i < 0 or self._tok.convert_ids_to_tokens(i) != token:
+            raise KeyError(f"{token!r} 不在词表里")
+        return i
 
     # ------------------------------------------------------------------
     # 加载
@@ -519,21 +599,49 @@ class Qwen35Adapter(ModelAdapter):
     # 输入
     # ------------------------------------------------------------------
 
-    def resize_image(self, image: Any) -> Image.Image:
-        """把一张图转成 RGB 并缩放到 (H, W)。缩放用 PIL，重采样方式取图像处理器的 resample（执行器白名单）。"""
-        self._require_loaded()
+    def to_rgb(self, image: Any) -> Image.Image:
+        """把一张图转成 RGB 的 PIL 图，不缩放。"""
         if isinstance(image, Image.Image):
-            pil = image if image.mode == "RGB" else image.convert("RGB")
-        elif isinstance(image, np.ndarray):
+            return image if image.mode == "RGB" else image.convert("RGB")
+        if isinstance(image, np.ndarray):
             if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
                 raise ValueError(f"numpy 图必须是 uint8 的 (H, W, 3)，收到 dtype={image.dtype} shape={image.shape}")
-            pil = Image.fromarray(image)
-        else:
-            raise TypeError(f"图像必须是 PIL.Image 或 numpy 数组，收到 {type(image).__name__}")
-        h, w = self._image_size
+            return Image.fromarray(image)
+        raise TypeError(f"图像必须是 PIL.Image 或 numpy 数组，收到 {type(image).__name__}")
+
+    def resize_image(self, image: Any) -> Image.Image:
+        """固定尺寸模式：把一张图转成 RGB 并缩放到 (H, W)。缩放用 PIL，重采样方式取图像处理器的 resample（执行器白名单）。
+        像素预算模式下不预先缩放（由处理器的 smart resize 做），这里报错。"""
+        self._require_loaded()
+        self._require_fixed("resize_image")
+        pil = self.to_rgb(image)
+        h, w = self.image_size
         if pil.size != (w, h):
             pil = pil.resize((w, h), resample=self._resample)
         return pil
+
+    def processor_pixels(self) -> int:
+        """调图像处理器时显式传入的 min_pixels = max_pixels：固定尺寸 H·W；像素预算 n·32²。"""
+        if isinstance(self._policy, FixedSize):
+            return self._policy.h * self._policy.w
+        return self._policy.pixels
+
+    def expected_grid(self, image_hw: tuple[int, int]) -> tuple[int, int]:
+        """一张原图（高, 宽）在当前口径下应得的 patch 网格 (grid_h, grid_w)：固定尺寸是 (H/16, W/16)；像素预算按图像处理器
+        模块自己的 smart_resize（factor = patch × merge，min_pixels = max_pixels = 预算）算。build_inputs 用它核对处理器的输出。"""
+        self._require_loaded()
+        p = int(self._ip.patch_size)
+        if isinstance(self._policy, FixedSize):
+            return self._policy.h // p, self._policy.w // p
+        # 优先取图像处理器所在模块自己的 smart_resize（服务器：torchvision 后端；开发机：PIL 后端；5.17 两份逐字相同），
+        # 没有时退回 PIL 后端模块里的那份
+        smart_resize = getattr(importlib.import_module(type(self._ip).__module__), "smart_resize", None)
+        if smart_resize is None:
+            from transformers.models.qwen2_vl.image_processing_pil_qwen2_vl import smart_resize
+        n = self._policy.pixels
+        rh, rw = smart_resize(int(image_hw[0]), int(image_hw[1]), factor=p * int(self._ip.merge_size),
+                              min_pixels=n, max_pixels=n)
+        return rh // p, rw // p
 
     def build_inputs(self, images: Sequence[Any], instruction: str, order: Order) -> ModelInputs:
         """组装单条输入。区间都是 input_ids 里的 token 下标（半开）。
@@ -541,6 +649,8 @@ class Qwen35Adapter(ModelAdapter):
         user 内容的顺序：instruction_first → [指令, 图1, 图2, …]；image_first → [图1, …, 指令]。
         已调用 inject_query_tokens 时，查询 token 放在 user 内容最后一项之后、<|im_end|> 之前。
         只渲染到 user 轮结束（<|im_end|>\\n），不含 assistant 头；assistant 头由 generate 按思考开关追加。
+        图像按构造时的口径处理（模块说明）：固定尺寸先用 PIL 缩放；像素预算不预先缩放。两种都以 min_pixels = max_pixels
+        显式调图像处理器，每张图的网格取自 image_grid_thw，并与 expected_grid（固定尺寸 / smart_resize）逐张核对。
         """
         self._require_loaded()
         if order not in ORDERS:
@@ -550,7 +660,10 @@ class Qwen35Adapter(ModelAdapter):
         self._check_instruction(instruction)
         if isinstance(images, (Image.Image, np.ndarray)):
             raise TypeError("images 必须是图像的序列（单张图也要放进列表）")
-        pil = [self.resize_image(im) for im in images]
+        if isinstance(self._policy, FixedSize):
+            pil = [self.resize_image(im) for im in images]
+        else:
+            pil = [self.to_rgb(im) for im in images]
         n_img = len(pil)
 
         # 1. 渲染：指令槽先放哨兵，确认模板对指令原样输出（Qwen 模板会 trim 整段内容）
@@ -566,19 +679,25 @@ class Qwen35Adapter(ModelAdapter):
         if not text.endswith(IM_END + "\n"):
             raise RuntimeError(f"渲染没有以 {IM_END!r}+换行 结束")
 
-        # 2. 图像：处理器不再缩放（min = max = H·W），逐张核对网格
-        h, w = self._image_size
+        # 2. 图像：min_pixels = max_pixels 显式传入；逐张核对网格（固定尺寸：处理器不再缩放；像素预算：= smart_resize）
         tensors: dict[str, torch.Tensor] = {}
         n_tok_per_image: list[int] = []
+        llm_grids: list[tuple[int, int]] = []
+        n_pixels: list[int] = []
         if n_img:
-            enc = self._ip(images=pil, min_pixels=h * w, max_pixels=h * w, return_tensors="pt")
+            px = self.processor_pixels()
+            enc = self._ip(images=pil, min_pixels=px, max_pixels=px, return_tensors="pt")
             grid = enc["image_grid_thw"]
-            p = self._ip.patch_size
-            want = torch.tensor([[1, h // p, w // p]] * n_img, dtype=grid.dtype)
+            p, merge = int(self._ip.patch_size), int(self._ip.merge_size)
+            want = torch.tensor([[1, *self.expected_grid((im.height, im.width))] for im in pil], dtype=grid.dtype)
             if not torch.equal(grid, want):
-                raise RuntimeError(f"image_grid_thw={grid.tolist()}，期望 {want.tolist()}：处理器又做了缩放")
-            merge2 = self._ip.merge_size**2
-            n_tok_per_image = [int(g.prod()) // merge2 for g in grid]
+                raise RuntimeError(f"image_grid_thw={grid.tolist()}，期望 {want.tolist()}（{self._policy!r}）：处理器没有按给定的像素数缩放")
+            for _, gh_p, gw_p in grid.tolist():
+                if gh_p % merge or gw_p % merge:
+                    raise RuntimeError(f"patch 网格 {gh_p}×{gw_p} 不是 merge_size={merge} 的倍数")
+                llm_grids.append((gh_p // merge, gw_p // merge))
+                n_pixels.append(gh_p * p * gw_p * p)
+            n_tok_per_image = [gh * gw for gh, gw in llm_grids]
             tensors["pixel_values"] = enc["pixel_values"].to(device=self._device, dtype=self._dtype)
             tensors["image_grid_thw"] = grid.to(self._device)
 
@@ -598,14 +717,13 @@ class Qwen35Adapter(ModelAdapter):
         runs = _runs(ids, self._ids[IMAGE_PAD])
         if [e - s for s, e in runs] != n_tok_per_image:
             raise RuntimeError(f"图像 token 段 {runs} 与每张图的 token 数 {n_tok_per_image} 不一致")
-        gh, gw = self.llm_grid_hw
         infos = []
-        for s, e in runs:
+        for (s, e), (gh, gw), npx in zip(runs, llm_grids, n_pixels):
             if ids[s - 1] != self._ids[VISION_START] or ids[e] != self._ids[VISION_END]:
                 raise RuntimeError(f"图像段 [{s}, {e}) 前后不是 vision_start / vision_end")
             if e - s != gh * gw:
                 raise RuntimeError(f"图像段长度 {e - s} 与网格 {gh}×{gw} 不一致")
-            infos.append(ImageTokenInfo(Span(s, e), (gh, gw)))
+            infos.append(ImageTokenInfo(Span(s, e), (gh, gw), n_pixels=npx))
 
         # 5. 查询区间
         query_span = None
@@ -663,23 +781,7 @@ class Qwen35Adapter(ModelAdapter):
                 if q * q != qe - qs:
                     raise ValueError(f"grid2d 的查询个数 {qe - qs} 不是完全平方数")
                 segs.append((qs, qe, (q, q)))
-        segs.sort()
-        rows = torch.empty((3, seq_len), dtype=torch.long)
-        cur = 0
-        i = 0
-        for s, e, (gh, gw) in segs:
-            if s < i or e - s != gh * gw:
-                raise RuntimeError(f"段 [{s}, {e}) 与网格 {gh}×{gw} 或前一段不相容")
-            rows[:, i:s] = torch.arange(cur, cur + (s - i))
-            cur += s - i
-            r = torch.arange(gh).repeat_interleave(gw)
-            c = torch.arange(gw).repeat(gh)
-            rows[0, s:e] = cur
-            rows[1, s:e] = cur + r
-            rows[2, s:e] = cur + c
-            cur += max(gh, gw)
-            i = e
-        rows[:, i:] = torch.arange(cur, cur + (seq_len - i))
+        rows = mrope_rows(seq_len, segs)
         pos = torch.cat([torch.arange(seq_len)[None], rows], dim=0).unsqueeze(1)
 
         # 与模型自己的 get_rope_index 比对（查询 token 在 mm_token_type_ids 里记为文本）
@@ -769,68 +871,88 @@ class Qwen35Adapter(ModelAdapter):
 
         allowed_token_ids 非空时，每一步把其他 id 的 logits 置为 -inf；这时若希望能停下，调用方要把停止 token
         放进允许集合。返回的 token_ids 含生成出的停止 token；n_prompt_tokens 含 assistant 头。
+        与 generate_batch 走同一条路径（一行的批，没有填充）；stopped、n_image_pixels 等字段见 base.GenerationResult。
         """
-        self._require_loaded()
-        if not isinstance(enable_thinking, bool):
-            raise TypeError(f"enable_thinking 必须是 bool，收到 {enable_thinking!r}")
-        if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or max_new_tokens < 1:
-            raise ValueError(f"max_new_tokens 必须是正整数，收到 {max_new_tokens!r}")
-        if inputs.query_span is not None:
-            raise ValueError("带查询 token 的输入不能用于 generate（查询 token 只供 hidden_states 读出）")
-        reserved = {"input_ids", "attention_mask", "pixel_values", "image_grid_thw", "mm_token_type_ids",
-                    "position_ids", "inputs_embeds", "max_new_tokens", "eos_token_id", "pad_token_id"}
-        clash = sorted(reserved & set(gen_kwargs))
-        if clash:
-            raise ValueError(f"gen_kwargs 不能覆盖适配器控制的参数：{clash}")
-        self._check_entry(inputs, None, where="generate")
-        from transformers import LogitsProcessorList
+        (res,) = self._generate_rows([inputs], enable_thinking=enable_thinking, allowed_token_ids=allowed_token_ids,
+                                     max_new_tokens=max_new_tokens, gen_kwargs=gen_kwargs, where="generate")
+        return res
 
+    def generate_batch(
+        self,
+        inputs_list: Sequence[ModelInputs],
+        *,
+        enable_thinking: bool,
+        max_new_tokens: int,
+        allowed_token_ids: Sequence[int] | None = None,
+        **gen_kwargs: Any,
+    ) -> list[GenerationResult]:
+        """批量生成（约定见 base.ModelAdapter.generate_batch）。左填充用 <|endoftext|>（也是 HF 给已结束的行补的 pad）；
+        mm_token_type_ids 在填充位置为 0；各行的 pixel_values / image_grid_thw 按行的顺序拼接，每行可以有不同个数、不同网格的图。
+        M-RoPE：HF 按 attention_mask 跳过填充算 (T, H, W)；生成前逐行核对它与本适配器自己的规则（mrope_rows）逐个相等。
+        """
+        return self._generate_rows(inputs_list, enable_thinking=enable_thinking, allowed_token_ids=allowed_token_ids,
+                                   max_new_tokens=max_new_tokens, gen_kwargs=gen_kwargs, where="generate_batch")
+
+    def _prompt_row(self, inputs: ModelInputs, enable_thinking: bool) -> batching.PromptRow:
+        """一行送进模型的提示：user 轮（inputs）+ assistant 头；mm_token_type_ids 在头上为 0。"""
         t = inputs.tensors
-        header = torch.tensor([self.assistant_header_ids(enable_thinking)], dtype=torch.long, device=self._device)
-        input_ids = torch.cat([t["input_ids"], header], dim=1)
-        kw: dict[str, Any] = {
-            "input_ids": input_ids,
-            "attention_mask": torch.ones_like(input_ids),
-            "mm_token_type_ids": torch.cat([t["mm_token_type_ids"], torch.zeros_like(header)], dim=1),
-        }
-        if inputs.images:
-            kw["pixel_values"] = t["pixel_values"]
-            kw["image_grid_thw"] = t["image_grid_thw"]
+        if t["input_ids"].dim() != 2 or t["input_ids"].shape[0] != 1:
+            raise ValueError(f"只支持单条样本的 ModelInputs，input_ids 形状 {tuple(t['input_ids'].shape)}")
+        header = list(self.assistant_header_ids(enable_thinking))
+        return batching.PromptRow(
+            ids=tuple(t["input_ids"][0].tolist() + header),
+            n_visual_tokens=sum(len(i.span) for i in inputs.images),
+            n_image_pixels=batching.image_pixels(inputs),
+            mm_token_type_ids=tuple(t["mm_token_type_ids"][0].tolist() + [0] * len(header)),
+        )
+
+    def _generate_rows(self, inputs_list: Sequence[ModelInputs], *, enable_thinking: bool,
+                       allowed_token_ids: Sequence[int] | None, max_new_tokens: int, gen_kwargs: dict[str, Any],
+                       where: str) -> list[GenerationResult]:
+        self._require_loaded()
+        batching.check_generate_args(enable_thinking, max_new_tokens)
+        items = batching.check_inputs_list(inputs_list, where=where)
+        batching.check_reserved(gen_kwargs, _RESERVED_GEN_KWARGS)
+        for inp in items:
+            self._check_entry(inp, None, where=where)
+        rows = [self._prompt_row(inp, enable_thinking) for inp in items]
+        kw: dict[str, Any] = batching.batch_prompt(rows, pad_id=self._ids[END_OF_TEXT], device=self._device)
+        with_images = [inp for inp in items if inp.images]
+        if with_images:
+            kw["pixel_values"] = torch.cat([inp.tensors["pixel_values"] for inp in with_images], dim=0)
+            kw["image_grid_thw"] = torch.cat([inp.tensors["image_grid_thw"] for inp in with_images], dim=0)
+        self._check_batch_positions(kw, items)
         processors = list(gen_kwargs.pop("logits_processor", None) or [])
         if allowed_token_ids is not None:
             vocab_rows = self._model.get_output_embeddings().weight.shape[0]
             processors.insert(0, _AllowedTokensProcessor(allowed_token_ids, vocab_rows))
         gen_kwargs.setdefault("do_sample", False)
         stop_ids = [self._ids[s] for s in STOP_TOKENS]
+        pad_id = self._ids[END_OF_TEXT]
+        out, wall = batching.run_generate(self._model, kw, device=self._device, max_new_tokens=max_new_tokens,
+                                          stop_ids=stop_ids, pad_id=pad_id, processors=processors,
+                                          gen_kwargs=gen_kwargs, scope=self.gdn_scope())
+        return batching.make_results(rows, out, kw["input_ids"].shape[1], wall=wall, stop_ids=stop_ids, pad_id=pad_id,
+                                     max_new_tokens=max_new_tokens, split_answer=self.split_answer,
+                                     enable_thinking=enable_thinking)
 
-        if self._device.type == "cuda":
-            torch.cuda.synchronize(self._device)
-        t0 = time.perf_counter()
-        with self.gdn_scope(), torch.no_grad():
-            out = self._model.generate(
-                **kw,
-                max_new_tokens=max_new_tokens,
-                eos_token_id=stop_ids,
-                pad_token_id=self._ids[END_OF_TEXT],
-                logits_processor=LogitsProcessorList(processors),
-                **gen_kwargs,
-            )
-        new_ids = out[0, input_ids.shape[1] :].tolist()
-        wall = time.perf_counter() - t0
-        if out.shape[0] != 1 or not torch.equal(out[0, : input_ids.shape[1]], input_ids[0]):
-            raise RuntimeError("generate 的输出不以输入为前缀")
-
-        text, raw_text, unclosed = self.split_answer(new_ids, enable_thinking=enable_thinking)
-        return GenerationResult(
-            text=text,
-            token_ids=tuple(new_ids),
-            n_generated_tokens=len(new_ids),
-            n_prompt_tokens=int(input_ids.shape[1]),
-            n_visual_tokens=sum(len(i.span) for i in inputs.images),
-            wall_time_s=wall,
-            raw_text=raw_text,
-            thinking_unclosed=unclosed,
-        )
+    def _check_batch_positions(self, kw: dict[str, Any], items: Sequence[ModelInputs]) -> None:
+        """有填充的批：HF 的 get_rope_index（带 attention_mask，与 generate 内部同一种调用）在每行非填充位置上的 (T, H, W)
+        必须与本适配器按规则构造的位置（mrope_rows，图像段取各图自己的网格，assistant 头是文本）逐个相等。不一致就报错。"""
+        pads = batching.n_padding(kw["attention_mask"])
+        if not any(pads):
+            return
+        ref, _ = self._model.model.get_rope_index(
+            kw["input_ids"], mm_token_type_ids=kw["mm_token_type_ids"], image_grid_thw=kw.get("image_grid_thw"),
+            attention_mask=kw["attention_mask"])
+        ref = ref.cpu()
+        width = kw["input_ids"].shape[1]
+        for b, (inp, p) in enumerate(zip(items, pads)):
+            own = mrope_rows(width - p, [(i.span.start, i.span.end, i.grid_hw) for i in inp.images])
+            if not torch.equal(ref[:, b, p:], own):
+                bad = int((ref[:, b, p:] != own).any(dim=0).nonzero()[0])
+                raise RuntimeError(f"左填充后第 {b} 行的 M-RoPE 位置与单独生成时不同（行内第 {bad} 个 token："
+                                   f"HF {ref[:, b, p + bad].tolist()}，本适配器 {own[:, bad].tolist()}）")
 
     def split_answer(self, token_ids: Sequence[int], *, enable_thinking: bool) -> tuple[str, str, bool]:
         """把生成的 token 拆成 (text, raw_text, thinking_unclosed)（D10）。
@@ -1292,24 +1414,45 @@ def build_tiny_model(real_config: Any, *, tie_word_embeddings: bool, dtype: torc
 def make_tiny_adapter(
     components: tuple[Any, Any, Any, str],
     *,
-    image_size: tuple[int, int],
+    image_size: tuple[int, int] | None = None,
+    image_policy: FixedSize | PixelBudget | None = None,
     tie_word_embeddings: bool = True,
     dtype: torch.dtype = torch.float32,
     seed: int = 0,
     device: str | torch.device = "cpu",
     model: Any = None,
+    source_key: str = TINY_SOURCE_KEY,
 ) -> Qwen35Adapter:
-    """用 load_pinned_components 的结果挂一个小型随机模型的适配器。
+    """用 load_pinned_components 的结果挂一个小型随机模型的适配器。图像口径与 Qwen35Adapter 相同：image_size 与
+    image_policy 恰好给一个。source_key 是 components 的来源（只写进 model_key）。
 
     注意：add_grid_tokens / inject_query_tokens 会改 tokenizer；需要彼此独立的适配器时，传入各自的 tokenizer 副本。
     """
     config, tokenizer, image_processor, template = components
     if model is None:
         model = build_tiny_model(config, tie_word_embeddings=tie_word_embeddings, dtype=dtype, seed=seed)
-    adapter = Qwen35Adapter(device=device, image_size=image_size)
+    adapter = Qwen35Adapter(device=device, image_size=image_size, image_policy=image_policy)
     adapter.attach(model, tokenizer=tokenizer, image_processor=image_processor, chat_template=template,
-                   model_key=f"tiny({TINY_SOURCE_KEY})")
+                   model_key=f"tiny({source_key})")
     return adapter
+
+
+def reference_processor(tokenizer: Any, image_processor: Any, chat_template: str) -> Any:
+    """官方 `Qwen3VLProcessor` 类的一个实例，只供比对（测试与冒烟 --tiny）；适配器本身从不用它（同 internvl35.reference_processor）。
+
+    开发机没有 torchvision，视频处理器构造不出来，ProcessorMixin 的类型检查又不接受别的视频处理器。这里在构造期间临时跳过
+    那一项类型检查、用 `BaseVideoProcessor()` 占位（本项目不送视频）；图像与文本路径——`__call__`、占位符展开、
+    mm_token_type_ids、分词——都是官方代码。服务器上的比对对象是 load() 留下的 hf_processor（AutoProcessor）。
+    """
+    from unittest import mock
+
+    from transformers.models.qwen3_vl.processing_qwen3_vl import Qwen3VLProcessor
+    from transformers.processing_utils import ProcessorMixin
+    from transformers.video_processing_utils import BaseVideoProcessor
+
+    with mock.patch.object(ProcessorMixin, "check_argument_for_proper_class", lambda self, name, arg: type(arg)):
+        return Qwen3VLProcessor(image_processor=image_processor, tokenizer=tokenizer,
+                                video_processor=BaseVideoProcessor(), chat_template=chat_template)
 
 
 __all__ = [
@@ -1325,9 +1468,11 @@ __all__ = [
     "kernel_implementation",
     "load_pinned_components",
     "make_tiny_adapter",
+    "mrope_rows",
     "native_box_to_xyxy",
     "parse_boxes",
     "parse_one_box",
+    "reference_processor",
     "tiny_config",
     "torch_gdn",
 ]

@@ -44,6 +44,8 @@ class ParseFailure(str, enum.Enum):
     # —— 多边形 ——
     NO_POLYGON = "no_polygon"  # 没有 JSON，或 JSON 是空列表
     TOO_FEW_POINTS = "too_few_points"  # 某个多边形少于 3 个点
+    # —— 停止原因（DEV-0011；追加在末尾，前面的取值与顺序不变）——
+    TRUNCATED = "truncated"  # 被 max_new_tokens 截断：GenerationResult.stopped is False（parse_generation 判定，D21、D22-3）
 
 
 class ParseResult(NamedTuple):
@@ -89,19 +91,27 @@ def one_box(parsed: BoxParse) -> OneBoxParse:
 
 
 def parse_generation(result: Any, parse_fn: Callable[..., Any], **kw: Any) -> Any:
-    """一次生成的统一解析入口。result 是 GenerationResult（只用它的 thinking_unclosed 与 text 两个字段）。
+    """一次生成的统一解析入口。result 是 GenerationResult（只用它的 thinking_unclosed、stopped 与 text 三个字段）。
 
-    判定顺序：
+    判定顺序（DEV-0011 加第 2 步）：
     1. result.thinking_unclosed → thinking_unclosed（思考段开了没闭合，没有最终回答；D19）；
-    2. result.text.strip() == "" → empty；
-    3. 否则返回 parse_fn(result.text, **kw)，原样不动。
+    2. result.stopped is False → truncated（被 max_new_tokens 截断，D21、D22-3）；
+    3. result.text.strip() == "" → empty；
+    4. 否则返回 parse_fn(result.text, **kw)，原样不动。
+
+    **E1 的协议：截断一律判失败，不尝试从截断的输出里解析**——截断的多边形、网格或框列表可能恰好是一个更短的合法结果，
+    解析出来会被当成模型的回答。截断与思考段未闭合在解析失败率里各自单列（ParseTally 按原因计数）。
+    stopped 为 None（字段未记录：旧的构造方式与测试替身，或没有这个字段的对象，例如健康检查的 _Answer）时跳过第 2 步，
+    行为与 DEV-0011 之前相同；三个适配器的 generate / generate_batch 一律填写 True/False。
 
     返回值与 parse_fn 的返回类型相同（ParseResult、BoxParse、OneBoxParse、GridParse……），调用方不必区分失败来自哪一步：
-    前两种失败的做法是取 parse_fn("", **kw)（对空串，每个解析函数都返回值字段全为 None 的失败），只把 failure 换成
-    thinking_unclosed / empty。所以 parse_fn 必须返回带 failure 字段的 NamedTuple，且对空串判失败；否则抛 TypeError。
+    前三种失败的做法是取 parse_fn("", **kw)（对空串，每个解析函数都返回值字段全为 None 的失败），只把 failure 换成
+    thinking_unclosed / truncated / empty。所以 parse_fn 必须返回带 failure 字段的 NamedTuple，且对空串判失败；否则抛 TypeError。
     """
     if result.thinking_unclosed:
         reason = ParseFailure.THINKING_UNCLOSED
+    elif getattr(result, "stopped", None) is False:
+        reason = ParseFailure.TRUNCATED
     elif result.text.strip() == "":
         reason = ParseFailure.EMPTY
     else:
