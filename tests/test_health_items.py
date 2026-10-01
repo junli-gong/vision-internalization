@@ -220,7 +220,25 @@ def test_all_prompts_have_no_edge_whitespace(items_obj):
 
 
 def test_protocol_constants_pinned():
-    assert dict(P.MAX_NEW_TOKENS) == {"mmlu_pro": 32, "gsm8k": 512, "ifeval": 1024}
+    # 协议 v2（D28-7）：MMLU-Pro 的标题读数 256 token，32 token 留作格式诊断（同一次生成的前 32 个 token）
+    assert P.PROTOCOL_VERSION == 2 and P.SUPPORTED_PROTOCOL_VERSIONS == (1, 2)
+    assert P.ITEMS_PROTOCOL_VERSION == 1  # 题目文件建于 v1，v2 题目不变
+    assert dict(P.MAX_NEW_TOKENS) == {"mmlu_pro": 256, "gsm8k": 512, "ifeval": 1024}
+    assert P.FMT32_MAX_NEW_TOKENS == 32 and P.TRUNCATION_NOTICE_PP == 10
+    assert [(r.name, r.benchmark, r.max_new_tokens, r.role, r.prefix_of) for r in P.READINGS] == [
+        ("mmlu_pro", "mmlu_pro", 256, "headline", None),
+        ("mmlu_pro_fmt32", "mmlu_pro", 32, "diagnostic", "mmlu_pro"),
+        ("gsm8k", "gsm8k", 512, "headline", None),
+        ("ifeval", "ifeval", 1024, "headline", None),
+    ]
+    # v1 的输出（D26）：MMLU-Pro 32、GSM8K 512、IFEval 1024；v1 的 MMLU-Pro 对上 v2 的 fmt32
+    assert {k: (r.name, r.max_new_tokens) for k, r in P.record_readings(1).items()} == {
+        "mmlu_pro": ("mmlu_pro_fmt32", 32), "gsm8k": ("gsm8k", 512), "ifeval": ("ifeval", 1024)}
+    assert list(P.record_readings(2)) == [r.name for r in P.READINGS]
+    assert [r.name for r in P.readings_of("mmlu_pro")] == ["mmlu_pro", "mmlu_pro_fmt32"]
+    for bad in (0, 3, None, True, "2"):
+        with pytest.raises(ValueError):
+            P.check_protocol_version(bad)
     assert P.ORDER == "instruction_first" and P.ENABLE_THINKING is False
     assert P.GREEDY_KWARGS["do_sample"] is False and P.GREEDY_KWARGS["num_beams"] == 1
     assert dict(P.HEADLINE) == {"mmlu_pro": "accuracy", "gsm8k": "flexible", "ifeval": "prompt_level_strict"}

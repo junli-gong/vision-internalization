@@ -14,8 +14,14 @@
         # 不加载模型，从保存的输出重算三项（或只重算 IFEval），规则与一次跑完相同；记下评分时间、代码 commit、punkt_tab 哈希
 开发机彩排（本地构造的小型随机模型，CPU；数值无意义，只验证全流程；--model 选家族，不给即 Qwen3.5）：
     python scripts/health_check.py --tiny --model gemma-4-e2b-it --limit 3 --out /tmp/health_tiny.json
-比较两次运行（门报告用；合并后比基座低超过 5 个百分点的项标出，并列给出配对 bootstrap CI 与符号检验 p 值）：
+比较两次运行（门报告用；标题读数合并后比基座低超过 5 个百分点的项标出，并列给出配对 bootstrap CI 与符号检验 p 值；
+另列截断率提示）：
     python scripts/health_check.py --compare <基座 json> <合并后 json> [--out <json>]
+
+协议 v2（D28-7，DEV-0013）：MMLU-Pro 生成到 256 个 token，标题读数 mmlu_pro 取全部，诊断读数 mmlu_pro_fmt32 取同一次
+生成的前 32 个 token（不标红）。v1 的输出（RUN-0007/0009）照旧可读、可 --rescore、可 --compare；与 v2 比较时 MMLU-Pro
+只比 v1 的 32 对 v2 的 fmt32，输出里写明"口径不同、标题不可比"。算力机上可加 --audit-fmt32 N：MMLU-Pro 前 N 题再真的用
+max_new_tokens=32 各生成一次，与截出的读数逐字段比较（GPU bf16 上"前缀相同"的运行期核对；不计入记账，不改分数）。
 
 退出码：0 = 完成（分数高低不影响）；2 = 出错（运行模式下已有结果与报错先写进 --out 再退出；重评模式写出报错）；
 argparse 用法错误也是 2。--limit N：每项只跑前 N 题（调试用；这样的结果不能拿去比较）。
@@ -47,7 +53,7 @@ from src.adapters import factory, registry  # noqa: E402
 from src.adapters.image_policy import FixedSize, SoftTokenBudget, TilePolicy  # noqa: E402
 from src.health import protocol as P  # noqa: E402
 from src.health.items import load_items  # noqa: E402
-from src.health.run import rescore_records, run_items  # noqa: E402
+from src.health.run import audit_prefix_readings, rescore_records, run_items  # noqa: E402
 from src.health.scoring import IFEVAL_SKIP_REASON, compare, require_punkt, summarize  # noqa: E402
 
 DTYPES = {"bf16": torch.bfloat16, "fp32": torch.float32}  # 与 scripts/smoke_adapter.py 的 --dtype 取值相同
@@ -68,9 +74,13 @@ def parse_args(argv=None):
     p.add_argument("--rescore", metavar="IN_JSON", help="不加载模型，从已保存的输出重算分数，写到 --out")
     p.add_argument("--only-ifeval", action="store_true", help="与 --rescore 一起用：只重算 IFEval，其余两项原样保留")
     p.add_argument("--compare", nargs=2, metavar=("BASE_JSON", "MERGED_JSON"), help="比较两次运行，不跑模型")
+    p.add_argument("--audit-fmt32", type=int, metavar="N",
+                   help="跑完后 MMLU-Pro 前 N 题再真的用 max_new_tokens=32 各生成一次，与截出的 mmlu_pro_fmt32 逐字段比较"
+                        "（不计入记账，不改分数）")
     args = p.parse_args(argv)
     run_only = {"--model": args.model, "--device": args.device, "--dtype": args.dtype, "--tiny": args.tiny,
-                "--limit": args.limit, "--skip-ifeval-scoring": args.skip_ifeval_scoring}
+                "--limit": args.limit, "--skip-ifeval-scoring": args.skip_ifeval_scoring,
+                "--audit-fmt32": args.audit_fmt32}
     if args.compare and args.rescore:
         p.error("--compare 与 --rescore 不能同时用")
     if args.only_ifeval and not args.rescore:
@@ -89,6 +99,8 @@ def parse_args(argv=None):
         p.error("运行需要 --out")
     if args.limit is not None and args.limit < 1:
         p.error("--limit 必须是正整数")
+    if args.audit_fmt32 is not None and args.audit_fmt32 < 1:
+        p.error("--audit-fmt32 必须是正整数")
     if args.tiny:
         args.device = args.device or "cpu"
         args.dtype = args.dtype or "fp32"
@@ -167,11 +179,16 @@ def _write(path: Path, obj: dict) -> None:
 
 
 def _print_summary(report: dict, out_path: Path) -> None:
-    for bench in P.BENCHMARKS:
-        note = "  (未评分)" if bench in report["unscored"] else ""
-        print(f"{bench:9s} {P.HEADLINE[bench]:20s} {report['headline'][bench]}  (n={report['diagnostics'][bench]['n']}){note}")
+    layout = P.record_readings(report["protocol_version"])
+    for key, reading in layout.items():
+        note = "  (未评分)" if key in report["unscored"] else ""
+        metric = P.HEADLINE[reading.benchmark]
+        kind = "诊断" if key not in report["headline"] else "标题"
+        diag = report["diagnostics"][key]
+        print(f"{key:15s} {metric:20s} {report['scores'][key][metric]['pct']}  [{kind}, max_new_tokens="
+              f"{reading.max_new_tokens}]  (n={diag['n']}, 写满 {diag['n_reached_max_new_tokens']}){note}")
     for name, t in report["parse_tally"].items():
-        print(f"parse {name:15s} n={t['n']} failed={t['n_failed']} {t['failures']}")
+        print(f"parse {name:21s} n={t['n']} failed={t['n_failed']} {t['failures']}")
     total = report["compute"]["total"]
     print(f"compute: generated={total['generated_tokens']} prompt={total['prompt_tokens']} "
           f"call_time={total['call_time_s']:.1f}s  -> {out_path}")
@@ -179,18 +196,31 @@ def _print_summary(report: dict, out_path: Path) -> None:
 
 def main_compare(args) -> int:
     res = compare(*args.compare)
+    print(f"protocol: base v{res['protocol_versions']['base']}, merged v{res['protocol_versions']['merged']}")
     for r in res["rows"]:
-        if not r["scored"]:
-            print(f"{r['benchmark']:9s} {r['metric']:25s} 未评分（{r['benchmark']} 在 unscored 里）")
+        head = f"{r['reading']:15s} {r['metric']:25s}"
+        if not r["comparable"]:
+            print(f"{head} 口径不同、标题不可比（见 notes）")
             continue
-        mark = "  <-- 标红" if r["flag"] else ""
+        if not r["scored"]:
+            print(f"{head} 未评分（{r['reading']} 在 unscored 里）")
+            continue
+        mark = "  <-- 标红" if r["flag"] else ("  [诊断，不标红]" if r["diagnostic"] else "")
         delta = "n/a" if r["delta_pp"] is None else f"{r['delta_pp']:+.1f}"
         ci = "n/a" if r["ci95_pp"] is None else f"[{r['ci95_pp'][0]:+.1f}, {r['ci95_pp'][1]:+.1f}]"
         st = r["sign_test"]
-        print(f"{r['benchmark']:9s} {r['metric']:25s} base={r['base_pct']} merged={r['merged_pct']} "
+        print(f"{head} base={r['base_pct']} merged={r['merged_pct']} "
               f"delta={delta} pp  CI95={ci}  sign test {st['n_better']}+/{st['n_worse']}- p={st['p_value']:.3g}  "
               f"(lost {r['lost']}, gained {r['gained']}, n={r['n']}){mark}")
-    print(f"any_flag={res['any_flag']}  flagged={res['flagged']}  unscored={res['unscored']}  partial_run={res['partial_run']}")
+    for t in res["truncation"]["rows"]:
+        mark = "  <-- 截断率提示" if t["notice"] else ""
+        delta = "n/a" if t["delta_pp"] is None else f"{t['delta_pp']:+.1f}"
+        print(f"truncation {t['reading']:15s} max_new_tokens={t['max_new_tokens']:<5d} base={t['base_pct']}% "
+              f"merged={t['merged_pct']}% delta={delta} pp (n={t['n']}){mark}")
+    for note in res["notes"]:
+        print(f"note: {note}")
+    print(f"any_flag={res['any_flag']}  flagged={res['flagged']}  truncation_notices={res['truncation']['notices']}  "
+          f"incomparable={res['incomparable']}  unscored={res['unscored']}  partial_run={res['partial_run']}")
     if args.out:
         _write(Path(args.out), res)
     return 0
@@ -204,13 +234,13 @@ def main_rescore(args) -> int:
         report = json.loads(raw.decode("utf-8"))
         if report.get("ok") is not True:
             raise ValueError(f"{src_path} 不是一次跑完的运行（ok={report.get('ok')!r}）")
-        if report.get("protocol_version") != P.PROTOCOL_VERSION:
-            raise ValueError(f"协议版本 {report.get('protocol_version')} 与当前的 {P.PROTOCOL_VERSION} 不同")
+        # v1 的输出（RUN-0007/0009）按 v1 的布局重评，输出仍记 v1（生成是按 v1 做的）
+        version = P.check_protocol_version(report.get("protocol_version"))
         items_obj, items_sha = load_items()
         if report["items_file"]["sha256"] != items_sha:
             raise ValueError("输入用的题目文件与当前题目文件的 sha256 不同")
         punkt = check_ifeval_ready(pinned=report["mode"] == "real") if "ifeval" in benchmarks else None
-        records = rescore_records(report["records"], items_obj, benchmarks=benchmarks)
+        records = rescore_records(report["records"], items_obj, benchmarks=benchmarks, protocol_version=version)
     except Exception as e:  # noqa: BLE001 — 输入文件原样不动，报错写进 --out
         _write(out_path, {"script": "scripts/health_check.py", "rescore_of": str(src_path), "ok": False,
                           "error": repr(e), "traceback": traceback.format_exc()[-4000:]})
@@ -218,7 +248,7 @@ def main_rescore(args) -> int:
         return 2
     out = dict(report)
     out["records"] = records
-    out.update(summarize(records))
+    out.update(summarize(records, protocol_version=version))
     out["scoring"] = scoring_block(mode="rescore", benchmarks=benchmarks, punkt=punkt,
                                    source={"path": str(src_path), "sha256": hashlib.sha256(raw).hexdigest()})
     out["scoring_history"] = list(report.get("scoring_history", [])) + [report.get("scoring")]
@@ -253,7 +283,7 @@ def main(argv=None) -> int:
         punkt = check_ifeval_ready(pinned=not args.tiny) if score_ifeval else None
         config = {"script": "scripts/health_check.py", "model": args.model, "tiny": args.tiny, "device": args.device,
                   "dtype": args.dtype, "limit": args.limit, "skip_ifeval_scoring": args.skip_ifeval_scoring,
-                  "protocol_version": P.PROTOCOL_VERSION, "seed": P.SEED}
+                  "audit_fmt32": args.audit_fmt32, "protocol_version": P.PROTOCOL_VERSION, "seed": P.SEED}
         report["run"] = run_record(config, REPO_ROOT / P.ITEMS_PATH)
         ad, entry, vision = make_adapter(args)
         report["model"] = {
@@ -264,10 +294,15 @@ def main(argv=None) -> int:
             "model_generation_config": ad.model.generation_config.to_diff_dict(),
         }
         report["generation"] = {"order": P.ORDER, "n_images": 0, "enable_thinking": P.ENABLE_THINKING,
-                                "greedy_kwargs": dict(P.GREEDY_KWARGS), "max_new_tokens": dict(P.MAX_NEW_TOKENS)}
+                                "greedy_kwargs": dict(P.GREEDY_KWARGS), "max_new_tokens": dict(P.MAX_NEW_TOKENS),
+                                "readings": {r.name: {"benchmark": r.benchmark, "max_new_tokens": r.max_new_tokens,
+                                                      "role": r.role, "prefix_of": r.prefix_of} for r in P.READINGS}}
         _log(f"模型 {entry.key}（{report['mode']}，{ad.device}，{ad.dtype}）已就绪，开始跑题"
              + ("；IFEval 只生成、不评分" if not score_ifeval else ""))
         run_items(ad, items_obj, limit=args.limit, score_ifeval=score_ifeval, state=state, progress=_log)
+        if args.audit_fmt32:
+            _log(f"前缀读数审计：MMLU-Pro 前 {args.audit_fmt32} 题再用 max_new_tokens={P.FMT32_MAX_NEW_TOKENS} 各生成一次")
+            state["prefix_audit"] = audit_prefix_readings(ad, items_obj, state["records"], n=args.audit_fmt32)
         report.update(state)
         report.update(summarize(state["records"]))
         scored = [b for b in P.BENCHMARKS if score_ifeval or b != "ifeval"]
@@ -283,6 +318,9 @@ def main(argv=None) -> int:
     report["wall_time_s"] = round(time.perf_counter() - t_all, 2)
     _write(out_path, report)
     _print_summary(report, out_path)
+    for name, a in report.get("prefix_audit", {}).items():
+        print(f"prefix audit {name}: {a['n_identical']}/{a['n']} identical to a real max_new_tokens={a['max_new_tokens']} "
+              f"generation; mismatched ids {[x['id'] for x in a['mismatches']]}")
     print(f"wall={report['wall_time_s']} s")
     return 0
 

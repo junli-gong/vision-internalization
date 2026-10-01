@@ -12,8 +12,12 @@
   评分前把 langdetect 的种子固定为 protocol.LANGDETECT_SEED（langdetect 默认每次随机，同一回答可能判出不同语言）。
 - 汇总：每个口径都从逐题记录重新数出来（同一条路径给出分数、比较与门报告的数），百分数保留一位小数（四舍五入）。
   IFEval 可以先不评分（--skip-ifeval-scoring），这时它的分数为 null，unscored 里写明原因；之后用 --rescore 补评。
-- 比较：compare(base, merged) 按精确分数算差值（百分点），标题口径下降严格大于 RED_FLAG_DROP_PP 即标出；
+- 比较：compare(base, merged) 按精确分数算差值（百分点），标题读数的标题口径下降严格大于 RED_FLAG_DROP_PP 即标出；
   与标红并列给出按题配对的 bootstrap 95% CI 与不一致题对上的精确符号检验 p 值（审查第 1 轮）。
+- 协议 v2（D28-7，DEV-0013）：汇总与比较的单位是读数（protocol.READINGS）。MMLU-Pro 的标题读数 mmlu_pro 是 256 token，
+  诊断读数 mmlu_pro_fmt32 是同一次生成的前 32 个 token：给出差值与 CI，不标红。比较另给截断率提示（写满 max_new_tokens
+  的比例变化严格大于 TRUNCATION_NOTICE_PP 个百分点），与标红分开。v1 的输出照旧可读、可比：v1 的 MMLU-Pro（32 token）
+  按口径对上 v2 的 mmlu_pro_fmt32，256 的标题读数只在 v2 一边时写明"口径不同、标题不可比"。
 """
 
 from __future__ import annotations
@@ -219,43 +223,52 @@ def item_counts(benchmark: str, metric: str, records: list[Mapping[str, Any]]) -
     return [(c, n) for c, n in per.values()]
 
 
-def summarize(records: Mapping[str, list[Mapping[str, Any]]]) -> dict[str, Any]:
+def summarize(records: Mapping[str, list[Mapping[str, Any]]], *,
+              protocol_version: int = P.PROTOCOL_VERSION) -> dict[str, Any]:
     """逐题记录 → 分数（各口径）、标题分数、未评分的项及原因、ParseTally（MMLU-Pro 与 GSM8K 两个口径）、诊断计数。
 
+    键按 protocol_version 那一版的布局（protocol.RECORD_KEYS_BY_VERSION）：v2 是四个读数（mmlu_pro、mmlu_pro_fmt32、
+    gsm8k、ifeval），headline 只列三项的标题读数（mmlu_pro 为 256 token）；v1 是三项，结构与 v1 的输出逐字节相同
+    （重评 v1 的输出不改变它的任何汇总）。
     未评分的 IFEval（--skip-ifeval-scoring）：各口径的 n 照常给出，n_correct 与 pct 为 None，unscored 里写明原因。
     """
+    layout = P.record_readings(protocol_version)
+    extra = [k for k in records if k not in layout]
+    if extra:
+        raise ValueError(f"协议 v{protocol_version} 的记录里没有 {extra}（应为 {list(layout)}）")
     scores: dict[str, Any] = {}
     unscored: dict[str, str] = {}
-    for bench in P.BENCHMARKS:
-        recs = records.get(bench, [])
+    tally: dict[str, Any] = {}
+    diagnostics: dict[str, Any] = {}
+    for key, reading in layout.items():
+        bench = reading.benchmark
+        recs = records.get(key, [])
         scored = is_scored(bench, recs)
         if not scored:
-            unscored[bench] = IFEVAL_SKIP_REASON
-        scores[bench] = {}
+            unscored[key] = IFEVAL_SKIP_REASON
+        scores[key] = {}
         for metric in METRICS[bench]:
             if scored:
                 units = unit_outcomes(bench, metric, recs)
                 n, c = len(units), sum(units.values())
-                scores[bench][metric] = {"n": n, "n_correct": c, "pct": pct1(c, n)}
+                scores[key][metric] = {"n": n, "n_correct": c, "pct": pct1(c, n)}
             else:
                 n = len(recs) if metric.startswith("prompt_level_") else sum(len(r["instruction_id_list"]) for r in recs)
-                scores[bench][metric] = {"n": n, "n_correct": None, "pct": None}
-    headline = {bench: scores[bench][P.HEADLINE[bench]]["pct"] for bench in P.BENCHMARKS}
-    tally = {
-        "mmlu_pro": _tally([r["failure"] for r in records.get("mmlu_pro", [])]).to_dict(),
-        "gsm8k_strict": _tally([r["strict"]["failure"] for r in records.get("gsm8k", [])]).to_dict(),
-        "gsm8k_flexible": _tally([r["flexible"]["failure"] for r in records.get("gsm8k", [])]).to_dict(),
-    }
-    diagnostics = {
-        bench: {
-            "n": len(records.get(bench, [])),
-            "n_thinking_unclosed": sum(r["thinking_unclosed"] for r in records.get(bench, [])),
-            "n_empty_text": sum(r["text"].strip() == "" for r in records.get(bench, [])),
-            # 生成数达到 max_new_tokens：被截断的上界（恰好在最后一步生成停止 token 的也算在内）
-            "n_reached_max_new_tokens": sum(r["reached_max_new_tokens"] for r in records.get(bench, [])),
+                scores[key][metric] = {"n": n, "n_correct": None, "pct": None}
+        if bench == "mmlu_pro":
+            tally[key] = _tally([r["failure"] for r in recs]).to_dict()
+        elif bench == "gsm8k":
+            tally[f"{key}_strict"] = _tally([r["strict"]["failure"] for r in recs]).to_dict()
+            tally[f"{key}_flexible"] = _tally([r["flexible"]["failure"] for r in recs]).to_dict()
+        diagnostics[key] = {
+            "n": len(recs),
+            "n_thinking_unclosed": sum(r["thinking_unclosed"] for r in recs),
+            "n_empty_text": sum(r["text"].strip() == "" for r in recs),
+            # 生成数达到该读数的 max_new_tokens：被截断的上界（恰好在最后一步生成停止 token 的也算在内）
+            "n_reached_max_new_tokens": sum(r["reached_max_new_tokens"] for r in recs),
         }
-        for bench in P.BENCHMARKS
-    }
+    # 标题：每项一个数（v2 的 mmlu_pro 为 256 token；v1 的输出里 mmlu_pro 是当时的 32 token 标题，原样保留）
+    headline = {key: scores[key][P.HEADLINE[key]]["pct"] for key in layout if key in P.BENCHMARKS}
     return {"scores": scores, "headline": headline, "unscored": unscored, "parse_tally": tally,
             "diagnostics": diagnostics}
 
@@ -305,47 +318,103 @@ def paired_ci_pp(metric: str, base_counts: list[tuple[int, int]],
     return round1(Fraction(ci.low) * 100), round1(Fraction(ci.high) * 100)
 
 
-def compare(base: Mapping[str, Any] | str | Path, merged: Mapping[str, Any] | str | Path) -> dict[str, Any]:
-    """两次健康检查（scripts/health_check.py 的输出 JSON 或其路径）→ 每项每个口径的差值（合并后 − 基座，百分点）。
+INCOMPARABLE = "口径不同、标题不可比"
 
-    只比较同一题目文件（sha256 相同）、同一协议版本、同一批题目（逐题的键相同，--limit 不同的运行不可比）的两次运行，
-    否则 ValueError。每行给出：
+
+def _view(report: Mapping[str, Any]) -> tuple[int, dict[str, list[Mapping[str, Any]]]]:
+    """一份输出 → (协议版本, {v2 读数名: 逐题记录})。v1 的 "mmlu_pro"（32 token）落到 mmlu_pro_fmt32。"""
+    version = P.check_protocol_version(report.get("protocol_version"))
+    records = report["records"]
+    return version, {name: records[key] for key, name in P.RECORD_KEYS_BY_VERSION[version].items() if key in records}
+
+
+def _side_pct(bench: str, metric: str, recs: list[Mapping[str, Any]] | None) -> float | None:
+    if recs is None or not is_scored(bench, recs):
+        return None
+    units = unit_outcomes(bench, metric, recs)
+    return pct1(sum(units.values()), len(units))
+
+
+def _incomparable_note(reading: P.Reading, vb: int, vm: int, in_b: bool, in_m: bool) -> str:
+    def side(v: int, has: bool) -> str:
+        return f"协议 v{v}，{'有' if has else '没有'}这个读数"
+
+    return (f"{INCOMPARABLE}：{reading.name}（{reading.benchmark}，max_new_tokens={reading.max_new_tokens}）"
+            f"基座{side(vb, in_b)}、合并后{side(vm, in_m)}。协议 v1 的 MMLU-Pro 只有 32 token 的读数，"
+            f"只与 v2 的 {P.MMLU_PRO_FMT32} 比对（D28-7）。")
+
+
+def compare(base: Mapping[str, Any] | str | Path, merged: Mapping[str, Any] | str | Path) -> dict[str, Any]:
+    """两次健康检查（scripts/health_check.py 的输出 JSON 或其路径）→ 每个读数每个口径的差值（合并后 − 基座，百分点）。
+
+    只比较同一题目文件（sha256 相同）、同一批题目（逐题的键相同，--limit 不同的运行不可比）的两次运行，协议版本须在
+    protocol.SUPPORTED_PROTOCOL_VERSIONS 里，否则 ValueError。比较的单位是 v2 的读数（protocol.READINGS），两边各自
+    按自己的版本布局取记录：口径（项与 max_new_tokens）相同才比；v1 的 MMLU-Pro（32 token）对上 v2 的 mmlu_pro_fmt32，
+    256 的标题读数 mmlu_pro 只要有一边没有，就不比：该读数各行 comparable=False、数值为 None、note 写明
+    "口径不同、标题不可比"，列在 incomparable 与 notes 里（两边都是 v1 时也一样：D28-7 起 32 token 只是格式诊断）。
+    每行给出：
     - 两边的分数、按精确分数算的差值（一位小数）、丢题数（基座对、合并后错）与得题数（instruction-level 按指令数）；
-    - flag：标题口径（protocol.HEADLINE）下降严格大于 RED_FLAG_DROP_PP 个百分点时为 True（简报 §8.11 的标红规则，
-      只看差值）；非标题口径为 None（只报差值）；
+    - flag：标题读数的标题口径（protocol.HEADLINE）下降严格大于 RED_FLAG_DROP_PP 个百分点时为 True（简报 §8.11 的
+      标红规则，只看差值）；非标题口径与诊断读数（mmlu_pro_fmt32）为 None（给出差值、CI 与符号检验，不标红）；
     - 与 flag 并列的两项统计（不改变标红规则）：ci95_pp 为按题配对的 bootstrap 95% CI（paired_ci_pp）；
       sign_test 为按题的精确符号检验：变好 / 变坏的题数（该题对的单位数合并后更多 / 更少；二值口径即得题数 / 丢题数）
       与双侧 p 值（sign_test_p）。
     任一边的某项没有评分（IFEval 用了 --skip-ifeval-scoring）时，该项各行 scored=False，差值、flag、CI、p 值都为 None，
-    该项列在 unscored 里；any_flag 只看评了分的标题口径。
+    该项列在 unscored 里；any_flag 只看可比、评了分的标题口径。
+    截断率提示（D28-7，与标红分开）：每个可比的读数给出两边写满该读数 max_new_tokens 的题所占比例（reached_max_new_tokens）
+    与差值；差值的绝对值严格大于 TRUNCATION_NOTICE_PP 个百分点即列进 truncation.notices。未评分的项照样给出。
     """
     b, m = _load_report(base), _load_report(merged)
-    if b.get("protocol_version") != m.get("protocol_version"):
-        raise ValueError(f"协议版本不同：{b.get('protocol_version')} vs {m.get('protocol_version')}")
+    vb, view_b = _view(b)
+    vm, view_m = _view(m)
     if b["items_file"]["sha256"] != m["items_file"]["sha256"]:
         raise ValueError("两次运行用的题目文件不同（sha256 不一致）")
     rows = []
-    unscored = []
-    for bench in P.BENCHMARKS:
-        rb, rm = b["records"].get(bench, []), m["records"].get(bench, [])
+    unscored: list[str] = []
+    incomparable: list[str] = []
+    notes: list[str] = []
+    truncation = []
+    for reading in P.READINGS:
+        name, bench = reading.name, reading.benchmark
+        rb, rm = view_b.get(name), view_m.get(name)
+        diagnostic = reading.role == P.ROLE_DIAGNOSTIC
+        common = {"reading": name, "benchmark": bench}
+        if rb is None or rm is None:
+            incomparable.append(name)
+            notes.append(_incomparable_note(reading, vb, vm, rb is not None, rm is not None))
+            for metric in METRICS[bench]:
+                rows.append({**common, "metric": metric, "headline": not diagnostic and metric == P.HEADLINE[bench],
+                             "diagnostic": diagnostic, "max_new_tokens": reading.max_new_tokens, "comparable": False,
+                             "scored": None, "note": notes[-1], "n": None, "base_pct": _side_pct(bench, metric, rb),
+                             "merged_pct": _side_pct(bench, metric, rm), "delta_pp": None, "lost": None,
+                             "gained": None, "flag": None, "ci95_pp": None, "sign_test": None})
+            continue
         if [r["id"] for r in rb] != [r["id"] for r in rm]:
-            raise ValueError(f"{bench}：两次运行的题目不同（--limit 不同？）")
+            raise ValueError(f"{name}：两次运行的题目不同（--limit 不同？）")
+        n_items = len(rb)
+        tb, tm = sum(bool(r["reached_max_new_tokens"]) for r in rb), sum(bool(r["reached_max_new_tokens"]) for r in rm)
+        t_delta = Fraction(100 * (tm - tb), n_items) if n_items else None
+        truncation.append({"reading": name, "max_new_tokens": reading.max_new_tokens, "n": n_items,
+                           "base_n_reached": tb, "merged_n_reached": tm,
+                           "base_pct": pct1(tb, n_items), "merged_pct": pct1(tm, n_items),
+                           "delta_pp": None if t_delta is None else round1(t_delta),
+                           "notice": t_delta is not None and abs(t_delta) > P.TRUNCATION_NOTICE_PP})
         scored_b, scored_m = is_scored(bench, rb), is_scored(bench, rm)
         if not (scored_b and scored_m):
-            unscored.append(bench)
+            unscored.append(name)
         for metric in METRICS[bench]:
-            headline = metric == P.HEADLINE[bench]
-            row: dict[str, Any] = {"benchmark": bench, "metric": metric, "headline": headline,
-                                   "scored": scored_b and scored_m}
+            headline = not diagnostic and metric == P.HEADLINE[bench]
+            row: dict[str, Any] = {**common, "metric": metric, "headline": headline, "diagnostic": diagnostic,
+                                   "max_new_tokens": reading.max_new_tokens, "comparable": True,
+                                   "scored": scored_b and scored_m, "note": None}
             if not row["scored"]:
-                side = {"base_pct": b.get("scores", {}).get(bench, {}).get(metric, {}).get("pct") if scored_b else None,
-                        "merged_pct": m.get("scores", {}).get(bench, {}).get(metric, {}).get("pct") if scored_m else None}
-                rows.append({**row, "n": None, **side, "delta_pp": None, "lost": None, "gained": None, "flag": None,
-                             "ci95_pp": None, "sign_test": None})
+                rows.append({**row, "n": None, "base_pct": _side_pct(bench, metric, rb),
+                             "merged_pct": _side_pct(bench, metric, rm), "delta_pp": None, "lost": None,
+                             "gained": None, "flag": None, "ci95_pp": None, "sign_test": None})
                 continue
             ub, um = unit_outcomes(bench, metric, rb), unit_outcomes(bench, metric, rm)
             if set(ub) != set(um):
-                raise ValueError(f"{bench}/{metric}：评分单位不同")
+                raise ValueError(f"{name}/{metric}：评分单位不同")
             n = len(ub)
             cb, cm = sum(ub.values()), sum(um.values())
             delta = Fraction(100 * (cm - cb), n) if n else None
@@ -365,10 +434,14 @@ def compare(base: Mapping[str, Any] | str | Path, merged: Mapping[str, Any] | st
                 "ci95_pp": None if ci is None else list(ci),
                 "sign_test": {"n_better": better, "n_worse": worse, "p_value": sign_test_p(better, worse)},
             })
-    flagged = [r["benchmark"] for r in rows if r["flag"]]
+    flagged = [r["reading"] for r in rows if r["flag"]]
     return {
+        "protocol_versions": {"base": vb, "merged": vm},
         "threshold_pp": P.RED_FLAG_DROP_PP,
-        "rule": f"headline metric drops by more than {P.RED_FLAG_DROP_PP} percentage points (merged - base < -{P.RED_FLAG_DROP_PP})",
+        "rule": (f"headline metric of a headline reading drops by more than {P.RED_FLAG_DROP_PP} percentage points "
+                 f"(merged - base < -{P.RED_FLAG_DROP_PP}); MMLU-Pro's headline reading is mmlu_pro at "
+                 f"max_new_tokens={P.READINGS_BY_NAME['mmlu_pro'].max_new_tokens} (D28-7); the diagnostic reading "
+                 f"{P.MMLU_PRO_FMT32} gets delta, CI and sign test but is never flagged"),
         "statistics": {
             "ci95_pp": "paired bootstrap over questions, merged - base, percentile interval (src.stats.paired_bootstrap_ci; "
                        "instruction-level metrics resample questions with src.stats.ratio_of_sums)",
@@ -379,10 +452,19 @@ def compare(base: Mapping[str, Any] | str | Path, merged: Mapping[str, Any] | st
         "base_model": b.get("model", {}).get("key"),
         "merged_model": m.get("model", {}).get("key"),
         "partial_run": b.get("limit") is not None or m.get("limit") is not None,
+        "incomparable": incomparable,
+        "notes": notes,
         "unscored": unscored,
         "rows": rows,
         "flagged": flagged,
         "any_flag": bool(flagged),
+        "truncation": {
+            "rule": (f"share of questions whose generation reached the reading's max_new_tokens; listed in notices when "
+                     f"|merged - base| > {P.TRUNCATION_NOTICE_PP} percentage points (D28-7); separate from the red flag"),
+            "threshold_pp": P.TRUNCATION_NOTICE_PP,
+            "rows": truncation,
+            "notices": [t["reading"] for t in truncation if t["notice"]],
+        },
     }
 
 
