@@ -661,3 +661,49 @@
    - E3b 如果 `allowed_token_ids` 不含停止 token，每行都会跑满、判 truncated。E3b 的解析口径届时另定。
    - Gemma 与 InternVL 的 `token_id()` 仍只认 attach 时缓存的 token；`_AllowedTokensProcessor` 等公共工具仍在 qwen35.py。这两件留到 E3 之前的接口任务（D21-2）。
 
+## D30 — DEV-0012（E1 数据）合入与偏离裁定（2026-10-01）
+
+1. **合入**（34a6a58，审查 2 轮）：
+   - 落地脚本：断点续传、清单与哈希、预算与红线、Range 只取需要的成员；
+   - 开发子集；
+   - NYU 点对；
+   - 评测子集生成器；
+   - 统一加载器，剔除开发子集与 D20，并逐条记录剔除的样本。
+   - 合入前验证：普通与 server-parity 条件都是 1278 passed + 12 skipped。
+   - 在开发机上，8 个源各做了 ≤10 条的真实小样本落地，核对全部通过。
+     - RefCOCO 的三个 refs pickle 与 P0 的 sha256 相同；
+     - 与 HF 镜像逐条比对，0 处不符。
+2. **审查的裁定**：
+   - **点对的深度边缘保护打开**：19×19 窗口内深度全部有效，且任意 4 邻接两像素的深度 max/min ≤ 1.05。
+     - 只排除遮挡边界；纵深的墙与掠射角的地面保留。
+     - 第 1 轮曾用整窗 max/min，会剔掉斜面、让点偏向正对相机的平面，第 2 轮改正。
+     - 3 张真实图上，剔除比例 29.9%：27.9% 是窗口含无效像素，2.0% 是相邻跳变。
+   - **评测子集**：
+     - 多边形分割每划分 1,000 句；
+     - 16×16 网格 500 句；
+     - 思考子集每任务 200 条，8192 敏感性子集从中抽 50 条；
+     - 附加对照：定位 500 句 + COCO 100 张。
+     - 抽样用哈希排序，各类子集用独立的盐。由服务器在完整数据上生成，管理员入库。
+3. **偏离全部接受**：
+   - 新增 pyarrow 与 h5py；
+   - 常量放在 `src/data/constants.py`；
+   - zip 用 Range 只取需要的成员，ODinW 因此只能核对大小与成员 CRC；
+   - NYU 默认流式核对官方 sha256；
+   - E1 的点对与 GT 用 `depth_raw`，E3 用哪种另定；
+   - COCO 500 的总体含无标注图；
+   - RefCOCO 的开发子集按句抽；
+   - NYU 的开发子集 50 张；
+   - 10% 向下取整；
+   - ODinW 用 GLIP 的 `OVERRIDE_CATEGORY`；
+   - CV-Bench 以 parquet 的 idx 为 id；
+   - fixture 的深度文件用 `.depth.zip` 扩展名，以避开 `.gitignore`。
+4. **E1 预注册要写明的数据事实**：
+   - 剔除后的 n：
+     - RefCOCO val / testA / testB：10,634 / 5,657 / 5,095；
+     - RefCOCO+：10,558 / 5,726 / 4,889；
+     - RefCOCOg val / test：4,696 / 9,602；
+     - CountBench 442；BLINK 112；CV-Bench 2,588；EmbSpatial 3,590；
+     - NYU 点对 3,270；
+     - ODinW 463 张（13 个数据集，其中 6 个不足 50 张）。
+   - 评测集之间的重合：CV-Bench 与 COCO 500 共 83 张；CV-Bench 含 NYU test 36 张。E1 不训练，不算泄漏，照实写。
+
