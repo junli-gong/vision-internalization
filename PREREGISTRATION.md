@@ -57,9 +57,9 @@
 |---|---|---|---|---|
 | 指代定位（框） | RefCOCO/+ 的 unc val/testA/testB，RefCOCOg 的 umd val/test，全划分 | 57,457 句 | Acc@IoU0.5 | 各划分分列 |
 | 指代分割（多边形文本） | 同上，每个划分随机 1,000 句（种子固定） | 8,000 句 | cIoU | gIoU |
-| 计数 | CountBench（491 张；去掉开发子集） | 约 441 | 准确率 | 按计数值分档 |
+| 计数 | CountBench（491 张；去掉开发子集 49 张） | 442 | 准确率 | 按计数值分档 |
 | 开放词汇检测 | COCO val2017 500 张（去掉探针用图）；ODinW13 各 ≤ 50 张 | 500 + ≤650 | F1@0.5（N9 → (b)） | 随机打破平局后平均的 mAP 作补充；编造类别的比例 |
-| 相对深度 | NYUv2 Eigen test 点对（每图 5 对，相对差 ≥ 15%，A/B 各半）；BLINK Relative_Depth val | 3,270 + 约 74 | 点对准确率 | — |
+| 相对深度 | NYUv2 Eigen test 点对（每图 5 对，相对差 ≥ 15%，A/B 各半）；BLINK Relative_Depth val | 3,270 + 112（BLINK 去掉开发子集 12 条） | 点对准确率 | — |
 | 空间问答 | CV-Bench test、EmbSpatial-Bench test（去掉开发子集） | 约 2,588 + 约 3,590 | 准确率 | CV-Bench 按 2D/3D 分列 |
 | 16×16 数字网格（像素 token 通道的起点参考，简报 §8.2） | RefCOCO unc val 随机 500 句 | 500 | gIoU（网格上采样到原图） | 解析失败率 |
 
