@@ -1,0 +1,390 @@
+{
+ "schema_version": 1,
+ "name": "E1 提示配置（T 文本通道零样本基线；DEV-0014）",
+ "status": "草稿，未冻结。冻结后 sha256 写进 PREREGISTRATION.md 的 E1 条目；之后改动只能新增修订条。",
+ "rules": [
+  "每个任务只用一个提示，不调提示（简报 §4 第 5 条，预注册草稿 §3）。",
+  "有原生格式的任务（定位、检测）用各家族官方文档或 cookbook 的写法；多选与问答用 benchmark 自带的提示；没有原生格式的（多边形、16×16 数字网格、NYU 点对、计数）用统一提示。",
+  "模板用 Python str.format 的占位符；渲染后去掉首尾空白（Qwen 的聊天模板会 trim 整段内容，三个家族统一处理）。",
+  "开发子集只用于核对格式、截断率与解析失败，不看准确率。截断率高时可以调 max_new_tokens，调整写进 max_new_tokens_adjustments，附理由。",
+  "截断一律判解析失败（truncated），思考段未闭合单列（thinking_unclosed），都不从输出里解析（D22-3、D28-5）。"
+ ],
+ "image_order": {
+  "value": "image_first",
+  "note": "图在文字之前（ModelAdapter.build_inputs 的 order）。三个家族的官方示例都是图在前，RUN-0001/0002 的零样本探针也是图在前。",
+  "sources": {
+   "qwen3.5": "Qwen3-VL cookbook 2d_grounding.ipynb 的 inference 函数：messages 的 content 先 image 后 text",
+   "gemma4": "https://ai.google.dev/gemma/docs/capabilities/vision/image ：\"content\" : [ { \"type\" : \"image\" , \"url\" : img_url }, { \"type\" : \"text\" , \"text\" : \"detect person and cat\" } ]",
+   "internvl3.5": "https://internvl.readthedocs.io/en/latest/get_started/chat_data_format.html ：\"<image>\\nuser input\"；\"<image> indicates the position where the image is inserted\""
+  }
+ },
+ "generation": {
+  "decoding": {
+   "do_sample": false,
+   "num_beams": 1,
+   "repetition_penalty": 1.0,
+   "temperature": null,
+   "top_p": null,
+   "top_k": null
+  },
+  "decoding_note": "greedy，所有采样参数显式关闭（预注册草稿 §3）；temperature/top_p/top_k 显式置 null，覆盖各仓库 generation_config 里的采样默认值。",
+  "enable_thinking": {
+   "eval": false,
+   "dev": false,
+   "extra": false,
+   "think": true,
+   "think8192": true
+  },
+  "think_max_new_tokens": {
+   "think": 4096,
+   "think8192": 8192
+  },
+  "think_note": "思考子集的 max_new_tokens 就是思考预算（含最终回答），D28-10：greedy，预算 4096，另做 8192 的敏感性检查。主口径一律关思考，每次显式设置（简报 §6.3、§12）。"
+ },
+ "max_new_tokens_adjustments": [],
+ "parse_functions": {
+  "one_box": "适配器的 parse_one_box(text, width=W, height=H)：本家族原生框格式，按原图宽高换成绝对像素 xyxy；多于一个框判 multiple_boxes（src/parsing/core.one_box）",
+  "boxes": "适配器的 parse_boxes(text, width=W, height=H)：本家族原生框格式的框列表与标签；标签按 src.parsing.normalize_phrase 与给定类别名精确比对，比不上的记为编造类别（src/e1/scoring.py）",
+  "polygon": "src.parsing.parse_polygons(text, width=W, height=H, axis_order=\"xy\")：0–1000 的 JSON 多边形 → 绝对像素",
+  "grid16": "src.grid.codec.parse_grid_text(text, n=GRID_SIZE_E1)：恰好 16 行、每行 16 个 0/1 的块",
+  "count": "src.parsing.parse_count(text)：非负整数",
+  "choice": "src.parsing.parse_choice(text, letters) 认选项字母；只有它判 no_choice 时，再用 src.parsing.parse_named_choice(text, 选项原文) 按选项原文匹配，匹配上就取该选项的字母（src/e1/scoring.parse_mcq；匹配途径逐条记录）"
+ },
+ "count_question_rule": {
+  "version": 1,
+  "template_source": "PaliGemma 技术报告（arXiv:2407.07726）附录的 CountBenchQA 构造：\"To construct CountbenchQA, we manually annotated the dataset with questions of the form How many {object class} are there in the image?, where we extracted the {object class} from the caption manually.\"",
+  "rule": "我们没有人工标注，按确定性规则从 caption 取 {object}（src/e1/prompts.count_object）：(1) 分词：英文词（可含连字符、撇号）、数字串、其余单个非空白字符；(2) 计数提及 = 第一个与 GT 计数相等的记号（英文数词不分大小写，或阿拉伯数字串）；(3) 向后取：先跳过紧跟的重复计数与括号（如 \"ten (10)\"、\"five 5\"），若下一个词是 of 再跳过 of 与限定词（the/a/an/these/those/my/our/your/his/her/their/its）；然后连续取纯字母词，遇到停用词（介词、连词、限定词与少数常见动词，列表见代码 COUNT_STOP_WORDS）、非字母记号或已取 4 个词就停；(4) 向后取到的为空时向前取：从计数提及往前跳过 of、set、sets、pack、group、lot、series、collection、block、a、an、the，再连续取纯字母的非停用词（最多 4 个），按原顺序拼；(5) 仍为空（或 caption 里找不到计数）时取 objects。保留 caption 里的原始大小写。每条样本的 object 与所走的规则分支写进 predictions.jsonl，metrics.json 按分支给出条数与准确率。"
+ },
+ "tasks": {
+  "refexp_box": {
+   "description": "指代定位（框）：RefCOCO/+ unc val/testA/testB，RefCOCOg umd val/test。标题 Acc@IoU0.5。",
+   "placeholders": {"expression": "RefCOCO 的 sent（规范化后的指代表达，src/data/loaders.load_refcoco 的 fields[\"expression\"]）"},
+   "families": {
+    "qwen3.5": {
+     "template": "Locate {expression} in the image. Report bbox coordinates in JSON format.",
+     "native": true,
+     "provenance": "predecessor_cookbook",
+     "source_url": "https://github.com/QwenLM/Qwen3-VL/blob/0dcc180d854f4b132f8059b10bbf0b5fd5dae9ed/cookbooks/2d_grounding.ipynb",
+     "source_quote": "prompt = \"Locate the shadow of the paper fox, report the bbox coordinates in JSON format.\"；prompt = 'Locate every instance that belongs to the following categories: \"head, hand, man, woman, glasses\". Report bbox coordinates in JSON format.'",
+     "note": "与 RUN-0001 零样本探针的提示逐字相同（docs/model_notes.md §5.5）。Qwen3.5 的 model card 与仓库没有定位提示（§5.5），措辞取自前代 Qwen3-VL 的官方 cookbook（文件 sha256 24a39b56467c16aea1062e40157c00800e8f53266714e8270ca3238064fd9898）。",
+     "max_new_tokens": 128,
+     "parse": "one_box"
+    },
+    "gemma4": {
+     "template": "detect {expression}",
+     "native": true,
+     "provenance": "official_doc",
+     "source_url": "https://ai.google.dev/gemma/docs/capabilities/vision/image",
+     "source_quote": "{ \"type\" : \"text\" , \"text\" : \"detect person and cat\" }；\"Bounding box coordinates are expressed as normalized values relative to a 1000x1000 grid.\"",
+     "note": "与 RUN-0002 零样本探针的提示逐字相同（docs/model_notes.md §6.5；原始 HTML 在 experiments/P0/0002_family_probe/raw/docs_evidence/）。",
+     "max_new_tokens": 128,
+     "parse": "one_box"
+    },
+    "internvl3.5": {
+     "template": "Please provide the bounding box coordinate of the region this sentence describes: <ref>{expression}</ref>",
+     "native": true,
+     "provenance": "official_doc",
+     "source_url": "https://internvl.readthedocs.io/en/latest/get_started/chat_data_format.html",
+     "source_quote": "\"value\" : \"<image>\\nPlease provide the bounding box coordinate of the region this sentence describes: <ref>the lady with the blue shirt</ref>\"",
+     "note": "RefCOCO 示例原文；与 RUN-0002 零样本探针的提示逐字相同（docs/model_notes.md §7.5）。<image> 占位由适配器按 image_first 放置。",
+     "max_new_tokens": 128,
+     "parse": "one_box"
+    }
+   }
+  },
+  "ovd": {
+   "description": "开放词汇检测：COCO val2017 500 张（全部 80 类）、ODinW13 各 ≤50 张（GLIP 的 OVERRIDE_CATEGORY 类名）。标题 F1@0.5（N9 → (b)），随机打破平局后平均的 mAP 作补充，另报编造类别的比例。",
+   "placeholders": {"categories": "该数据集的全部类别名，按类别 id 升序，用 category_joiner 连接"},
+   "families": {
+    "qwen3.5": {
+     "template": "Locate every instance that belongs to the following categories: \"{categories}\". Report bbox coordinates in JSON format.",
+     "category_joiner": ", ",
+     "native": true,
+     "provenance": "predecessor_cookbook",
+     "source_url": "https://github.com/QwenLM/Qwen3-VL/blob/0dcc180d854f4b132f8059b10bbf0b5fd5dae9ed/cookbooks/2d_grounding.ipynb",
+     "source_quote": "#### 1. Multi-Target Object Detection …… prompt = 'Locate every instance that belongs to the following categories: \"head, hand, man, woman, glasses\". Report bbox coordinates in JSON format.'",
+     "note": "cookbook 多目标检测例句逐字，只替换类别表（类别之间用 \", \"，整表一对双引号，与例句相同）。cookbook 的已知局限原文：\"When the number of instances in a particular category significantly exceeds 40-50 or when objects are densely packed, the model may enter an endless generation loop.\"",
+     "max_new_tokens": 512,
+     "parse": "boxes"
+    },
+    "gemma4": {
+     "template": "detect {categories}",
+     "category_joiner": ", ",
+     "native": true,
+     "provenance": "official_doc",
+     "source_url": "https://ai.google.dev/gemma/docs/capabilities/vision/image",
+     "source_quote": "{ \"type\" : \"text\" , \"text\" : \"detect person and cat\" }；{ \"type\" : \"text\" , \"text\" : \"detect person and car, output only ```json\" }",
+     "note": "官方例句只有两类，用 and 连接；多类别时按任务书写成 \"detect {类别1}, {类别2}, …\"（逗号连接，不加 and）。不加 \"output only ```json\"（那一句只出现在 token 预算一节）。",
+     "max_new_tokens": 512,
+     "parse": "boxes"
+    },
+    "internvl3.5": {
+     "template": "Please detect and label all objects in the following image that belong to these categories, and mark their positions: {categories}.",
+     "category_joiner": ", ",
+     "native": false,
+     "provenance": "adapted_official_doc",
+     "source_url": "https://internvl.readthedocs.io/en/latest/get_started/chat_data_format.html",
+     "source_quote": "\"value\" : \"<image>\\nPlease detect and label all objects in the following image and mark their positions.\"；\"We organize the model’s responses in the following format: <ref>class name</ref><box>[[x1, y1, x2, y2], ...]</box>\"",
+     "note": "非原生。InternVL 文档的检测例句不带类别表（\"detect and label all objects\"），开放词汇检测必须给出类别，于是在例句里插入类别表；没有找到带类别表的原生写法（文档、model card 都没有）。输出格式沿用文档的 <ref>…</ref><box>[[…]]</box>，提示里不另写格式。",
+     "max_new_tokens": 512,
+     "parse": "boxes"
+    }
+   }
+  },
+  "refexp_poly": {
+   "description": "指代分割（多边形文本）：RefCOCO/+/g 每个划分 1,000 句（configs/e1_eval_subsets.json 的 poly:*）。标题 cIoU，另报 gIoU；GT 为 RefCOCO 的 mask。",
+   "placeholders": {"expression": "同 refexp_box"},
+   "families": {
+    "qwen3.5": {
+     "template": "Outline {expression} in the image with a polygon. Report the polygon vertices in JSON format as a list of [x, y] points: [[x1, y1], [x2, y2], ...]. Coordinates are relative to the image size and range from 0 to 1000, with x first. Output only one JSON block.",
+     "native": false,
+     "provenance": "unified",
+     "source_url": "prompts/dev/0014-e1-harness.md",
+     "source_quote": "多边形是 `[[x, y], …]`，坐标为 0–1000，x 在前，只给一个 JSON 块。",
+     "note": "统一提示，三个家族逐字相同；没有哪个家族有原生的多边形格式。",
+     "max_new_tokens": 1024,
+     "parse": "polygon"
+    },
+    "gemma4": {
+     "template": "Outline {expression} in the image with a polygon. Report the polygon vertices in JSON format as a list of [x, y] points: [[x1, y1], [x2, y2], ...]. Coordinates are relative to the image size and range from 0 to 1000, with x first. Output only one JSON block.",
+     "native": false,
+     "provenance": "unified",
+     "source_url": "prompts/dev/0014-e1-harness.md",
+     "source_quote": "多边形是 `[[x, y], …]`，坐标为 0–1000，x 在前，只给一个 JSON 块。",
+     "note": "统一提示，三个家族逐字相同。注意 Gemma 的原生框是 y 在前；这里明确要求 x 在前，解析一律按 x 在前。",
+     "max_new_tokens": 1024,
+     "parse": "polygon"
+    },
+    "internvl3.5": {
+     "template": "Outline {expression} in the image with a polygon. Report the polygon vertices in JSON format as a list of [x, y] points: [[x1, y1], [x2, y2], ...]. Coordinates are relative to the image size and range from 0 to 1000, with x first. Output only one JSON block.",
+     "native": false,
+     "provenance": "unified",
+     "source_url": "prompts/dev/0014-e1-harness.md",
+     "source_quote": "多边形是 `[[x, y], …]`，坐标为 0–1000，x 在前，只给一个 JSON 块。",
+     "note": "统一提示，三个家族逐字相同。",
+     "max_new_tokens": 1024,
+     "parse": "polygon"
+    }
+   }
+  },
+  "grid16": {
+   "description": "16×16 数字网格（像素 token 通道的起点参考，简报 §8.2）：RefCOCO unc val 500 句。标题 gIoU（网格按 src.grid.codec.grid_to_mask 回填到原图），另报解析失败率。",
+   "placeholders": {"expression": "同 refexp_box"},
+   "families": {
+    "qwen3.5": {
+     "template": "Segment {expression} in the image as a 16x16 binary grid. Split the image into 16 rows (top to bottom) and 16 columns (left to right) of equal size. Output exactly 16 lines, each with 16 digits and no spaces: 1 if the cell is mostly covered by the object, otherwise 0. Output only the grid.",
+     "native": false,
+     "provenance": "unified",
+     "source_url": "docs/RESEARCH_BRIEF.md §8.2",
+     "source_quote": "在零样本条件下尝试让模型用普通数字字符输出一个16×16的mask网格，作为像素token通道的起点参考。",
+     "note": "统一提示，三个家族逐字相同。\"mostly covered\" 对应 GRID_FG_AREA_THRESHOLD = 0.5（src/constants.py）；网格边长 16 = GRID_SIZE_E1，tests 钉住。",
+     "max_new_tokens": 1024,
+     "parse": "grid16"
+    },
+    "gemma4": {
+     "template": "Segment {expression} in the image as a 16x16 binary grid. Split the image into 16 rows (top to bottom) and 16 columns (left to right) of equal size. Output exactly 16 lines, each with 16 digits and no spaces: 1 if the cell is mostly covered by the object, otherwise 0. Output only the grid.",
+     "native": false,
+     "provenance": "unified",
+     "source_url": "docs/RESEARCH_BRIEF.md §8.2",
+     "source_quote": "在零样本条件下尝试让模型用普通数字字符输出一个16×16的mask网格，作为像素token通道的起点参考。",
+     "note": "统一提示，三个家族逐字相同。",
+     "max_new_tokens": 1024,
+     "parse": "grid16"
+    },
+    "internvl3.5": {
+     "template": "Segment {expression} in the image as a 16x16 binary grid. Split the image into 16 rows (top to bottom) and 16 columns (left to right) of equal size. Output exactly 16 lines, each with 16 digits and no spaces: 1 if the cell is mostly covered by the object, otherwise 0. Output only the grid.",
+     "native": false,
+     "provenance": "unified",
+     "source_url": "docs/RESEARCH_BRIEF.md §8.2",
+     "source_quote": "在零样本条件下尝试让模型用普通数字字符输出一个16×16的mask网格，作为像素token通道的起点参考。",
+     "note": "统一提示，三个家族逐字相同。",
+     "max_new_tokens": 1024,
+     "parse": "grid16"
+    }
+   }
+  },
+  "count": {
+   "description": "计数：CountBench（491 张有图，去掉开发子集 49 张）。标题准确率，按 GT 计数值分档。问句按 count_question_rule 由 caption 确定性生成。",
+   "placeholders": {"object": "count_question_rule 从 caption 取出的计数对象"},
+   "families": {
+    "qwen3.5": {
+     "template": "How many {object} are there in the image? Answer with a single number.",
+     "native": false,
+     "provenance": "unified_common_practice",
+     "source_url": "https://arxiv.org/abs/2407.07726",
+     "source_quote": "To construct CountbenchQA, we manually annotated the dataset with questions of the form How many {object class} are there in the image?, where we extracted the {object class} from the caption manually.",
+     "note": "统一提示，三个家族逐字相同。问句模板取自 PaliGemma 的 CountBenchQA（附录），对象由 count_question_rule 确定性取出（不是人工标注）；末尾加一句输出格式。",
+     "max_new_tokens": 64,
+     "parse": "count"
+    },
+    "gemma4": {
+     "template": "How many {object} are there in the image? Answer with a single number.",
+     "native": false,
+     "provenance": "unified_common_practice",
+     "source_url": "https://arxiv.org/abs/2407.07726",
+     "source_quote": "To construct CountbenchQA, we manually annotated the dataset with questions of the form How many {object class} are there in the image?, where we extracted the {object class} from the caption manually.",
+     "note": "统一提示，三个家族逐字相同。",
+     "max_new_tokens": 64,
+     "parse": "count"
+    },
+    "internvl3.5": {
+     "template": "How many {object} are there in the image? Answer with a single number.",
+     "native": false,
+     "provenance": "unified_common_practice",
+     "source_url": "https://arxiv.org/abs/2407.07726",
+     "source_quote": "To construct CountbenchQA, we manually annotated the dataset with questions of the form How many {object class} are there in the image?, where we extracted the {object class} from the caption manually.",
+     "note": "统一提示，三个家族逐字相同。",
+     "max_new_tokens": 64,
+     "parse": "count"
+    }
+   }
+  },
+  "rel_depth_nyu": {
+   "description": "相对深度：NYUv2 Eigen test 上构造的点对（每图 5 对，带 A、B 环形标记的渲染图）。标题点对准确率。",
+   "placeholders": {},
+   "choices": ["A is closer", "B is closer"],
+   "families": {
+    "qwen3.5": {
+     "template": "Two points are circled on the image, labeled by A and B beside each circle. Which point is closer to the camera?\nSelect from the following choices.\n(A) A is closer\n(B) B is closer",
+     "native": false,
+     "provenance": "unified_benchmark_wording",
+     "source_url": "https://huggingface.co/datasets/BLINK-Benchmark/BLINK/tree/a3666eb249237ba3d5eca8db21176cc47967e040/Relative_Depth",
+     "source_quote": "'prompt': 'Two points are circled on the image, labeled by A and B beside each circle. Which point is closer to the camera?\\nSelect from the following choices.\\n(A) A is closer\\n(B) B is closer'",
+     "note": "统一提示，三个家族逐字相同。点对是我们构造的，没有自带提示；渲染（环 + 旁边的字母，src/data/nyu_pairs.py）与 BLINK Relative_Depth 的视觉提示同形，所以逐字沿用 BLINK 的提示，两者可直接对照。",
+     "max_new_tokens": 64,
+     "parse": "choice"
+    },
+    "gemma4": {
+     "template": "Two points are circled on the image, labeled by A and B beside each circle. Which point is closer to the camera?\nSelect from the following choices.\n(A) A is closer\n(B) B is closer",
+     "native": false,
+     "provenance": "unified_benchmark_wording",
+     "source_url": "https://huggingface.co/datasets/BLINK-Benchmark/BLINK/tree/a3666eb249237ba3d5eca8db21176cc47967e040/Relative_Depth",
+     "source_quote": "'prompt': 'Two points are circled on the image, labeled by A and B beside each circle. Which point is closer to the camera?\\nSelect from the following choices.\\n(A) A is closer\\n(B) B is closer'",
+     "note": "统一提示，三个家族逐字相同。",
+     "max_new_tokens": 64,
+     "parse": "choice"
+    },
+    "internvl3.5": {
+     "template": "Two points are circled on the image, labeled by A and B beside each circle. Which point is closer to the camera?\nSelect from the following choices.\n(A) A is closer\n(B) B is closer",
+     "native": false,
+     "provenance": "unified_benchmark_wording",
+     "source_url": "https://huggingface.co/datasets/BLINK-Benchmark/BLINK/tree/a3666eb249237ba3d5eca8db21176cc47967e040/Relative_Depth",
+     "source_quote": "'prompt': 'Two points are circled on the image, labeled by A and B beside each circle. Which point is closer to the camera?\\nSelect from the following choices.\\n(A) A is closer\\n(B) B is closer'",
+     "note": "统一提示，三个家族逐字相同。",
+     "max_new_tokens": 64,
+     "parse": "choice"
+    }
+   }
+  },
+  "rel_depth_blink": {
+   "description": "相对深度：BLINK Relative_Depth val（去掉开发子集 12 条）。标题准确率。",
+   "placeholders": {"prompt": "BLINK 每题自带的 prompt 字段（原样）"},
+   "families": {
+    "qwen3.5": {
+     "template": "{prompt}",
+     "native": true,
+     "provenance": "benchmark",
+     "source_url": "https://github.com/zeyofu/BLINK_Benchmark",
+     "source_quote": "We have released a full suite comprising 1,901 validation samples, the prompt we used, and model predictions for the baselines tested in our paper.",
+     "note": "benchmark 自带的提示原样使用（简报 §4 第 5 条）；数据 BLINK-Benchmark/BLINK@a3666eb249237ba3d5eca8db21176cc47967e040 的 prompt 字段。",
+     "max_new_tokens": 64,
+     "parse": "choice"
+    },
+    "gemma4": {
+     "template": "{prompt}",
+     "native": true,
+     "provenance": "benchmark",
+     "source_url": "https://github.com/zeyofu/BLINK_Benchmark",
+     "source_quote": "We have released a full suite comprising 1,901 validation samples, the prompt we used, and model predictions for the baselines tested in our paper.",
+     "note": "同 qwen3.5。",
+     "max_new_tokens": 64,
+     "parse": "choice"
+    },
+    "internvl3.5": {
+     "template": "{prompt}",
+     "native": true,
+     "provenance": "benchmark",
+     "source_url": "https://github.com/zeyofu/BLINK_Benchmark",
+     "source_quote": "We have released a full suite comprising 1,901 validation samples, the prompt we used, and model predictions for the baselines tested in our paper.",
+     "note": "同 qwen3.5。",
+     "max_new_tokens": 64,
+     "parse": "choice"
+    }
+   }
+  },
+  "spatial_cvbench": {
+   "description": "空间问答：CV-Bench test（去掉开发子集）。标题准确率，按 2D/3D 分列，另报官方的合成准确率。",
+   "placeholders": {"prompt": "CV-Bench 每题自带的 prompt 字段（原样）"},
+   "families": {
+    "qwen3.5": {
+     "template": "{prompt}",
+     "native": true,
+     "provenance": "benchmark",
+     "source_url": "https://huggingface.co/datasets/nyu-visionx/CV-Bench/tree/bc284db50d036958861cb60cdd7b77612052ce0d",
+     "source_quote": "| `prompt` | Prompt with question and choices pre-formatted |；例：\"How many yellow surfboards are there?\\nSelect from the following choices.\\n(A) 0\\n(B) 1\\n(C) 2\\n(D) 3\"",
+     "note": "benchmark 自带的提示原样使用（简报 §4 第 5 条）。",
+     "max_new_tokens": 64,
+     "parse": "choice"
+    },
+    "gemma4": {
+     "template": "{prompt}",
+     "native": true,
+     "provenance": "benchmark",
+     "source_url": "https://huggingface.co/datasets/nyu-visionx/CV-Bench/tree/bc284db50d036958861cb60cdd7b77612052ce0d",
+     "source_quote": "| `prompt` | Prompt with question and choices pre-formatted |",
+     "note": "同 qwen3.5。",
+     "max_new_tokens": 64,
+     "parse": "choice"
+    },
+    "internvl3.5": {
+     "template": "{prompt}",
+     "native": true,
+     "provenance": "benchmark",
+     "source_url": "https://huggingface.co/datasets/nyu-visionx/CV-Bench/tree/bc284db50d036958861cb60cdd7b77612052ce0d",
+     "source_quote": "| `prompt` | Prompt with question and choices pre-formatted |",
+     "note": "同 qwen3.5。",
+     "max_new_tokens": 64,
+     "parse": "choice"
+    }
+   }
+  },
+  "spatial_embspatial": {
+   "description": "空间问答：EmbSpatial-Bench test（去掉开发子集）。标题准确率，按关系与数据源分列。",
+   "placeholders": {"question": "question 字段（原样）", "options": "answer_options 按 option_format 逐行列出"},
+   "option_format": "{letter}. {text}",
+   "option_joiner": "\n",
+   "families": {
+    "qwen3.5": {
+     "template": "Question: {question}\nOptions:\n{options}\nPlease select the correct answer from the options above.",
+     "native": false,
+     "provenance": "common_practice",
+     "source_url": "https://github.com/open-compass/VLMEvalKit/blob/e9214c0816f67a2848296b82d5d615d709fb7325/vlmeval/dataset/image_mcq.py",
+     "source_quote": "options_prompt = 'Options:\\n' / for key, item in options.items(): options_prompt += f'{key}. {item}\\n' / prompt += f'Question: {question}\\n' / prompt += options_prompt / prompt += 'Please select the correct answer from the options above. \\n'",
+     "note": "非原生。EmbSpatial-Bench 没有自带提示：数据只有 question 与 answer_options，官方 README 只写 \"Questions from the human-verified evaluation data are formatted as multiple-choice problems. LVLMs need to select the most reasonable answer from choices.\"，论文也没有给模板。改用 VLMEvalKit 默认多选题格式（ImageMCQDataset.build_prompt，文件 sha256 9f619bec3abc784ca647ae8fb78f2dc6d5ff6209b8d525a0d0be3ead868c5c73），末尾的 \" \\n\" 按规则去掉。三个家族逐字相同。",
+     "max_new_tokens": 64,
+     "parse": "choice"
+    },
+    "gemma4": {
+     "template": "Question: {question}\nOptions:\n{options}\nPlease select the correct answer from the options above.",
+     "native": false,
+     "provenance": "common_practice",
+     "source_url": "https://github.com/open-compass/VLMEvalKit/blob/e9214c0816f67a2848296b82d5d615d709fb7325/vlmeval/dataset/image_mcq.py",
+     "source_quote": "prompt += f'Question: {question}\\n' / prompt += options_prompt / prompt += 'Please select the correct answer from the options above. \\n'",
+     "note": "非原生，同 qwen3.5。",
+     "max_new_tokens": 64,
+     "parse": "choice"
+    },
+    "internvl3.5": {
+     "template": "Question: {question}\nOptions:\n{options}\nPlease select the correct answer from the options above.",
+     "native": false,
+     "provenance": "common_practice",
+     "source_url": "https://github.com/open-compass/VLMEvalKit/blob/e9214c0816f67a2848296b82d5d615d709fb7325/vlmeval/dataset/image_mcq.py",
+     "source_quote": "prompt += f'Question: {question}\\n' / prompt += options_prompt / prompt += 'Please select the correct answer from the options above. \\n'",
+     "note": "非原生，同 qwen3.5。",
+     "max_new_tokens": 64,
+     "parse": "choice"
+    }
+   }
+  }
+ }
+}
