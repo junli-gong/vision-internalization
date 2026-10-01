@@ -633,3 +633,31 @@
       - 不升到 64×64，那会让 token 数变成 4 倍。
 14. **下一步**：按计划派发 E1 的准备开发，并写 E1 预注册交项目负责人批准。
 
+## D29 — DEV-0011（E1 的适配器准备）合入与偏离裁定（2026-10-01）
+
+1. **合入**（a813ab1，无返工）：
+   - 批量生成 `generate_batch`：左填充、逐行拆分，并核对 HF 填充的行为；
+   - 图像口径统一定义在 `src/adapters/image_policy.py`，D28-3 冻结的 E1 口径为默认值；
+   - Qwen 的像素预算模式、InternVL 的原生动态 tile；
+   - `stopped` 与 `truncated`；像素数记账（compute schema 3）；
+   - 统一的构造入口 `make_adapter`；
+   - `scripts/validate_batching.py`。
+   - 合入前在干净 worktree 里验证：
+     - 普通与 server-parity 条件都是 1184 passed + 11 skipped；
+     - 三家族 `--tiny` 冒烟都通过；
+     - 用新代码对 RUN-0009 的两份健康检查输出跑 `--compare`，照常给出结果。
+2. **事实**：
+   - CPU（fp32）上，三家族的批量与逐条生成逐个 token 相同，覆盖混合长度、横竖方图、多图、不同 tile 数、开关思考、受限 token 与滑窗跨越。
+   - 用 hook 逐步核对过：左填充下 Qwen 的三维位置与单条生成逐个相同。
+   - GPU 上的 bf16 不要求逐位相同（GDN 分块边界、sdpa 归约），按 D28-5 在开发子集上量一致率。
+3. **偏离全部接受**：
+   - **像素预算的 token 数只是约等于 n**：smart resize 放大时向上取整、缩小时向下取整。例如 640×427 → 330 个 token，640×360 → 312，612×612 → 289；640×480 正好 300。每条结果都记下实际的 token 数与像素数，报告照实写（D28-3）。
+   - **多张图网格不同的情形**：能用，并有测试。
+   - **墙钟按行等分整批**：`batch_wall_time_s` 记整批的值，记账相加恰为整批。
+   - **`stopped` 默认 None**，表示未记录；三个适配器一律填 True 或 False。
+   - **compute.json 的 schema 升到 3**，旧的 v2 文件 `read_compute_json` 不再接受。
+   - `make_adapter` 多了 `tiny` 与小模型参数；冒烟 `--tiny --model` 改取该键的 config。
+4. **要记住的**：
+   - E3b 如果 `allowed_token_ids` 不含停止 token，每行都会跑满、判 truncated。E3b 的解析口径届时另定。
+   - Gemma 与 InternVL 的 `token_id()` 仍只认 attach 时缓存的 token；`_AllowedTokensProcessor` 等公共工具仍在 qwen35.py。这两件留到 E3 之前的接口任务（D21-2）。
+

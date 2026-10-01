@@ -22,8 +22,9 @@
 
 | DEV | 发出 | 合入 commit | 内容 | 状态 |
 |---|---|---|---|---|
+| 0013 | 2026-10-01 | — | 健康检查协议 v2：MMLU-Pro 标题 256 token，32 token 截出作格式诊断；截断率提示；兼容 v1 输出（D28-7；模式 B，worktree agent） | 已派发 |
 | 0012 | 2026-10-01 | — | E1 数据：落地脚本与清单（RefCOCO/+/g、COCO val2017 子集、ODinW13 子集、CountBench、NYUv2 Eigen test、BLINK、CV-Bench、EmbSpatial）、开发子集、NYUv2 点对、统一加载器（模式 B，worktree agent） | 已派发 |
-| 0011 | 2026-10-01 | — | E1 的适配器准备：批量生成（左填充、M-RoPE 核对）、Qwen 像素预算口径、InternVL 原生动态 tile、停止原因与 truncated、统一构造入口、批处理核对脚本（模式 B，worktree agent） | 已派发 |
+| 0011 | 2026-10-01 | a813ab1 | E1 的适配器准备：批量生成（左填充、M-RoPE 核对）、Qwen 像素预算口径、InternVL 原生动态 tile、停止原因与 truncated、统一构造入口、批处理核对脚本（模式 B，worktree agent） | 已合入（无返工；1184 passed + 11 skipped；D29） |
 | 0010 | 2026-09-30 | bd23fc0 | E5 合成数据生成器第二部分：a 出平面三维旋转、b 视角变化（程序化 3D 实体、自写确定性光栅化与深度、跨平台逐位复现；生成器版本 3；模式 B，worktree agent） | 已合入（无返工；1102 passed + 11 skipped；D27） |
 | 0009 | 2026-09-30 | f9f90d0 | E5 生成器跨机器逐位复现修复：整数光栅化、确定的三角函数与聚合、元数据只用量化值；版本 2，摘要扩大到 c/e 120 个、d 60 个（D24；模式 B，worktree agent） | 已合入（无返工；877 passed + 1 skipped；D25） |
 | 0008 | 2026-09-30 | 647b007 | 健康检查框架（简报 §8.11）：固定 200 题（MMLU-Pro 100 分层、GSM8K 50、IFEval 50）+ 三个评分器 + 运行脚本（模式 B，worktree agent） | 已合入（审查 1 轮：先生成后评分、比较时给配对 CI 与符号检验；main 1030 passed + 11 skipped；D26） |
@@ -401,3 +402,5 @@
   - (a) 兑现；
   - (b) 大部分兑现：Qwen-4B、9B ≥ 70，Gemma E4B ≥ E2B，InternVL-4B ≥ 2B。但 Qwen-0.8B 是 64，高于我预测的上限 50。
 - **健康检查的基座参照**还差 MMLU-Pro 256 token 的标题口径（D28-7），等健康检查协议 v2 的开发任务合入后重跑。
+- **DEV-0011 合入**（a813ab1，D29）：CPU 上三家族的批量与逐条生成逐个 token 相同；左填充下 Qwen 的 M-RoPE 位置逐步核对过。GPU 上的一致率等数据落地后，在开发子集上按 D28-5 验收。
+- **派发 DEV-0013（健康检查协议 v2）**：只生成一次 256 token，再从中截出 32 token 的读数。greedy 下两者等价，开发机上要用测试证明。
