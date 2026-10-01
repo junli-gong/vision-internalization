@@ -14,10 +14,13 @@
   IFEval 可以先不评分（--skip-ifeval-scoring），这时它的分数为 null，unscored 里写明原因；之后用 --rescore 补评。
 - 比较：compare(base, merged) 按精确分数算差值（百分点），标题读数的标题口径下降严格大于 RED_FLAG_DROP_PP 即标出；
   与标红并列给出按题配对的 bootstrap 95% CI 与不一致题对上的精确符号检验 p 值（审查第 1 轮）。
-- 协议 v2（D28-7，DEV-0013）：汇总与比较的单位是读数（protocol.READINGS）。MMLU-Pro 的标题读数 mmlu_pro 是 256 token，
-  诊断读数 mmlu_pro_fmt32 是同一次生成的前 32 个 token：给出差值与 CI，不标红。比较另给截断率提示（写满 max_new_tokens
-  的比例变化严格大于 TRUNCATION_NOTICE_PP 个百分点），与标红分开。v1 的输出照旧可读、可比：v1 的 MMLU-Pro（32 token）
-  按口径对上 v2 的 mmlu_pro_fmt32，256 的标题读数只在 v2 一边时写明"口径不同、标题不可比"。
+- 协议 v2（D28-7，DEV-0013）：汇总与比较的单位是读数（protocol.READINGS）。比较另给截断率提示（写满 max_new_tokens
+  的比例变化严格大于 TRUNCATION_NOTICE_PP 个百分点），与标红分开。
+- 协议 v3（D36-4，DEV-0016；G3 之前不再动）：MMLU-Pro 的标题读数是受限字母读数 mmlu_pro_letter（option_logits 的 argmax，
+  不解析文本），口径 accuracy 参与标红；另一口径 mean_p_gold（正确选项在选项集合上的 softmax 概率的平均）只给差值与配对
+  bootstrap CI。256 token 的自由作答 mmlu_pro_free256 与它的 32 token 前缀 mmlu_pro_fmt32 是诊断读数，不标红。
+  v1、v2 的输出照旧可读、可重评、可比：按口径对上 v3 的读数（v1 的 MMLU-Pro → fmt32；v2 的 mmlu_pro → free256），
+  只有一边有的读数写明"口径不同、标题不可比"。
 """
 
 from __future__ import annotations
@@ -107,6 +110,23 @@ def score_mmlu_pro(item: Mapping[str, Any], result: Any) -> dict[str, Any]:
             "correct": p.value is not None and p.value == item["answer"]}
 
 
+def score_mmlu_pro_letter(item: Mapping[str, Any], generation: Mapping[str, Any]) -> dict[str, Any]:
+    """受限字母读数（v3，D36-4）的评分部分：只读生成部分里的 options、probs 与 choice（不解析文本）。
+
+    options 必须是本题的实际字母；choice（option_logits 的 argmax）等于答案字母即对；p_gold 是答案字母在选项集合上的概率。
+    """
+    letters = P.option_letters(len(item["options"]))
+    options = list(generation["options"])
+    if options != list(letters):
+        raise ValueError(f"{item['id']}：选项 {options} 不是本题的实际字母 {list(letters)}")
+    probs = list(generation["probs"])
+    if len(probs) != len(options) or generation["choice"] not in options:
+        raise ValueError(f"{item['id']}：probs / choice 与选项对不上")
+    gold = item["answer"]
+    return {"letters": letters, "gold": gold, "correct": generation["choice"] == gold,
+            "p_gold": float(probs[options.index(gold)])}
+
+
 def score_gsm8k(item: Mapping[str, Any], result: Any) -> dict[str, Any]:
     out: dict[str, Any] = {"gold": item["answer"]}
     for name, fn in (("strict", parse_gsm8k_strict), ("flexible", parse_gsm8k_flexible)):
@@ -158,6 +178,24 @@ METRICS: Mapping[str, tuple[str, ...]] = {
     "gsm8k": ("flexible", "strict"),
     "ifeval": ("prompt_level_strict", "instruction_level_strict", "prompt_level_loose", "instruction_level_loose"),
 }
+# 受限字母读数（v3）的口径：accuracy（标题，标红）与 mean_p_gold（正确选项概率的平均，诊断：差值与 CI，不标红）
+MEAN_P_GOLD = "mean_p_gold"
+LETTER_METRICS: tuple[str, ...] = ("accuracy", MEAN_P_GOLD)
+
+
+def metrics_of(reading: P.Reading) -> tuple[str, ...]:
+    return LETTER_METRICS if reading.kind == P.KIND_OPTION_LETTER else METRICS[reading.benchmark]
+
+
+def mean_fraction(values: list[float]) -> Fraction | None:
+    """浮点数的精确平均（Fraction(float) 是精确值）；空集合为 None。"""
+    return sum((Fraction(v) for v in values), Fraction(0)) / len(values) if values else None
+
+
+def mean_p_gold_entry(records: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """{"n", "mean"（概率，0–1）, "pct"（百分数一位小数）}；空集合时 mean 与 pct 为 None。"""
+    m = mean_fraction([r["p_gold"] for r in records])
+    return {"n": len(records), "mean": None if m is None else float(m), "pct": None if m is None else round1(m * 100)}
 
 
 IFEVAL_SKIP_REASON = (
@@ -227,9 +265,9 @@ def summarize(records: Mapping[str, list[Mapping[str, Any]]], *,
               protocol_version: int = P.PROTOCOL_VERSION) -> dict[str, Any]:
     """逐题记录 → 分数（各口径）、标题分数、未评分的项及原因、ParseTally（MMLU-Pro 与 GSM8K 两个口径）、诊断计数。
 
-    键按 protocol_version 那一版的布局（protocol.RECORD_KEYS_BY_VERSION）：v2 是四个读数（mmlu_pro、mmlu_pro_fmt32、
-    gsm8k、ifeval），headline 只列三项的标题读数（mmlu_pro 为 256 token）；v1 是三项，结构与 v1 的输出逐字节相同
-    （重评 v1 的输出不改变它的任何汇总）。
+    键按 protocol_version 那一版的布局（protocol.RECORD_KEYS_BY_VERSION）：v3 是五个读数（mmlu_pro_letter、mmlu_pro_free256、
+    mmlu_pro_fmt32、gsm8k、ifeval），headline 每项一个数（MMLU-Pro 取受限字母读数的准确率）；受限字母读数另给 mean_p_gold，
+    没有 ParseTally。v2 是四个读数、v1 是三项，结构与当时的输出逐字节相同（重评 v1、v2 的输出不改变它的任何汇总）。
     未评分的 IFEval（--skip-ifeval-scoring）：各口径的 n 照常给出，n_correct 与 pct 为 None，unscored 里写明原因。
     """
     layout = P.record_readings(protocol_version)
@@ -243,6 +281,13 @@ def summarize(records: Mapping[str, list[Mapping[str, Any]]], *,
     for key, reading in layout.items():
         bench = reading.benchmark
         recs = records.get(key, [])
+        if reading.kind == P.KIND_OPTION_LETTER:  # v3：不解析文本，没有 ParseTally；诊断只记题数
+            units = unit_outcomes(bench, "accuracy", recs)
+            scores[key] = {"accuracy": {"n": len(units), "n_correct": sum(units.values()),
+                                        "pct": pct1(sum(units.values()), len(units))},
+                           MEAN_P_GOLD: mean_p_gold_entry(recs)}
+            diagnostics[key] = {"n": len(recs)}
+            continue
         scored = is_scored(bench, recs)
         if not scored:
             unscored[key] = IFEVAL_SKIP_REASON
@@ -267,8 +312,9 @@ def summarize(records: Mapping[str, list[Mapping[str, Any]]], *,
             # 生成数达到该读数的 max_new_tokens：被截断的上界（恰好在最后一步生成停止 token 的也算在内）
             "n_reached_max_new_tokens": sum(r["reached_max_new_tokens"] for r in recs),
         }
-    # 标题：每项一个数（v2 的 mmlu_pro 为 256 token；v1 的输出里 mmlu_pro 是当时的 32 token 标题，原样保留）
-    headline = {key: scores[key][P.HEADLINE[key]]["pct"] for key in layout if key in P.BENCHMARKS}
+    # 标题：每项一个数，取该版本自己的标题读数（v3 的 MMLU-Pro 为受限字母读数；v2 为 256 token；v1 为当时的 32 token，原样保留）
+    heads = P.HEADLINE_KEYS_BY_VERSION[protocol_version]
+    headline = {bench: scores[heads[bench]][P.HEADLINE[bench]]["pct"] for bench in P.BENCHMARKS}
     return {"scores": scores, "headline": headline, "unscored": unscored, "parse_tally": tally,
             "diagnostics": diagnostics}
 
@@ -321,6 +367,18 @@ def paired_ci_pp(metric: str, base_counts: list[tuple[int, int]],
 INCOMPARABLE = "口径不同、标题不可比"
 
 
+def _mean_p_gold_row(rb: list[Mapping[str, Any]], rm: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """受限字母读数的 mean_p_gold 一行：两边的平均（百分数一位小数）、按精确平均算的差值（百分点）与配对 bootstrap CI。"""
+    vb, vm = [float(r["p_gold"]) for r in rb], [float(r["p_gold"]) for r in rm]
+    mb, mm = mean_fraction(vb), mean_fraction(vm)
+    ci = paired_bootstrap_ci(np.array(vm, dtype=np.float64), np.array(vb, dtype=np.float64))
+    return {"n": len(vb), "base_pct": None if mb is None else round1(mb * 100),
+            "merged_pct": None if mm is None else round1(mm * 100),
+            "delta_pp": None if mb is None else round1((mm - mb) * 100), "lost": None, "gained": None, "flag": None,
+            "ci95_pp": None if ci is None else [round1(Fraction(ci.low) * 100), round1(Fraction(ci.high) * 100)],
+            "sign_test": None}
+
+
 def _view(report: Mapping[str, Any]) -> tuple[int, dict[str, list[Mapping[str, Any]]]]:
     """一份输出 → (协议版本, {v2 读数名: 逐题记录})。v1 的 "mmlu_pro"（32 token）落到 mmlu_pro_fmt32。"""
     version = P.check_protocol_version(report.get("protocol_version"))
@@ -331,6 +389,8 @@ def _view(report: Mapping[str, Any]) -> tuple[int, dict[str, list[Mapping[str, A
 def _side_pct(bench: str, metric: str, recs: list[Mapping[str, Any]] | None) -> float | None:
     if recs is None or not is_scored(bench, recs):
         return None
+    if metric == MEAN_P_GOLD:
+        return mean_p_gold_entry(recs)["pct"]
     units = unit_outcomes(bench, metric, recs)
     return pct1(sum(units.values()), len(units))
 
@@ -339,9 +399,10 @@ def _incomparable_note(reading: P.Reading, vb: int, vm: int, in_b: bool, in_m: b
     def side(v: int, has: bool) -> str:
         return f"协议 v{v}，{'有' if has else '没有'}这个读数"
 
-    return (f"{INCOMPARABLE}：{reading.name}（{reading.benchmark}，max_new_tokens={reading.max_new_tokens}）"
-            f"基座{side(vb, in_b)}、合并后{side(vm, in_m)}。协议 v1 的 MMLU-Pro 只有 32 token 的读数，"
-            f"只与 v2 的 {P.MMLU_PRO_FMT32} 比对（D28-7）。")
+    return (f"{INCOMPARABLE}：{reading.name}（{reading.benchmark}，{reading.kind}，max_new_tokens={reading.max_new_tokens}）"
+            f"基座{side(vb, in_b)}、合并后{side(vm, in_m)}。协议 v1 的 MMLU-Pro 只有 32 token 的读数（对上 {P.MMLU_PRO_FMT32}）；"
+            f"v2 的 MMLU-Pro 是 256 token 的自由作答（对上 {P.MMLU_PRO_FREE256}）与它的 32 token 前缀；受限字母读数 "
+            f"{P.MMLU_PRO_LETTER} 只有 v3 才有（D28-7、D36-4）。")
 
 
 def compare(base: Mapping[str, Any] | str | Path, merged: Mapping[str, Any] | str | Path) -> dict[str, Any]:
@@ -382,7 +443,7 @@ def compare(base: Mapping[str, Any] | str | Path, merged: Mapping[str, Any] | st
         if rb is None or rm is None:
             incomparable.append(name)
             notes.append(_incomparable_note(reading, vb, vm, rb is not None, rm is not None))
-            for metric in METRICS[bench]:
+            for metric in metrics_of(reading):
                 rows.append({**common, "metric": metric, "headline": not diagnostic and metric == P.HEADLINE[bench],
                              "diagnostic": diagnostic, "max_new_tokens": reading.max_new_tokens, "comparable": False,
                              "scored": None, "note": notes[-1], "n": None, "base_pct": _side_pct(bench, metric, rb),
@@ -392,21 +453,25 @@ def compare(base: Mapping[str, Any] | str | Path, merged: Mapping[str, Any] | st
         if [r["id"] for r in rb] != [r["id"] for r in rm]:
             raise ValueError(f"{name}：两次运行的题目不同（--limit 不同？）")
         n_items = len(rb)
-        tb, tm = sum(bool(r["reached_max_new_tokens"]) for r in rb), sum(bool(r["reached_max_new_tokens"]) for r in rm)
-        t_delta = Fraction(100 * (tm - tb), n_items) if n_items else None
-        truncation.append({"reading": name, "max_new_tokens": reading.max_new_tokens, "n": n_items,
-                           "base_n_reached": tb, "merged_n_reached": tm,
-                           "base_pct": pct1(tb, n_items), "merged_pct": pct1(tm, n_items),
-                           "delta_pp": None if t_delta is None else round1(t_delta),
-                           "notice": t_delta is not None and abs(t_delta) > P.TRUNCATION_NOTICE_PP})
+        if reading.kind == P.KIND_GENERATE:  # 受限字母读数只看一个位置，没有截断
+            tb, tm = sum(bool(r["reached_max_new_tokens"]) for r in rb), sum(bool(r["reached_max_new_tokens"]) for r in rm)
+            t_delta = Fraction(100 * (tm - tb), n_items) if n_items else None
+            truncation.append({"reading": name, "max_new_tokens": reading.max_new_tokens, "n": n_items,
+                               "base_n_reached": tb, "merged_n_reached": tm,
+                               "base_pct": pct1(tb, n_items), "merged_pct": pct1(tm, n_items),
+                               "delta_pp": None if t_delta is None else round1(t_delta),
+                               "notice": t_delta is not None and abs(t_delta) > P.TRUNCATION_NOTICE_PP})
         scored_b, scored_m = is_scored(bench, rb), is_scored(bench, rm)
         if not (scored_b and scored_m):
             unscored.append(name)
-        for metric in METRICS[bench]:
+        for metric in metrics_of(reading):
             headline = not diagnostic and metric == P.HEADLINE[bench]
             row: dict[str, Any] = {**common, "metric": metric, "headline": headline, "diagnostic": diagnostic,
                                    "max_new_tokens": reading.max_new_tokens, "comparable": True,
                                    "scored": scored_b and scored_m, "note": None}
+            if metric == MEAN_P_GOLD:  # 连续读数：差值与配对 bootstrap CI（诊断，不标红；没有丢题、得题与符号检验）
+                rows.append({**row, **_mean_p_gold_row(rb, rm)})
+                continue
             if not row["scored"]:
                 rows.append({**row, "n": None, "base_pct": _side_pct(bench, metric, rb),
                              "merged_pct": _side_pct(bench, metric, rm), "delta_pp": None, "lost": None,
@@ -439,14 +504,18 @@ def compare(base: Mapping[str, Any] | str | Path, merged: Mapping[str, Any] | st
         "protocol_versions": {"base": vb, "merged": vm},
         "threshold_pp": P.RED_FLAG_DROP_PP,
         "rule": (f"headline metric of a headline reading drops by more than {P.RED_FLAG_DROP_PP} percentage points "
-                 f"(merged - base < -{P.RED_FLAG_DROP_PP}); MMLU-Pro's headline reading is mmlu_pro at "
-                 f"max_new_tokens={P.READINGS_BY_NAME['mmlu_pro'].max_new_tokens} (D28-7); the diagnostic reading "
-                 f"{P.MMLU_PRO_FMT32} gets delta, CI and sign test but is never flagged"),
+                 f"(merged - base < -{P.RED_FLAG_DROP_PP}); MMLU-Pro's headline reading is the constrained letter reading "
+                 f"{P.MMLU_PRO_LETTER} (accuracy of the option_logits argmax over the item's letters, D36-4); its "
+                 f"{MEAN_P_GOLD} (mean softmax probability of the correct letter) gets delta and CI but is never flagged; "
+                 f"the diagnostic readings {P.MMLU_PRO_FREE256} and {P.MMLU_PRO_FMT32} get delta, CI and sign test but "
+                 f"are never flagged"),
         "statistics": {
             "ci95_pp": "paired bootstrap over questions, merged - base, percentile interval (src.stats.paired_bootstrap_ci; "
                        "instruction-level metrics resample questions with src.stats.ratio_of_sums)",
             "bootstrap": {"n_resamples": BOOTSTRAP_N_RESAMPLES, "level": BOOTSTRAP_CI_LEVEL, "seed": BOOTSTRAP_SEED},
             "sign_test": "exact two-sided binomial test (p = 1/2) on questions whose count of correct units differs",
+            "mean_p_gold": "delta of the exact mean of per-question p_gold, in percentage points; ci95_pp is the paired "
+                           "bootstrap of the mean (src.stats.paired_bootstrap_ci); no sign test",
             "note": "reported alongside the flag; the flag rule itself is unchanged (brief §8.11)",
         },
         "base_model": b.get("model", {}).get("key"),

@@ -220,23 +220,35 @@ def test_all_prompts_have_no_edge_whitespace(items_obj):
 
 
 def test_protocol_constants_pinned():
-    # 协议 v2（D28-7）：MMLU-Pro 的标题读数 256 token，32 token 留作格式诊断（同一次生成的前 32 个 token）
-    assert P.PROTOCOL_VERSION == 2 and P.SUPPORTED_PROTOCOL_VERSIONS == (1, 2)
-    assert P.ITEMS_PROTOCOL_VERSION == 1  # 题目文件建于 v1，v2 题目不变
+    # 协议 v3（D36-4，冻结到 G3）：MMLU-Pro 的标题读数是受限字母读数（option_logits，记 1 个 token）；
+    # v2 的 256 token 自由作答（改名 mmlu_pro_free256）与同一次生成的 32 token 前缀保留为诊断
+    assert P.PROTOCOL_VERSION == 3 and P.SUPPORTED_PROTOCOL_VERSIONS == (1, 2, 3)
+    assert P.ITEMS_PROTOCOL_VERSION == 1  # 题目文件建于 v1，v2、v3 题目不变
     assert dict(P.MAX_NEW_TOKENS) == {"mmlu_pro": 256, "gsm8k": 512, "ifeval": 1024}
-    assert P.FMT32_MAX_NEW_TOKENS == 32 and P.TRUNCATION_NOTICE_PP == 10
-    assert [(r.name, r.benchmark, r.max_new_tokens, r.role, r.prefix_of) for r in P.READINGS] == [
-        ("mmlu_pro", "mmlu_pro", 256, "headline", None),
-        ("mmlu_pro_fmt32", "mmlu_pro", 32, "diagnostic", "mmlu_pro"),
-        ("gsm8k", "gsm8k", 512, "headline", None),
-        ("ifeval", "ifeval", 1024, "headline", None),
+    assert P.FMT32_MAX_NEW_TOKENS == 32 and P.TRUNCATION_NOTICE_PP == 10 and P.LETTER_MAX_NEW_TOKENS == 1
+    assert [(r.name, r.benchmark, r.kind, r.max_new_tokens, r.role, r.prefix_of) for r in P.READINGS] == [
+        ("mmlu_pro_letter", "mmlu_pro", "option_letter", 1, "headline", None),
+        ("mmlu_pro_free256", "mmlu_pro", "generate", 256, "diagnostic", None),
+        ("mmlu_pro_fmt32", "mmlu_pro", "generate", 32, "diagnostic", "mmlu_pro_free256"),
+        ("gsm8k", "gsm8k", "generate", 512, "headline", None),
+        ("ifeval", "ifeval", "generate", 1024, "headline", None),
     ]
-    # v1 的输出（D26）：MMLU-Pro 32、GSM8K 512、IFEval 1024；v1 的 MMLU-Pro 对上 v2 的 fmt32
+    # v1 的输出（D26）：MMLU-Pro 32、GSM8K 512、IFEval 1024；v1 的 MMLU-Pro 对上 fmt32
     assert {k: (r.name, r.max_new_tokens) for k, r in P.record_readings(1).items()} == {
         "mmlu_pro": ("mmlu_pro_fmt32", 32), "gsm8k": ("gsm8k", 512), "ifeval": ("ifeval", 1024)}
-    assert list(P.record_readings(2)) == [r.name for r in P.READINGS]
-    assert [r.name for r in P.readings_of("mmlu_pro")] == ["mmlu_pro", "mmlu_pro_fmt32"]
-    for bad in (0, 3, None, True, "2"):
+    # v2 的输出（D28-7）：键 "mmlu_pro" 是 256 token 的自由作答，对上 v3 的 mmlu_pro_free256
+    assert {k: (r.name, r.max_new_tokens) for k, r in P.record_readings(2).items()} == {
+        "mmlu_pro": ("mmlu_pro_free256", 256), "mmlu_pro_fmt32": ("mmlu_pro_fmt32", 32), "gsm8k": ("gsm8k", 512),
+        "ifeval": ("ifeval", 1024)}
+    assert list(P.record_readings(3)) == [r.name for r in P.READINGS]
+    assert {v: dict(h) for v, h in P.HEADLINE_KEYS_BY_VERSION.items()} == {
+        1: {"mmlu_pro": "mmlu_pro", "gsm8k": "gsm8k", "ifeval": "ifeval"},
+        2: {"mmlu_pro": "mmlu_pro", "gsm8k": "gsm8k", "ifeval": "ifeval"},
+        3: {"mmlu_pro": "mmlu_pro_letter", "gsm8k": "gsm8k", "ifeval": "ifeval"}}
+    assert [r.name for r in P.readings_of("mmlu_pro")] == ["mmlu_pro_letter", "mmlu_pro_free256", "mmlu_pro_fmt32"]
+    with pytest.raises(ValueError):  # 受限字母读数不能是前缀读数、不能多于 1 个 token
+        P.Reading("x", "mmlu_pro", 2, P.ROLE_HEADLINE, kind=P.KIND_OPTION_LETTER)
+    for bad in (0, 4, None, True, "2"):
         with pytest.raises(ValueError):
             P.check_protocol_version(bad)
     assert P.ORDER == "instruction_first" and P.ENABLE_THINKING is False

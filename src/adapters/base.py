@@ -16,6 +16,8 @@
 - token 区间一律是半开区间 [start, end)，下标相对于单条输入序列。
 - 计时口径（D21，DEV-0011）：GenerationResult.wall_time_s 只含 model.generate 本身（CUDA 上前后各同步一次），不含 build_inputs；
   进程里第一次生成含 JIT、内核编译与库初始化，记账之前先调用 warmup()，它的耗时不进记账。
+- 受限选项读数（DEV-0016，D36-4、D36-6）：option_logits 只做一次前向，读第一个生成位置的 logits，每个选项取它所有单 token
+  写法（OPTION_SPELLING_TEMPLATES）里 logit 的最大值，在选项集合上做 softmax。结果是 OptionScores，规则写在它的说明里。
 """
 
 from __future__ import annotations
@@ -162,6 +164,98 @@ class GenerationResult:
                 raise ValueError(f"wall_time_s={self.wall_time_s} 不是整批墙钟 {self.batch_wall_time_s} 的 1/{self.batch_size}")
 
 
+# 受限选项读数（DEV-0016，D36-4）：一个选项的候选写法，"{}" 换成选项本身。至少包括不带空格与带一个前导空格两种
+# （同一字母常有这两种 token）；编码不是单个 token 的写法不用，记在 OptionScores.skipped_spellings 里。
+OPTION_SPELLING_TEMPLATES: tuple[str, ...] = ("{}", " {}")
+
+
+@dataclass(frozen=True)
+class OptionSpelling:
+    """选项的一种单 token 写法：文本与它的 token id（tokenizer 编码恰为这一个 id，且解码回来就是这段文本）。"""
+
+    text: str
+    token_id: int
+
+
+@dataclass(frozen=True)
+class OptionScores:
+    """option_logits 的一行结果（DEV-0016，D36-4）。各字段按 options 的顺序。
+
+    - spellings[i]：选项 i 的单 token 写法（至少一个）；skipped_spellings[i]：编码不是单个 token 的写法（不用，只记录）。
+    - spelling_logits[i][j]：第一个生成位置上 spellings[i][j] 的 logit（fp32；bf16 模型取 lm_head 输出转成的 fp32）。
+    - logits[i] = max_j spelling_logits[i][j]；token_ids[i] 是取到最大值的那个写法的 token id（相等时取 id 小的）。
+    - probs：logits 在选项集合上的 softmax（fp32）。
+    - choice：logit 最大的选项；相等时取所用 token id 较小的选项。这与 HF greedy 在"只允许全部写法"时的选择相同
+      （torch.argmax 取第一个最大值，即 id 最小的 token），所以 choice 恒等于
+      generate(allowed_token_ids=全部写法, max_new_tokens=1) 生成的 token 所属的选项。
+    - 记账字段同 GenerationResult：n_prompt_tokens 是该行（不含填充）的提示长度；wall_time_s 是整批墙钟按行等分的份额；
+      n_generated_tokens 恒为 1（计算量等于只生成 1 个 token 的一次 prefill；src.accounting.Compute.from_generation 可直接用）。
+    """
+
+    options: tuple[str, ...]
+    spellings: tuple[tuple[OptionSpelling, ...], ...]
+    skipped_spellings: tuple[tuple[str, ...], ...]
+    spelling_logits: tuple[tuple[float, ...], ...]
+    logits: tuple[float, ...]
+    token_ids: tuple[int, ...]
+    probs: tuple[float, ...]
+    choice: str
+    n_prompt_tokens: int
+    n_visual_tokens: int
+    n_image_pixels: int
+    wall_time_s: float
+    batch_size: int = 1
+    batch_wall_time_s: float | None = None
+
+    def __post_init__(self) -> None:
+        n = len(self.options)
+        if n < 2 or len(set(self.options)) != n:
+            raise ValueError(f"options 须是至少 2 个互不相同的选项，收到 {self.options!r}")
+        for name in ("spellings", "skipped_spellings", "spelling_logits", "logits", "token_ids", "probs"):
+            if len(getattr(self, name)) != n:
+                raise ValueError(f"{name} 的长度 {len(getattr(self, name))} 与选项数 {n} 不一致")
+        for i, (sp, lg) in enumerate(zip(self.spellings, self.spelling_logits)):
+            if not sp or len(sp) != len(lg):
+                raise ValueError(f"选项 {self.options[i]!r}：写法 {sp!r} 与 logit {lg!r} 不配套")
+            best = max(range(len(sp)), key=lambda j: (lg[j], -sp[j].token_id))
+            if self.logits[i] != lg[best] or self.token_ids[i] != sp[best].token_id:
+                raise ValueError(f"选项 {self.options[i]!r}：logit / token 不是各写法里的最大值")
+        all_ids = [s.token_id for sp in self.spellings for s in sp]
+        if len(set(all_ids)) != len(all_ids):
+            raise ValueError(f"不同写法用到了同一个 token id：{all_ids}")
+        top = max(range(n), key=lambda i: (self.logits[i], -self.token_ids[i]))
+        if self.choice != self.options[top]:
+            raise ValueError(f"choice={self.choice!r} 不是 logit 最大的选项 {self.options[top]!r}")
+        if any(not 0.0 <= p <= 1.0 for p in self.probs) or not math.isclose(sum(self.probs), 1.0, abs_tol=1e-5):
+            raise ValueError(f"probs 不是选项集合上的概率分布：{self.probs!r}")
+        for name in ("n_prompt_tokens", "n_visual_tokens", "n_image_pixels"):
+            v = getattr(self, name)
+            if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+                raise ValueError(f"{name} 必须是非负整数，收到 {v!r}")
+        if (self.n_image_pixels == 0) != (self.n_visual_tokens == 0):
+            raise ValueError(f"n_image_pixels={self.n_image_pixels} 与 n_visual_tokens={self.n_visual_tokens} 不相容")
+        if self.wall_time_s < 0:
+            raise ValueError("wall_time_s 不能为负")
+        if isinstance(self.batch_size, bool) or not isinstance(self.batch_size, int) or self.batch_size < 1:
+            raise ValueError(f"batch_size 必须是正整数，收到 {self.batch_size!r}")
+        if self.batch_wall_time_s is not None and not math.isclose(
+                self.wall_time_s, self.batch_wall_time_s / self.batch_size, rel_tol=1e-9, abs_tol=1e-12):
+            raise ValueError(f"wall_time_s={self.wall_time_s} 不是整批墙钟 {self.batch_wall_time_s} 的 1/{self.batch_size}")
+
+    @property
+    def n_generated_tokens(self) -> int:
+        """记账口径：一次 option_logits 的计算量等于只生成 1 个 token。"""
+        return 1
+
+    @property
+    def choice_token_id(self) -> int:
+        """choice 所用的 token id（= generate(allowed_token_ids=全部写法, max_new_tokens=1) 生成的 token）。"""
+        return self.token_ids[self.options.index(self.choice)]
+
+    def prob(self, option: str) -> float:
+        return self.probs[self.options.index(option)]
+
+
 @dataclass(frozen=True)
 class HiddenStates:
     """按层给出的隐藏状态。
@@ -208,6 +302,7 @@ def check_grid_token_names(names: Sequence[str], n_existing: int = 0) -> None:
 _REQUIRED_KWONLY: dict[str, tuple[str, ...]] = {
     "generate": ("enable_thinking", "max_new_tokens"),
     "generate_batch": ("enable_thinking", "max_new_tokens"),  # DEV-0011：规则与 generate 相同
+    "option_logits": ("enable_thinking",),  # DEV-0016：思考开关每次显式给出（D1）
     "parse_boxes": ("width", "height"),  # 原图宽高必须由调用方显式给出（DEV-0006）
 }
 # 子类必须保持为"无默认值"的参数（层号只能由调用方给出）
@@ -286,6 +381,29 @@ class ModelAdapter(abc.ABC):
           stopped 按行各自给出；n_prompt_tokens 是该行自己（不含填充）的提示长度；n_visual_tokens、n_image_pixels 按行计。
         - 墙钟：batch_wall_time_s 是整批的值，wall_time_s 按行等分（见 GenerationResult）。
         - 带查询 token 的输入不能生成（与 generate 相同）。
+        """
+
+    @abc.abstractmethod
+    def option_logits(
+        self,
+        inputs_list: Sequence[ModelInputs],
+        options: Sequence[Sequence[str]],
+        *,
+        enable_thinking: bool,
+    ) -> list[OptionScores]:
+        """受限选项读数（DEV-0016，D36-4、D36-6），返回与 inputs_list 等长、同顺序的 OptionScores。
+
+        约定（三个家族一致）：
+        - options[k] 是第 k 条输入自己的选项（如 ["A", "B", "C", "D"]），至少 2 个、互不相同、非空、没有首尾空白；
+          不能是单个字符串。
+        - 送进模型的提示（思考开关、system 轮、助手头）与左填充和 generate_batch 对同一批输入送进去的逐个相同（共用同一段构造）。
+        - 只做一次前向：取 HF generate 在 max_new_tokens=1 下的原始 logits（output_logits，logits 处理器之前；HF 把 lm_head 的输出
+          转成 fp32），即**第一个生成位置**（提示最后一个 token 之后）的 logits。不经过任何采样或 logits 处理器；显式 greedy、
+          num_beams=1。
+        - 每个选项的写法由 tokenizer 查出（OPTION_SPELLING_TEMPLATES）：编码恰为一个 token、解码回来就是原文的写法才用；
+          不是单 token 的写法记在 skipped_spellings 里；一个可用写法都没有时报错。不同选项不能共用 token。
+        - 每个选项的分数是它所有可用写法 logit 的最大值；softmax 在 fp32 下、只在选项集合上做；choice 的规则见 OptionScores。
+        - 带查询 token 的输入不能用（与 generate 相同）；入口断言与 generate 相同。
         """
 
     def warmup(self, images: Sequence[Any] = (), *, instruction: str = "Describe the image.",

@@ -35,6 +35,10 @@ class _Dummy(ModelAdapter):
                                                     gen_kwargs)]
         return [GenerationResult("x", (7,), 1, 3, 0, 0.0) for _ in inputs_list]
 
+    def option_logits(self, inputs_list, options, *, enable_thinking):  # DEV-0016
+        self.calls = getattr(self, "calls", []) + [("option_logits", len(inputs_list), enable_thinking)]
+        return []
+
     def hidden_states(self, inputs, layers):
         return HiddenStates(tuple(layers), {l: None for l in layers})
 
@@ -117,6 +121,7 @@ def test_vision_features_is_abstract():
         build_inputs = _Dummy.build_inputs
         generate = _Dummy.generate
         generate_batch = _Dummy.generate_batch  # DEV-0011
+        option_logits = _Dummy.option_logits  # DEV-0016
         hidden_states = _Dummy.hidden_states
         inject_query_tokens = _Dummy.inject_query_tokens
         add_grid_tokens = _Dummy.add_grid_tokens
