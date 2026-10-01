@@ -11,15 +11,19 @@
   - 其中最后一个层号 num_layers() 按 HF `output_hidden_states` 元组的惯例，取经过最终归一化（final norm）
     之后的值。三个家族的 HF 实现都是这个惯例，所以层号与 HF 元组下标一一对应；
   - 有效范围 [0, num_layers()]，越界报错。
-- `generate` 的 `enable_thinking` 与 `max_new_tokens` 是必填关键字参数，没有默认值（D1：每次调用都
+- `generate` 与 `generate_batch` 的 `enable_thinking` 与 `max_new_tokens` 是必填关键字参数，没有默认值（D1：每次调用都
   显式设置）。子类若给它们加默认值，定义类时就报 TypeError（见 `ModelAdapter.__init_subclass__`）。
 - token 区间一律是半开区间 [start, end)，下标相对于单条输入序列。
+- 计时口径（D21，DEV-0011）：GenerationResult.wall_time_s 只含 model.generate 本身（CUDA 上前后各同步一次），不含 build_inputs；
+  进程里第一次生成含 JIT、内核编译与库初始化，记账之前先调用 warmup()，它的耗时不进记账。
 """
 
 from __future__ import annotations
 
 import abc
 import inspect
+import math
+import time
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Sequence
 
@@ -55,10 +59,18 @@ class ImageTokenInfo:
     grid_hw 指送进 LLM 的视觉 token 网格（即合并/下采样之后的网格），不是 patch 网格。
     某些家族在行间插分隔 token，这时 len(span) 可能不等于 h*w；本基类不强制两者相等，
     由各家族适配器在 docstring 里写明。
+    n_pixels（DEV-0011，D28-3"报告里写明各家族实际看到的像素数"）：这张图送进视觉编码器的像素数，即缩放 / 切 tile 之后
+    的像素总数（含 InternVL 的缩略图 tile）；各家族的算法写在适配器里。None 只为兼容旧的构造方式，三个适配器一律填写。
     """
 
     span: Span
     grid_hw: tuple[int, int]
+    n_pixels: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.n_pixels is not None and (isinstance(self.n_pixels, bool) or not isinstance(self.n_pixels, int)
+                                          or self.n_pixels <= 0):
+            raise ValueError(f"n_pixels 必须是正整数或 None，收到 {self.n_pixels!r}")
 
 
 @dataclass
@@ -66,7 +78,7 @@ class ModelInputs:
     """送进模型的一条输入：张量加元数据。
 
     `tensors` 是处理器产出的张量字典（input_ids、attention_mask、pixel_values 等），键名由适配器决定。
-    元数据描述单条序列（batch 为 1）；批处理的元数据形式等 DEV-0003 按真实 schema 定。
+    元数据描述单条序列（batch 为 1）。批处理不改这个结构：generate_batch 接收若干条 ModelInputs，在内部左填充拼批（DEV-0011）。
     """
 
     tensors: Mapping[str, Any]
@@ -94,6 +106,15 @@ class GenerationResult:
     thinking_unclosed：输出里的思考段开了却没有闭合（例如 max_new_tokens 用完）。此时 text 为空串。
         各家族的判定规则写在适配器里（D19）：Qwen3.5 的思考段开头由提示预填，开启思考时输出里没有 `</think>` 即为未闭合；
         Gemma 4 与 InternVL3.5 看输出本身，最后一个思考段开头之后没有结束标记才算未闭合，没写思考段就直接作答取全文。
+
+    DEV-0011 新增的字段（都有默认值，旧的构造方式照旧可用；三个适配器的 generate 与 generate_batch 一律填写）：
+    stopped：停止原因（D21、D22-3）。True = 最后一个 token 是本家族的停止 token；False = 没有生成停止 token，被
+        max_new_tokens 截断（allowed_token_ids 把停止 token 排除在外时也总是 False）。None = 未记录（旧的构造方式与测试替身）。
+        src.parsing.parse_generation 把 stopped is False 判为 truncated（E1 的协议：截断一律判失败）。
+    n_image_pixels：模型实际看到的像素数，即各图 ImageTokenInfo.n_pixels 之和（没有图为 0；D28-3）。None = 未记录。
+    batch_size：这一行所在批的行数（generate 为 1）。
+    batch_wall_time_s：整批 model.generate 的墙钟。wall_time_s 是按行均摊的份额 = batch_wall_time_s / batch_size
+        （等分；理由：左填充下每一行在整批的每个解码步里都占一个槽位，直到最长的一行结束）。generate 时两者相等。
     """
 
     text: str
@@ -104,6 +125,10 @@ class GenerationResult:
     wall_time_s: float
     raw_text: str | None = None
     thinking_unclosed: bool = False
+    stopped: bool | None = None
+    n_image_pixels: int | None = None
+    batch_size: int = 1
+    batch_wall_time_s: float | None = None
 
     def __post_init__(self) -> None:
         if self.n_generated_tokens != len(self.token_ids):
@@ -117,6 +142,24 @@ class GenerationResult:
             raise ValueError("wall_time_s 不能为负")
         if self.thinking_unclosed and self.text != "":
             raise ValueError("思考段未闭合时 text 必须为空串")
+        if self.stopped is not None:
+            if not isinstance(self.stopped, bool):
+                raise TypeError(f"stopped 必须是 bool 或 None，收到 {self.stopped!r}")
+            if self.stopped and not self.token_ids:
+                raise ValueError("stopped=True 却一个 token 也没有生成")
+        if self.n_image_pixels is not None:
+            if isinstance(self.n_image_pixels, bool) or not isinstance(self.n_image_pixels, int) or self.n_image_pixels < 0:
+                raise ValueError(f"n_image_pixels 必须是非负整数或 None，收到 {self.n_image_pixels!r}")
+            if (self.n_image_pixels == 0) != (self.n_visual_tokens == 0):
+                raise ValueError(f"n_image_pixels={self.n_image_pixels} 与 n_visual_tokens={self.n_visual_tokens} 不相容"
+                                 "（有视觉 token 就必须有像素，反之亦然）")
+        if isinstance(self.batch_size, bool) or not isinstance(self.batch_size, int) or self.batch_size < 1:
+            raise ValueError(f"batch_size 必须是正整数，收到 {self.batch_size!r}")
+        if self.batch_wall_time_s is not None:
+            if self.batch_wall_time_s < 0:
+                raise ValueError("batch_wall_time_s 不能为负")
+            if not math.isclose(self.wall_time_s, self.batch_wall_time_s / self.batch_size, rel_tol=1e-9, abs_tol=1e-12):
+                raise ValueError(f"wall_time_s={self.wall_time_s} 不是整批墙钟 {self.batch_wall_time_s} 的 1/{self.batch_size}")
 
 
 @dataclass(frozen=True)
@@ -164,6 +207,7 @@ def check_grid_token_names(names: Sequence[str], n_existing: int = 0) -> None:
 # 子类必须保持为"无默认值的关键字参数"的参数：方法名 -> 参数名
 _REQUIRED_KWONLY: dict[str, tuple[str, ...]] = {
     "generate": ("enable_thinking", "max_new_tokens"),
+    "generate_batch": ("enable_thinking", "max_new_tokens"),  # DEV-0011：规则与 generate 相同
     "parse_boxes": ("width", "height"),  # 原图宽高必须由调用方显式给出（DEV-0006）
 }
 # 子类必须保持为"无默认值"的参数（层号只能由调用方给出）
@@ -221,6 +265,46 @@ class ModelAdapter(abc.ABC):
         allowed_token_ids 非空时，每一步只在这组 token 上计算 logits 并采样（简报 §4 第 4 条）；
         训练与推理的限制实现必须一致（简报 §12）。
         """
+
+    @abc.abstractmethod
+    def generate_batch(
+        self,
+        inputs_list: Sequence[ModelInputs],
+        *,
+        enable_thinking: bool,
+        max_new_tokens: int,
+        allowed_token_ids: Sequence[int] | None = None,
+        **gen_kwargs: Any,
+    ) -> list[GenerationResult]:
+        """批量生成（DEV-0011，D28-5），返回与 inputs_list 等长、同顺序的结果。
+
+        约定（三个家族一致）：
+        - enable_thinking、max_new_tokens、allowed_token_ids 与 gen_kwargs 对整批相同；必填参数的规则与 generate 相同（D1）。
+        - 每一行送进模型的提示（思考开关、system 轮、助手头）与 generate 对同一条输入送进去的逐个相同；行间左填充，
+          attention_mask 把填充位置置 0；每一行非填充 token 的位置编码与单独生成时逐个相等（Qwen 的 M-RoPE 三维位置亦然）。
+        - 逐行拆分：token_ids 从第一个生成 token 到第一个停止 token（含），之后的填充不计；text、raw_text、thinking_unclosed、
+          stopped 按行各自给出；n_prompt_tokens 是该行自己（不含填充）的提示长度；n_visual_tokens、n_image_pixels 按行计。
+        - 墙钟：batch_wall_time_s 是整批的值，wall_time_s 按行等分（见 GenerationResult）。
+        - 带查询 token 的输入不能生成（与 generate 相同）。
+        """
+
+    def warmup(self, images: Sequence[Any] = (), *, instruction: str = "Describe the image.",
+               order: Order = "instruction_first", batch_size: int = 1, max_new_tokens: int = 2) -> float:
+        """预热（D21）：用给定的图（建议用与正式运行同口径、同尺寸的一张代表图）跑一次不计账的 greedy 生成，返回它的墙钟。
+
+        进程里第一次生成含 JIT、内核编译与库初始化；记账之前调用一次。batch_size > 1 时走 generate_batch（把同一条输入
+        复制 batch_size 份），也预热批量路径。结果丢弃，不改适配器的任何状态。
+        """
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+            raise ValueError(f"batch_size 必须是正整数，收到 {batch_size!r}")
+        inputs = self.build_inputs(list(images), instruction, order)
+        t0 = time.perf_counter()
+        if batch_size == 1:
+            self.generate(inputs, enable_thinking=False, max_new_tokens=max_new_tokens, do_sample=False)
+        else:
+            self.generate_batch([inputs] * batch_size, enable_thinking=False, max_new_tokens=max_new_tokens,
+                                do_sample=False)
+        return time.perf_counter() - t0
 
     @abc.abstractmethod
     def hidden_states(

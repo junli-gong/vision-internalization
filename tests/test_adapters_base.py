@@ -27,7 +27,13 @@ class _Dummy(ModelAdapter):
         return ModelInputs({}, order, (), Span(0, 0))
 
     def generate(self, inputs, *, enable_thinking, allowed_token_ids=None, max_new_tokens, **gen_kwargs):
+        self.calls = getattr(self, "calls", []) + [("generate", 1, enable_thinking, max_new_tokens, gen_kwargs)]
         return GenerationResult("x", (7,), 1, 3, 0, 0.0)
+
+    def generate_batch(self, inputs_list, *, enable_thinking, max_new_tokens, allowed_token_ids=None, **gen_kwargs):
+        self.calls = getattr(self, "calls", []) + [("generate_batch", len(inputs_list), enable_thinking, max_new_tokens,
+                                                    gen_kwargs)]
+        return [GenerationResult("x", (7,), 1, 3, 0, 0.0) for _ in inputs_list]
 
     def hidden_states(self, inputs, layers):
         return HiddenStates(tuple(layers), {l: None for l in layers})
@@ -110,6 +116,7 @@ def test_vision_features_is_abstract():
         load = _Dummy.load
         build_inputs = _Dummy.build_inputs
         generate = _Dummy.generate
+        generate_batch = _Dummy.generate_batch  # DEV-0011
         hidden_states = _Dummy.hidden_states
         inject_query_tokens = _Dummy.inject_query_tokens
         add_grid_tokens = _Dummy.add_grid_tokens
@@ -140,6 +147,69 @@ def test_generation_result_consistency():
         GenerationResult("ab", (1, 2), 3, 10, 4, 0.1)
     with pytest.raises(ValueError):
         GenerationResult("ab", (1, 2), 2, -1, 4, 0.1)
+
+
+def test_generation_result_new_fields_default_and_validation():
+    """DEV-0011：stopped / n_image_pixels / batch_size / batch_wall_time_s 都有默认值，旧的构造方式照旧可用。"""
+    r = GenerationResult("ab", (1, 2), 2, 10, 4, 0.1)
+    assert (r.stopped, r.n_image_pixels, r.batch_size, r.batch_wall_time_s) == (None, None, 1, None)
+    ok = GenerationResult("ab", (1, 2), 2, 10, 4, 0.25, stopped=True, n_image_pixels=4096, batch_size=4,
+                          batch_wall_time_s=1.0)
+    assert ok.wall_time_s * ok.batch_size == ok.batch_wall_time_s
+    assert GenerationResult("", (), 0, 10, 0, 0.0, stopped=False, n_image_pixels=0).stopped is False
+    with pytest.raises(TypeError):
+        GenerationResult("ab", (1, 2), 2, 10, 4, 0.1, stopped=1)
+    with pytest.raises(ValueError):  # 停下来了却没有 token
+        GenerationResult("", (), 0, 10, 0, 0.0, stopped=True)
+    with pytest.raises(ValueError):  # 有视觉 token 却 0 个像素
+        GenerationResult("ab", (1, 2), 2, 10, 4, 0.1, n_image_pixels=0)
+    with pytest.raises(ValueError):  # 没有视觉 token 却有像素
+        GenerationResult("ab", (1, 2), 2, 10, 0, 0.1, n_image_pixels=16)
+    with pytest.raises(ValueError):
+        GenerationResult("ab", (1, 2), 2, 10, 4, 0.1, n_image_pixels=-1)
+    with pytest.raises(ValueError):
+        GenerationResult("ab", (1, 2), 2, 10, 4, 0.1, batch_size=0)
+    with pytest.raises(ValueError):  # 均摊份额不是整批墙钟的 1/batch_size
+        GenerationResult("ab", (1, 2), 2, 10, 4, 0.5, batch_size=4, batch_wall_time_s=1.0)
+
+
+def test_image_token_info_n_pixels():
+    assert ImageTokenInfo(Span(0, 4), (2, 2)).n_pixels is None  # 旧的构造方式
+    assert ImageTokenInfo(Span(0, 4), (2, 2), n_pixels=4096).n_pixels == 4096
+    for bad in (0, -5, 1.5, True):
+        with pytest.raises(ValueError):
+            ImageTokenInfo(Span(0, 4), (2, 2), n_pixels=bad)
+
+
+def test_generate_batch_is_abstract_and_has_the_same_required_kwargs():
+    assert "generate_batch" in ModelAdapter.__abstractmethods__
+    assert base._REQUIRED_KWONLY["generate_batch"] == base._REQUIRED_KWONLY["generate"]
+    with pytest.raises(TypeError, match="max_new_tokens"):
+
+        class _Bad(_Dummy):
+            def generate_batch(self, inputs_list, *, enable_thinking, max_new_tokens=64, allowed_token_ids=None, **kw):
+                pass
+
+    with pytest.raises(TypeError, match="enable_thinking"):
+
+        class _Bad2(_Dummy):
+            def generate_batch(self, inputs_list, enable_thinking, *, max_new_tokens, allowed_token_ids=None, **kw):
+                pass
+
+    m = _Dummy()
+    with pytest.raises(TypeError):
+        m.generate_batch([_inputs()], max_new_tokens=4)
+    assert len(m.generate_batch([_inputs()] * 3, enable_thinking=False, max_new_tokens=4)) == 3
+
+
+def test_warmup_runs_one_uncounted_greedy_generation():
+    m = _Dummy()
+    t = m.warmup()
+    assert t >= 0 and m.calls == [("generate", 1, False, 2, {"do_sample": False})]
+    m.warmup(batch_size=3, max_new_tokens=4)
+    assert m.calls[-1] == ("generate_batch", 3, False, 4, {"do_sample": False})
+    with pytest.raises(ValueError):
+        m.warmup(batch_size=0)
 
 
 def test_hidden_states_layers_match():

@@ -11,7 +11,9 @@
 检查项（1–7 的编号同任务书；0、8 是附加项）：
   0 环境与模型事实（只记录）
   1 两种顺序 × 思考开关各 build + generate 一次（max_new_tokens 取小值）；prompt + assistant 头与
-    apply_chat_template 逐个相同；load 路径下另与官方 AutoProcessor 的输出逐项比对
+    apply_chat_template 逐个相同；load 路径下另与官方 AutoProcessor 的输出逐项比对。
+    另加像素预算口径（DEV-0011）：PixelBudget(300) 与 PixelBudget(1024) 各一个共享模型的适配器，单图与网格不同的两图
+    build + generate，与官方 processor（同样的 min/max_pixels）逐项比对（--tiny 用 qwen35.reference_processor）
   2 经适配器 API 复现 RUN-0001 §5.7 的仪器：图在前时两条等长指令下各层图像 token 逐位相同；
     指令在前时第 0 层相同、之后各层不同（逐层 max|Δ| 与 model_notes §5.7 的表同口径）
   3 add_grid_tokens(["<g0>", "<g1>"]) 后用 allowed_token_ids 限定生成，产出的 id 全在允许集合内
@@ -23,7 +25,9 @@
 执行顺序：0 1 2 5 6 7 3 4 8（会加 token / 注入查询的 3、4 放在后面；8 最后）。
 
 其他家族按 --model 的注册键分派；开发机彩排加 --tiny（--tiny 时 --model 选家族与小模型 config 的来源，不给 --model
-即 Qwen3.5）。按家族分派只在 family_suite() 一处；每个家族的 setup 返回 (adapter, ctx)，ctx["checks"] 是它的检查表：
+即 Qwen3.5）。适配器一律经 src/adapters/factory.make_adapter 构造（DEV-0011），口径：Qwen 固定尺寸 --image-size、
+Gemma max_soft_tokens 280（--tiny 70）、InternVL 单 tile。按家族分派只在 family_suite() 一处；每个家族的 setup 返回
+(adapter, ctx)，ctx["checks"] 是它的检查表：
 - Gemma 4（DEV-0004）：--model gemma-4-e2b-it。构造与 0、1、3–7 项检查在 src/adapters/gemma4.py（smoke_setup），
   2、8 两项沿用本脚本的通用实现；编号与含义同上，Gemma 的差异写在那里。
 - InternVL3.5（DEV-0005）：--model internvl3.5-2b-hf。构造与 0、1、4–7 项检查，以及附加的 9（多 tile），在
@@ -53,6 +57,8 @@ from PIL import Image, ImageOps  # noqa: E402
 
 from src.adapters import qwen35, registry  # noqa: E402
 from src.adapters.base import ORDERS  # noqa: E402
+from src.adapters.factory import make_adapter  # noqa: E402
+from src.adapters.image_policy import E1_PIXEL_BUDGET_TOKENS, E1_SUBSET_PIXEL_BUDGET_TOKENS, FixedSize, PixelBudget  # noqa: E402
 from src.adapters.qwen35 import IMAGE_PAD, IM_END, END_OF_TEXT, THINK_END  # noqa: E402
 
 INSTR_A, INSTR_B = "Describe the cat.", "Describe the sofa."  # RUN-0001 §5.7 用的同一对指令（各 4 个 token）
@@ -129,17 +135,12 @@ def base_context(args):
 
 
 def setup(args):
-    """Qwen3.5 的构造（不给 --model 时的默认家族）。其他家族的构造见 family_suite。"""
+    """Qwen3.5 的构造（不给 --model 时的默认家族）：经 src/adapters/factory.make_adapter，固定尺寸 --image-size。
+    其他家族的构造见 family_suite（它们的 setup 同样经 make_adapter）。"""
     ctx = base_context(args)
-    dtype = DTYPES[args.dtype]
-    hw = tuple(args.image_size)
-    if args.tiny:
-        comps = qwen35.load_pinned_components()
-        model = qwen35.build_tiny_model(comps[0], tie_word_embeddings=True, dtype=dtype)
-        ad = qwen35.make_tiny_adapter(comps, image_size=hw, device=args.device, model=model)
-    else:
-        ad = qwen35.Qwen35Adapter(device=args.device, image_size=hw)
-        ad.load(args.model, dtype)
+    key = args.model or qwen35.TINY_SOURCE_KEY
+    ad = make_adapter(key, device=args.device, dtype=DTYPES[args.dtype], image_policy=FixedSize(*args.image_size),
+                      tiny=args.tiny)
     return ad, {**ctx, "checks": CHECKS}
 
 
@@ -221,14 +222,18 @@ def check_0_facts(ad, ctx):
     }
 
 
-def _compare_official(ad, images, instruction, order, thinking, inp):
-    """load 路径：适配器的输入张量（加 assistant 头后）与官方 AutoProcessor 的输出逐项相同。"""
-    proc = ad.hf_processor
-    h, w = ad.image_size
-    resized = [ad.resize_image(im) for im in images]
+def _compare_official(ad, images, instruction, order, thinking, inp, proc=None):
+    """适配器的输入张量（加 assistant 头后）与官方 processor 的输出逐项相同（proc 默认是 load 路径的 AutoProcessor）。
+
+    处理器参数与适配器相同：min_pixels = max_pixels = ad.processor_pixels()。固定尺寸时两边都喂 PIL 缩放到 (H, W) 的图；
+    像素预算时两边都喂原图（不预先缩放，由处理器的 smart resize 决定网格；DEV-0011）。
+    """
+    proc = ad.hf_processor if proc is None else proc
+    px = ad.processor_pixels()
+    prepared = [ad.resize_image(im) if ad.fixed_size else ad.to_rgb(im) for im in images]
     text = proc.apply_chat_template([{"role": "user", "content": _content(len(images), instruction, order)}],
                                     tokenize=False, add_generation_prompt=True, enable_thinking=thinking)
-    enc = proc(text=[text], images=resized, min_pixels=h * w, max_pixels=h * w, return_tensors="pt")
+    enc = proc(text=[text], images=prepared, min_pixels=px, max_pixels=px, return_tensors="pt")
     t = inp.tensors
     header = torch.tensor([ad.assistant_header_ids(thinking)], dtype=torch.long)
     ids = torch.cat([t["input_ids"].cpu(), header], dim=1)
@@ -267,8 +272,47 @@ def check_1_build_generate(ad, ctx):
                 "n_visual_tokens": res.n_visual_tokens, "wall_time_s": round(res.wall_time_s, 4),
                 "thinking_unclosed": res.thinking_unclosed, "text": res.text[:200], "raw_text": res.raw_text[:300],
             })
-    return {"ok": all(c["ok"] for c in cases), "official_processor_compared": ad.hf_processor is not None,
-            "cases": cases}
+    budget = _pixel_budget_cases(ad, ctx)
+    return {"ok": all(c["ok"] for c in cases) and budget["ok"], "official_processor_compared": ad.hf_processor is not None,
+            "cases": cases, "pixel_budget": budget}
+
+
+def _pixel_budget_cases(ad, ctx):
+    """像素预算口径（DEV-0011，D28-3）：在同一个模型上另挂 PixelBudget(300) 与 PixelBudget(1024) 的适配器（共享模型与 tokenizer，
+    只读），单图与"横图 + 竖图"两图（网格不同）各 build + generate 一次。每项与官方 processor（同样的 min/max_pixels，不预先缩放）
+    逐项相同（input_ids、attention_mask、mm_token_type_ids、image_grid_thw、pixel_values）；每张图的网格 = smart_resize 的结果；
+    记下实际的网格、视觉 token 数与像素数。对照对象：load 路径是 AutoProcessor，--tiny 是 qwen35.reference_processor（官方类）。"""
+    args, img = ctx["args"], ctx["img"]
+    portrait = img.crop((0, 0, max(1, img.width // 2), img.height))  # 竖图：与原图的网格不同
+    if ad.hf_processor is not None:
+        ref, ref_kind = ad.hf_processor, f"AutoProcessor（{type(ad.hf_processor).__name__}）"
+    else:
+        ref = qwen35.reference_processor(ad.tokenizer, ad.image_processor, ad.chat_template)
+        ref_kind = "Qwen3VLProcessor 官方类（开发机：绕过视频处理器的类型检查）+ Qwen2VLImageProcessorPil"
+    merge = int(ad.image_processor.merge_size)
+    cases = []
+    for n in (E1_PIXEL_BUDGET_TOKENS, E1_SUBSET_PIXEL_BUDGET_TOKENS):
+        pb = qwen35.Qwen35Adapter(device=ad.device, image_policy=PixelBudget(n))
+        pb.attach(ad.model, tokenizer=ad.tokenizer, image_processor=ad.image_processor, chat_template=ad.chat_template,
+                  model_key=ad.model_key)
+        for imgs in ([img], [img, portrait]):
+            inp = pb.build_inputs(imgs, INSTR_A, "instruction_first")
+            cmp = _compare_official(pb, imgs, INSTR_A, "instruction_first", False, inp, proc=ref)
+            res = pb.generate(inp, enable_thinking=False, max_new_tokens=args.max_new_tokens)
+            grids = [list(i.grid_hw) for i in inp.images]
+            want = [[g // merge for g in pb.expected_grid((im.height, im.width))] for im in imgs]
+            n_tok = sum(h * w for h, w in grids)
+            ok = (cmp["ok"] and grids == want and res.n_visual_tokens == n_tok
+                  and res.n_image_pixels == sum(i.n_pixels for i in inp.images)
+                  and 1 <= res.n_generated_tokens <= args.max_new_tokens and isinstance(res.stopped, bool))
+            cases.append({
+                "pixel_budget_tokens": n, "min_max_pixels": pb.processor_pixels(), "ok": bool(ok),
+                "image_sizes_wh": [list(im.size) for im in imgs], "grids_hw": grids, "grids_from_smart_resize": want,
+                "n_visual_tokens": res.n_visual_tokens, "n_image_pixels": res.n_image_pixels,
+                "official_processor": cmp, "n_generated_tokens": res.n_generated_tokens, "stopped": res.stopped,
+                "text": res.text[:200],
+            })
+    return {"ok": all(c["ok"] for c in cases), "reference_processor": ref_kind, "cases": cases}
 
 
 def check_2_task_modulation(ad, ctx):

@@ -9,6 +9,8 @@
   图像处理器按宽高比缩放（高、宽都是 patch 16 × pool 3 = 48 的倍数，不超过 max_soft_tokens×9 个 patch），
   网格 (h, w) 由 `image_position_ids` 推出：第 0 维是列（x），第 1 维是行（y），网格 = (行 patch 数/3, 列 patch 数/3)。
   序列里的视觉 token 按行优先排列：pooler 的核下标 = 列块 + w × 行块（modeling_gemma4.Gemma4VisionPooler）。
+  口径对象是 image_policy.SoftTokenBudget（DEV-0011；E1 用 280，D28-3）。ImageTokenInfo.n_pixels = 有效 patch 数 × 16²
+  = (h·48)·(w·48)，即缩放后的像素数（每个视觉 token 对应 48×48 px，D21-3）。
 - 序列布局（§6.2–6.3）：`<bos><|turn>user\\n{内容}<turn|>\\n`；每张图是 `<|image>` + h·w 个 `<|image|>` + `<image|>`，
   两张图直接相连。ImageTokenInfo.span 只覆盖 `<|image|>` 那一段（长度恰为 h·w），不含前后的 `<|image>`、`<image|>`。
 - 思考开关（D13-2，§6.2）：`enable_thinking` 直接传给 `apply_chat_template`。与 Qwen 不同，Gemma 的开关不在
@@ -19,7 +21,9 @@
 - 思考段（固定 revision 的 tokenizer_config.json 里 response_template：open `<|channel>thought\\n`、close `<channel|>`；
   聊天模板的 strip_thinking 按 `<|channel>`…`<channel|>` 剥离）：text 取最后一个 `<channel|>` 之后的内容。
 - 生成（D13-3）：显式 greedy（仓库的 generation_config 是 do_sample=True, top_k=64, top_p=0.95）；
-  停止 token 是 `<turn|>` 与 `<eos>`，id 从 tokenizer 查。
+  停止 token 是 `<turn|>` 与 `<eos>`，id 从 tokenizer 查。generate 与 generate_batch 走同一条路径（src/adapters/batching.py；
+  DEV-0011）：左填充用 `<pad>`，各行的图按行的顺序拼进同一个 pixel_values（每张图都按 max_soft_tokens 补到同样的 patch 数），
+  一维位置由 HF 按 attention_mask 推出（cumsum − 1），E2B/E4B 是纯因果注意力（use_bidirectional_attention=None）。
 - 位置（§6.4）：LLM 位置是一维的 0..L-1，没有 M-RoPE。查询 token 只支持 seq1d；grid2d 直接报错（见 inject_query_tokens）。
 - 新增 token（D13-1）：没有超出 tokenizer 的预留行，复用 6227 个 `<unusedN>`（普通词表项）。grid token 按 id 从小到大取，
   查询占位符取 id 最大的那一个（与 grid token 的取用顺序无关，grid token 的 id 不随是否注入过查询而变）。
@@ -52,14 +56,14 @@ from __future__ import annotations
 import copy
 import math
 import re
-import time
 from typing import Any, Iterable, NamedTuple, Sequence
 
 import numpy as np
 import torch
 from PIL import Image
 
-from src.adapters import registry
+from src.adapters import batching, registry
+from src.adapters.image_policy import SoftTokenBudget
 from src.adapters.base import (
     ORDERS,
     POSITION_MODES,
@@ -109,6 +113,11 @@ MAX_SOFT_TOKENS_CHOICES: tuple[int, ...] = (70, 140, 280, 560, 1120)
 
 # 复用的占位 token（D13-1）：词表里形如 <unusedN> 的普通词表项
 UNUSED_TOKEN_RE = re.compile(r"<unused\d+>")
+
+# generate / generate_batch 的 gen_kwargs 不能覆盖的参数（适配器自己控制）
+_RESERVED_GEN_KWARGS = frozenset({"input_ids", "attention_mask", "pixel_values", "image_position_ids", "mm_token_type_ids",
+                                  "position_ids", "inputs_embeds", "per_layer_inputs", "max_new_tokens", "eos_token_id",
+                                  "pad_token_id"})
 
 # 小型随机模型：从哪个登记模型的真实 config 缩出来
 TINY_SOURCE_KEY = "gemma-4-e2b-it"
@@ -212,7 +221,7 @@ def parse_one_box(text: str, *, width: float, height: float) -> OneBoxParse:
 
 
 class Gemma4Adapter(ModelAdapter):
-    """Gemma 4（E2B-it / E4B-it）适配器。单条样本（batch = 1）；批处理和 vLLM 另开任务。
+    """Gemma 4（E2B-it / E4B-it）适配器。ModelInputs 是单条样本；generate_batch 左填充拼批（DEV-0011）。vLLM 另开任务。
 
     设备在构造时给定，dtype 在 load 时给定。进入任何模型算子之前，入口断言检查输入与模型的 device/dtype，
     不一致就抛 AdapterDeviceError 并报出两个值。
@@ -270,6 +279,11 @@ class Gemma4Adapter(ModelAdapter):
     def max_soft_tokens(self) -> int:
         """每张图的视觉 token 预算（构造时给定，每次调用图像处理器都显式传）。实际个数 = h·w ≤ 它。"""
         return self._max_soft_tokens
+
+    @property
+    def image_policy(self) -> SoftTokenBudget:
+        """构造时给定的图像口径（src/adapters/image_policy.py）。"""
+        return SoftTokenBudget(self._max_soft_tokens)
 
     @property
     def model(self) -> Any:
@@ -622,10 +636,11 @@ class Gemma4Adapter(ModelAdapter):
         if [e - s for s, e in runs] != counts:
             raise RuntimeError(f"图像 token 段 {runs} 与每张图的 token 数 {counts} 不一致")
         infos = []
-        for (s, e), grid in zip(runs, grids):
+        side = self._patch * self._pool  # 每个视觉 token 对应缩放后图像的边长（48 px）
+        for (s, e), (gh, gw) in zip(runs, grids):
             if ids[s - 1] != self._ids[BOI] or ids[e] != self._ids[EOI]:
                 raise RuntimeError(f"图像段 [{s}, {e}) 前后不是 {BOI} / {EOI}")
-            infos.append(ImageTokenInfo(Span(s, e), grid))
+            infos.append(ImageTokenInfo(Span(s, e), (gh, gw), n_pixels=gh * side * gw * side))
 
         # 5. 查询区间
         query_span = None
@@ -755,68 +770,64 @@ class Gemma4Adapter(ModelAdapter):
 
         allowed_token_ids 非空时，每一步把其他 id 的 logits 置为 -inf；这时若希望能停下，调用方要把停止 token
         放进允许集合。返回的 token_ids 含生成出的停止 token；n_prompt_tokens 含思考 system 轮与生成提示。
+        与 generate_batch 走同一条路径（一行的批，没有填充）；stopped、n_image_pixels 等字段见 base.GenerationResult。
         """
-        self._require_loaded()
-        if not isinstance(enable_thinking, bool):
-            raise TypeError(f"enable_thinking 必须是 bool，收到 {enable_thinking!r}")
-        if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or max_new_tokens < 1:
-            raise ValueError(f"max_new_tokens 必须是正整数，收到 {max_new_tokens!r}")
-        if inputs.query_span is not None:
-            raise ValueError("带查询 token 的输入不能用于 generate（查询 token 只供 hidden_states 读出）")
-        reserved = {"input_ids", "attention_mask", "pixel_values", "image_position_ids", "mm_token_type_ids",
-                    "position_ids", "inputs_embeds", "per_layer_inputs", "max_new_tokens", "eos_token_id",
-                    "pad_token_id"}
-        clash = sorted(reserved & set(gen_kwargs))
-        if clash:
-            raise ValueError(f"gen_kwargs 不能覆盖适配器控制的参数：{clash}")
-        self._check_entry(inputs, None, where="generate")
-        from transformers import LogitsProcessorList
+        (res,) = self._generate_rows([inputs], enable_thinking=enable_thinking, allowed_token_ids=allowed_token_ids,
+                                     max_new_tokens=max_new_tokens, gen_kwargs=gen_kwargs, where="generate")
+        return res
 
-        t = inputs.tensors
-        input_ids = self.prompt_ids(inputs, enable_thinking=enable_thinking)
-        kw: dict[str, Any] = {
-            "input_ids": input_ids,
-            "attention_mask": torch.ones_like(input_ids),
-            "mm_token_type_ids": (input_ids == self._ids[IMAGE_TOKEN]).to(torch.long),
-        }
-        if inputs.images:
-            kw["pixel_values"] = t["pixel_values"]
-            kw["image_position_ids"] = t["image_position_ids"]
+    def generate_batch(
+        self,
+        inputs_list: Sequence[ModelInputs],
+        *,
+        enable_thinking: bool,
+        max_new_tokens: int,
+        allowed_token_ids: Sequence[int] | None = None,
+        **gen_kwargs: Any,
+    ) -> list[GenerationResult]:
+        """批量生成（约定见 base.ModelAdapter.generate_batch）。每行的提示 = prompt_ids（思考 system 轮只在开启时插在 `<bos>` 之后）；
+        左填充用 `<pad>`；图像按行的顺序拼接（相当于官方 processor 的"按样本嵌套传图"，D13-6），每行的图数可以不同。
+        """
+        return self._generate_rows(inputs_list, enable_thinking=enable_thinking, allowed_token_ids=allowed_token_ids,
+                                   max_new_tokens=max_new_tokens, gen_kwargs=gen_kwargs, where="generate_batch")
+
+    def _prompt_row(self, inputs: ModelInputs, enable_thinking: bool) -> batching.PromptRow:
+        ids = self.prompt_ids(inputs, enable_thinking=enable_thinking)[0].tolist()
+        image_id = self._ids[IMAGE_TOKEN]
+        return batching.PromptRow(
+            ids=tuple(ids),
+            n_visual_tokens=sum(len(i.span) for i in inputs.images),
+            n_image_pixels=batching.image_pixels(inputs),
+            mm_token_type_ids=tuple(int(t == image_id) for t in ids),
+        )
+
+    def _generate_rows(self, inputs_list: Sequence[ModelInputs], *, enable_thinking: bool,
+                       allowed_token_ids: Sequence[int] | None, max_new_tokens: int, gen_kwargs: dict[str, Any],
+                       where: str) -> list[GenerationResult]:
+        self._require_loaded()
+        batching.check_generate_args(enable_thinking, max_new_tokens)
+        items = batching.check_inputs_list(inputs_list, where=where)
+        batching.check_reserved(gen_kwargs, _RESERVED_GEN_KWARGS)
+        for inp in items:
+            self._check_entry(inp, None, where=where)
+        rows = [self._prompt_row(inp, enable_thinking) for inp in items]
+        kw: dict[str, Any] = batching.batch_prompt(rows, pad_id=self._ids[PAD], device=self._device)
+        with_images = [inp for inp in items if inp.images]
+        if with_images:
+            kw["pixel_values"] = torch.cat([inp.tensors["pixel_values"] for inp in with_images], dim=0)
+            kw["image_position_ids"] = torch.cat([inp.tensors["image_position_ids"] for inp in with_images], dim=0)
         processors = list(gen_kwargs.pop("logits_processor", None) or [])
         if allowed_token_ids is not None:
             vocab_rows = self._model.get_output_embeddings().weight.shape[0]
             processors.insert(0, _AllowedTokensProcessor(allowed_token_ids, vocab_rows))
         gen_kwargs.setdefault("do_sample", False)
         stop_ids = [self._ids[s] for s in STOP_TOKENS]
-
-        if self._device.type == "cuda":
-            torch.cuda.synchronize(self._device)
-        t0 = time.perf_counter()
-        with torch.no_grad():
-            out = self._model.generate(
-                **kw,
-                max_new_tokens=max_new_tokens,
-                eos_token_id=stop_ids,
-                pad_token_id=self._ids[PAD],
-                logits_processor=LogitsProcessorList(processors),
-                **gen_kwargs,
-            )
-        new_ids = out[0, input_ids.shape[1] :].tolist()
-        wall = time.perf_counter() - t0
-        if out.shape[0] != 1 or not torch.equal(out[0, : input_ids.shape[1]], input_ids[0]):
-            raise RuntimeError("generate 的输出不以输入为前缀")
-
-        text, raw_text, unclosed = self.split_answer(new_ids, enable_thinking=enable_thinking)
-        return GenerationResult(
-            text=text,
-            token_ids=tuple(new_ids),
-            n_generated_tokens=len(new_ids),
-            n_prompt_tokens=int(input_ids.shape[1]),
-            n_visual_tokens=sum(len(i.span) for i in inputs.images),
-            wall_time_s=wall,
-            raw_text=raw_text,
-            thinking_unclosed=unclosed,
-        )
+        pad_id = self._ids[PAD]
+        out, wall = batching.run_generate(self._model, kw, device=self._device, max_new_tokens=max_new_tokens,
+                                          stop_ids=stop_ids, pad_id=pad_id, processors=processors, gen_kwargs=gen_kwargs)
+        return batching.make_results(rows, out, kw["input_ids"].shape[1], wall=wall, stop_ids=stop_ids, pad_id=pad_id,
+                                     max_new_tokens=max_new_tokens, split_answer=self.split_answer,
+                                     enable_thinking=enable_thinking)
 
     def split_answer(self, token_ids: Sequence[int], *, enable_thinking: bool) -> tuple[str, str, bool]:
         """把生成的 token 拆成 (text, raw_text, thinking_unclosed)（D10）。
@@ -1272,8 +1283,9 @@ def make_tiny_adapter(
     seed: int = 0,
     device: str | torch.device = "cpu",
     model: Any = None,
+    source_key: str = TINY_SOURCE_KEY,
 ) -> Gemma4Adapter:
-    """用 load_pinned_components 的结果挂一个小型随机模型的适配器。
+    """用 load_pinned_components 的结果挂一个小型随机模型的适配器。source_key 是 components 的来源（只写进 model_key）。
 
     注意：add_grid_tokens / inject_query_tokens 会改 tokenizer；需要彼此独立的适配器时，传入各自的 tokenizer 副本。
     """
@@ -1282,7 +1294,7 @@ def make_tiny_adapter(
                                  generation_config=components.generation_config)
     adapter = Gemma4Adapter(device=device, max_soft_tokens=max_soft_tokens)
     adapter.attach(model, tokenizer=components.tokenizer, image_processor=components.image_processor,
-                   chat_template=components.chat_template, model_key=f"tiny({TINY_SOURCE_KEY})")
+                   chat_template=components.chat_template, model_key=f"tiny({source_key})")
     return adapter
 
 
@@ -1299,13 +1311,10 @@ SMOKE_MAX_SOFT_TOKENS = 280
 def smoke_setup(args: Any, dtype: torch.dtype, ctx: dict, smoke: Any) -> tuple[Gemma4Adapter, dict]:
     """构造适配器（--tiny：小型随机模型，config 取 --model 的固定 revision；否则按注册键加载真模型），
     返回 (adapter, ctx)。ctx["checks"] 是 Gemma 的检查表，ctx["smoke"] 是冒烟脚本模块（取指令常量与通用检查）。"""
-    if args.tiny:
-        comps = load_pinned_components(args.model)
-        model = build_tiny_model(comps.config, dtype=dtype, generation_config=comps.generation_config)
-        ad = make_tiny_adapter(comps, max_soft_tokens=TINY_MAX_SOFT_TOKENS, device=args.device, model=model)
-    else:
-        ad = Gemma4Adapter(device=args.device, max_soft_tokens=SMOKE_MAX_SOFT_TOKENS)
-        ad.load(args.model, dtype)
+    from src.adapters.factory import make_adapter  # 函数内 import：factory 按家族 import 本模块
+
+    policy = SoftTokenBudget(TINY_MAX_SOFT_TOKENS if args.tiny else SMOKE_MAX_SOFT_TOKENS)
+    ad = make_adapter(args.model, device=args.device, dtype=dtype, image_policy=policy, tiny=args.tiny)
     checks = dict(smoke.CHECKS)
     checks.update({
         "0_facts": smoke_check_0_facts,

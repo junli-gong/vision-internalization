@@ -21,8 +21,8 @@
 argparse 用法错误也是 2。--limit N：每项只跑前 N 题（调试用；这样的结果不能拿去比较）。
 真模型运行（以及对真模型输出的重评）要求 punkt_tab/english 与 protocol.PUNKT_TAB_ENGLISH_SHA256 逐个相同；--tiny 只记录。
 
-按家族构造适配器只在 make_adapter 一处（写法同 scripts/smoke_adapter.py 的家族分派）。纯文本输入不用图像，
-构造适配器必须给的视觉参数取冒烟脚本的同一组值，只记录，不影响结果。
+适配器经 src/adapters/factory.make_adapter 构造（DEV-0011；按家族分派只在那一处）。纯文本输入不用图像，
+构造适配器必须给的视觉参数取冒烟脚本的同一组值（vision_policy），只记录，不影响结果。
 """
 
 from __future__ import annotations
@@ -43,7 +43,8 @@ sys.path.insert(0, str(REPO_ROOT))
 import torch  # noqa: E402
 
 from src import runlog  # noqa: E402
-from src.adapters import registry  # noqa: E402
+from src.adapters import factory, registry  # noqa: E402
+from src.adapters.image_policy import FixedSize, SoftTokenBudget, TilePolicy  # noqa: E402
 from src.health import protocol as P  # noqa: E402
 from src.health.items import load_items  # noqa: E402
 from src.health.run import rescore_records, run_items  # noqa: E402
@@ -99,48 +100,28 @@ def parse_args(argv=None):
     return args
 
 
-def make_adapter(args):
-    """按家族构造适配器（唯一的分派处）。返回 (adapter, 注册项, 构造时给的视觉参数)。"""
-    key = args.model or registry.keys_for_family(registry.FAMILY_QWEN35)[0]
-    entry = registry.get_model(key)
-    dtype = DTYPES[args.dtype]
-    if entry.family == registry.FAMILY_QWEN35:
-        from src.adapters import qwen35
-
-        vision = {"image_size": list(QWEN_IMAGE_SIZE)}
-        if args.tiny:
-            comps = qwen35.load_pinned_components(key)
-            model = qwen35.build_tiny_model(comps[0], tie_word_embeddings=True, dtype=dtype)
-            ad = qwen35.make_tiny_adapter(comps, image_size=QWEN_IMAGE_SIZE, device=args.device, model=model)
-        else:
-            ad = qwen35.Qwen35Adapter(device=args.device, image_size=QWEN_IMAGE_SIZE)
-            ad.load(key, dtype)
-    elif entry.family == registry.FAMILY_GEMMA4:
+def vision_policy(family: str, *, tiny: bool):
+    """构造适配器必须给的图像口径（纯文本输入用不到，只记录）：取冒烟脚本的同一组值。"""
+    if family == registry.FAMILY_QWEN35:
+        return FixedSize(*QWEN_IMAGE_SIZE)
+    if family == registry.FAMILY_GEMMA4:
         from src.adapters import gemma4
 
-        soft = gemma4.TINY_MAX_SOFT_TOKENS if args.tiny else gemma4.SMOKE_MAX_SOFT_TOKENS
-        vision = {"max_soft_tokens": soft}
-        if args.tiny:
-            comps = gemma4.load_pinned_components(key)
-            model = gemma4.build_tiny_model(comps.config, dtype=dtype, generation_config=comps.generation_config)
-            ad = gemma4.make_tiny_adapter(comps, max_soft_tokens=soft, device=args.device, model=model)
-        else:
-            ad = gemma4.Gemma4Adapter(device=args.device, max_soft_tokens=soft)
-            ad.load(key, dtype)
-    elif entry.family == registry.FAMILY_INTERNVL35:
+        return SoftTokenBudget(gemma4.TINY_MAX_SOFT_TOKENS if tiny else gemma4.SMOKE_MAX_SOFT_TOKENS)
+    if family == registry.FAMILY_INTERNVL35:
         from src.adapters import internvl35
 
-        vision = dict(internvl35.SMOKE_POLICY)
-        if args.tiny:
-            comps = internvl35.load_pinned_components(key)
-            model = internvl35.build_tiny_model(comps[0], dtype=dtype)
-            ad = internvl35.make_tiny_adapter(comps, **vision, device=args.device, model=model, source_key=key)
-        else:
-            ad = internvl35.InternVL35Adapter(device=args.device, **vision)
-            ad.load(key, dtype)
-    else:
-        raise ValueError(f"健康检查还不支持 {entry.family} 家族（{key}）")
-    return ad, entry, vision
+        return TilePolicy(**internvl35.SMOKE_POLICY)
+    raise ValueError(f"健康检查还不支持 {family} 家族")
+
+
+def make_adapter(args):
+    """构造适配器（经 src/adapters/factory.make_adapter，DEV-0011）。返回 (adapter, 注册项, 构造时给的视觉参数)。"""
+    key = args.model or registry.keys_for_family(registry.FAMILY_QWEN35)[0]
+    entry = registry.get_model(key)
+    policy = vision_policy(entry.family, tiny=args.tiny)
+    ad = factory.make_adapter(key, device=args.device, dtype=DTYPES[args.dtype], image_policy=policy, tiny=args.tiny)
+    return ad, entry, policy.as_dict()
 
 
 def run_record(config: dict, items_path: Path) -> dict:
