@@ -82,5 +82,7 @@
   - `HF_HOME=$ROOT/.hf`（含 token）；模型权重暂放内存盘 `HF_HUB_CACHE=/dev/shm/visint/hf-hub`；pip 一律不留缓存。
   - 仓库级 git：`core.sshCommand` 用 `$PROJ/.ssh/id_ed25519_github`（deploy key，读写），身份 `b200-server-cc`。
   - 值守：心跳 `$PROJ/logs/standby.status`，已执行任务清单 `$PROJ/logs/server_tasks_done.txt`（见 `prompts/server/STANDBY.md`）。
-  - **磁盘红线（D6）：** 整机只有一块 500 GB 盘，2026-09-29 只剩 6.1 GB。任何时刻 `df /` 剩余低于 3 GB 立即停止。`/dev/shm` 是 91 GB 内存盘，重启即丢。
+  - **磁盘红线（D6）：** 整机只有一块 500 GB 盘，与别的用户共用。任何时刻 `df /` 剩余低于 3 GB 立即停止。
+  - **根盘份额（D28-8）：** 本项目在根盘上最多占 15 GB，数据、结果、探针都算在内。数据放 `$PROJ/data`。2026-10-01 清理后根盘可用约 40 GB。
+  - **权重：** 放内存盘 `/dev/shm`（91 GB，重启即丢），上限 25 GB。按下载清单与哈希，重启后照单恢复；跨家族的权重评测完即删。
 - 启动脚本一律自己 export `HF_HOME`、`HF_HUB_CACHE`、`TMPDIR`、`PIP_NO_CACHE_DIR=1`，不依赖交互式 shell。
