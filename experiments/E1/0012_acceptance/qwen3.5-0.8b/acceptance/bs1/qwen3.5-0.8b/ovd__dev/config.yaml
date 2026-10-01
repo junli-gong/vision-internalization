@@ -1,0 +1,58 @@
+experiment: E1
+framework: src/e1（DEV-0014）
+model:
+  key: qwen3.5-0.8b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-0.8B
+  revision: 2fc06364715b967f1860aea9cf38778875588b17
+  adapter_model_key: qwen3.5-0.8b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+task: ovd
+subset: dev
+generation:
+  enable_thinking: false
+  max_new_tokens: 512
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: 974d3d730e903a6f0a0727a13fceaa52437b3a048914b90836f8b918afcdc0fa
+  entry:
+    template: 'Locate every instance that belongs to the following categories: "{categories}".
+      Report bbox coordinates in JSON format.'
+    native: true
+    provenance: predecessor_cookbook
+    source_url: https://github.com/QwenLM/Qwen3-VL/blob/0dcc180d854f4b132f8059b10bbf0b5fd5dae9ed/cookbooks/2d_grounding.ipynb
+    parse: boxes
+    max_new_tokens: 512
+data:
+  n_samples: 100
+  sample_ids_sha256: ff5e94e59b57a9ec05a3b2a36b865f3f50431d7af2a9bec6d9ec5e9dcaef73c2
+  has_gt: false
+  selection_stats:
+    refcoco/val/dev:
+      n_total: 10834
+      n_kept: 200
+      excluded_by_reason: {}
+    note: 检测没有开发子集：用 RefCOCO unc val 开发子集的图（去重）配 COCO 80 类，只核对格式，没有 GT
+    n: 100
+    limit: 100
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: 100
+map_ci_resamples: 0
+batch_size: 1

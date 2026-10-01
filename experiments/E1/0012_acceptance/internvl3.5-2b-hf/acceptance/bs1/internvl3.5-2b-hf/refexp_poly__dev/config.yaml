@@ -1,0 +1,66 @@
+experiment: E1
+framework: src/e1（DEV-0014）
+model:
+  key: internvl3.5-2b-hf
+  family: internvl3.5
+  repo: OpenGVLab/InternVL3_5-2B-HF
+  revision: 3f301ffcf3dcbb47893afae6650ea3e78d96fb6d
+  adapter_model_key: internvl3.5-2b-hf
+  tiny: false
+image_policy:
+  tag: default
+  type: TilePolicy
+  crop_to_patches: false
+  max_patches: 1
+task: refexp_poly
+subset: dev
+generation:
+  enable_thinking: false
+  max_new_tokens: 1024
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: 974d3d730e903a6f0a0727a13fceaa52437b3a048914b90836f8b918afcdc0fa
+  entry:
+    template: 'Outline {expression} in the image with a polygon. Report the polygon
+      vertices in JSON format as a list of [x, y] points: [[x1, y1], [x2, y2], ...].
+      Coordinates are relative to the image size and range from 0 to 1000, with x
+      first. Output only one JSON block.'
+    native: false
+    provenance: unified
+    source_url: prompts/dev/0014-e1-harness.md
+    parse: polygon
+    max_new_tokens: 1024
+data:
+  n_samples: 100
+  sample_ids_sha256: f5c5d7fd72cf219fdacb404c668f392da78f937eac8b68840b3429a793f66f4b
+  has_gt: true
+  selection_stats:
+    refcoco/val/dev:
+      n_total: 10834
+      n_kept: 200
+      excluded_by_reason: {}
+    refcoco+/val/dev:
+      n_total: 10758
+      n_kept: 200
+      excluded_by_reason: {}
+    refcocog/val/dev:
+      n_total: 4896
+      n_kept: 200
+      excluded_by_reason: {}
+    n: 100
+    limit: 100
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: 100
+map_ci_resamples: 0
+batch_size: 1
