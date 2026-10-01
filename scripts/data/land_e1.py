@@ -5,6 +5,8 @@
                                    [--workers 8] [--limit N] [--dry-run]
 
 源：refcoco、coco_val2017、odinw13、countbench、nyuv2、blink_reldepth、cvbench、embspatial、all（按此顺序逐个）。
+另有可选的源 countbenchqa_questions（DEV-0015：big_vision 的 CountBench 人工问句，31 KB；E1 默认不用它），只能单独点名，
+不在 all 里。
 
 - 可断点续传、幂等：已落地且 sha256 与上次清单相符的文件跳过；下载先写 .part，续传用 Range。
 - 每个源写 <root>/<源>/MANIFEST.json（来源 URL 与 revision、每个文件的 sha256 与字节数、许可原文、落地时间、脚本的
@@ -28,7 +30,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.data.land import coco, hfbench, nyuv2, odinw, refcoco  # noqa: E402
+from src.data.land import coco, countbenchqa, hfbench, nyuv2, odinw, refcoco  # noqa: E402
 from src.data.land.common import DryRun, LandContext  # noqa: E402
 from src.data.land.manifest import BudgetExceeded, DiskRedLine, read_manifest  # noqa: E402
 from src.data.land.net import MAX_CONCURRENCY  # noqa: E402
@@ -43,11 +45,15 @@ LANDERS = {
     "cvbench": hfbench.land_cvbench,
     "embspatial": hfbench.land_embspatial,
 }
+# 可选的源：只能单独点名，不在 all 里（DEV-0015 §4：CountBench 人工问句默认不用，项目负责人批准后再定）
+OPTIONAL_LANDERS = {
+    "countbenchqa_questions": countbenchqa.land,
+}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("source", choices=[*LANDERS, "all"])
+    ap.add_argument("source", choices=[*LANDERS, *OPTIONAL_LANDERS, "all"])
     ap.add_argument("--root", required=True, type=Path, help="落地根目录（服务器：$PROJ/data）")
     ap.add_argument("--tmpdir", type=Path, default=Path(os.environ.get("TMPDIR", "/tmp")), help="大文件与压缩包的临时目录（默认 $TMPDIR）")
     ap.add_argument("--budget-gb", type=float, default=10.0, help="单个源的落地体积上限（GB，1e9），超过就拒绝开跑")
@@ -93,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     for s in sources:
         print(f"== {s}", file=sys.stderr)
         try:
-            LANDERS[s](ctx)
+            {**LANDERS, **OPTIONAL_LANDERS}[s](ctx)
         except DryRun:
             print(f"[dry-run] {s}：估算通过，未下载", file=sys.stderr)
             continue

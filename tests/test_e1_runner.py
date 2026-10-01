@@ -183,6 +183,47 @@ def test_batch_size_one_uses_generate(paths, tmp_path):
     assert {w for w, _, _ in fake2.calls} == {"generate_batch"}
 
 
+def test_count_with_countbenchqa_questions(paths, tmp_path):
+    """DEV-0015 §4：--count-questions countbenchqa 时指令用人工问句，问句与来源进 predictions、config 与 metrics 分档；
+    问句来源与样本不一致时拒绝运行；两种来源的输出不能混着续跑。"""
+    from src.e1.prompts import COUNTBENCHQA_FIELD
+
+    sel = select("count", "eval", paths, count_questions="countbenchqa")
+    sp = R.RunSpec(**{**spec("count").__dict__, "count_questions": "countbenchqa"})
+    m = R.run_task(FakeAdapter(), sp, sel, PROMPTS, paths, tmp_path / "qa", log=lambda _: None)
+    lf = leaf(tmp_path / "qa", "count")
+    recs = R.read_jsonl_tolerant(lf / "predictions.jsonl", repair=False)
+    for s, r in zip(sel.samples, recs):
+        q = s.fields[COUNTBENCHQA_FIELD]
+        assert r["instruction"] == q + " Answer with a single number." and r["extras"]["question"] == q
+    assert {r["extras"]["object_rule"] for r in recs} <= {"countbenchqa", "countbenchqa_free_form"}
+    assert set(m["breakdown"]["object_rule"]) == {r["extras"]["object_rule"] for r in recs}
+    cfg = (lf / "config.yaml").read_text()
+    assert "count_questions: countbenchqa" in cfg and sel.stats["count_questions"]["sha256"] in cfg
+    with pytest.raises(ValueError, match="问句来源不一致"):  # 样本带人工问句，RunSpec 却是 heuristic
+        R.run_task(FakeAdapter(), spec("count"), sel, PROMPTS, paths, tmp_path / "x", log=lambda _: None)
+    with pytest.raises(ValueError, match="问句来源不一致"):
+        R.run_task(FakeAdapter(), sp, select("count", "eval", paths), PROMPTS, paths, tmp_path / "y", log=lambda _: None)
+    with pytest.raises(ValueError, match="续跑的配置与已有的不同"):
+        R.run_task(FakeAdapter(), spec("count"), select("count", "eval", paths), PROMPTS, paths, tmp_path / "qa", resume=True,
+                   log=lambda _: None)
+    plain = R.run_config(spec("count"), select("count", "eval", paths), PROMPTS, paths)
+    assert plain["prompt"]["count_questions"] == "heuristic"
+    assert "count_questions" not in R.run_config(spec("grid16"), select("grid16", "eval", paths), PROMPTS, paths)["prompt"]
+
+
+def test_metrics_and_readme_carry_failure_diagnostics(paths, tmp_path):
+    sel = select("refexp_box", "eval", paths)
+    m = R.run_task(FakeAdapter(), spec("refexp_box"), sel, PROMPTS, paths, tmp_path, log=lambda _: None)
+    d = m["diagnostics"]
+    assert d["failure_detail"]["rule_version"] == 1 and d["think_marker_when_off"]["n"] == 0
+    readme = (leaf(tmp_path, "refexp_box") / "README.md").read_text()
+    assert "## 失败的诊断" in readme and "关思考时自发写出思考标记：0 条" in readme
+    t = R.run_task(FakeAdapter(), spec("count", "think"), select("count", "think", paths), PROMPTS, paths, tmp_path / "t",
+                   log=lambda _: None)
+    assert t["diagnostics"]["think_marker_when_off"] is None  # 开思考：不适用
+
+
 def test_estimate_task_with_fake_adapter(paths):
     out = EST.estimate_task(FakeAdapter(), "count", "qwen3.5", PROMPTS, paths, batch_sizes=[1, 2], n_dev=4, think=True,
                             n_think=1, policy_tag="default", log=lambda _: None)

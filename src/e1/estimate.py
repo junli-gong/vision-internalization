@@ -17,7 +17,7 @@ from __future__ import annotations
 import time
 from typing import Any, Mapping, Sequence
 
-from src.e1.prompts import PromptConfig
+from src.e1.prompts import DEFAULT_COUNT_QUESTIONS, PromptConfig
 from src.e1.runner import generate_rows, load_images
 from src.e1.tasks import DataPaths, TASK_SUBSETS, select
 
@@ -86,8 +86,8 @@ def _hours(n: int, sps: float | None) -> float | None:
 
 def estimate_task(adapter: Any, task: str, family: str, prompts: PromptConfig, paths: DataPaths, *,
                   batch_sizes: Sequence[int], n_dev: int, think: bool, n_think: int, policy_tag: str,
-                  log=print) -> dict[str, Any]:
-    dev = select(task, "dev", paths).samples[:n_dev]
+                  count_questions: str = DEFAULT_COUNT_QUESTIONS, log=print) -> dict[str, Any]:
+    dev = select(task, "dev", paths, count_questions=count_questions).samples[:n_dev]
     max_new = prompts.max_new_tokens(task, family, "eval")
     out: dict[str, Any] = {"task": task, "n_dev_used": len(dev), "max_new_tokens": max_new, "by_batch_size": []}
     if dev:  # 预热用最小的批大小：最大的那个可能 OOM，留给 measure 去判

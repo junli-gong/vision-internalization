@@ -41,7 +41,107 @@
   },
   "think_note": "思考子集的 max_new_tokens 就是思考预算（含最终回答），D28-10：greedy，预算 4096，另做 8192 的敏感性检查。主口径一律关思考，每次显式设置（简报 §6.3、§12）。"
  },
- "max_new_tokens_adjustments": [],
+ "max_new_tokens_adjustments": [
+  {
+   "date": "2026-10-01",
+   "task": "refexp_box",
+   "families": ["qwen3.5", "gemma4", "internvl3.5"],
+   "from": 128,
+   "to": 256,
+   "basis": "RUN-0012 开发子集（前 100 条）上的截断条数（stopped=False，逐条 bs=1 / 批量 bs=16）：qwen3.5-0.8b 2/100、2/100；qwen3.5-2b 1/100、1/100；qwen3.5-4b 3/100、3/100；qwen3.5-9b 2/100、2/100；gemma-4-e2b-it 13/100、12/100；gemma-4-e4b-it 8/100、9/100；internvl3.5-2b-hf 0/100、0/100；internvl3.5-4b-hf 0/100、0/100。Gemma 达 8–13%。",
+   "source": "experiments/E1/0012_acceptance/accept_summary.md 第二节；<模型>/acceptance/bs{1,16}/<模型>/<任务>__dev/metrics.json 的 truncation",
+   "decided_by": "DEV-0015 任务书 §1（管理员按截断率给定新值）",
+   "rule": "只依据开发子集的截断率，不看准确率（预注册草稿 §3；D11-6）"
+  },
+  {
+   "date": "2026-10-01",
+   "task": "count",
+   "families": ["qwen3.5", "gemma4", "internvl3.5"],
+   "from": 64,
+   "to": 256,
+   "basis": "RUN-0012 开发子集（49 条）上的截断条数（逐条 / 批量）：qwen3.5-0.8b 0/49、0/49；qwen3.5-2b 0/49、0/49；qwen3.5-4b 0/49、0/49；qwen3.5-9b 0/49、0/49；gemma-4-e2b-it 0/49、0/49；gemma-4-e4b-it 0/49、0/49；internvl3.5-2b-hf 14/49、15/49（其中思考段未闭合 3、4 条）；internvl3.5-4b-hf 0/49、0/49。",
+   "source": "同上",
+   "decided_by": "DEV-0015 任务书 §1",
+   "rule": "只依据开发子集的截断率，不看准确率"
+  },
+  {
+   "date": "2026-10-01",
+   "task": "ovd",
+   "families": ["qwen3.5", "gemma4", "internvl3.5"],
+   "from": 512,
+   "to": 2048,
+   "basis": "RUN-0012 开发子集（RefCOCO unc val 开发子集的图，前 100 张，配 COCO 80 类）上的截断条数（逐条 / 批量）：qwen3.5-0.8b 66/100、66/100；qwen3.5-2b 47/100、47/100；qwen3.5-4b 29/100、30/100；qwen3.5-9b 36/100、34/100；gemma-4-e2b-it 1/100、1/100；gemma-4-e4b-it 2/100、4/100；internvl3.5-2b-hf 4/100、5/100；internvl3.5-4b-hf 47/100、46/100。",
+   "source": "同上",
+   "decided_by": "DEV-0015 任务书 §1",
+   "rule": "只依据开发子集的截断率，不看准确率"
+  },
+  {
+   "date": "2026-10-01",
+   "task": "rel_depth_nyu",
+   "families": ["qwen3.5", "gemma4", "internvl3.5"],
+   "from": 64,
+   "to": 1024,
+   "basis": "RUN-0012 开发子集（前 100 对）上的截断条数（逐条 / 批量）：8 个模型全部 100/100、100/100。原始输出是先写解释、再给答案。",
+   "source": "同上",
+   "decided_by": "DEV-0015 任务书 §1",
+   "rule": "只依据开发子集的截断率，不看准确率"
+  },
+  {
+   "date": "2026-10-01",
+   "task": "rel_depth_blink",
+   "families": ["qwen3.5", "gemma4", "internvl3.5"],
+   "from": 64,
+   "to": 1024,
+   "basis": "RUN-0012 开发子集（12 条）上的截断条数（逐条 / 批量）：8 个模型全部 12/12、12/12。",
+   "source": "同上",
+   "decided_by": "DEV-0015 任务书 §1",
+   "rule": "只依据开发子集的截断率，不看准确率"
+  },
+  {
+   "date": "2026-10-01",
+   "task": "spatial_cvbench",
+   "families": ["qwen3.5", "gemma4", "internvl3.5"],
+   "from": 64,
+   "to": 1024,
+   "basis": "RUN-0012 开发子集（50 条）上的截断条数（逐条 / 批量）：qwen3.5-0.8b 48/50、47/50；qwen3.5-2b 47/50、46/50；qwen3.5-4b 47/50、48/50；qwen3.5-9b 43/50、44/50；gemma-4-e2b-it 35/50、35/50；gemma-4-e4b-it 31/50、29/50；internvl3.5-2b-hf 44/50、44/50；internvl3.5-4b-hf 35/50、35/50。",
+   "source": "同上",
+   "decided_by": "DEV-0015 任务书 §1",
+   "rule": "只依据开发子集的截断率，不看准确率"
+  },
+  {
+   "date": "2026-10-01",
+   "task": "spatial_embspatial",
+   "families": ["qwen3.5", "gemma4", "internvl3.5"],
+   "from": 64,
+   "to": 1024,
+   "basis": "RUN-0012 开发子集（50 条）上的截断条数（逐条 / 批量）：qwen3.5-0.8b 46/50、48/50；qwen3.5-2b 43/50、42/50；qwen3.5-4b 34/50、31/50；qwen3.5-9b 34/50、33/50；gemma-4-e2b-it 49/50、49/50；gemma-4-e4b-it 43/50、43/50；internvl3.5-2b-hf 31/50、28/50；internvl3.5-4b-hf 14/50、14/50。",
+   "source": "同上",
+   "decided_by": "DEV-0015 任务书 §1",
+   "rule": "只依据开发子集的截断率，不看准确率"
+  },
+  {
+   "date": "2026-10-01",
+   "task": "refexp_poly",
+   "families": ["qwen3.5", "gemma4", "internvl3.5"],
+   "from": 1024,
+   "to": 1024,
+   "basis": "不调。RUN-0012 开发子集（前 100 条）上的截断条数（逐条 / 批量）最多 4/100、6/100（internvl3.5-4b-hf），其余模型 ≤ 2/100。",
+   "source": "同上",
+   "decided_by": "DEV-0015 任务书 §1",
+   "rule": "只依据开发子集的截断率，不看准确率"
+  },
+  {
+   "date": "2026-10-01",
+   "task": "grid16",
+   "families": ["qwen3.5", "gemma4", "internvl3.5"],
+   "from": 1024,
+   "to": 1024,
+   "basis": "不调。RUN-0012 开发子集（前 100 条）上：qwen3.5-0.8b 100/100、qwen3.5-2b 99/100 写满 1024，原始输出是一整串不换行的 0 或 1（退化的输出，不是预算不够：16 行 × 16 位只需约 272 个 token）；其余 6 个模型 0/100。",
+   "source": "同上；qwen3.5-0.8b、qwen3.5-2b 的 grid16__dev/predictions.jsonl 的 raw_text",
+   "decided_by": "DEV-0015 任务书 §1",
+   "rule": "只依据开发子集的截断率，不看准确率"
+  }
+ ],
  "parse_functions": {
   "one_box": "适配器的 parse_one_box(text, width=W, height=H)：本家族原生框格式，按原图宽高换成绝对像素 xyxy；多于一个框判 multiple_boxes（src/parsing/core.one_box）",
   "boxes": "适配器的 parse_boxes(text, width=W, height=H)：本家族原生框格式的框列表与标签；标签按 src.parsing.normalize_phrase 与给定类别名精确比对，比不上的记为编造类别（src/e1/scoring.py）",
@@ -55,6 +155,13 @@
   "template_source": "PaliGemma 技术报告（arXiv:2407.07726）附录的 CountBenchQA 构造：\"To construct CountbenchQA, we manually annotated the dataset with questions of the form How many {object class} are there in the image?, where we extracted the {object class} from the caption manually.\"",
   "rule": "我们没有人工标注，按确定性规则从 caption 取 {object}（src/e1/prompts.count_object）：(1) 分词：英文词（可含连字符、撇号）、数字串、其余单个非空白字符；(2) 计数提及 = 第一个与 GT 计数相等的记号（英文数词不分大小写，或阿拉伯数字串）；(3) 向后取：先跳过紧跟的重复计数与括号（如 \"ten (10)\"、\"five 5\"），若下一个词是 of 再跳过 of 与限定词（the/a/an/these/those/my/our/your/his/her/their/its）；然后连续取纯字母词，遇到停用词（介词、连词、限定词与少数常见动词，列表见代码 COUNT_STOP_WORDS）、非字母记号或已取 4 个词就停；(4) 向后取到的为空时向前取：从计数提及往前跳过 of、set、sets、pack、group、lot、series、collection、block、a、an、the，再连续取纯字母的非停用词（最多 4 个），按原顺序拼；(5) 仍为空（或 caption 里找不到计数）时取 objects。保留 caption 里的原始大小写。每条样本的 object 与所走的规则分支写进 predictions.jsonl，metrics.json 按分支给出条数与准确率。"
  },
+ "countbenchqa_questions": {
+  "status": "可选，默认关：run_e1.py --count-questions heuristic（上面的 count_question_rule）。用人工问句要加 --count-questions countbenchqa；项目负责人批准后再改默认（D32-3）。",
+  "source": "google-research/big_vision 仓库（Apache-2.0）的 big_vision/datasets/countbenchqa/data/countbench_paired_questions.json，按固定 commit 落地：scripts/data/land_e1.py countbenchqa_questions（commit、URL 与 sha256 钉在 src/data/land/countbenchqa.py 的 SPEC）。",
+  "pairing": "文件是 540 条 {\"question\": …} 的列表，第 k 条对应 CountBench 的第 k 行（0 起，即 countbench.jsonl 的 row）。依据：big_vision countbenchqa.py 的 _generate_examples_hf 按行号把问句并进 HF 打包版（df['question'] = df_question）。",
+  "question_part": "How many {object} are there in the image?",
+  "rule": "用整句问句（不抽对象）：指令 = 人工问句 + 模板里 question_part 之后的部分（\" Answer with a single number.\"），再去掉首尾空白；模板本身不变。问句恰是 question_part 的句式时，渲染结果与把 {object} 换成问句里的对象逐字相同，object_rule 记 countbenchqa；不是这个句式的问句按原句使用，object 记 null，object_rule 记 countbenchqa_free_form。每条的问句写进 predictions.jsonl 的 extras.question。"
+ },
  "tasks": {
   "refexp_box": {
    "description": "指代定位（框）：RefCOCO/+ unc val/testA/testB，RefCOCOg umd val/test。标题 Acc@IoU0.5。",
@@ -67,7 +174,7 @@
      "source_url": "https://github.com/QwenLM/Qwen3-VL/blob/0dcc180d854f4b132f8059b10bbf0b5fd5dae9ed/cookbooks/2d_grounding.ipynb",
      "source_quote": "prompt = \"Locate the shadow of the paper fox, report the bbox coordinates in JSON format.\"；prompt = 'Locate every instance that belongs to the following categories: \"head, hand, man, woman, glasses\". Report bbox coordinates in JSON format.'",
      "note": "与 RUN-0001 零样本探针的提示逐字相同（docs/model_notes.md §5.5）。Qwen3.5 的 model card 与仓库没有定位提示（§5.5），措辞取自前代 Qwen3-VL 的官方 cookbook（文件 sha256 24a39b56467c16aea1062e40157c00800e8f53266714e8270ca3238064fd9898）。",
-     "max_new_tokens": 128,
+     "max_new_tokens": 256,
      "parse": "one_box"
     },
     "gemma4": {
@@ -77,7 +184,7 @@
      "source_url": "https://ai.google.dev/gemma/docs/capabilities/vision/image",
      "source_quote": "{ \"type\" : \"text\" , \"text\" : \"detect person and cat\" }；\"Bounding box coordinates are expressed as normalized values relative to a 1000x1000 grid.\"",
      "note": "与 RUN-0002 零样本探针的提示逐字相同（docs/model_notes.md §6.5；原始 HTML 在 experiments/P0/0002_family_probe/raw/docs_evidence/）。",
-     "max_new_tokens": 128,
+     "max_new_tokens": 256,
      "parse": "one_box"
     },
     "internvl3.5": {
@@ -87,7 +194,7 @@
      "source_url": "https://internvl.readthedocs.io/en/latest/get_started/chat_data_format.html",
      "source_quote": "\"value\" : \"<image>\\nPlease provide the bounding box coordinate of the region this sentence describes: <ref>the lady with the blue shirt</ref>\"",
      "note": "RefCOCO 示例原文；与 RUN-0002 零样本探针的提示逐字相同（docs/model_notes.md §7.5）。<image> 占位由适配器按 image_first 放置。",
-     "max_new_tokens": 128,
+     "max_new_tokens": 256,
      "parse": "one_box"
     }
    }
@@ -104,7 +211,7 @@
      "source_url": "https://github.com/QwenLM/Qwen3-VL/blob/0dcc180d854f4b132f8059b10bbf0b5fd5dae9ed/cookbooks/2d_grounding.ipynb",
      "source_quote": "#### 1. Multi-Target Object Detection …… prompt = 'Locate every instance that belongs to the following categories: \"head, hand, man, woman, glasses\". Report bbox coordinates in JSON format.'",
      "note": "cookbook 多目标检测例句逐字，只替换类别表（类别之间用 \", \"，整表一对双引号，与例句相同）。cookbook 的已知局限原文：\"When the number of instances in a particular category significantly exceeds 40-50 or when objects are densely packed, the model may enter an endless generation loop.\"",
-     "max_new_tokens": 512,
+     "max_new_tokens": 2048,
      "parse": "boxes"
     },
     "gemma4": {
@@ -115,7 +222,7 @@
      "source_url": "https://ai.google.dev/gemma/docs/capabilities/vision/image",
      "source_quote": "{ \"type\" : \"text\" , \"text\" : \"detect person and cat\" }；{ \"type\" : \"text\" , \"text\" : \"detect person and car, output only ```json\" }",
      "note": "官方例句只有两类，用 and 连接；多类别时按任务书写成 \"detect {类别1}, {类别2}, …\"（逗号连接，不加 and）。不加 \"output only ```json\"（那一句只出现在 token 预算一节）。",
-     "max_new_tokens": 512,
+     "max_new_tokens": 2048,
      "parse": "boxes"
     },
     "internvl3.5": {
@@ -126,7 +233,7 @@
      "source_url": "https://internvl.readthedocs.io/en/latest/get_started/chat_data_format.html",
      "source_quote": "\"value\" : \"<image>\\nPlease detect and label all objects in the following image and mark their positions.\"；\"We organize the model’s responses in the following format: <ref>class name</ref><box>[[x1, y1, x2, y2], ...]</box>\"",
      "note": "非原生。InternVL 文档的检测例句不带类别表（\"detect and label all objects\"），开放词汇检测必须给出类别，于是在例句里插入类别表；没有找到带类别表的原生写法（文档、model card 都没有）。输出格式沿用文档的 <ref>…</ref><box>[[…]]</box>，提示里不另写格式。",
-     "max_new_tokens": 512,
+     "max_new_tokens": 2048,
      "parse": "boxes"
     }
    }
@@ -204,7 +311,7 @@
    }
   },
   "count": {
-   "description": "计数：CountBench（491 张有图，去掉开发子集 49 张）。标题准确率，按 GT 计数值分档。问句按 count_question_rule 由 caption 确定性生成。",
+   "description": "计数：CountBench（491 张有图，去掉开发子集 49 张）。标题准确率，按 GT 计数值分档。问句按 count_question_rule 由 caption 确定性生成（默认）；可选改用 countbenchqa_questions 的人工问句（--count-questions countbenchqa，默认关）。",
    "placeholders": {"object": "count_question_rule 从 caption 取出的计数对象"},
    "families": {
     "qwen3.5": {
@@ -214,7 +321,7 @@
      "source_url": "https://arxiv.org/abs/2407.07726",
      "source_quote": "To construct CountbenchQA, we manually annotated the dataset with questions of the form How many {object class} are there in the image?, where we extracted the {object class} from the caption manually.",
      "note": "统一提示，三个家族逐字相同。问句模板取自 PaliGemma 的 CountBenchQA（附录），对象由 count_question_rule 确定性取出（不是人工标注）；末尾加一句输出格式。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 256,
      "parse": "count"
     },
     "gemma4": {
@@ -224,7 +331,7 @@
      "source_url": "https://arxiv.org/abs/2407.07726",
      "source_quote": "To construct CountbenchQA, we manually annotated the dataset with questions of the form How many {object class} are there in the image?, where we extracted the {object class} from the caption manually.",
      "note": "统一提示，三个家族逐字相同。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 256,
      "parse": "count"
     },
     "internvl3.5": {
@@ -234,7 +341,7 @@
      "source_url": "https://arxiv.org/abs/2407.07726",
      "source_quote": "To construct CountbenchQA, we manually annotated the dataset with questions of the form How many {object class} are there in the image?, where we extracted the {object class} from the caption manually.",
      "note": "统一提示，三个家族逐字相同。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 256,
      "parse": "count"
     }
    }
@@ -251,7 +358,7 @@
      "source_url": "https://huggingface.co/datasets/BLINK-Benchmark/BLINK/tree/a3666eb249237ba3d5eca8db21176cc47967e040/Relative_Depth",
      "source_quote": "'prompt': 'Two points are circled on the image, labeled by A and B beside each circle. Which point is closer to the camera?\\nSelect from the following choices.\\n(A) A is closer\\n(B) B is closer'",
      "note": "统一提示，三个家族逐字相同。点对是我们构造的，没有自带提示；渲染（环 + 旁边的字母，src/data/nyu_pairs.py）与 BLINK Relative_Depth 的视觉提示同形，所以逐字沿用 BLINK 的提示，两者可直接对照。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 1024,
      "parse": "choice"
     },
     "gemma4": {
@@ -261,7 +368,7 @@
      "source_url": "https://huggingface.co/datasets/BLINK-Benchmark/BLINK/tree/a3666eb249237ba3d5eca8db21176cc47967e040/Relative_Depth",
      "source_quote": "'prompt': 'Two points are circled on the image, labeled by A and B beside each circle. Which point is closer to the camera?\\nSelect from the following choices.\\n(A) A is closer\\n(B) B is closer'",
      "note": "统一提示，三个家族逐字相同。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 1024,
      "parse": "choice"
     },
     "internvl3.5": {
@@ -271,7 +378,7 @@
      "source_url": "https://huggingface.co/datasets/BLINK-Benchmark/BLINK/tree/a3666eb249237ba3d5eca8db21176cc47967e040/Relative_Depth",
      "source_quote": "'prompt': 'Two points are circled on the image, labeled by A and B beside each circle. Which point is closer to the camera?\\nSelect from the following choices.\\n(A) A is closer\\n(B) B is closer'",
      "note": "统一提示，三个家族逐字相同。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 1024,
      "parse": "choice"
     }
    }
@@ -287,7 +394,7 @@
      "source_url": "https://github.com/zeyofu/BLINK_Benchmark",
      "source_quote": "We have released a full suite comprising 1,901 validation samples, the prompt we used, and model predictions for the baselines tested in our paper.",
      "note": "benchmark 自带的提示原样使用（简报 §4 第 5 条）；数据 BLINK-Benchmark/BLINK@a3666eb249237ba3d5eca8db21176cc47967e040 的 prompt 字段。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 1024,
      "parse": "choice"
     },
     "gemma4": {
@@ -297,7 +404,7 @@
      "source_url": "https://github.com/zeyofu/BLINK_Benchmark",
      "source_quote": "We have released a full suite comprising 1,901 validation samples, the prompt we used, and model predictions for the baselines tested in our paper.",
      "note": "同 qwen3.5。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 1024,
      "parse": "choice"
     },
     "internvl3.5": {
@@ -307,7 +414,7 @@
      "source_url": "https://github.com/zeyofu/BLINK_Benchmark",
      "source_quote": "We have released a full suite comprising 1,901 validation samples, the prompt we used, and model predictions for the baselines tested in our paper.",
      "note": "同 qwen3.5。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 1024,
      "parse": "choice"
     }
    }
@@ -323,7 +430,7 @@
      "source_url": "https://huggingface.co/datasets/nyu-visionx/CV-Bench/tree/bc284db50d036958861cb60cdd7b77612052ce0d",
      "source_quote": "| `prompt` | Prompt with question and choices pre-formatted |；例：\"How many yellow surfboards are there?\\nSelect from the following choices.\\n(A) 0\\n(B) 1\\n(C) 2\\n(D) 3\"",
      "note": "benchmark 自带的提示原样使用（简报 §4 第 5 条）。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 1024,
      "parse": "choice"
     },
     "gemma4": {
@@ -333,7 +440,7 @@
      "source_url": "https://huggingface.co/datasets/nyu-visionx/CV-Bench/tree/bc284db50d036958861cb60cdd7b77612052ce0d",
      "source_quote": "| `prompt` | Prompt with question and choices pre-formatted |",
      "note": "同 qwen3.5。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 1024,
      "parse": "choice"
     },
     "internvl3.5": {
@@ -343,7 +450,7 @@
      "source_url": "https://huggingface.co/datasets/nyu-visionx/CV-Bench/tree/bc284db50d036958861cb60cdd7b77612052ce0d",
      "source_quote": "| `prompt` | Prompt with question and choices pre-formatted |",
      "note": "同 qwen3.5。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 1024,
      "parse": "choice"
     }
    }
@@ -361,7 +468,7 @@
      "source_url": "https://github.com/open-compass/VLMEvalKit/blob/e9214c0816f67a2848296b82d5d615d709fb7325/vlmeval/dataset/image_mcq.py",
      "source_quote": "options_prompt = 'Options:\\n' / for key, item in options.items(): options_prompt += f'{key}. {item}\\n' / prompt += f'Question: {question}\\n' / prompt += options_prompt / prompt += 'Please select the correct answer from the options above. \\n'",
      "note": "非原生。EmbSpatial-Bench 没有自带提示：数据只有 question 与 answer_options，官方 README 只写 \"Questions from the human-verified evaluation data are formatted as multiple-choice problems. LVLMs need to select the most reasonable answer from choices.\"，论文也没有给模板。改用 VLMEvalKit 默认多选题格式（ImageMCQDataset.build_prompt，文件 sha256 9f619bec3abc784ca647ae8fb78f2dc6d5ff6209b8d525a0d0be3ead868c5c73），末尾的 \" \\n\" 按规则去掉。三个家族逐字相同。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 1024,
      "parse": "choice"
     },
     "gemma4": {
@@ -371,7 +478,7 @@
      "source_url": "https://github.com/open-compass/VLMEvalKit/blob/e9214c0816f67a2848296b82d5d615d709fb7325/vlmeval/dataset/image_mcq.py",
      "source_quote": "prompt += f'Question: {question}\\n' / prompt += options_prompt / prompt += 'Please select the correct answer from the options above. \\n'",
      "note": "非原生，同 qwen3.5。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 1024,
      "parse": "choice"
     },
     "internvl3.5": {
@@ -381,7 +488,7 @@
      "source_url": "https://github.com/open-compass/VLMEvalKit/blob/e9214c0816f67a2848296b82d5d615d709fb7325/vlmeval/dataset/image_mcq.py",
      "source_quote": "prompt += f'Question: {question}\\n' / prompt += options_prompt / prompt += 'Please select the correct answer from the options above. \\n'",
      "note": "非原生，同 qwen3.5。",
-     "max_new_tokens": 64,
+     "max_new_tokens": 1024,
      "parse": "choice"
     }
    }

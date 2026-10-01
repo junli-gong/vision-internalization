@@ -3,6 +3,10 @@
 配置的结构：任务 × 家族 → 提示模板原文、是否原生、出处链接与引用原文、max_new_tokens、解析函数名。约定只在配置里写一处，
 这里只读它；模板之外的规则（CountBench 问句的对象怎么取、多选题选项怎么排）写在本模块，配置的 count_question_rule 是它的
 说明文字，tests 钉住两者一致。渲染后去掉首尾空白（Qwen 的聊天模板会 trim 整段内容）。
+
+CountBench 的问句有两个来源（DEV-0015 §4；run_e1.py --count-questions）：heuristic（默认，count_question_rule 从 caption 取对象）
+与 countbenchqa（big_vision 的人工问句，配置的 countbenchqa_questions）。用哪个由样本决定：src/e1/tasks.select 在
+countbenchqa 模式下把问句放进 fields[COUNTBENCHQA_FIELD]，render 见到它就用整句问句（规则见 countbenchqa_instruction）。
 """
 
 from __future__ import annotations
@@ -102,6 +106,13 @@ def validate(cfg: Mapping[str, Any]) -> None:
         bad.append(f"parse_functions 必须恰好说明 {PARSERS}")
     if "rule" not in cfg.get("count_question_rule", {}) or cfg["count_question_rule"].get("version") != COUNT_RULE_VERSION:
         bad.append(f"count_question_rule 必须有 rule，version = {COUNT_RULE_VERSION}（src/e1/prompts.py）")
+    qpart = cfg.get("countbenchqa_questions", {}).get("question_part")
+    if not isinstance(qpart, str) or qpart.count("{object}") != 1 or _placeholders(qpart) != {"object"}:
+        bad.append("countbenchqa_questions.question_part 必须是只含一个 {object} 的问句")
+    else:
+        for fam, e in cfg.get("tasks", {}).get("count", {}).get("families", {}).items():
+            if not str(e.get("template", "")).startswith(qpart):
+                bad.append(f"count/{fam}: 模板必须以 countbenchqa_questions.question_part 开头（人工问句替换的就是这一段）")
     tasks = cfg.get("tasks", {})
     if set(tasks) != set(TASKS):
         bad.append(f"tasks 必须恰好是 {sorted(TASKS)}，收到 {sorted(tasks)}")
@@ -203,6 +214,10 @@ class PromptConfig:
         elif task == "ovd":
             values["categories"] = e["category_joiner"].join(f["categories"])
         elif task == "count":
+            if COUNTBENCHQA_FIELD in f:  # 人工问句（--count-questions countbenchqa）：整句替换模板的问句部分
+                text, obj, rule = countbenchqa_instruction(e["template"], self.data["countbenchqa_questions"]["question_part"],
+                                                           f[COUNTBENCHQA_FIELD])
+                return Rendered(text, {"object": obj, "object_rule": rule, "question": f[COUNTBENCHQA_FIELD]})
             obj, rule = count_object(f["text"], int(sample.gt["count"]))
             values["object"] = obj
             extras.update(object=obj, object_rule=rule)
@@ -301,12 +316,43 @@ def count_object(caption: str, count: int) -> tuple[str, str]:
     return COUNT_FALLBACK_OBJECT, "fallback_no_phrase"
 
 
+# ---------------------------------------------------------------------------
+# CountBench 的人工问句（configs/e1_prompts.json 的 countbenchqa_questions；DEV-0015 §4）
+# ---------------------------------------------------------------------------
+
+COUNT_QUESTION_SOURCES: tuple[str, ...] = ("heuristic", "countbenchqa")
+DEFAULT_COUNT_QUESTIONS = "heuristic"  # 项目负责人批准人工问句之前不改（D32-3）
+COUNTBENCHQA_FIELD = "countbenchqa_question"  # src/e1/tasks.select 在 countbenchqa 模式下放进 Sample.fields 的键
+COUNTBENCHQA_RULES: tuple[str, ...] = ("countbenchqa", "countbenchqa_free_form")
+
+
+def countbenchqa_instruction(template: str, question_part: str, question: str) -> tuple[str, str | None, str]:
+    """人工问句 → (指令, 对象, 规则分支)。用整句问句（不抽对象）：指令 = 问句 + 模板里 question_part 之后的部分，去掉首尾空白；
+    模板本身不变。问句恰是 question_part 的句式（如 "How many cars are there in the image?"）时，结果与把 {object} 换成那个对象
+    逐字相同，分支记 countbenchqa、对象记那个短语；否则按原句使用，对象记 None，分支记 countbenchqa_free_form。"""
+    if not template.startswith(question_part):
+        raise PromptConfigError(f"计数模板 {template!r} 不以 question_part {question_part!r} 开头")
+    q = question.strip()
+    if not q:
+        raise ValueError("人工问句是空的")
+    pre, post = question_part.split("{object}")
+    m = re.fullmatch(re.escape(pre) + r"(?P<object>.+?)" + re.escape(post), q)
+    text = (q + template[len(question_part):]).strip()
+    if m:
+        return text, m.group("object"), "countbenchqa"
+    return text, None, "countbenchqa_free_form"
+
+
 __all__ = [
+    "COUNTBENCHQA_FIELD",
+    "COUNTBENCHQA_RULES",
     "COUNT_FALLBACK_OBJECT",
     "COUNT_MAX_OBJECT_WORDS",
+    "COUNT_QUESTION_SOURCES",
     "COUNT_RULE_BRANCHES",
     "COUNT_RULE_VERSION",
     "COUNT_STOP_WORDS",
+    "DEFAULT_COUNT_QUESTIONS",
     "PARSERS",
     "PROMPTS_PATH",
     "PromptConfig",
@@ -316,6 +362,7 @@ __all__ = [
     "TASKS",
     "THINK_SUBSETS",
     "count_object",
+    "countbenchqa_instruction",
     "file_sha256",
     "load_prompt_config",
     "subset_kind",

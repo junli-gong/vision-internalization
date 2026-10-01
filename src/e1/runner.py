@@ -34,7 +34,7 @@ from PIL import Image
 from src.accounting import Compute, merge, write_compute_json
 from src.constants import BOOTSTRAP_SEED
 from src.data.records import Sample
-from src.e1.prompts import PromptConfig
+from src.e1.prompts import COUNTBENCHQA_FIELD, DEFAULT_COUNT_QUESTIONS, PromptConfig
 from src.e1.scoring import aggregate, score_generation
 from src.e1.tasks import DataPaths, Selection
 from src.runlog import write_run_metadata
@@ -64,6 +64,7 @@ class RunSpec:
     limit: int | None
     tiny: bool
     map_ci_resamples: int
+    count_questions: str = DEFAULT_COUNT_QUESTIONS  # 计数的问句来源（DEV-0015 §4）；别的任务不用
 
 
 def policy_dirname(tag: str) -> str:
@@ -129,7 +130,8 @@ def run_config(spec: RunSpec, sel: Selection, prompts: PromptConfig, paths: Data
         "prompt": {"config": os.path.relpath(prompts.path, REPO_ROOT) if Path(prompts.path).is_relative_to(REPO_ROOT)
                    else prompts.path, "config_sha256": prompts.sha256,
                    "entry": {k: e[k] for k in ("template", "native", "provenance", "source_url", "parse",
-                                               "max_new_tokens") if k in e}},
+                                               "max_new_tokens") if k in e},
+                   **({"count_questions": spec.count_questions} if spec.task == "count" else {})},
         "data": {"n_samples": len(ids), "sample_ids_sha256": ids_digest(ids), "has_gt": sel.has_gt,
                  "selection_stats": json.loads(json.dumps(sel.stats, ensure_ascii=False)),
                  "config_sha256": {Path(p).name: hashlib.sha256(Path(p).read_bytes()).hexdigest()
@@ -163,6 +165,12 @@ def _fmt(v: Any) -> str:
     return "null" if v is None else (f"{v:.4f}" if isinstance(v, float) else str(v))
 
 
+def _think_marker_line(tm: Mapping[str, Any] | None) -> str:
+    if tm is None:
+        return "不适用（开思考）"
+    return f"{tm['n']} 条（其中思考段未闭合 {tm['n_thinking_unclosed']} 条）"
+
+
 def readme_text(spec: RunSpec, cfg: Mapping[str, Any], metrics: Mapping[str, Any]) -> str:
     lines = [f"# E1 · {spec.model_key} · {spec.task} · {spec.subset}", "",
              f"- 模型：{spec.repo}@{spec.revision}（{spec.family}；适配器 {spec.adapter_model_key}）",
@@ -182,6 +190,9 @@ def readme_text(spec: RunSpec, cfg: Mapping[str, Any], metrics: Mapping[str, Any
     lines += ["", "## 解析与截断", "",
               f"- 解析失败率：{_fmt(p['failure_rate'])}（{p['n_failed']}/{p['n']}）；分原因：{p['failures']}",
               f"- 截断率：{_fmt(metrics['truncation']['rate'])}；思考段未闭合：{_fmt(metrics['thinking_unclosed']['rate'])}",
+              "", "## 失败的诊断（只作诊断，失败原因不变；规则见 src/e1/scoring.failure_detail）", "",
+              f"- 失败的样子：{metrics['diagnostics']['failure_detail']['counts'] or '（无）'}",
+              f"- 关思考时自发写出思考标记：{_think_marker_line(metrics['diagnostics']['think_marker_when_off'])}",
               "", "## 文件", "",
               "- predictions.jsonl：逐条输出、解析与得分；metrics.json：全部指标（由 predictions.jsonl 算出）；",
               "- compute.json：计算记账（src/accounting.py）；config.yaml：运行身份；meta.json：git、主机、包版本；logs/：墙钟与每次调用的记录。",
@@ -196,7 +207,8 @@ def finalize(leaf: Path, spec: RunSpec, sel: Selection, cfg: Mapping[str, Any]) 
     if [r["id"] for r in recs] != ids[: len(recs)]:
         raise RuntimeError(f"{leaf / PREDICTIONS} 的 id 不是样本顺序的前缀")
     samples = sel.samples[: len(recs)]
-    body = aggregate(spec.task, samples, recs, has_gt=sel.has_gt, map_ci_resamples=spec.map_ci_resamples)
+    body = aggregate(spec.task, samples, recs, has_gt=sel.has_gt, map_ci_resamples=spec.map_ci_resamples,
+                     enable_thinking=bool(cfg["generation"]["enable_thinking"]))
     body["complete"] = len(recs) == len(ids)
     body["n_expected"] = len(ids)
     metrics = _metrics_doc(spec, cfg, body)
@@ -244,6 +256,12 @@ def run_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: PromptConfig,
     log = log or (lambda m: print(m, file=sys.stderr, flush=True))
     if isinstance(spec.batch_size, bool) or not isinstance(spec.batch_size, int) or spec.batch_size < 1:
         raise ValueError(f"batch_size 必须是正整数，收到 {spec.batch_size!r}")
+    if spec.task == "count":  # 问句来源由样本决定（tasks.select），这里核对与 RunSpec 一致，防止静默混用
+        has = [COUNTBENCHQA_FIELD in s.fields for s in sel.samples]
+        mixed = any(has) and not all(has)
+        if has and (mixed or any(has) != (spec.count_questions == "countbenchqa")):
+            raise ValueError(f"count_questions={spec.count_questions!r}，而样本里带人工问句的有 {sum(has)}/{len(has)} 条："
+                             "select 与 RunSpec 的问句来源不一致")
     leaf = leaf_dir(out_dir, spec.model_key, spec.task, spec.subset, spec.policy_tag)
     cfg = run_config(spec, sel, prompts, paths)
     pred_path = leaf / PREDICTIONS

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import types
 
 import numpy as np
@@ -11,6 +12,7 @@ import pytest
 from src.adapters import gemma4, internvl35, qwen35
 from src.adapters.base import GenerationResult
 from src.data.records import Sample
+from src.e1 import acceptance as A
 from src.e1 import scoring as S
 from src.e1.acceptance import answers_agree, compare
 from src.parsing import ParseFailure
@@ -35,7 +37,7 @@ def ref_sample(k: int = 0, split: str = "val", ds: str = "refcoco_unc") -> Sampl
 
 
 def record(task, parser, sample, res, adapter=QWEN, extras=None, size=(12, 9)):
-    rec = {"id": sample.id, "raw_text": res.raw_text, "truncated": res.stopped is False,
+    rec = {"id": sample.id, "raw_text": res.raw_text, "text": res.text, "truncated": res.stopped is False,
            "thinking_unclosed": res.thinking_unclosed, "n_generated_tokens": res.n_generated_tokens,
            "n_visual_tokens": res.n_visual_tokens, "n_image_pixels": res.n_image_pixels, "image_size": list(size),
            "extras": extras or {}}
@@ -290,3 +292,195 @@ def test_acceptance_agreement_rules():
     assert out["answer_agreement"] == 0.0 and out["pass"] is False and out["diff"] == 0.0 and out["diff_ci_contains_0"]
     same = compare("refexp_box", [s], [x], [x], has_gt=True, batch_size=4)
     assert same["pass"] and same["raw_text_equal_rate"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# DEV-0015 §2：验收的三种一致口径
+# ---------------------------------------------------------------------------
+
+
+def _box_rec(s, box_text, **kw):
+    return record("refexp_box", "one_box", s, gen(box_text, **kw))
+
+
+def test_three_agreement_modes_on_boxes():
+    s = ref_sample()  # GT [1, 1, 9, 7]（12×9 的图）
+    x = _box_rec(s, '[{"bbox_2d": [100, 125, 750, 750]}]')  # 与 GT 的 IoU = 0.914 → 对
+    y = _box_rec(s, '[{"bbox_2d": [100, 125, 750, 751]}]')  # 末位不同：两框 IoU ≈ 0.998
+    far = _box_rec(s, '[{"bbox_2d": [0, 0, 500, 500]}]')  # 与 GT 的 IoU = 0.30 → 错
+    far2 = _box_rec(s, '[{"bbox_2d": [0, 0, 400, 400]}]')  # 也错；与 far 的 IoU = 0.64
+    fail = _box_rec(s, "no box here")
+    fail2 = _box_rec(s, '[{"bbox_2d": [100, 125, 750, 750]}]', stopped=False)  # 截断
+    assert fail["failure"] == "no_box" and fail2["failure"] == "truncated"
+    assert not far["score"]["correct"] and not far2["score"]["correct"] and x["score"]["correct"]
+    cases = [  # (a, b, bitwise, iou90, outcome)
+        (x, x, True, True, True),
+        (x, y, False, True, True),
+        (far, far2, False, False, True),  # 两遍都错：对错相同
+        (x, far, False, False, False),
+        (fail, fail2, True, True, True),  # 两遍都失败
+        (fail, far, False, False, True),  # 一遍失败、另一遍成功但错：对错相同，(c) 记一致
+        (fail, x, False, False, False),
+    ]
+    for a, b, bw, iou, oc in cases:
+        assert A.agreement_flags("refexp_box", "bitwise", [s], [a], [b], has_gt=True) == [bw]
+        assert A.agreement_flags("refexp_box", "iou90", [s], [a], [b], has_gt=True) == [iou]
+        assert A.agreement_flags("refexp_box", "outcome", [s], [a], [b], has_gt=True) == [oc]
+    assert A.agreement_flags("refexp_box", "outcome", [s], [x], [y], has_gt=False) is None
+    with pytest.raises(ValueError):
+        A.agreement_flags("refexp_box", "nope", [s], [x], [y], has_gt=True)
+    assert A._pair_iou([5, 5, 5, 5], [5, 5, 5, 5]) == 1.0 and A._pair_iou([5, 5, 5, 5], [6, 6, 6, 6]) == 0.0
+
+
+def test_compare_selects_mode_and_reports_all_three():
+    ss = [ref_sample(k) for k in range(50)]
+    good = '[{"bbox_2d": [100, 125, 750, 750]}]'
+    jitter = '[{"bbox_2d": [100, 125, 750, 751]}]'
+    single = [_box_rec(s, good) for s in ss]
+    batched = [_box_rec(s, jitter if k < 10 else good) for k, s in enumerate(ss)]
+    rows = {m: A.compare("refexp_box", ss, single, batched, has_gt=True, batch_size=4, agreement=m) for m in A.AGREEMENTS}
+    for m, row in rows.items():
+        assert row["agreement"] == m and row["answer_agreement"] == row["agreement_by_mode"][m]["rate"]
+        assert row["pass"] == row["agreement_by_mode"][m]["pass"]
+        assert row["agreement_by_mode"] == rows["bitwise"]["agreement_by_mode"]  # 三种口径都算，与所选口径无关
+    by = rows["bitwise"]["agreement_by_mode"]
+    assert by["bitwise"]["rate"] == 0.8 and by["bitwise"]["pass"] is False and len(by["bitwise"]["disagree_ids"]) == 10
+    assert by["iou90"]["rate"] == 1.0 and by["iou90"]["pass"] and by["outcome"]["rate"] == 1.0 and by["outcome"]["pass"]
+    assert rows["bitwise"]["diff_ci_contains_0"]  # 指标没变
+    with pytest.raises(ValueError):
+        A.compare("refexp_box", ss, single, batched, has_gt=True, batch_size=4, agreement="x")
+
+
+def test_detection_outcome_needs_gt_and_compares_per_image_tp_fp():
+    s1 = _ovd(1, [([10, 10, 50, 50], 1, "person"), ([60, 60, 90, 90], 3, "car")])
+    s2 = _ovd(2, [([0, 0, 40, 40], 3, "car")])
+    ss = [s1, s2]
+
+    def rec(s, text):
+        return record("ovd", "boxes", s, gen(text), size=(100, 100))
+
+    a1 = rec(s1, '[{"bbox_2d": [100, 100, 500, 500], "label": "person"}, {"bbox_2d": [600, 600, 900, 900], "label": "car"}]')
+    # 换了顺序、坐标末位不同：逐位与 iou90（按输出顺序配对）都不一致，但这张图的 TP/FP 相同
+    b1 = rec(s1, '[{"bbox_2d": [600, 600, 901, 900], "label": "car"}, {"bbox_2d": [100, 100, 500, 500], "label": "person"}]')
+    a2 = rec(s2, '[{"bbox_2d": [0, 0, 400, 400], "label": "car"}]')  # TP 1
+    b2 = rec(s2, '[{"bbox_2d": [0, 0, 400, 400], "label": "car"}, {"bbox_2d": [500, 500, 900, 900], "label": "dog"}]')  # 多一个 FP
+    single, batched = [a1, a2], [b1, b2]
+    assert A.agreement_flags("ovd", "bitwise", ss, single, batched, has_gt=True) == [False, False]
+    assert A.agreement_flags("ovd", "iou90", ss, single, batched, has_gt=True) == [False, False]
+    assert A.agreement_flags("ovd", "outcome", ss, single, batched, has_gt=True) == [True, False]
+    assert A._ovd_tp_fp(ss, single) == [(2, 0), (1, 0)] and A._ovd_tp_fp(ss, batched) == [(2, 0), (1, 1)]
+    same_order = rec(s1, '[{"bbox_2d": [100, 100, 500, 501], "label": "person"}, {"bbox_2d": [600, 600, 900, 900], "label": "car"}]')
+    assert A.agreement_flags("ovd", "iou90", [s1], [a1], [same_order], has_gt=True) == [True]
+    assert A.agreement_flags("ovd", "outcome", ss, single, batched, has_gt=False) is None
+    row = A.compare("ovd", ss, single, batched, has_gt=False, batch_size=2, agreement="outcome")
+    assert row["answer_agreement"] is None and row["pass"] is None
+    assert "没有 GT" in row["agreement_by_mode"]["outcome"]["note"] and row["agreement_by_mode"]["bitwise"]["rate"] == 0.0
+
+
+def test_overall_lists_not_evaluated_and_markdown_has_three_columns():
+    s = ref_sample()
+    x = _box_rec(s, '[{"bbox_2d": [100, 125, 750, 750]}]')
+    box_row = A.compare("refexp_box", [s], [x], [x], has_gt=True, batch_size=2)
+    o = _ovd(1, [([10, 10, 50, 50], 1, "person")])
+    r = record("ovd", "boxes", o, gen('[{"bbox_2d": [100, 100, 500, 500], "label": "person"}]'), size=(100, 100))
+    ovd_row = A.compare("ovd", [o], [r], [r], has_gt=False, batch_size=2)
+    rows = [box_row, ovd_row]
+    assert A.overall(rows, "bitwise") == {"all_pass": True, "n_judged": 2, "not_evaluated": []}
+    assert A.overall(rows, "outcome") == {"all_pass": True, "n_judged": 1, "not_evaluated": ["ovd"]}
+    assert A.overall([ovd_row], "outcome")["all_pass"] is None
+    md = A.summary_markdown("m", rows, header={"x": 1}, agreement="outcome")
+    for mode in A.AGREEMENTS:
+        assert f"{A.AGREEMENT_LABELS[mode]} 一致率" in md and f"{A.AGREEMENT_LABELS[mode]} 通过" in md
+        assert A.AGREEMENT_RULES[mode] in md
+    assert f"{A.AGREEMENT_LABELS['outcome']}（本次采用）" in md and "| ovd |" in md
+    head = next(line for line in md.splitlines() if line.startswith("| 任务"))
+    body = next(line for line in md.splitlines() if line.startswith("| ovd |"))
+    assert head.count("|") == body.count("|")
+    assert A.DEFAULT_AGREEMENT == "bitwise" and A.AGREE_BOX_IOU == A.AGREE_MASK_IOU == 0.9  # N15 (b)：与多边形、网格同一个数
+
+
+# ---------------------------------------------------------------------------
+# DEV-0015 §3：失败的诊断（只作诊断，失败原因不变）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("text,label", [
+    ('```json\n[\n\t{"bbox_2d": [459, 231, 894, 988], "label": "green woman"}\n]\n```', "wrong_shape:bbox_2d"),  # Qwen 小模型
+    ('```json\n[\n\t{"point_2d": [730, 598], "label": "green woman"}\n]\n```', "wrong_shape:point_2d"),
+    ('```json\n[\n  {"box_2d": [231, 461, 1000, 902], "mask": "<unused90>", "label": "x"}\n]\n```', "wrong_shape:box_2d"),  # Gemma
+    ('[{"label": "x", "box": [1, 2, 3, 4]}, {"point_2d": [1, 2]}]', "wrong_shape:box"),  # 按出现位置取第一个
+    ('```json\n[\n  [10, 33, 990, 990]\n]\n```', None),  # 扁平的框，没有键：不归类
+    ('{"polygon": [[1, 2], [3, 4], [5, 6]]}', None),  # 包了一层的多边形：不算"给错形状"
+])
+def test_wrong_shape_diagnostic(text, label):
+    r = record("refexp_poly", "polygon", ref_sample(), gen(text))
+    assert r["failure"] == "malformed"
+    assert S.failure_detail("refexp_poly", r) == label
+
+
+def test_wrong_shape_only_for_malformed_polygons():
+    s = ref_sample()
+    trunc = record("refexp_poly", "polygon", s, gen('[{"bbox_2d": [100, 125, 750, 750]}]', stopped=False))
+    assert trunc["failure"] == "truncated" and S.failure_detail("refexp_poly", trunc) is None
+    box = record("refexp_box", "one_box", s, gen('[{"bbox_2d": [0, 0, 5, 5]}, {"bbox_2d": [1, 1, 5, 5]}]'))
+    assert box["failure"] == "multiple_boxes" and S.failure_detail("refexp_box", box) is None
+    ok = record("refexp_poly", "polygon", s, gen("[[0, 0], [500, 0], [500, 1000]]"))
+    assert ok["failure"] is None and S.failure_detail("refexp_poly", ok) is None
+
+
+@pytest.mark.parametrize("text,is_refusal", [
+    ("I'm sorry, but I cannot fulfill that request. Is there something else I can help you with?", True),  # Gemma
+    ("I’m sorry, I can’t help with that.", True),  # 弯撇号
+    ("I am unable to locate it.", True),
+    ("Therefore, I cannot answer the question about the relative positions of a bell and a rope.", True),
+    ("I'm sorry, the object is at [100, 200].", False),  # 有数字：不算拒绝
+    ("I did not find any bounding box detections for small giraffe.", False),  # "没找到"不是拒绝句式
+    ("The cannoli is on the left.", False),  # 整词匹配
+    ("", False),
+])
+def test_refusal_diagnostic(text, is_refusal):
+    r = record("refexp_box", "one_box", ref_sample(), gen(text))
+    assert r["failure"] is not None  # 都解析不出框；诊断不改失败原因
+    assert (S.failure_detail("refexp_box", r) == "refusal") is is_refusal
+
+
+def test_refusal_needs_failure():
+    ex = {"letters": ["A", "B"], "options": ["A is closer", "B is closer"]}
+    s = Sample(id="nyuv2_pairs/test/p0", task="rel_depth", images=("x",), image_keys=("k",), fields={},
+               gt={"closer": "B"}, source="nyuv2_pairs", split="test")
+    r = record("rel_depth_nyu", "choice", s, gen("The answer is B, though I cannot be certain."), extras=ex)
+    assert r["failure"] is None and S.failure_detail("rel_depth_nyu", r) is None
+
+
+def test_think_marker_when_off_and_aggregate_diagnostics():
+    ss = [_count_sample(k, 3) for k in range(4)]
+    ex = {"object": "x", "object_rule": "after_number"}
+    closed = GenerationResult(text="3", token_ids=(1, 2, 3), n_generated_tokens=3, n_prompt_tokens=10, n_visual_tokens=4,
+                              wall_time_s=0.1, raw_text="<think>a</think>\n3", stopped=True, n_image_pixels=16)
+    recs = [record("count", "count", ss[0], gen("3"), extras=ex),
+            record("count", "count", ss[1], gen("<think>\nLet me count", unclosed=True, stopped=False), extras=ex),
+            record("count", "count", ss[2], closed, extras=ex),  # 闭合的思考段：照常解析
+            record("count", "count", ss[3], gen("I'm sorry, I cannot count them."), extras=ex)]
+    assert [r["failure"] for r in recs] == [None, "thinking_unclosed", None, "no_number"]
+    assert [S.think_marker_when_off(r, False) for r in recs] == [False, True, True, False]
+    assert S.think_marker_when_off(recs[1], True) is None
+    m = S.aggregate("count", ss, recs, has_gt=True, enable_thinking=False)
+    d = m["diagnostics"]
+    assert d["think_marker_when_off"]["n"] == 2 and d["think_marker_when_off"]["n_thinking_unclosed"] == 1
+    assert d["think_marker_when_off"]["ids"] == [ss[1].id, ss[2].id]
+    assert set(S.THINK_MARKERS) == {"<think>", "</think>", "<|channel>", "<channel|>"}
+    assert d["failure_detail"]["counts"] == {"refusal": 1}
+    assert d["failure_detail"]["by_failure"] == {"refusal": {"no_number": 1}}
+    assert d["failure_detail"]["ids"] == {"refusal": [ss[3].id]} and d["failure_detail"]["rule_version"] == S.DIAG_RULE_VERSION
+    assert m["parse"]["failures"] == {"no_number": 1, "thinking_unclosed": 1}  # 失败原因不变
+    assert S.aggregate("count", ss, recs, has_gt=True, enable_thinking=True)["diagnostics"]["think_marker_when_off"] is None
+    assert S.aggregate("count", ss, recs, has_gt=True)["diagnostics"]["think_marker_when_off"] is None
+
+
+def test_diagnostic_regexes_are_pinned():
+    """正则固定（写进完成总结与预注册）：改了要同时改 DIAG_RULE_VERSION 与这里。"""
+    assert S.WRONG_SHAPE_KEYS == ("bbox_2d", "box_2d", "point_2d", "bbox", "box", "point")
+    assert S.WRONG_SHAPE_RE.pattern == r'"(bbox_2d|box_2d|point_2d|bbox|box|point)"\s*:'
+    assert S.REFUSAL_RE.pattern == (r"\b(?:I['’]m sorry|I am sorry|I apologi[sz]e|unable to|not able to|can['’]?t|cannot|"
+                                    r"can not)\b")
+    assert S.REFUSAL_RE.flags & re.IGNORECASE and S.DIAG_RULE_VERSION == 1
