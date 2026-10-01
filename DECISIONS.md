@@ -729,3 +729,31 @@
    - `split_answer` 没在 base 接口里声明，放进 E3 之前的接口任务（D21-2）；
    - `round1` 会给出 −0.0，是显示上的小毛病。
 
+## D32 — DEV-0014（E1 评测框架）合入与偏离裁定（2026-10-01）
+
+1. **合入**（a6c0c41，无返工）：
+   - 提示配置 `configs/e1_prompts.json`：每项都有原文、出处与引用；
+   - `src/e1/`：任务运行器、评分与诊断、断点续传；
+   - `scripts/run_e1.py`：含批处理验收模式与算力估算模式。
+   - 合入前验证：普通与 server-parity 条件都是 1354 passed + 11 skipped。
+2. **偏离接受**，并写进 E1 预注册：
+   - **检测没有开发子集**：验收借 RefCOCO 开发子集里的图配 COCO 的 80 类，只比答案一致率与 raw_text，指标差记 null；ODinW 没有开发核对。
+   - **多选题的解析**：先用 `parse_choice` 认字母，判 no_choice 时再按选项原文匹配。每条走的路径都记下。
+   - **"指标差落在 CI 内"**：解释为两遍逐样本配对、差值的 95% CI 含 0。
+   - **验收的一致判据**：
+     - 两遍都解析失败算一致；
+     - 框、检测要求逐位相等；
+     - 计数、多选要求值相等；
+     - 多边形与网格要求两个预测光栅化后 mask IoU ≥ 0.9。
+   - **mAP 的 bootstrap CI 默认不算**：标题 F1@0.5 的 CI 照算；ODinW 的标题取 13 个数据集 F1 的平均，不给 CI。
+   - **编造类别**：标签规范化后与类别名精确比对；无标签的框单列。两者在 F1 里都记 FP。
+   - **截断率**：凡 `stopped=False` 都算截断，含思考段未闭合。
+   - **两处非原生提示**：InternVL 的多类别检测（改写自文档例句）与 EmbSpatial（用 VLMEvalKit 的 MCQ 模板）。NYU 点对借用 BLINK Relative_Depth 的措辞。
+3. **待项目负责人决定**（随 E1 预注册一起提交）：CountBench 的问句来源。
+   - 现状：从 caption 启发式抽取对象词，540 条里有一部分抽出的短语不通，例如 "women check out some"。
+   - 替代方案：big_vision 仓库的 `countbench_paired_questions.json`，是人工写的 "How many {object class} are there in the image?"（PaliGemma 的 CountBenchQA）。仓库是 Apache-2.0，问句文件就在仓库里；图像就是已落地的那份 CountBench 打包版。
+   - 建议改用它。
+4. **验收的范围**（RUN-0012）：
+   - 管理员定为每个家族最小的模型加 Qwen-9B，每个任务取开发子集的前 100 条；任何一处不达标，就扩大到全部 8 个模型。
+   - 理由：batch=1 那一遍很慢，全部 8 个模型要 12–16 GPU 小时；批处理的行为按家族、按内核决定，同一家族内的尺寸差别主要在 9B 这种不共享 lm_head 的模型。
+
