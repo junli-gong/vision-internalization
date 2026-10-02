@@ -29,6 +29,8 @@ from src.runlog import git_info
 MANIFEST_NAME = "MANIFEST.json"
 JOURNAL_NAME = "MANIFEST.journal.jsonl"
 MANIFEST_SCHEMA = 1
+# 清单里 script.path 的默认值：E1 的落地入口。别的入口（如 scripts/data/land_train.py）由落地源经 Manifest(script=…) 传入（DEV-0026）。
+DEFAULT_SCRIPT = "scripts/data/land_e1.py"
 GB = 10**9
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -85,7 +87,17 @@ def check_budget(estimate_bytes: int, *, budget_gb: float, root: str | Path, min
 class Manifest:
     """一个源的清单。线程安全地登记文件；每登记一个就写 journal，便于中断后续传。"""
 
-    def __init__(self, source_dir: str | Path, source: str, *, root: str | Path, tmpdir: str | Path, min_free_gb: float, log: Callable[[str], None] | None = None) -> None:
+    def __init__(
+        self,
+        source_dir: str | Path,
+        source: str,
+        *,
+        root: str | Path,
+        tmpdir: str | Path,
+        min_free_gb: float,
+        log: Callable[[str], None] | None = None,
+        script: str = DEFAULT_SCRIPT,
+    ) -> None:
         self.dir = Path(source_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.root = Path(root)
@@ -100,7 +112,7 @@ class Manifest:
             "source": source,
             "landed_at_utc": None,
             "script": {
-                "path": "scripts/data/land_e1.py",
+                "path": script,
                 "argv": sys.argv[1:],
                 "git": git_info(REPO_ROOT),
                 "python": sys.version.split()[0],

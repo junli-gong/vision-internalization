@@ -2,7 +2,8 @@
 
 只用标准库 urllib，不引入 requests。四件事：
 - download：下到 dest.part，按 Range 续传；完整且长度、哈希相符后才改名为 dest。dest 已存在且哈希与期望相符就跳过。
-- download_many：线程池，并发不超过 MAX_CONCURRENCY；失败的逐条记下来返回，不静默跳过。
+- download_many：线程池，并发不超过 MAX_CONCURRENCY；失败的逐条记下来返回，不静默跳过。on_done 抛出异常（如磁盘
+  红线 DiskRedLine）时叫停：没开始的下载不再开始，进行中的在下一个块处停下（.part 留着供续传），不再写出新文件（DEV-0026）。
 - HTTPRangeFile：只读、可 seek 的远端文件对象（按块缓存的 Range 读）。zipfile、h5py、pyarrow 都能直接打开它，
   用来定点取 zip 成员、读 HDF5 元数据、读 parquet 的单列，不用整包下载（lessons："zip 用 Range 抽取 central
   directory 定点取文件"）。
@@ -47,6 +48,19 @@ class _Retryable(Exception):
     pass
 
 
+class Cancelled(Exception):
+    """下载被叫停（download_many 里别的任务出错，或调用方 set 了 cancel 事件）。不是 FetchError：不记为失败、不重试。"""
+
+    def __init__(self, url: str) -> None:
+        super().__init__(f"{url}: 已叫停")
+        self.url = url
+
+
+def _check_cancel(url: str, cancel: threading.Event | None) -> None:
+    if cancel is not None and cancel.is_set():
+        raise Cancelled(url)
+
+
 def sha256_file(path: str | Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -84,14 +98,19 @@ def _open(url: str, *, method: str = "GET", headers: dict[str, str] | None = Non
         raise _Retryable(f"{type(e).__name__}: {e}") from e
 
 
-def _with_retries(url: str, fn: Callable[[], Any], *, retries: int, backoff: float, log: Callable[[str], None] | None):
+def _with_retries(url: str, fn: Callable[[], Any], *, retries: int, backoff: float, log: Callable[[str], None] | None, cancel: threading.Event | None = None):
+    """cancel 给了：每次尝试前查一次，退避的等待也随时可被叫停（抛 Cancelled）。不给时行为同前。"""
     last = ""
     for attempt in range(retries + 1):
         if attempt:
             delay = backoff * 2 ** (attempt - 1)
             if log:
                 log(f"重试 {attempt}/{retries}（{last}），{delay:.1f}s 后：{url}")
-            time.sleep(delay)
+            if cancel is None:
+                time.sleep(delay)
+            elif cancel.wait(delay):
+                raise Cancelled(url)
+        _check_cancel(url, cancel)
         try:
             return fn()
         except _Retryable as e:
@@ -152,6 +171,7 @@ def download(
     backoff: float = DEFAULT_BACKOFF,
     timeout: float = DEFAULT_TIMEOUT,
     log: Callable[[str], None] | None = None,
+    cancel: threading.Event | None = None,
 ) -> DownloadResult:
     """把 url 下到 dest，可断点续传、幂等。
 
@@ -159,6 +179,7 @@ def download(
       （调用方从上一次的清单里取哈希传进来，就能跳过）。
     - 续传：dest.part 存在时发 Range: bytes=<已有字节>-；服务器回 206 就接着写，回 200 就从头写。
     - 完成后核对 expected_size 与 expected_sha256，不符就删掉 .part 并抛 FetchError（不重试：内容本身不对）。
+    - cancel 被 set：在下一个块处停下（这一块不写）、改名为 dest 之前再查一次，抛 Cancelled；.part 留着供下次续传。
     """
     dest = Path(dest)
     if dest.exists():
@@ -183,6 +204,7 @@ def download(
                     total = offset + int(cl)
                 with open(part, "ab" if offset else "wb") as f:
                     for chunk in iter(lambda: r.read(_CHUNK), b""):
+                        _check_cancel(url, cancel)
                         f.write(chunk)
         except urllib.error.HTTPError as e:
             if e.code == 416 and offset and expected_size is not None and offset == expected_size:
@@ -199,7 +221,7 @@ def download(
         if total is not None and got != total:
             raise _Retryable(f"长度不足：{got}/{total}")
 
-    _with_retries(url, go, retries=retries, backoff=backoff, log=log)
+    _with_retries(url, go, retries=retries, backoff=backoff, log=log, cancel=cancel)
     size = part.stat().st_size
     digest = sha256_file(part)
     if expected_size is not None and size != expected_size:
@@ -208,6 +230,7 @@ def download(
     if expected_sha256 is not None and digest != expected_sha256:
         part.unlink()
         raise FetchError(url, f"sha256 {digest} 与期望 {expected_sha256} 不符")
+    _check_cancel(url, cancel)
     os.replace(part, dest)
     return DownloadResult(url, dest, size, digest, skipped=False, resumed_from=first_offset)
 
@@ -230,14 +253,28 @@ def download_many(
     timeout: float = DEFAULT_TIMEOUT,
     log: Callable[[str], None] | None = None,
     on_done: Callable[[DownloadJob, DownloadResult], None] | None = None,
+    cancel: threading.Event | None = None,
 ) -> tuple[list[tuple[DownloadJob, DownloadResult]], list[dict[str, Any]]]:
-    """并发下载。返回 (成功列表，按 jobs 顺序；失败列表 [{url, dest, error}])。并发超过 MAX_CONCURRENCY 报错。"""
+    """并发下载。返回 (成功列表，按 jobs 顺序；失败列表 [{url, dest, error}])。并发超过 MAX_CONCURRENCY 报错。
+
+    叫停（DEV-0026）：on_done（在锁里调用，登记清单、查磁盘红线）或 download 抛出 FetchError 以外的异常时，set 叫停
+    事件：还没开始的下载不再开始（不联网），进行中的在下一个块处停下、不改名为 dest，之后不再调用 on_done；等线程池
+    收尾后把第一个异常抛给调用方（DiskRedLine 由落地脚本转成退出码 4）。cancel 可由调用方给出并在外部 set，此时
+    抛 Cancelled（没下完的不静默当成功）。"""
     check_workers(workers)
     results: list[tuple[DownloadJob, DownloadResult] | None] = [None] * len(jobs)
     failures: list[dict[str, Any]] = []
     lock = threading.Lock()
+    stop = cancel if cancel is not None else threading.Event()
+    errors: list[BaseException] = []
+
+    def halt(e: BaseException) -> None:
+        stop.set()
+        errors.append(e)
 
     def one(i: int) -> None:
+        if stop.is_set():
+            return
         job = jobs[i]
         try:
             res = download(
@@ -249,18 +286,34 @@ def download_many(
                 backoff=backoff,
                 timeout=timeout,
                 log=log,
+                cancel=stop,
             )
+        except Cancelled:
+            return
         except FetchError as e:
             with lock:
                 failures.append({"url": job.url, "dest": str(job.dest), "error": e.msg, **job.meta})
             return
-        results[i] = (job, res)
-        if on_done is not None:
+        except BaseException as e:  # noqa: BLE001 — 记下、叫停其余任务，线程池收尾后在主线程抛出
             with lock:
-                on_done(job, res)
+                halt(e)
+            return
+        with lock:
+            if stop.is_set():
+                return
+            results[i] = (job, res)
+            if on_done is not None:
+                try:
+                    on_done(job, res)
+                except BaseException as e:  # noqa: BLE001 — 同上（DiskRedLine 走这里）
+                    halt(e)
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         list(ex.map(one, range(len(jobs))))
+    if errors:
+        raise errors[0]
+    if stop.is_set():
+        raise Cancelled(f"download_many（{len(jobs)} 个任务）")
     return [r for r in results if r is not None], failures
 
 

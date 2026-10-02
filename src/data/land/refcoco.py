@@ -11,6 +11,11 @@
    split、sent_ids、句子文本，并比对 raw_anns 的 bbox 与 instances.json 的 bbox。
 3. 计数：各评测划分的 refs / sentences / images 与 P0 的统计（data_sources A §1.3）一致。
 
+本地副本（DEV-0026，国内网络连不上 web.archive.org 时）：--refer-zip-dir 指向放着 refcoco.zip、refcoco+.zip、refcocog.zip
+的目录，不访问 web.archive.org。核对不少于远端：中央目录（尾部）的 sha256 = SPEC refer_zip_pins、成员 CRC32、refs 的
+sha256 = P0、instances.json 的字节数与 CRC32 = SPEC，整个文件的 sha256 记进清单（SPEC refer_zip_sha256 钉了就比对）；
+之后的计数与镜像比对同远端。读本地 zip 的代码与训练源 refcoco_train 共用（fetch_refer_members）。不给时行为不变。
+
 mask 来源：refer zip 自带的 instances.json（REFER API 读的就是它；data_sources A §1.6 来源 A）。
 评测划分：RefCOCO、RefCOCO+ 取 unc 的 val/testA/testB，RefCOCOg 取 umd 的 val/test（D11-1）。训练划分不落地。
 图像：只下评测划分用到的 COCO train2014 图像，逐张按单图 URL（A §1.5）。
@@ -26,22 +31,34 @@ from __future__ import annotations
 
 import json
 import pickle
+import zipfile
 from pathlib import Path
 from typing import Any
 
 from src.data.land import net
 from src.data.land.common import (
     LandContext,
+    LocalZip,
+    MemberJob,
     budget_gate,
+    check_zip_pins,
     download_images,
     extract_member,
     fetch_hf_file,
+    fetch_zip_members,
     hf_tree,
     open_remote_zip,
+    read_zip_index,
     write_json,
+    zip_source,
 )
 
 SOURCE = "refcoco"
+# --refer-zip-dir 时清单 upstream 里的核对说明（不给时沿用 DEV-0012 的原说明，见 _fetch_wayback_members）
+LOCAL_OFFICIAL_CHECK = (
+    "--refer-zip-dir 的本地副本（Wayback 2022-04-13 快照的拷贝，不访问 web.archive.org）；中央目录 sha256 = SPEC；成员 CRC32；"
+    "refs sha256 = P0；instances.json 字节数与 CRC32 = SPEC；整个文件的 sha256 记进清单（钉住时比对）；评测划分逐条比对 HF 镜像 jxu124"
+)
 _WB = "https://web.archive.org/web/{ts}if_/https://bvisionweb1.cs.unc.edu/licheng/referit/data/{zip}"
 
 SPEC: dict[str, Any] = {
@@ -94,6 +111,21 @@ SPEC: dict[str, Any] = {
             },
         },
     },
+    # refer zip 的中央目录（尾部）与 instances.json 的钉住值：开发机 2026-10-02 用 Range 读中央目录得到（DEV-0022，原在
+    # refcoco_train.SPEC，DEV-0026 搬到这里供 E1 的 --refer-zip-dir 共用）。size 就是上面的 zip_bytes。
+    "refer_zip_pins": {
+        "refcoco": {"size": 53_993_993, "n_entries": 3, "start_dir": 53_993_698, "tail_bytes": 295, "tail_sha256": "df4f6a89577f53ffef1cac2eace0a95e46d6ab7760b7fcd73f9172c4e2a9b56c"},
+        "refcoco+": {"size": 45_613_210, "n_entries": 2, "start_dir": 45_613_005, "tail_bytes": 205, "tail_sha256": "caa09ba1ed952b64715a94d6fbe1058099b9ab4d91542d97ed8e79d3b9f5a7d2"},
+        "refcocog": {"size": 56_712_951, "n_entries": 4, "start_dir": 56_712_574, "tail_bytes": 377, "tail_sha256": "d122663e698b8570c0994978e57c54eea04279e1e3724933ccda15f98683f499"},
+    },
+    "instances_pins": {  # (解压后字节数, CRC32)
+        "refcoco": (120_213_916, "cecd6518"),
+        "refcoco+": (120_197_185, "30ba2d2b"),
+        "refcocog": (124_416_571, "78cbaae4"),
+    },
+    # 整个 zip 文件的 sha256（--refer-zip-dir 时核对）。中央目录推不出它（要读全部字节，含没取的 refs(google).p），
+    # P0 与 B200 的落地清单也没记；None = 还没钉住：只记进清单、不比对。管理员下载后用 scripts/data/refer_zip_sha256.py 补钉。
+    "refer_zip_sha256": {"refcoco": None, "refcoco+": None, "refcocog": None},
     "image_url": "http://images.cocodataset.org/train2014/COCO_train2014_{id:012d}.jpg",
     # 评测划分三者并集 6,549 张、1,105,415,725 B（data_sources A §1.5，逐张 HEAD）；--limit 时按均值估。
     "eval_union_images": 6549,
@@ -122,6 +154,112 @@ def load_refs_pickle(path: Path) -> list[dict[str, Any]]:
 
 def image_file_name(image_id: int) -> str:
     return f"COCO_train2014_{image_id:012d}.jpg"
+
+
+# ---------------------------------------------------------------------------
+# refer zip 的成员：E1 的 --refer-zip-dir 与训练源 refcoco_train 共用这一份（DEV-0026）
+# ---------------------------------------------------------------------------
+
+
+def refer_zip_path(local_dir: str | Path, name: str) -> Path:
+    """--refer-zip-dir 里的本地副本，用官方文件名：refcoco.zip、refcoco+.zip、refcocog.zip。"""
+    return Path(local_dir) / f"{name}.zip"
+
+
+def fetch_refer_members(
+    ctx: LandContext,
+    m,
+    name: str,
+    ds: dict[str, Any],
+    scratch: Path,
+    *,
+    zip_pins: dict[str, Any],
+    instances_pin: tuple[int, str],
+    zip_sha256: str | None,
+    local: str | Path | None,
+    official_check: str,
+) -> tuple[Path, Path]:
+    """取一个 refer zip 里的 refs pickle 与 instances.json 到 scratch（TMPDIR），返回两者的路径。
+
+    来源：local 给了就读本地 zip（--refer-zip-dir 的副本），否则远端 ds["zip_url"]（Range）。核对，任何一项不符都抛错、
+    不往下落地：中央目录（尾部）的大小、条目数与 sha256 = zip_pins；读成员时核对 CRC32 与大小；refs 的 sha256 = P0
+    （ds["refs_sha256"]）；instances.json 的字节数与 CRC32 = instances_pin。本地 zip 另算整个文件的 sha256 记进清单
+    （copy_of 记它是哪个 URL 的副本），zip_sha256 钉了就比对。成员已在 scratch 且大小与 CRC32 相符时跳过（幂等）。"""
+    if local is not None and not Path(local).is_file():
+        raise FileNotFoundError(f"{local} 不存在：--refer-zip-dir 里要放 {name}.zip（官方文件名）")
+    src = zip_source(ctx, ds["zip_url"], local)
+    index = read_zip_index(src)
+    check_zip_pins(m, f"refer {name}.zip", index, zip_pins)
+    extra: dict[str, Any] = {}
+    if isinstance(src, LocalZip):
+        full = net.sha256_file(src.path)
+        extra = {"copy_of": ds["zip_url"], "zip_sha256": full}
+        if zip_sha256 is None:
+            m.note(f"refer {name}.zip：本地副本整个文件的 sha256 为 {full}，SPEC 还没钉住（refer_zip_sha256），本次只核对了中央目录与成员")
+        else:
+            m.verify(f"refer {name}.zip：整个文件的 sha256 = SPEC 钉住的值", full == zip_sha256, got=full, expected=zip_sha256)
+            if full != zip_sha256:
+                raise zipfile.BadZipFile(f"refer {name}.zip：整个文件的 sha256 {full} ≠ 钉住的 {zip_sha256}")
+    refs_tmp, inst_tmp = scratch / f"{name}_refs.p", scratch / f"{name}_instances.json"
+    jobs = [MemberJob(ds["refs_member"], refs_tmp), MemberJob(ds["instances_member"], inst_tmp)]
+    ok, failures = fetch_zip_members(src, index, jobs, workers=min(ctx.workers, 2), log=ctx.log)
+    if failures:
+        raise net.FetchError(src.where, f"refer 成员取回失败：{failures}")
+    refs_sha = net.sha256_file(refs_tmp)
+    m.verify(f"{name}：refs pickle 的 sha256 与 P0 记录一致", refs_sha == ds["refs_sha256"], got=refs_sha, expected=ds["refs_sha256"])
+    if refs_sha != ds["refs_sha256"]:
+        raise ValueError(f"{name} refs pickle sha256 不符")
+    want_bytes, want_crc = instances_pin
+    inst_mm = index.members[ds["instances_member"]]
+    got_inst = (inst_mm.file_size, f"{inst_mm.crc:08x}")
+    m.verify(f"{name}：instances.json 的字节数与 CRC32 = 钉住的值", got_inst == (want_bytes, want_crc), got=got_inst, expected=(want_bytes, want_crc))
+    if got_inst != (want_bytes, want_crc):
+        raise zipfile.BadZipFile(f"{name}：instances.json 的 (字节数, CRC32) {got_inst} ≠ 钉住的 {(want_bytes, want_crc)}")
+    m.data["upstream"].append(
+        {
+            "dataset": name,
+            **src.record(),
+            **extra,
+            "zip": index.pins(),
+            "members": {job.member: {"sha256": rec["sha256"], "bytes": rec["bytes"], "crc32": rec["crc32"]} for job, rec in ok},
+            "official_check": official_check,
+        }
+    )
+    return refs_tmp, inst_tmp
+
+
+def _fetch_wayback_members(ctx: LandContext, m, name: str, ds: dict[str, Any], scratch: Path) -> tuple[Path, Path]:
+    """不给 --refer-zip-dir 时的原路径（DEV-0012，行为与清单格式不变）：zipfile 经 HTTPRangeFile 读 Wayback 上的 zip。"""
+    zf, rf = open_remote_zip(ds["zip_url"], ctx)
+    if rf.size != ds["zip_bytes"]:
+        raise net.FetchError(ds["zip_url"], f"zip 大小 {rf.size} 与 P0 记录 {ds['zip_bytes']} 不符")
+    refs_tmp = scratch / f"{name}_refs.p"
+    inst_tmp = scratch / f"{name}_instances.json"
+    if not (refs_tmp.exists() and net.sha256_file(refs_tmp) == ds["refs_sha256"]):
+        extract_member(zf, ds["refs_member"], refs_tmp)
+    refs_sha = net.sha256_file(refs_tmp)
+    m.verify(f"{name}：refs pickle 的 sha256 与 P0 记录一致", refs_sha == ds["refs_sha256"], got=refs_sha, expected=ds["refs_sha256"])
+    if refs_sha != ds["refs_sha256"]:
+        raise ValueError(f"{name} refs pickle sha256 不符")
+    info_inst = zf.getinfo(ds["instances_member"])
+    if not (inst_tmp.exists() and inst_tmp.stat().st_size == info_inst.file_size):
+        extract_member(zf, ds["instances_member"], inst_tmp)
+    inst_sha = net.sha256_file(inst_tmp)
+    info_refs = zf.getinfo(ds["refs_member"])
+    m.data["upstream"].append(
+        {
+            "dataset": name,
+            "url": ds["zip_url"],
+            "zip_bytes": rf.size,
+            "members": {
+                ds["refs_member"]: {"sha256": refs_sha, "bytes": info_refs.file_size, "crc32": f"{info_refs.CRC:08x}"},
+                ds["instances_member"]: {"sha256": inst_sha, "bytes": info_inst.file_size, "crc32": f"{info_inst.CRC:08x}"},
+            },
+            "range_bytes_fetched": rf.bytes_fetched,
+            "official_check": "zip CRC32（读成员时核对）；refs sha256 = P0 记录；评测划分逐条比对 HF 镜像 jxu124",
+        }
+    )
+    return refs_tmp, inst_tmp
 
 
 def build_eval_json(name: str, ds: dict[str, Any], refs: list[dict[str, Any]], inst: dict[str, Any]) -> dict[str, Any]:
@@ -226,10 +364,21 @@ def crosscheck_mirror(ctx: LandContext, m, name: str, ds: dict[str, Any], doc: d
 def land(ctx: LandContext, spec: dict[str, Any] | None = None) -> None:
     spec = {**SPEC, **(spec or {})}
     which = ctx.options.get("refcoco_datasets") or list(spec["datasets"])
+    # --refer-zip-dir（DEV-0026）：refer 的三个 zip 读本地副本，不访问 web.archive.org；核对同远端，另记整个文件的 sha256。
+    # 不给时走原路径，行为不变。--mirror-hf-base：与 jxu124 镜像比对时用的 HF 根地址（不给时用 SPEC 的 huggingface.co）。
+    local_dir = ctx.options.get("refer_zip_dir")
+    if ctx.options.get("mirror_hf_base"):
+        spec["hf_base"] = ctx.options["mirror_hf_base"]
+    if local_dir:
+        missing = [str(refer_zip_path(local_dir, n)) for n in which if not refer_zip_path(local_dir, n).is_file()]
+        if missing:
+            raise FileNotFoundError(f"--refer-zip-dir {local_dir} 里缺 {missing}（官方文件名 refcoco.zip、refcoco+.zip、refcocog.zip）")
     src_dir = ctx.source_dir(SOURCE)
     m = ctx.manifest(SOURCE)
     m.data["license"] = spec["license"]
     scratch = ctx.scratch(SOURCE)
+    if local_dir:
+        m.note(f"refer zip 读 --refer-zip-dir 的本地副本（{local_dir}），没有访问 web.archive.org；每个 zip 的完整 sha256 见 upstream[].zip_sha256")
 
     # 预算：标注很小；图像按 P0 的评测并集字节估（--limit 时按均值 × 张数），留 10% 余量。
     if ctx.limit is None:
@@ -242,35 +391,21 @@ def land(ctx: LandContext, spec: dict[str, Any] | None = None) -> None:
     docs: dict[str, dict[str, Any]] = {}
     for name in which:
         ds = spec["datasets"][name]
-        zf, rf = open_remote_zip(ds["zip_url"], ctx)
-        if rf.size != ds["zip_bytes"]:
-            raise net.FetchError(ds["zip_url"], f"zip 大小 {rf.size} 与 P0 记录 {ds['zip_bytes']} 不符")
-        refs_tmp = scratch / f"{name}_refs.p"
-        inst_tmp = scratch / f"{name}_instances.json"
-        if not (refs_tmp.exists() and net.sha256_file(refs_tmp) == ds["refs_sha256"]):
-            extract_member(zf, ds["refs_member"], refs_tmp)
-        refs_sha = net.sha256_file(refs_tmp)
-        m.verify(f"{name}：refs pickle 的 sha256 与 P0 记录一致", refs_sha == ds["refs_sha256"], got=refs_sha, expected=ds["refs_sha256"])
-        if refs_sha != ds["refs_sha256"]:
-            raise ValueError(f"{name} refs pickle sha256 不符")
-        info_inst = zf.getinfo(ds["instances_member"])
-        if not (inst_tmp.exists() and inst_tmp.stat().st_size == info_inst.file_size):
-            extract_member(zf, ds["instances_member"], inst_tmp)
-        inst_sha = net.sha256_file(inst_tmp)
-        info_refs = zf.getinfo(ds["refs_member"])
-        m.data["upstream"].append(
-            {
-                "dataset": name,
-                "url": ds["zip_url"],
-                "zip_bytes": rf.size,
-                "members": {
-                    ds["refs_member"]: {"sha256": refs_sha, "bytes": info_refs.file_size, "crc32": f"{info_refs.CRC:08x}"},
-                    ds["instances_member"]: {"sha256": inst_sha, "bytes": info_inst.file_size, "crc32": f"{info_inst.CRC:08x}"},
-                },
-                "range_bytes_fetched": rf.bytes_fetched,
-                "official_check": "zip CRC32（读成员时核对）；refs sha256 = P0 记录；评测划分逐条比对 HF 镜像 jxu124",
-            }
-        )
+        if local_dir:
+            refs_tmp, inst_tmp = fetch_refer_members(
+                ctx,
+                m,
+                name,
+                ds,
+                scratch,
+                zip_pins=spec["refer_zip_pins"][name],
+                instances_pin=spec["instances_pins"][name],
+                zip_sha256=spec["refer_zip_sha256"][name],
+                local=refer_zip_path(local_dir, name),
+                official_check=LOCAL_OFFICIAL_CHECK,
+            )
+        else:
+            refs_tmp, inst_tmp = _fetch_wayback_members(ctx, m, name, ds, scratch)
         m.df(f"{name}：成员已取到 TMPDIR")
         refs = load_refs_pickle(refs_tmp)
         inst = json.loads(inst_tmp.read_text())

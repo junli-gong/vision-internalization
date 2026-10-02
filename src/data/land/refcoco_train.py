@@ -6,7 +6,8 @@ D11-1：训练图 = RefCOCO(unc)、RefCOCO+(unc)、RefCOCOg(umd) 三者 train �
 
 来源：
 - refs 与 mask：复用 E1 钉住的 refer 存档（src/data/land/refcoco.SPEC：2022-04-13 的 Wayback 快照），用 Range 只取
-  refs(unc|umd).p 与 instances.json；核对 zip 中央目录 sha256（本模块 SPEC 钉住）、成员 CRC32、refs 的 sha256（P0）。
+  refs(unc|umd).p 与 instances.json；核对 zip 中央目录 sha256、成员 CRC32、refs 的 sha256（P0）。取成员的代码与钉住值
+  都与 E1 共用（refcoco.fetch_refer_members、refcoco.SPEC；DEV-0026）。
 - 图像：COCO 官方 train2014.zip（13.5 GB），用 Range 只取需要的成员（stored，不压缩），逐个核对 CRC32；中央目录
   （尾部 9.9 MB）的 sha256 钉在 SPEC 里。所有 24,407 张训练图都在 zip 里（开发机 2026-10-02 用 P0 的 image id 清单核对）。
 - 国内网络连不上 web.archive.org 或 images.cocodataset.org 时：--refer-zip-dir 指向放着 refcoco.zip、refcoco+.zip、
@@ -26,7 +27,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from src.data.land import net, refcoco
+from src.data.land import refcoco
 from src.data.land.common import (
     LandContext,
     MemberJob,
@@ -46,18 +47,11 @@ DATASETS = ("refcoco", "refcoco+", "refcocog")
 TRAIN_SPLIT = "train"
 
 SPEC: dict[str, Any] = {
-    # refer 存档：URL、refs 的 sha256、评测划分沿用 E1（refcoco.SPEC），这里只补中央目录与 instances.json 的钉住值
-    # （开发机 2026-10-02 用 Range 读中央目录，每个 zip 几百字节）。
-    "refer_zip_pins": {
-        "refcoco": {"size": 53_993_993, "n_entries": 3, "start_dir": 53_993_698, "tail_bytes": 295, "tail_sha256": "df4f6a89577f53ffef1cac2eace0a95e46d6ab7760b7fcd73f9172c4e2a9b56c"},
-        "refcoco+": {"size": 45_613_210, "n_entries": 2, "start_dir": 45_613_005, "tail_bytes": 205, "tail_sha256": "caa09ba1ed952b64715a94d6fbe1058099b9ab4d91542d97ed8e79d3b9f5a7d2"},
-        "refcocog": {"size": 56_712_951, "n_entries": 4, "start_dir": 56_712_574, "tail_bytes": 377, "tail_sha256": "d122663e698b8570c0994978e57c54eea04279e1e3724933ccda15f98683f499"},
-    },
-    "instances_pins": {  # (解压后字节数, CRC32)
-        "refcoco": (120_213_916, "cecd6518"),
-        "refcoco+": (120_197_185, "30ba2d2b"),
-        "refcocog": (124_416_571, "78cbaae4"),
-    },
+    # refer 存档：URL、refs 的 sha256、评测划分，以及中央目录、instances.json 与整个文件的钉住值，全部沿用 E1
+    # （refcoco.SPEC；DEV-0026 起钉住值只在那里定义一份，这里引用）。
+    "refer_zip_pins": refcoco.SPEC["refer_zip_pins"],
+    "instances_pins": refcoco.SPEC["instances_pins"],
+    "refer_zip_sha256": refcoco.SPEC["refer_zip_sha256"],
     # train 划分（refs, sentences, images），P0 refs_stats.json（data_sources A §1.3）
     "expect_train": {"refcoco": (42_404, 120_624, 16_994), "refcoco+": (42_278, 120_191, 16_992), "refcocog": (42_226, 80_512, 21_899)},
     # D11-1 的结果：开发机用 P0 的 refs_image_ids.json（官方 pickle 逐条统计）算出，落地时用官方 pickle 重算并比对
@@ -140,43 +134,31 @@ def _counts(refs: Iterable[Mapping[str, Any]]) -> tuple[int, int, int]:
     return len(rs), sum(len(r["sentences"]) for r in rs), len({r["image_id"] for r in rs})
 
 
+REFER_OFFICIAL_CHECK = "E1 钉住的 refer 存档（Wayback 2022-04-13 快照，或 --refer-zip-dir 的本地副本）；中央目录 sha256 = SPEC；成员 CRC32；refs sha256 = P0"
+
+
 def _fetch_refer_members(ctx: LandContext, m, name: str, ds: dict[str, Any], spec: dict[str, Any], scratch: Path) -> tuple[Path, Path]:
-    """取一个 refer zip 里的 refs pickle 与 instances.json 到 TMPDIR，核对中央目录、CRC32、refs 的 sha256。"""
+    """取一个 refer zip 里的 refs pickle 与 instances.json 到 TMPDIR：与 E1 共用 refcoco.fetch_refer_members（DEV-0026）。"""
     local_dir = ctx.options.get("refer_zip_dir")
-    local = Path(local_dir) / f"{name}.zip" if local_dir else None  # 官方文件名：refcoco.zip、refcoco+.zip、refcocog.zip
-    src = zip_source(ctx, ds["zip_url"], local)
-    index = read_zip_index(src)
-    check_zip_pins(m, f"refer {name}.zip", index, spec["refer_zip_pins"][name])
-    refs_tmp, inst_tmp = scratch / f"{name}_refs.p", scratch / f"{name}_instances.json"
-    jobs = [MemberJob(ds["refs_member"], refs_tmp), MemberJob(ds["instances_member"], inst_tmp)]
-    ok, failures = fetch_zip_members(src, index, jobs, workers=min(ctx.workers, 2), log=ctx.log)
-    if failures:
-        raise net.FetchError(src.where, f"refer 成员取回失败：{failures}")
-    refs_sha = net.sha256_file(refs_tmp)
-    m.verify(f"{name}：refs pickle 的 sha256 与 P0 记录一致", refs_sha == ds["refs_sha256"], got=refs_sha, expected=ds["refs_sha256"])
-    if refs_sha != ds["refs_sha256"]:
-        raise ValueError(f"{name} refs pickle sha256 不符")
-    want_bytes, want_crc = spec["instances_pins"][name]
-    inst_mm = index.members[ds["instances_member"]]
-    m.verify(f"{name}：instances.json 的字节数与 CRC32 = 钉住的值", (inst_mm.file_size, f"{inst_mm.crc:08x}") == (want_bytes, want_crc), got=(inst_mm.file_size, f"{inst_mm.crc:08x}"), expected=(want_bytes, want_crc))
-    m.data["upstream"].append(
-        {
-            "dataset": name,
-            **src.record(),
-            "zip": index.pins(),
-            "members": {job.member: {"sha256": rec["sha256"], "bytes": rec["bytes"], "crc32": rec["crc32"]} for job, rec in ok},
-            "official_check": "E1 钉住的 refer 存档（Wayback 2022-04-13 快照，或 --refer-zip-dir 的本地副本）；中央目录 sha256 = SPEC；成员 CRC32；refs sha256 = P0",
-        }
+    return refcoco.fetch_refer_members(
+        ctx,
+        m,
+        name,
+        ds,
+        scratch,
+        zip_pins=spec["refer_zip_pins"][name],
+        instances_pin=spec["instances_pins"][name],
+        zip_sha256=spec["refer_zip_sha256"][name],
+        local=refcoco.refer_zip_path(local_dir, name) if local_dir else None,
+        official_check=REFER_OFFICIAL_CHECK,
     )
-    return refs_tmp, inst_tmp
 
 
 def land(ctx: LandContext, spec: dict[str, Any] | None = None) -> None:
     spec = {**SPEC, **(spec or {})}
     rspec = {**refcoco.SPEC, **spec.get("refcoco_spec", {})}
     src_dir = ctx.source_dir(SOURCE)
-    m = ctx.manifest(SOURCE)
-    m.data["script"]["path"] = SCRIPT
+    m = ctx.manifest(SOURCE, script=SCRIPT)
     m.data["license"] = spec["license"]
     scratch = ctx.scratch(SOURCE)
 

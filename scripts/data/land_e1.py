@@ -17,6 +17,10 @@
 - 大文件只进 TMPDIR（服务器上是 /dev/shm 下的项目目录），用完即删；zip 一律用 Range 只取需要的成员。
 - 并发 ≤ 8，失败按指数退避重试，重试用尽的 URL 逐条记进清单 failures，退出码 2。
 - --limit N：开发机小样本（每个源只落 N 条），NYUv2 另加 --nyu-remote 用 Range 读远端 .mat，不下载。
+- 国内网络连不上 web.archive.org 时（DEV-0026）：refcoco 加 --refer-zip-dir DIR，DIR 里放 refcoco.zip、refcoco+.zip、
+  refcocog.zip（官方文件名；先用 scripts/data/refer_zip_sha256.py DIR 核对），核对同远端，清单另记每个 zip 的完整 sha256；
+  COCO 图像照旧从 images.cocodataset.org 取。huggingface.co 不通时加 --mirror-hf-base https://hf-mirror.com（只用于与
+  jxu124 镜像的逐条比对）。两个参数都不给时行为不变。
 - cvbench 放在 coco_val2017 与 nyuv2 之后跑，它的清单会记与 COCO 500 子集、NYU 官方 test 的重合。
 
 退出码：0 成功；2 有不可达的 URL 或核对不通过（清单已写）；3 预算拒绝；4 跌破磁盘红线。
@@ -67,6 +71,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--dry-run", action="store_true", help="只做估算与预算检查")
     ap.add_argument("--refcoco-datasets", nargs="+", choices=list(refcoco.SPEC["datasets"]), default=None)
     ap.add_argument("--skip-mirror-check", action="store_true", help="RefCOCO：跳过与 HF 镜像的逐条比对（只在开发机小样本时用）")
+    ap.add_argument("--refer-zip-dir", type=Path, default=None, help="RefCOCO：本地放着 refcoco.zip、refcoco+.zip、refcocog.zip 的目录（不访问 web.archive.org）")
+    ap.add_argument("--mirror-hf-base", default=None, help="RefCOCO：与 jxu124 镜像比对时用的 HF 根地址（默认 https://huggingface.co；国内可用 https://hf-mirror.com）")
     ap.add_argument("--odinw-configs", nargs="+", choices=list(odinw.CONFIGS), default=None)
     ap.add_argument("--nyu-local-dir", type=Path, default=None, help=f"本地已有 .mat 的目录（默认 {nyuv2.SPEC['local_dir']}）")
     ap.add_argument("--nyu-verify", choices=["stream", "none"], default="stream")
@@ -91,6 +97,8 @@ def main(argv: list[str] | None = None) -> int:
         options={
             "refcoco_datasets": a.refcoco_datasets,
             "skip_mirror_check": a.skip_mirror_check,
+            "refer_zip_dir": a.refer_zip_dir,
+            "mirror_hf_base": a.mirror_hf_base,
             "odinw_configs": a.odinw_configs,
             "nyu_local_dir": a.nyu_local_dir,
             "nyu_verify": a.nyu_verify,
