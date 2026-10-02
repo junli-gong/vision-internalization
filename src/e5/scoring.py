@@ -39,7 +39,6 @@
 from __future__ import annotations
 
 import enum
-import re
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
@@ -60,6 +59,8 @@ from src.grid.codec import (
 )
 from src.metrics.seg import mask_inter_union, sample_iou
 from src.parsing import ParseFailure, ParseTally, parse_generation, parse_polygons
+from src.parsing.refusal import DIGIT_RE as _DIGIT
+from src.parsing.refusal import REFUSAL_RE
 from src.stats import bootstrap_ci, paired_bootstrap_ci
 from src.synth.raster import UNITS, rasterize_units
 from src.synth.relief import RELIEF_TARGET_KEY, baseline_relief_key, relief_score
@@ -82,11 +83,8 @@ class E5Failure(str, enum.Enum):
 _FAILURES = {e.value: e for e in list(ParseFailure) + list(GridParseFailure) + list(E5Failure)}
 if len(_FAILURES) != len(ParseFailure) + len(GridParseFailure) + len(E5Failure):  # pragma: no cover
     raise ImportError("失败原因有重名的取值")
-# 拒答的诊断（只作诊断，不改失败原因）：失败、回答里没有阿拉伯数字、且含下列句式。与 E1 DEV-0015 的规则同一写法，在这里另写一份，
-# 不依赖 src/e1（另一个任务在改它）。
-REFUSAL_RE = re.compile(r"\b(?:I['’]m sorry|I am sorry|I apologi[sz]e|unable to|not able to|can['’]?t|cannot|can not)\b",
-                        re.IGNORECASE)
-_DIGIT = re.compile(r"[0-9]")
+# 拒答的诊断（只作诊断，不改失败原因）：失败、回答里没有阿拉伯数字（_DIGIT）、且 REFUSAL_RE 能匹配。两个正则与 E1 同一来源
+# src/parsing/refusal.py（DEV-0019），本模块顶部 import。
 
 
 def failure_enum(value: str | None):

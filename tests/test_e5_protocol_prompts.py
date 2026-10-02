@@ -1,7 +1,8 @@
-"""DEV-0018：E5 的评测集序号规则、标题口径与分列维度（src/e5/protocol.py），提示配置（src/e5/e5_prompts.json）。"""
+"""DEV-0018：E5 的评测集序号规则、标题口径与分列维度（src/e5/protocol.py），提示配置（configs/e5_prompts.json；DEV-0019 从 src/e5/ 搬来）。"""
 
 import copy
 import json
+from pathlib import Path
 
 import pytest
 
@@ -110,6 +111,24 @@ def test_render():
     assert "{" not in txt
     cot = c.render("cot", "rotation3d", "Rotate it.", "red cube")
     assert "relative to the image size and range from 0 to 1000" in cot and "red cube" in cot
+
+
+E5_PROMPTS_SHA256 = "ab83caad56fef8cda9431560c8a20d6364bf7ef9f15f260b796560978633dd6b"  # DEV-0018 定稿；DEV-0019 搬家不变
+
+
+def test_prompt_config_lives_in_configs_unchanged(tmp_path):
+    """DEV-0019：提示配置搬到 configs/e5_prompts.json，逐字节不变（sha256 同 DEV-0018）；src/e5/ 里不再有副本；
+    运行目录的 meta.json 记的是新位置的 sha256。"""
+    from src.e5 import runner as RN
+
+    repo = Path(__file__).resolve().parents[1]
+    assert P.PROMPTS_PATH == repo / "configs" / "e5_prompts.json"
+    assert P.file_sha256(P.PROMPTS_PATH) == E5_PROMPTS_SHA256 and P.load_prompt_config().sha256 == E5_PROMPTS_SHA256
+    assert not (repo / "src" / "e5" / "e5_prompts.json").exists()
+    spec = RN.RunSpec(system="baseline", model_key="visible", task="occlusion", subset="dev", n_per_bin=1, n_resamples=0, limit=1)
+    RN.run_baseline_task(spec, tmp_path)
+    meta = json.loads((RN.leaf_dir(tmp_path, spec) / "meta.json").read_text())
+    assert meta["data_sha256"] == {str(P.PROMPTS_PATH): E5_PROMPTS_SHA256}
 
 
 def test_validate_rejects_bad_configs():

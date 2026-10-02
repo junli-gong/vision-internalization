@@ -59,6 +59,8 @@ from src.parsing import (
     parse_named_choice,
     parse_polygons,
 )
+from src.parsing.refusal import DIGIT_RE as _DIGIT
+from src.parsing.refusal import REFUSAL_RE
 from src.stats import CI, bootstrap_ci, f1_statistic, ratio_of_sums
 
 COORD_TASKS = frozenset({"refexp_box", "refexp_poly", "ovd"})
@@ -140,10 +142,8 @@ DIAG_RULE_VERSION = 1
 # 多边形任务里"给错了形状"：malformed 的回答里出现这些 JSON 键（框或点）。按键在回答里第一次出现的位置取一个。
 WRONG_SHAPE_KEYS: tuple[str, ...] = ("bbox_2d", "box_2d", "point_2d", "bbox", "box", "point")
 WRONG_SHAPE_RE = re.compile(r'"(' + "|".join(re.escape(k) for k in WRONG_SHAPE_KEYS) + r')"\s*:')
-# 拒绝作答：失败、回答（text）里一个阿拉伯数字都没有、且含下列任一句式（不分大小写，整词）
-REFUSAL_RE = re.compile(r"\b(?:I['’]m sorry|I am sorry|I apologi[sz]e|unable to|not able to|can['’]?t|cannot|can not)\b",
-                        re.IGNORECASE)
-_DIGIT = re.compile(r"[0-9]")
+# 拒绝作答：失败、回答（text）里一个阿拉伯数字都没有（_DIGIT）、且 REFUSAL_RE 能匹配（不分大小写，整词）。两个正则的唯一来源是
+# src/parsing/refusal.py（DEV-0019，E1 与 E5 共用），本模块顶部 import。
 # 三个家族的思考段标记（字面量取自各适配器）：关思考时 raw_text 里出现任何一个，就记为"自发写出思考标记"
 THINK_MARKERS: tuple[str, ...] = tuple(sorted({qwen35.THINK_END, internvl35.THINK_START, internvl35.THINK_END,
                                                gemma4.CHANNEL_OPEN, gemma4.CHANNEL_CLOSE}))

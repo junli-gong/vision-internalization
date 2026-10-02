@@ -428,7 +428,7 @@ def test_wrong_shape_only_for_malformed_polygons():
     assert ok["failure"] is None and S.failure_detail("refexp_poly", ok) is None
 
 
-@pytest.mark.parametrize("text,is_refusal", [
+REFUSAL_EXAMPLES = [
     ("I'm sorry, but I cannot fulfill that request. Is there something else I can help you with?", True),  # Gemma
     ("I’m sorry, I can’t help with that.", True),  # 弯撇号
     ("I am unable to locate it.", True),
@@ -437,7 +437,10 @@ def test_wrong_shape_only_for_malformed_polygons():
     ("I did not find any bounding box detections for small giraffe.", False),  # "没找到"不是拒绝句式
     ("The cannoli is on the left.", False),  # 整词匹配
     ("", False),
-])
+]
+
+
+@pytest.mark.parametrize("text,is_refusal", REFUSAL_EXAMPLES)
 def test_refusal_diagnostic(text, is_refusal):
     r = record("refexp_box", "one_box", ref_sample(), gen(text))
     assert r["failure"] is not None  # 都解析不出框；诊断不改失败原因
@@ -484,3 +487,18 @@ def test_diagnostic_regexes_are_pinned():
     assert S.REFUSAL_RE.pattern == (r"\b(?:I['’]m sorry|I am sorry|I apologi[sz]e|unable to|not able to|can['’]?t|cannot|"
                                     r"can not)\b")
     assert S.REFUSAL_RE.flags & re.IGNORECASE and S.DIAG_RULE_VERSION == 1
+
+
+def test_refusal_regex_single_source_and_unchanged_verdicts():
+    """DEV-0019：拒答正则的唯一来源是 src/parsing/refusal.py。E1、E5 用的是同一个对象；E1 现有测试里的拒答例子
+    （REFUSAL_EXAMPLES 与 test_think_marker_when_off_and_aggregate_diagnostics 里的一条）在两边判定都不变。"""
+    from src.e5 import scoring as E5S
+    from src.parsing import refusal as R
+
+    assert S.REFUSAL_RE is R.REFUSAL_RE and E5S.REFUSAL_RE is R.REFUSAL_RE
+    assert S._DIGIT is R.DIGIT_RE and E5S._DIGIT is R.DIGIT_RE and R.DIGIT_RE.pattern == "[0-9]"
+    for text, want in REFUSAL_EXAMPLES + [("I'm sorry, I cannot count them.", True)]:
+        r = record("refexp_box", "one_box", ref_sample(), gen(text))
+        assert r["failure"] is not None and (S.failure_detail("refexp_box", r) == "refusal") is want, text
+        assert E5S.is_refusal({"failure": "no_grid", "text": text}) is want, text
+        assert E5S.is_refusal({"failure": None, "text": text}) is False

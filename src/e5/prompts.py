@@ -1,4 +1,4 @@
-"""E5 提示配置（src/e5/e5_prompts.json）：读取、结构校验、sha256、逐条渲染（DEV-0018）。
+"""E5 提示配置（configs/e5_prompts.json；DEV-0019 从 src/e5/ 搬来，内容逐字节不变）：读取、结构校验、sha256、逐条渲染（DEV-0018）。
 
 配置只在 JSON 里写一处，这里只读它。三个家族用同一个提示（统一提示）。
 """
@@ -15,7 +15,7 @@ from typing import Any, Mapping
 from src.e5.protocol import E5_GRID_SIZE, E5_TASKS, MODEL_SYSTEMS
 from src.synth.seeding import canonical_task
 
-PROMPTS_PATH = Path(__file__).resolve().parent / "e5_prompts.json"
+PROMPTS_PATH = Path(__file__).resolve().parents[2] / "configs" / "e5_prompts.json"
 PROMPTS_SCHEMA_VERSION = 1
 PLACEHOLDERS = frozenset({"instruction", "target", "n"})
 # 格式名 → 解析方式（scoring.parse_answer 按它分派）

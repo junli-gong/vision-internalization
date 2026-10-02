@@ -104,6 +104,11 @@ def test_export_inputs(tmp_path):
 
 _REF = re.compile(r"(src\.e5\.external|from src\.e5 import[^\n]*\bexternal\b|src/e5/external|" + re.escape(EXT.EXTERNAL_MARKER)
                   + r"|EXTERNAL_MARKER)")
+# 外部系统那一侧（DEV-0019）：这些脚本在外部系统自己的环境里运行，产出外部预测目录（写标记文件），不读我们的训练数据，
+# 也不 import src/（tests/test_e5_lisa_infer.py 静态核对）。它们不是外部预测的"读者"，所以不进 ALLOWED_READERS。
+EXTERNAL_SIDE_WRITERS: dict[str, str] = {
+    "scripts/external/lisa_e5_infer.py": "LISA-7B-v1 推理：外部系统那一侧，只写外部预测目录，不读我们的训练数据（DEV-0019）",
+}
 
 
 def test_static_only_allowed_files_reference_external_predictions():
@@ -111,14 +116,16 @@ def test_static_only_allowed_files_reference_external_predictions():
     for base in ("src", "scripts"):
         for path in sorted((REPO / base).rglob("*.py")):
             rel = path.relative_to(REPO).as_posix()
-            if rel in EXT.ALLOWED_READERS:
+            if rel in EXT.ALLOWED_READERS or rel in EXTERNAL_SIDE_WRITERS:
                 continue
             if _REF.search(path.read_text(encoding="utf-8")):
                 offenders.append(rel)
     assert not offenders, f"这些文件引用了外部预测（硬约束 1：只有 {EXT.ALLOWED_READERS} 可以）：{offenders}"
-    # 允许的读者确实存在（清单没有写错）
-    assert all((REPO / f).exists() for f in EXT.ALLOWED_READERS)
-    assert not any(f.startswith(("src/synth", "src/data", "src/rl", "src/readout", "src/probes")) for f in EXT.ALLOWED_READERS)
+    # 允许的读者与外部那一侧的脚本确实存在（清单没有写错）
+    assert all((REPO / f).exists() for f in (*EXT.ALLOWED_READERS, *EXTERNAL_SIDE_WRITERS))
+    assert not any(f.startswith(("src/synth", "src/data", "src/rl", "src/readout", "src/probes"))
+                   for f in (*EXT.ALLOWED_READERS, *EXTERNAL_SIDE_WRITERS))
+    assert all(f.startswith("scripts/external/") for f in EXTERNAL_SIDE_WRITERS)
 
 
 class _Probe:

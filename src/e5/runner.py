@@ -34,7 +34,7 @@ from src.accounting import Compute, merge, write_compute_json
 from src.constants import BOOTSTRAP_SEED
 from src.e5 import external as EXT
 from src.e5 import scoring as SC
-from src.e5.prompts import PromptConfig
+from src.e5.prompts import PROMPTS_PATH, PromptConfig
 from src.e5.protocol import (
     MODEL_SYSTEMS,
     SUBSETS,
@@ -188,7 +188,7 @@ def _prepare(leaf: Path, cfg: Mapping[str, Any], resume: bool) -> None:
     else:
         leaf.mkdir(parents=True, exist_ok=True)
         (leaf / "logs").mkdir(exist_ok=True)
-        files = [REPO_ROOT / "src" / "e5" / "e5_prompts.json"]
+        files = [PROMPTS_PATH]
         write_run_metadata(leaf, config=cfg, seed=BOOTSTRAP_SEED, data_files=files, repo_root=REPO_ROOT)
     (leaf / "logs").mkdir(exist_ok=True)
 
