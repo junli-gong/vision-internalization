@@ -1098,3 +1098,35 @@
    - RUN-0017 产出，代码 `c3f6983`，8 个基座，`experiments/P0/0017_health_v3_base/`；
    - MMLU-Pro 字母读数准确率：Qwen 0.8B/2B/4B/9B 为 16/29/46/53，Gemma E2B/E4B 为 32/40，InternVL 2B/4B 为 35/46。
 
+## D45 — DEV-0021（训练接口核对仪器、新增 token 行的训练开关）合入与偏离裁定（2026-10-02）
+
+1. **合入**（4e8660e，无返工）。合入前验证：普通与 server-parity 条件都是 1734 passed + 11 skipped。
+2. **`scripts/check_training_interfaces.py`** 是常备仪器。
+   - 数据：E1 grid16 开发子集里按 sha256 取 n 条，用 grid16 的提示，两种思考开关各跑一遍，128 token，批配置读冻结值（64）。
+   - allowed 集合：数字 "0"、"1"、换行与停止 token，不用 grid token。
+   - `restricted`：比较受限解码、`generate_batch` 与教师强制三者。
+   - `merge`：两种模式。
+     - 随机 LoRA：‖ΔW‖ = 0.05‖W‖，种子 0；
+     - `--checkpoint`：比较 `load_trained` 不合并与合并两种加载。以后评测前的合并核对就用这个模式（简报 §12）。
+   - 判据是提议值，RUN-0021 实测后由管理员冻结：
+     - 一致率 ≥ 0.995；
+     - 不一致处，两边所选 token 的 logit 差都 < 0.125；
+     - 随机 LoRA 必须明显偏离 base。
+3. **`trainable_token_rows`**：
+   - 实现：权重设为求梯度，再挂梯度掩码钩子，只有 grid token 那几行能更新。行仍在原来的权重张量里，生成、token 表、保存与合并都不用改。
+   - 代价：梯度与优化器状态是整个嵌入矩阵的稠密张量，9B 约 6 GB。
+   - 约束：这些参数必须放进 weight_decay = 0 的参数组。`save_trained` 会抽样核对冻结行，没被改动才放行。
+   - 不用 peft 的 `trainable_token_indices`：它要在注入前定好；增量放在包装层，行哈希读不到；还会改嵌入模块的结构。
+4. **偏离全部接受**：
+   - 判据的 logit 差，取两边所选 token 之差，不取前两名之差（前两名之差照报、不判）；
+   - 两种思考开关分别判；
+   - 合并核对用全词表；
+   - "随机 LoRA 明显不同"写成了可检查的前提；
+   - 退出码 1 表示判据不过；
+   - 加了 OOM 时的退路 `--batch-size`；
+   - manifest 多一个字段。
+5. **遗留**：
+   - **Gemma 的 PLE 行不训练**：grid token 的逐层输入因此相同。E3b 先在 Qwen 上做；Gemma 是 E6 的事，到 E6 的预注册里定。
+   - **`base.py` 补 `trainable_token_rows` 的桩**：下一个改适配器的任务顺手做。
+   - **`--checkpoint` 模式改用检查点自己的 grid token** 作为可选项：等 E3b 有了训练出的模型再加。
+
