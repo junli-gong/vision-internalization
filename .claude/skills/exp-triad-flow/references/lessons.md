@@ -12,6 +12,9 @@
   但要有"数值不变"的实证（改前后逐 epoch 损失逐位相同）。
 - **服务器的长任务从固定 commit 的 worktree 跑**：多模型的驱动每个模型都开新进程，推中间批前的 `git pull` 会让后面的模型加载新代码，一次运行里就混了两版。
   开跑前 `git worktree add --detach <tmp>/wt<NNNN> HEAD`，所有进程都从那里启动，输出写主仓库的绝对路径；主 checkout 只用来 pull 与推。
+- **git stash 是所有 worktree 共用的**：主仓库和各开发 agent 的 worktree 共用一个 stash 栈，裸 `git stash` / `git stash pop` 可能弹出别的会话存的改动。
+  合入时要暂存本地改动，用临时 WIP 提交；非用 stash 不可时，用 `git stash push -u -m <唯一标签>`，按 SHA `git stash apply`，再按标签找到条目删掉。
+- **重申：不要 cd 进 worktree**。核对 worktree 里的脚本，用绝对路径加 `cd /主仓库 &&` 前缀。2026-10-03 又犯了一次，主工作目录被带走。
 
 ## 约定与文档
 - **约定只写一处，其余 import；配置注释里的数字用测试钉住** — 网格索引语义被复述后歧义
