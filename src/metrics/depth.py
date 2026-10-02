@@ -110,3 +110,30 @@ def depth_dataset_metrics(samples: Sequence[dict[str, float] | None]) -> dict[st
         "n_images": len(used),
         "n_skipped": len(samples) - len(used),
     }
+
+
+def depth_sample_rmse(pred: np.ndarray, gt: np.ndarray, *, align: Literal["none", "scale_shift"]) -> float | None:
+    """单张图的 RMSE（米）= sqrt(mean((gt − pred)²))。有效像素为空时返回 None。DEV-0023 新增（E2 探针）。
+
+    有效区域（nyu_eval_mask）与对齐方式（align）和 depth_sample_metrics 逐步相同：度量深度先 clip_pred；scale_shift 在有效像素上
+    用未裁剪的预测拟合 s·pred + t 再裁剪。tests/test_e2_metrics.py 钉住两者用的是同一个预测（同一组像素上 AbsRel 逐位相同）。
+    公式对齐 cleinc/bts pytorch/bts_eval.py compute_errors 的 `rms = (gt - pred) ** 2; rms = np.sqrt(rms.mean())`；
+    数据集级与 BTS 相同，取逐图 RMSE 的平均（不是逐像素汇总）。
+    """
+    p = np.asarray(pred, dtype=np.float64)
+    g = np.asarray(gt, dtype=np.float64)
+    if p.shape != g.shape:
+        raise ValueError(f"pred 形状 {p.shape} 与 gt 形状 {g.shape} 不一致")
+    mask = nyu_eval_mask(g)
+    if not np.any(mask):
+        return None
+    pv, gv = p[mask], g[mask]
+    if align == "none":
+        pv = clip_pred(pv)
+    elif align == "scale_shift":
+        finite = np.where(np.isfinite(pv), pv, clip_pred(pv))
+        scale, shift = fit_scale_shift(finite, gv)
+        pv = clip_pred(scale * finite + shift)
+    else:
+        raise ValueError(f"未知 align={align!r}")
+    return float(np.sqrt(np.mean((gv - pv) ** 2)))

@@ -1,0 +1,128 @@
+{
+ "schema": 1,
+ "version": "e2-probes-v1",
+ "framework": "src/e2（DEV-0023）；规则见 src/e2/__init__.py 的模块说明",
+ "inputs": {
+  "image_policy": "E1 冻结的口径（D28-3）：src/adapters/image_policy.E1_IMAGE_POLICIES，factory.make_adapter 不给 image_policy 时取它；E2 不另设",
+  "model_dtype": "bf16",
+  "dense_order": "image_first",
+  "dense_prompt": "Describe this image.",
+  "dense_prompt_basis": "深度、语义分割、法向用图在前：因果注意力下图像 token 看不到后面的文字，层表征与任务无关（简报 §12）；这句话本身不影响图像位置的隐藏状态（tests/test_e2_modulation.py 钉住）",
+  "refseg_order": "instruction_first",
+  "refseg_template": "Find the object referred to as \"{expression}\" in the image.",
+  "refseg_template_basis": "指代分割用指令在前（简报 §8.3）：指代句放在图像之前，图像 token 能看到它；{expression} 换成 RefCOCO 的 sent（去掉首尾空白）",
+  "thinking": "不涉及：hidden_states 只跑到 user 轮结束，不含 assistant 头与思考前缀"
+ },
+ "layers": {
+  "default": "all",
+  "per_model": {"qwen3.5-9b": "every 2"},
+  "always_include_last": true,
+  "basis": "简报 §8.3：小模型取全部层，9B 每隔一层。every k = range(0, num_layers()+1, k)，再补上最后一层（最终归一化之后的值，D19 的层号约定），否则层数为奇数的模型会漏掉它"
+ },
+ "references": {
+  "post_proj": "就是第 0 层（D21-3：vision_features 与第 0 层在图像位置上逐位相同）。给了 --reference post_proj 只是确保第 0 层在层集合里，运行时核对一次两者逐位相同，不另训一组探针；G2 解读时不能算作第二条证据",
+  "pre_proj": "视觉塔在投影或合并之前的输出：要求适配器提供 pre_projection_features(inputs) -> (张量 [n, D_v], (h, w))，行主序；现有三个适配器都没有，见 DEV-0023 完成总结"
+ },
+ "feature_norm": {
+  "kind": "per_channel_standardize",
+  "n_samples": 256,
+  "eps": 1e-06,
+  "basis": "每个特征来源（层或参考线）各自一组：训练前在训练集里按哈希排序取 n_samples 条（不含留出的验证子集）做一遍前向，按通道算均值与方差（float64，Chan 并行合并），之后冻结；x̂ = (x − μ) / sqrt(σ² + eps)。冻结的统计量进检查点，续跑与评测用同一份"
+ },
+ "probes": {
+  "linear": {"kind": "conv1x1", "basis": "简报 §8.3：线性探针 = 1×1 卷积，D → C"},
+  "conv": {"kind": "conv3x3_gelu_conv3x3", "hidden": 256, "kernel": 3, "padding": 1, "basis": "简报 §8.3：小的两层卷积探针，3×3、D → 256、GELU、3×3、→ C（任务书）"}
+ },
+ "upsample": {"mode": "bilinear", "align_corners": false, "basis": "探针输出在 token 网格分辨率，双线性上采样到 GT 分辨率后算损失与指标（任务书）；三个家族都把整张图缩放进视觉编码器（不裁、不补边），token 网格覆盖整张图"},
+ "optim": {
+  "optimizer": "adamw",
+  "lr": {"linear": 0.001, "conv": 0.0005},
+  "betas": [0.9, 0.999],
+  "eps": 1e-08,
+  "weight_decay": 0.0001,
+  "schedule": "warmup_cosine",
+  "warmup_steps": 100,
+  "min_lr_ratio": 0.0,
+  "basis": "全部模型、全部层、全部任务共用（任务书：不按评测集挑超参）。线性探针 lr 1e-3 是标准化输入上 Adam 的常用值；两层卷积探针取 5e-4，与 Probe3D（El Banani et al., CVPR 2024）稠密探针的 AdamW 设置相同。没有在任何数据上调过"
+ },
+ "seed": 20261002,
+ "probe_chunk": 8,
+ "probe_chunk_max_elements": 134217728,
+ "probe_chunk_basis": "同一个网格形状的探针拼成一块做上采样与损失（各探针的损失相加后一起反传，梯度互不相干），省内核启动。一块至多 probe_chunk 个探针，且上采样后的元素数 P·C·H·W 不超过 probe_chunk_max_elements（2^27 个 fp32 = 512 MiB；交叉熵的中间量与梯度再乘几倍）；ADE 150 类在 512×683 上一块 2 个探针，深度、法向、指代分割一块 8 个",
+ "tasks": {
+  "depth": {
+   "train": "nyu_depth_train（BTS 清单，D11-2；src/data/train_loaders.load_nyu_depth_train，必须有去重清单）",
+   "eval": "nyuv2 官方 654（E1 的 nyuv2 落地：index.json 里 split = test 的条目，depth_raw；Eigen crop，D11-2）",
+   "n_eval_expected": 654,
+   "out_channels": 1,
+   "steps": 3000,
+   "batch_size": 8,
+   "eval_every": 250,
+   "ckpt_every": 250,
+   "holdout": {"group": "base_scene", "min_items": 64, "n_val": 64},
+   "loss": {"kind": "silog", "variance_focus": 0.85, "scale": 10.0, "basis": "探针输出 log 深度（米）；cleinc/bts pytorch/bts.py silog_loss：sqrt(mean(d²) − 0.85·mean(d)²)·10，d = log 预测 − log GT，只在 GT 有效像素上（NYU_DEPTH_MIN < GT < NYU_DEPTH_MAX）"},
+   "metrics": "AbsRel、δ1、RMSE（度量深度，预测先 clip；Eigen crop），另报尺度-平移对齐后的 AbsRel、δ1；逐图平均（BTS）"
+  },
+  "semseg": {
+   "train": "ade20k/train（src/data/train_loaders.load_ade20k，必须有去重清单）",
+   "eval": "ade20k/val（2,000 张）",
+   "n_eval_expected": 2000,
+   "out_channels": 150,
+   "steps": 3000,
+   "batch_size": 8,
+   "eval_every": 250,
+   "ckpt_every": 250,
+   "holdout": {"group": "stem", "min_items": 64, "n_val": 64},
+   "loss": {"kind": "cross_entropy", "basis": "标签 0（other objects）忽略：reduce_zero_label 之后 0 → 255 = ignore_index（mmseg ADE20KDataset），1–150 → 0–149"},
+   "metrics": "mIoU（150 类，逐类在全集上累计交并）、像素准确率（aAcc）；mmseg 口径"
+  },
+  "normals": {
+   "train": "nyu_normals/train（Bae 2021 / GeoNet，795 张；必须有去重清单）",
+   "eval": "nyu_normals/test（654 张）",
+   "n_eval_expected": 654,
+   "license_gate": "N20：数据许可待项目负责人确认；真模型运行要显式给 --enable-normals（--tiny 的 fixture 是合成数据，不受此限）",
+   "out_channels": 3,
+   "steps": 1000,
+   "batch_size": 8,
+   "eval_every": 100,
+   "ckpt_every": 100,
+   "holdout": {"group": "idx", "min_items": 32, "n_val": 32},
+   "loss": {"kind": "cosine", "basis": "预测逐像素单位化后 1 − cos(预测, GT) 在有效掩码（GT 非 (0,0,0)）上的平均"},
+   "metrics": "平均角误差、中位角误差、11.25°/22.5°/30° 内的比例；逐像素汇总（Bae 2021 compute_normal_errors）。中位数由 0.1° 箱宽的直方图插值（src/metrics/normal.NORMAL_HIST_BIN_DEG）",
+   "steps_basis": "训练集只有 795 张（去掉 E1 开发子集与留出后约 700 张），1000 步 × 8 ≈ 11 个 epoch；其余任务 3000 步 × 8 = 24,000 条，约为 NYU 深度训练集的 1 个 epoch、ADE 的 1.2 个 epoch、RefCOCO 句子的 1/5"
+  },
+  "refseg": {
+   "train": "refcoco_train 的 refcoco（unc）train 句子（D11-1 已去掉评测图；必须有去重清单）",
+   "eval": "RefCOCO（unc）val（E1 的 refcoco 落地，src/data/loaders.load_refcoco）",
+   "eval_subset": "eval",
+   "eval_subset_basis": "与 E1 的 RefCOCO val 同一总体：去掉 E1 的 200 句开发子集与 D20 的探针用图；要用整个 val 改成 all（待管理员裁定）",
+   "out_channels": 1,
+   "steps": 3000,
+   "batch_size": 8,
+   "eval_every": 250,
+   "ckpt_every": 250,
+   "holdout": {"group": "image_id", "min_items": 128, "n_val": 128},
+   "loss": {"kind": "bce_dice", "bce_weight": 1.0, "dice_weight": 1.0, "dice_smooth": 1.0, "basis": "逐像素二值交叉熵（logits）+ Dice（sigmoid 概率，1 − (2Σpg + s)/(Σp + Σg + s)），在 GT 分辨率上"},
+   "metrics": "cIoU（累计交 / 累计并）、gIoU（逐句 IoU 的平均）；预测 = logit > 0；LISA 口径（src/metrics/seg）"
+  }
+ },
+ "holdout_basis": "验证子集从训练集里留出（不进训练），只用来记曲线，不挑步数或超参：按 group 键的哈希排序依次取组，直到条数 ≥ min_items，再在这些组里按哈希排序取 n_val 条。NYU 深度按基础场景留出（同一场景的相邻帧几乎相同），RefCOCO 按图留出（同一张图的句子不跨划分）",
+ "tiny": {
+  "basis": "--tiny：小型随机模型 + CPU + tests/fixtures/e2 的小数据。只改下面这些规模参数，其余同正式配置",
+  "steps": 4,
+  "batch_size": 2,
+  "eval_every": 1,
+  "ckpt_every": 2,
+  "warmup_steps": 1,
+  "n_norm_samples": 2,
+  "holdout_min_items": 1,
+  "n_val": 2,
+  "probe_chunk": 3,
+  "bootstrap_resamples": 50
+ },
+ "estimate": {
+  "train_steps": 3,
+  "eval_samples": 8,
+  "basis": "--estimate：每个任务先预热 1 步，再计时 train_steps 个训练步与 eval_samples 条评测（含全部探针的前向、上采样与指标），按配置的步数、曲线点数与评测集条数外推 GPU 小时"
+ }
+}

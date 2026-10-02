@@ -219,3 +219,40 @@ def mean_iou(per_image: Iterable[tuple[np.ndarray, np.ndarray]]) -> float | None
     if not items:
         return None
     return miou_from_totals(np.sum([i for i, _ in items], axis=0), np.sum([u for _, u in items], axis=0))
+
+
+def pixel_correct_total(
+    pred: np.ndarray,
+    label: np.ndarray,
+    num_classes: int = ADE_NUM_CLASSES,
+    ignore_index: int = ADE_IGNORE_INDEX,
+    *,
+    reduce_zero: bool,
+) -> tuple[int, int]:
+    """单张图的 (预测正确的像素数, 参与评测的像素数)，像素准确率用。DEV-0023 新增（E2 探针）。
+
+    参与评测的像素与 intersect_and_union 相同：reduce_zero 的规则相同（必填，没有默认值），去掉 label == ignore_index，
+    只计 label ∈ [0, num_classes)；正确 = 其中 pred == label 的像素，恰为 intersect_and_union 的逐类交之和
+    （tests/test_e2_metrics.py 钉住）。
+    """
+    p = np.asarray(pred).astype(np.int64)
+    lab = np.asarray(label).astype(np.int64)
+    if p.shape != lab.shape:
+        raise ValueError(f"pred 形状 {p.shape} 与 label 形状 {lab.shape} 不一致")
+    if reduce_zero:
+        lab = reduce_zero_label(lab)
+    keep = (lab != ignore_index) & (lab >= 0) & (lab < num_classes)
+    return int(np.count_nonzero(p[keep] == lab[keep])), int(np.count_nonzero(keep))
+
+
+def pixel_accuracy(per_image: Iterable[tuple[int, int]]) -> float | None:
+    """像素准确率 = Σ正确 / Σ参与评测的像素（逐像素汇总）。空集合或分母为 0 返回 None。
+
+    对齐 open-mmlab/mmsegmentation mmseg/evaluation/metrics/iou_metric.py IoUMetric.total_area_to_metrics 的
+    `all_acc = total_area_intersect.sum() / total_area_label.sum()`（aAcc）。per_image：每张图 pixel_correct_total 的结果。
+    """
+    items = list(per_image)
+    total = sum(int(t) for _, t in items)
+    if not items or total == 0:
+        return None
+    return sum(int(c) for c, _ in items) / total
