@@ -1007,3 +1007,36 @@
    - 开发机 visint 同步装了这两个版本，并带上依赖 psutil 7.2.2；
    - 服务器的 `pip install --dry-run -r requirements.txt` 不会新装。
 
+## D42 — DEV-0020（E3 前的适配器接口）合入与偏离裁定（2026-10-02）
+
+1. **合入**（6a75f62，无返工）。
+   - 合入前验证：普通与 server-parity 条件都是 1708 passed + 11 skipped；
+   - E1、E5 提示配置的 sha256 不变；
+   - 冒烟、`run_e1.py --tiny`、`health_check.py --tiny` 三家族照旧通过。
+2. **内容**：
+   - **公共实现**：新建 `src/adapters/training.py` 与 `checkpoint.py`，写成 mixin，三家族共用。
+   - **训练前向与受限 logits**：
+     - `training_forward`：位置 t 预测 t+1，可带梯度返回指定层与位置的隐藏状态；
+     - `restricted_logits` 是唯一的受限 logits：fp32，取 lm_head 的允许行，含 Gemma 的 softcap；
+     - `generate_restricted` 手写 greedy 循环，每步都调 `restricted_logits`；
+     - `chunked_lm_loss`；
+     - `train_mode`、`eval_mode` 与梯度检查点。
+   - **token 与 LoRA 的保存、恢复**：
+     - token 表与 `restore_tokens`：只核对、不初始化；
+     - 查询占位符固定在预留区末行：Qwen 248319，InternVL 151935；grid id 与调用顺序无关；
+     - LoRA 目标只含 LLM 线性层，参数量与 env_report 逐数相同；
+     - `save_trained` / `load_trained`：只存 LoRA、token 行、查询嵌入与 extra，在内存里合并，manifest 带 sha256。0.8B 约 88 MB，9B 约 356 MB。
+   - **查询嵌入必须显式传入**；`class_name_spans`。
+   - **一致性**：CPU fp32 上，受限解码与 `generate_batch(allowed_token_ids)` 逐个相同，教师强制的 argmax 等于解码出的 token，三家族、两种思考开关都核对过。
+3. **偏离全部接受**：
+   - 新建两个 mixin 文件；
+   - 现有测试的改动比任务书第 8 条更广：第 6 条改了 id 布局，旧断言随之失效，每处都有注释；
+   - 占位符平时不进 tokenizer；
+   - `restricted_logits` 在 fp32 下乘，与 HF 在模型 dtype 下乘的结果只差舍入，GPU 判据用一致率；
+   - 训练模式下禁止生成；
+   - 顺序约束只拦首次注入；
+   - `training_forward` 与 `save_trained` 多了 `query_embeds=` 参数；
+   - 类别名拼法暂定为 `" " + ", ".join(names)`，E3a 的提示措辞另定；
+   - base 指纹按抽样计算。
+4. **GPU 核对与遗留**：派 DEV-0021 写常备的核对脚本，同时补上新增 token 行的训练开关（peft 默认冻结全部 base 参数）。判据先按提议值，即一致率 ≥ 0.995 且不一致处都是近似平局，RUN 实测后再冻结。
+
