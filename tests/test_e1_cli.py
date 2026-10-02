@@ -188,21 +188,21 @@ def test_parse_args_rules(cli, monkeypatch):
 
 
 def test_frozen_batch_sizes_are_enforced_for_real_models(cli, monkeypatch):
-    """D36-1：真模型默认用冻结的批大小（16；验收 B 遍 12）；给别的值要 --allow-unfrozen-batch。"""
+    """D36-1、D43：真模型默认用冻结的批大小（64；验收 B 遍 48）；给别的值要 --allow-unfrozen-batch。"""
     from src.e1.prompts import load_prompt_config
 
     prompts = load_prompt_config()
     monkeypatch.delenv("VISINT_DATA_ROOT", raising=False)
     base = ["--model", "qwen3.5-2b", "--task", "count", "--out", "experiments/E1/0011_e1_main", "--data-root", "/d"]
-    assert cli.resolve_batch_sizes(cli.parse_args(base), prompts) == (16, None)
-    assert cli.resolve_batch_sizes(cli.parse_args(["--acceptance", *base]), prompts) == (16, 12)
-    with pytest.raises(ValueError, match="不是冻结的批大小 16"):
+    assert cli.resolve_batch_sizes(cli.parse_args(base), prompts) == (64, None)
+    assert cli.resolve_batch_sizes(cli.parse_args(["--acceptance", *base]), prompts) == (64, 48)
+    with pytest.raises(ValueError, match="不是冻结的批大小 64"):
         cli.resolve_batch_sizes(cli.parse_args([*base, "--batch-size", "32"]), prompts)
     with pytest.raises(ValueError, match="composition_b"):
         cli.resolve_batch_sizes(cli.parse_args(["--acceptance", *base, "--alt-batch-size", "8"]), prompts)
     assert cli.resolve_batch_sizes(cli.parse_args([*base, "--batch-size", "32", "--allow-unfrozen-batch"]), prompts) == (32, None)
     with pytest.raises(ValueError, match="必须都 > 1 且不同"):
-        cli.resolve_batch_sizes(cli.parse_args(["--acceptance", *base, "--alt-batch-size", "16", "--allow-unfrozen-batch"]),
+        cli.resolve_batch_sizes(cli.parse_args(["--acceptance", *base, "--alt-batch-size", "64", "--allow-unfrozen-batch"]),
                                 prompts)
     tiny = cli.parse_args(["--tiny", "--model", "qwen3.5-0.8b", "--task", "count", "--batch-size", "7", "--out", "x"])
     assert cli.resolve_batch_sizes(tiny, prompts) == (7, None)  # --tiny 不受冻结值约束

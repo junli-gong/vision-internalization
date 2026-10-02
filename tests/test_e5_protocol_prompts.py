@@ -73,7 +73,7 @@ def test_groups_and_headline():
 
 def test_prompt_config_loads_and_formats():
     c = P.load_prompt_config()
-    assert len(c.sha256) == 64 and c.order == "image_first" and c.batch_size() == 16
+    assert len(c.sha256) == 64 and c.order == "image_first" and c.batch_size() == 64
     assert c.enable_thinking("zeroshot") is False and c.enable_thinking("cot") is True
     assert c.max_new_tokens("cot") == 4096  # E1 的思考预算（configs/e1_prompts.json think_max_new_tokens.think）
     assert c.kind_of("zeroshot", "a") == "relief_grid"
@@ -113,7 +113,7 @@ def test_render():
     assert "relative to the image size and range from 0 to 1000" in cot and "red cube" in cot
 
 
-E5_PROMPTS_SHA256 = "ab83caad56fef8cda9431560c8a20d6364bf7ef9f15f260b796560978633dd6b"  # DEV-0018 定稿；DEV-0019 搬家不变
+E5_PROMPTS_SHA256 = "d84b6efc141c1bc281e6ea3adb5226602395ae1337e133bf5d0d34f7ed47402b"  # DEV-0018 定稿；DEV-0019 搬家不变；D43 批大小 16 → 64（管理员常量级修改）
 
 
 def test_prompt_config_lives_in_configs_unchanged(tmp_path):

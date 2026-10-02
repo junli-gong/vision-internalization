@@ -22,7 +22,7 @@ CFG_PATH = REPO / "configs" / "e1_prompts.json"
 # 配置的 sha256：配置改了（包括按截断率调 max_new_tokens）就要更新这里，并在 max_new_tokens_adjustments 里记理由；
 # 冻结后写进 PREREGISTRATION.md 的 E1 条目。
 # DEV-0017（协议 v2：受限字母读数、三列、批配置、验收 v3、CountBench 默认人工问句）；DEV-0015 为 e9fade2b…，DEV-0014 为 974d3d73…
-E1_PROMPTS_SHA256 = "4dd027b4c63098f7b1f9feb3dd64b5ed6a2c1b8e9571c52b28db86f2098c39d2"
+E1_PROMPTS_SHA256 = "5de1aec711fad0140db0cf27094d66e460cf2999ffcd5456f1964bc5b9851158"  # D43：批大小 16/12 → 64/48（管理员常量级修改）
 FAM = registry.FAMILIES
 
 

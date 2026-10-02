@@ -71,8 +71,8 @@ def test_batch_protocol_and_acceptance_config_pins():
     """D36-1 的数字：批大小 16（RUN-0012/0013 用的就是它）、左填充、按 select 的顺序；B 12；δ 准确率 2 个点、IoU 0.02；
     短输出 n ≥ 300（按输出类型合并），多边形与网格 500。"""
     bp, ac = CFG.batch_protocol(), CFG.acceptance()
-    assert (bp["batch_size"], bp["padding_side"], bp["order"], bp["letter_batches"]) == (16, "left", "selection", "same_letters")
-    assert ac["version"] == P.ACCEPTANCE_VERSION == 3 and ac["composition_b"]["batch_size"] == 12
+    assert (bp["batch_size"], bp["padding_side"], bp["order"], bp["letter_batches"]) == (64, "left", "selection", "same_letters")
+    assert ac["version"] == P.ACCEPTANCE_VERSION == 3 and ac["composition_b"]["batch_size"] == 48
     assert ac["delta"] == {"accuracy": 0.02, "iou": 0.02}
     g = {x["name"]: x for x in ac["groups"]}
     assert list(g) == ["short_text", "letter", "polygon", "grid", "detection"]
@@ -97,7 +97,7 @@ def test_acceptance_group_sizes_in_rules_match_dev_configs():
 
 @pytest.mark.parametrize("path,value,frag", [
     (("batch_protocol", "padding_side"), "right", "padding_side"),
-    (("acceptance", "composition_b", "batch_size"), 16, "composition_b"),
+    (("acceptance", "composition_b", "batch_size"), 64, "composition_b"),
     (("letter_readout", "max_new_tokens"), 2, "max_new_tokens 必须是 1"),
     (("letter_readout", "spellings"), ["{letter}", "{letter}"], "spellings"),
     (("letter_readout", "subsets"), ["eval", "think"], "letter_readout.subsets"),

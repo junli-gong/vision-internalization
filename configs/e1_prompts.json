@@ -73,19 +73,19 @@
  },
  "batch_protocol": {
   "version": 1,
-  "batch_size": 16,
+  "batch_size": 64,
   "padding_side": "left",
   "order": "selection",
   "letter_batches": "same_letters",
   "rule": "批配置是协议的一部分，全部子集、全部模型相同（D36-1）：每批 batch_size 条（最后一批可以不满）；左填充（src/adapters/batching，三个家族都只实现了左填充）；样本顺序就是 src/e1/tasks.select 给出的固定顺序，不按长度或别的键重排；每批由这个顺序里连续的样本组成；受限字母读数的任务另加一条：字母集合一变就另起一批。批划分在整份样本上一次算好（src/e1/runner.batch_plan）；续跑时没写完的那一批整批重跑，所以续跑与一次跑完的批组成相同。批大小进运行身份（config.yaml），续跑不能换。真模型运行换批大小要显式加 run_e1.py --allow-unfrozen-batch，config.yaml 记 frozen = false。",
-  "basis": "D36-1；RUN-0012、RUN-0013 批量那遍用的就是 16"
+  "basis": "D36-1；D43：RUN-0016 实测，8 个模型的主评测按 16 外推 29.3、按 64 外推 17.0 GPU 小时，思考子集的实测也多在 64；64 下没有 OOM，显存峰值 69.8 GB（internvl3.5-4b-hf）。原值 16（RUN-0012、RUN-0013 批量那遍）"
  },
  "acceptance": {
   "version": 3,
   "rule": "开发子集上，(i) 同一批配置（batch_protocol）跑两遍（A1、A2），每个任务的 predictions.jsonl 逐字节相同；(ii) 换一种批组成（B，见 composition_b）再跑一遍，按组比较 A1 与 B 的标题指标（严格读数）：两遍逐样本配对、bootstrap 的 95% CI 落在 [−δ, +δ] 以内（δ 按组的 metric_class 取 delta）。所有任务过 (i)、所有能判的组过 (ii) 才算通过。A1 与 B 之间的指标差及其 CI 记作数值噪声底，写进结果；E3 里小于它的效应不做解读。不再以 batch-1 为参照（D36-1）；三种一致口径（逐位、IoU ≥ 0.9、按判定结果）在 A1 与 B 之间照算，只作参考。",
   "composition_b": {
-   "batch_size": 12,
-   "rule": "批大小 12，其余同 batch_protocol（顺序不变、左填充、受限字母读数按字母集合分批）。批大小与 16 不同，除了被字母集合变化或末尾截短的批，B 里没有哪一批与 A 的组成相同：每条样本的同批邻居与填充长度都变了。比 16 小，显存不会比正式运行更紧。"
+   "batch_size": 48,
+   "rule": "批大小 48，其余同 batch_protocol（顺序不变、左填充、受限字母读数按字母集合分批）。批大小与 64 不同，除了被字母集合变化或末尾截短的批，B 里没有哪一批与 A 的组成相同：每条样本的同批邻居与填充长度都变了。比 64 小，显存不会比正式运行更紧。D43 随 A 由 16/12 改为 64/48。"
   },
   "delta": {"accuracy": 0.02, "iou": 0.02},
   "take_salt_purpose": "e1_acceptance_v3",
