@@ -34,8 +34,14 @@ WAIT=$REPO/.claude/skills/exp-triad-flow/scripts/server_standby_wait.sh
 - **退出码 0**（stdout 是任务书路径）：
   1. `cd $REPO && git pull --ff-only`
   2. `echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) running <文件名>" > $STATUS`
-  3. 按 server.md 与该任务书执行：校验 hash、守 D6 磁盘红线、分批 push。
-  4. 完成后，或按规定停止并已推送 report 后，把文件名追加进 `$DONE`，回到"进入值守"第 2 步。
+  3. **从固定 commit 的工作树运行**（D46；RUN-0017 的教训：推中间批时 pull 会把新代码带进还没跑的模型）：
+     - `git -C $REPO worktree add --detach /dev/shm/visint/tmp/wt<NNNN> HEAD`，其中 HEAD 就是第 1 步之后、开跑之前的 commit；
+     - 所有模型与配置都从这个工作树启动；`--out` 写成主仓库运行目录的绝对路径（`$REPO/experiments/...`）；
+     - 主 checkout 只用来 pull 与推结果；
+     - 任务结束后 `git worktree remove`；
+     - report 里写明运行用的 commit。
+  4. 按 server.md 与该任务书执行：校验 hash、守 D6 磁盘红线、分批 push。
+  5. 完成后，或按规定停止并已推送 report 后，把文件名追加进 `$DONE`，回到"进入值守"第 2 步。
 - **退出码 3**（等满 6 小时）：看一眼 `df /`。
   - 剩余低于 3 GB：写 `blocked disk` 到 `$STATUS` 并推送一份简短 report。
   - 否则立即重挂。
