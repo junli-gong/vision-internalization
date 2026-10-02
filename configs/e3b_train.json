@@ -1,0 +1,127 @@
+{
+ "schema": 1,
+ "version": "e3b-train-v1",
+ "framework": "src/e3（DEV-0025 第一部分：词表、目标、数据管线、训练循环、C3 对照；评测另派）；规则见 src/e3/__init__.py",
+ "status": "草稿，未冻结。超参取简报的默认值或常用值（各节 basis）；按简报 §9，LoRA 的秩与放置、数据混合与课程属于自由探索，正式取值由 E3 预注册冻结",
+ "grid": {
+  "size": 32,
+  "basis": "简报 §7.2、§8.5：32×32 = src/constants.GRID_SIZE_E3B（tests 钉住两者相同）。光栅顺序（行主序），每行之后一个行分隔 token，最后接本家族的回合结束 token；长度 32 × 33 + 1 = 1057（src/e3/targets.SEQ_LEN）"
+ },
+ "vocab": {
+  "mask": ["<|e3_m0|>", "<|e3_m1|>"],
+  "depth_template": "<|e3_d{k:02d}|>",
+  "row": "<|e3_row|>",
+  "planned_extra": {"ade20k_classes": 150},
+  "basis": "简报 §7.2 的默认预算：mask 2 个、深度 64 档（src/constants.DEPTH_NUM_BINS）、行分隔 1 个，共 67 个；planned_extra 是计划中的 ADE20K 150 个类别 token（本任务不加），67 + 150 = 217 ≤ MAX_NEW_GRID_TOKENS = 300（简报 §4 第 4 条；src/e3/tokens.GridVocab 核对）。名字过 base.check_grid_token_names；Gemma 上名字只是标签，文本里的样子是 <unusedN>（适配器 grid_token_surfaces）"
+ },
+ "allowed_scope": "task",
+ "allowed_scope_basis": "受限 logits 的允许集合 = 本任务的值 token（分割 2 个 / 深度 64 个）+ 行分隔 + 停止 token（升序）；训练损失与受限解码用同一个函数（src/e3/tokens.GridTokens.allowed_ids）。另一种取法 all = 全部 67 个 grid token + 停止 token",
+ "enable_thinking": false,
+ "enable_thinking_basis": "D1：每次显式设置；网格与 C3 的文本目标都直接作答，不经过思考段（训练与评测同一个开关）",
+ "model": {
+  "dtype": "bf16",
+  "image_policy": "E1 冻结的口径（D28-3；factory.make_adapter 不给 image_policy 时取 src/adapters/image_policy.E1_IMAGE_POLICIES），与 E2 相同；修正对的两张图（原图、叠加图）用同一个口径",
+  "gradient_checkpointing": true,
+  "basis": "bf16 权重（env_report §7 的训练实测口径）；LoRA 的参数由 peft 升到 fp32（get_peft_model 的 autocast_adapter_dtype 默认）；梯度检查点 use_reentrant=False（adapter.set_gradient_checkpointing）"
+ },
+ "tasks": {
+  "refseg": {
+   "train": "refcoco_train 的 RefCOCO、RefCOCO+、RefCOCOg train 句子（D11-1：三者 train 图像的并集减去全部评测图；src/data/train_loaders.load_refcoco_train，必须有去重清单）",
+   "datasets": ["refcoco", "refcoco+", "refcocog"],
+   "order": "instruction_first",
+   "grid_template": "Segment {expression} in the image. Output the {n}x{n} mask grid.",
+   "correction_template": "Segment {expression} in the image. The second image is a candidate result: a mask overlaid on the first image. Output the corrected complete {n}x{n} mask grid.",
+   "merge_candidates_max": 8,
+   "basis": "指令在前（简报 §8.5、§12）；{expression} 是 RefCOCO 的 sent（去首尾空白，空句剔除并计数），{n} 是网格边长。修正对的加噪用 src/noising/mask_noise.corrupt：'与邻近物体合并'的候选取同一张图上其他被指代的物体（按 COCO ann_id 去重、升序，至多 merge_candidates_max 个）"
+  },
+  "depth": {
+   "train": "nyu_depth_train（BTS 清单按场景过滤，D11-2；src/data/train_loaders.load_nyu_depth_train，必须有去重清单）",
+   "order": "instruction_first",
+   "grid_instruction": "Estimate the depth of the image. Output the {n}x{n} depth grid.",
+   "correction_instruction": "Estimate the depth of the image. The second image is a candidate result: a depth map overlaid on the first image. Output the corrected complete {n}x{n} depth grid.",
+   "cell": {"min_valid_fraction": 0.5},
+   "basis": "指令固定一句（任务书 §2）。格值 = 格内有效像素（NYU_DEPTH_MIN < d < NYU_DEPTH_MAX）深度的几何平均，再按 64 档对数分档（src/grid/codec.depth_to_bins）；有效像素不足 min_valid_fraction 的格子不监督（损失权重 0），教师强制输入里填最近的可监督格子的档号（src/e3/targets 模块说明）。0.5 与 mask_to_grid 的'过半'同一口径"
+  }
+ },
+ "mix": {
+  "weights": {"refseg": 1, "depth": 1},
+  "basis": "暂定：两个稠密任务等权交替（简报 §9：数据混合属于自由探索，E3 预注册冻结）。整数权重展开成一个固定的循环（平滑加权轮转），第 k 个样本的任务与该任务内的序号都由 k 算出（src/e3/data.mix_cycle、slot_task），无状态"
+ },
+ "correction": {
+  "fraction": 0.5,
+  "render": "src/e3/feedback.feedback_image（训练与评测共用的唯一入口）：分割 = grid_to_mask 回填 + src/executors/overlay.render_overlay；深度 = 64 档 HSV 色带的伪彩色，alpha 与 render_overlay 相同",
+  "basis": "任务书 §2 的默认 0.5：每条样本以这个概率做成修正对（带错的叠加图 + 原图 → 干净网格），其余从零预测。严重度按 src/noising/mask_noise.sample_severity 的噪声日程（MASK_NOISE_P_CLEAN 的干净对 + Beta(1, 1)）；分割在原图分辨率上加噪（mask_noise.corrupt）再 mask_to_grid，深度在网格上加噪（src/e3/depth_noise）"
+ },
+ "depth_noise": {
+  "max_ops": 3,
+  "shift_max_bins": 8,
+  "field_amp_max_bins": 6,
+  "field_smooth_cells": 4.0,
+  "blob_count": [1, 3],
+  "blob_radius_max_cells": 8.0,
+  "basis": "暂定（简报 §9：加噪的扰动种类与日程属于自由探索）。s = 1 时：整体偏移的标准差 8 档（64 档覆盖 log(10/0.5)，8 档 ≈ 1.45 倍的尺度误差）、平滑场的标准差 6 档、区域错误的半径至多 8 格（网格边长的 1/4）。没有在任何数据上调过"
+ },
+ "c3": {
+  "seg_kinds": {"box": 1, "polygon": 1},
+  "box_template": "Locate {expression} in the image. Report the bounding box as a JSON list [x0, y0, x1, y1]. Coordinates are relative to the image size and range from 0 to 1000, with x first. Output only one JSON block.",
+  "polygon_template_from": {"config": "configs/e1_prompts.json", "task": "refexp_poly"},
+  "polygon_max_points": 64,
+  "depth_template": "Which point of each pair is closer to the camera? Coordinates are relative to the image size and range from 0 to 1000, with x first.\n{pairs}",
+  "depth_pair_line": "{i}. A [{ax}, {ay}], B [{bx}, {by}]",
+  "depth_answer_line": "{i}. {closer} is closer",
+  "depth_pairs_per_image": 5,
+  "chunk_size": 1024,
+  "basis": "C3（简报 §8.4、§8.5）：同样的样本日程（同一个种子下每一步的任务、样本 id、epoch 与 E3b 逐个相同）、同样的 LoRA，目标换成稀疏文本，用 chunked_lm_loss 在全词表上训练；不加网格 token。分割：每条样本按 seg_kinds 的权重（种子与样本 id 决定）选框或多边形；框是 0–1000 的 [x0, y0, x1, y1]（统一格式，见完成总结的待裁项）；多边形用 E1 的统一提示与格式（[[x, y], …]，0–1000，x 在前；多个部件时 [[[x, y], …], …]，src/parsing/spatial.parse_polygons 都认），顶点超过 polygon_max_points 时等步长抽稀；GT 是 RLE 的样本退回框。深度：点对按 src/data/nyu_pairs.pairs_for_image 的规则从 GT 抽样（Eigen crop 内、深度有效、相距 ≥ 短边 10%、深度相对差 ≥ 15%、边缘保护），每张图 depth_pairs_per_image 对（与 E1 的 NYU 点对相同，src/data/constants.NYU_PAIRS_PER_IMAGE，tests 钉住），A / B 的先后由种子与样本 id 决定；坐标是像素中心的 0–1000 坐标（四舍五入成整数）。匹配曝光量的定义：每一步的源图像（同一批样本 id）相同、总步数与批大小相同；E3b 的修正对另有一张叠加图，C3 没有；两边都记监督 token 数与视觉 token 数（logs 与 accounting.json）"
+ },
+ "lora": {
+  "r": 32,
+  "alpha": 64,
+  "dropout": 0.05,
+  "basis": "简报 §8.4：rank 32，作用于所有线性层（adapter.lora_target_modules()：LLM 内全部 nn.Linear，视觉塔冻结）；alpha = 2r、dropout 0.05 取 LLaVA-1.5 LoRA 微调脚本的比例（r 128 / alpha 256，dropout 0.05）"
+ },
+ "optim": {
+  "optimizer": "adamw",
+  "betas": [0.9, 0.999],
+  "eps": 1e-08,
+  "lora": {"lr": 0.0002, "weight_decay": 0.0},
+  "token_rows": {"lr": 0.0002, "weight_decay": 0.0, "mode": "fp32_master_rows"},
+  "max_grad_norm": 1.0,
+  "schedule": "warmup_cosine",
+  "warmup_ratio": 0.03,
+  "min_lr_ratio": 0.0,
+  "basis": "AdamW 两个参数组：LoRA，与网格 token 行（weight_decay = 0，D45-3）。lr 2e-4、warmup_ratio 0.03、cosine、weight_decay 0 取 LLaVA-1.5 的 LoRA 微调脚本；max_grad_norm 1.0 是 HF Trainer 的默认。token 行的 mode：fp32_master_rows（默认）= 只为这 67 行（不共享 lm_head 时连同 lm_head 的 67 行）建 fp32 的主副本交给优化器，反向后从嵌入矩阵的梯度里取这几行，step 后写回模型 dtype 的权重；dense_param = 把 trainable_token_rows 返回的整个嵌入矩阵交给优化器（任务书原文的做法；bf16 下小于半个 ulp 的更新被舍掉，9B 的优化器状态约 8 GB）。两种模式在 fp32 上逐位相同（tests/test_e3_train.py 钉住）"
+ },
+ "batch": {
+  "micro_batch_size": 4,
+  "grad_accum_steps": 4,
+  "basis": "暂定：每步 16 条样本（4 × 4 累积）。env_report §7：9B LoRA r32、batch 8、序列 1060 的显存峰值 50 GB；E3b 的序列约 1057 个目标 token + 提示（视觉 token 按 E1 口径，修正对两张图），micro 4 留出余量。正式值由 E3 预注册按实测吞吐定"
+ },
+ "loss": {
+  "reduction": "token_mean",
+  "basis": "一步之内全部监督 token 的平均（各微批的损失和除以整步的监督 token 总数，梯度累积与一次大批等价）；网格与 C3 同一口径"
+ },
+ "data": {
+  "workers": 4,
+  "basis": "下一步的样本由这么多个线程在本步的 GPU 计算期间构造（读图、解码 GT、加噪、渲染叠加图都在 numpy / scipy / PIL 里，释放 GIL）；0 = 在主线程里串行构造。每条样本由 (种子, k) 唯一决定，线程数不改变任何结果（tests 钉住）；它照样记在 config.yaml 的 training 里，续跑时要相同"
+ },
+ "steps": 4000,
+ "steps_basis": "暂定：4000 步 × 16 = 64,000 条样本（等权混合下 RefCOCO 家族约 0.1 个 epoch、NYU 深度约 1.4 个 epoch）。正式值由 E3 预注册冻结",
+ "ckpt_every": 500,
+ "ckpt_basis": "每 ckpt_every 步写一次 save_trained（LoRA、token 行、manifest；不存合并后的权重，D34）与续跑状态（优化器、调度器、主副本、随机数状态），只留最新一份；训练完成后另存 final（只有 save_trained），续跑状态默认删掉",
+ "seeds": [0, 1, 2],
+ "seeds_basis": "简报 §8.4：每个配置 3 个种子。种子同时决定 LoRA 初始化、dropout、样本顺序、修正对与 C3 目标的随机数（无状态，src/e3/data）",
+ "dedupe": {
+  "required_eval_sets": {"refseg": ["refcoco/eval"], "depth": ["nyuv2/test"]},
+  "basis": "开跑前核对：训练池用的去重剔除清单（schema 2）比较过这些评测集（src/data/train_dedupe 的集合名）。refcoco/eval 是 E1 的 refcoco 落地（RefCOCO、RefCOCO+ 的 unc val/testA/testB 与 RefCOCOg 的 umd val/test 共用的图），nyuv2/test 是官方 654；跨通道迁移的 T 文本评测集（CountBench、CV-Bench、BLINK 等）由第二部分（评测）补进这里。旧格式的清单只在 --tiny 时照读"
+ },
+ "tiny": {
+  "basis": "--tiny：小型随机模型 + CPU + fp32 + tests/fixtures 的小数据。只改下面这些规模参数，其余同正式配置",
+  "steps": 4,
+  "micro_batch_size": 2,
+  "grad_accum_steps": 2,
+  "ckpt_every": 2,
+  "warmup_steps": 1,
+  "image_policies": {"qwen3.5": "pixel_budget:64", "gemma4": "soft_tokens:70", "internvl3.5": "tiles:false:1"},
+  "init_std": 0.05
+ }
+}
