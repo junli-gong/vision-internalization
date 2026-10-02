@@ -30,6 +30,8 @@
   先 `add_tokens(..., special_tokens=True)` 注册：注册后仍是原 id、len(tokenizer) 不变、不 resize。
   初始化两处，都写成基础词表（全部 id 去掉 `<unusedN>` 与 tokenizer 的特殊 token）行的精确均值：
   主嵌入行（lm_head 与它共享，只写一次）与 PLE 的 `embed_tokens_per_layer` 对应行。
+- E3 的训练侧接口（DEV-0020）：见 src/adapters/training.py 与 src/adapters/checkpoint.py；本模块只提供家族钩子
+  （logits 含 final_logit_softcapping；token 表另记 PLE 行 per_layer）。
 - vision_features 与第 0 层的关系（按 transformers 5.17 `modeling_gemma4` 源码，测试与冒烟钉住）：
   **在图像位置上逐位相同**。理由：`Gemma4Model.forward` 先用 `embed_tokens`（`Gemma4TextScaledWordEmbedding`，
   输出 = 权重行 × embed_scale = sqrt(hidden_size)）查 `llm_input_ids`（图像位置换成 pad），再用 `masked_scatter`
@@ -53,6 +55,7 @@ mm_token_type_ids（做法与 `Gemma4Processor` / `ProcessorMixin` 相同）。�
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import math
 import re
@@ -64,6 +67,8 @@ from PIL import Image
 
 from src.adapters import batching, registry
 from src.adapters.image_policy import SoftTokenBudget
+from src.adapters.checkpoint import CheckpointSupport, TokenRestoreError, base_fingerprint
+from src.adapters.training import TrainingSupport, cumsum_positions, scatter_rows
 from src.adapters.base import (
     ORDERS,
     POSITION_MODES,
@@ -221,7 +226,7 @@ def parse_one_box(text: str, *, width: float, height: float) -> OneBoxParse:
     return one_box(parse_boxes(text, width=width, height=height))
 
 
-class Gemma4Adapter(ModelAdapter):
+class Gemma4Adapter(CheckpointSupport, TrainingSupport, ModelAdapter):
     """Gemma 4（E2B-it / E4B-it）适配器。ModelInputs 是单条样本；generate_batch 左填充拼批（DEV-0011）。vLLM 另开任务。
 
     设备在构造时给定，dtype 在 load 时给定。进入任何模型算子之前，入口断言检查输入与模型的 device/dtype，
@@ -512,6 +517,7 @@ class Gemma4Adapter(ModelAdapter):
         self._base_idx = base_mask.nonzero().squeeze(1).to(self._device)
         self._patch = int(vc.patch_size)
         self._pool = int(vc.pooling_kernel_size)
+        self._base_fingerprint = base_fingerprint(model)  # 检查点核对 base 用（DEV-0020）
 
         # 模板自检：思考开关只在 <bos> 之后插一个 system 轮，生成提示两种开关相同。失败就撤销挂载。
         try:
@@ -807,6 +813,7 @@ class Gemma4Adapter(ModelAdapter):
                        where: str) -> list[GenerationResult]:
         self._require_loaded()
         batching.check_generate_args(enable_thinking, max_new_tokens)
+        self._require_eval(where)
         items = batching.check_inputs_list(inputs_list, where=where)
         batching.check_reserved(gen_kwargs, _RESERVED_GEN_KWARGS)
         for inp in items:
@@ -830,11 +837,16 @@ class Gemma4Adapter(ModelAdapter):
         """generate / generate_batch / option_logits 共用的拼批：每行的提示（prompt_ids）左填充成一批，各行的图按行的顺序拼接。"""
         rows = [self._prompt_row(inp, enable_thinking) for inp in items]
         kw: dict[str, Any] = batching.batch_prompt(rows, pad_id=self._ids[PAD], device=self._device)
-        with_images = [inp for inp in items if inp.images]
-        if with_images:
-            kw["pixel_values"] = torch.cat([inp.tensors["pixel_values"] for inp in with_images], dim=0)
-            kw["image_position_ids"] = torch.cat([inp.tensors["image_position_ids"] for inp in with_images], dim=0)
+        kw.update(self._image_kw(items))
         return rows, kw
+
+    def _image_kw(self, items: Sequence[ModelInputs]) -> dict[str, torch.Tensor]:
+        """各行的图按行的顺序拼进 pixel_values / image_position_ids（没有图时为空）。_batch_kw 与训练前向共用。"""
+        with_images = [inp for inp in items if inp.images]
+        if not with_images:
+            return {}
+        return {"pixel_values": torch.cat([inp.tensors["pixel_values"] for inp in with_images], dim=0),
+                "image_position_ids": torch.cat([inp.tensors["image_position_ids"] for inp in with_images], dim=0)}
 
     def option_logits(
         self,
@@ -847,6 +859,7 @@ class Gemma4Adapter(ModelAdapter):
         第一个生成位置 = 生成提示 `<|turn>model\\n` 之后（两种思考开关相同；开思考时 system 轮插在 `<bos>` 之后）。"""
         self._require_loaded()
         batching.check_enable_thinking(enable_thinking)
+        self._require_eval("option_logits")
         items = batching.check_inputs_list(inputs_list, where="option_logits")
         opts = batching.check_options(options, len(items))
         for inp in items:
@@ -895,7 +908,8 @@ class Gemma4Adapter(ModelAdapter):
         位置只用于 M-RoPE 模型，其他模型用一维位置。"grid2d" 直接报 ValueError（不静默当成 seq1d，免得配置里写着
         grid2d、实际跑的是 seq1d），报错前不改任何状态。
         占位符复用 id 最大的 `<unusedN>`，首次调用时注册，主嵌入行与 PLE 行按 D13-1 初始化为基础行均值；
-        它不计入 E3b 的 300 个 token 预算。
+        它不计入 E3b 的 300 个 token 预算。前向时它的嵌入一律由 query_embeds 替换（必须显式传，D21-2）。
+        首次调用（分配占位符的行）必须在 inject_lora 之前；之后再调只改个数与模式，不碰任何行，LoRA 之后也可以。
         """
         self._require_loaded()
         if isinstance(n, bool) or not isinstance(n, int) or n < 1:
@@ -908,6 +922,7 @@ class Gemma4Adapter(ModelAdapter):
                 f"用一维位置：请传 position_mode='seq1d'（收到 {position_mode!r}）"
             )
         if self._query_token_id is None:
+            self._check_tokens_mutable("inject_query_tokens")  # 首次注入要分配行：必须在 inject_lora 之前
             top = max(i for i in self._unused_ids if i not in self._taken)
             (qid,) = self._register_unused([self._unused_surface[top]])
             self._init_rows([qid])
@@ -929,8 +944,10 @@ class Gemma4Adapter(ModelAdapter):
         名字只是调用方的标签：token 在文本里的样子是 `<unusedN>`（decode 出来就是它），对应关系见 grid_token_surfaces；
         解析网格时请按 token id（grid_token_ids）而不是按名字的字符串。
         预算按累计计（≤ MAX_NEW_GRID_TOKENS，查询占位符不计）。主嵌入行（lm_head 共享）与 PLE 行都写成基础行的精确均值。
+        必须在 inject_lora 之前调用。
         """
         self._require_loaded()
+        self._check_tokens_mutable("add_grid_tokens")
         if isinstance(names, str):
             raise TypeError("names 必须是字符串的序列，不能是单个字符串")
         names = list(names)
@@ -975,6 +992,118 @@ class Gemma4Adapter(ModelAdapter):
         """本家族的原生框（JSON 的 box_2d，0–1000，y 在前），规则见模块级的 parse_boxes。
         不需要加载模型；parse_one_box 由基类在它之上给出。"""
         return parse_boxes(text, width=width, height=height)  # 模块级函数（方法体里的名字按全局作用域查找）
+
+    # ------------------------------------------------------------------
+    # 训练侧钩子（DEV-0020；公共实现见 src/adapters/training.py 的 TrainingSupport）
+    # ------------------------------------------------------------------
+
+    def _pad_id(self) -> int:
+        return self._ids[PAD]
+
+    def _stop_ids(self) -> list[int]:
+        return [self._ids[s] for s in STOP_TOKENS]
+
+    def _forward_scope(self) -> Any:
+        return contextlib.nullcontext()
+
+    def _user_index_shift(self, enable_thinking: bool) -> tuple[int, int]:
+        """提示行 = <bos> + 思考 system 轮（开思考时）+ ModelInputs 的其余部分 + 生成提示：下标 ≥ 1 的整体后移 system 轮的长度。"""
+        return len(self.thinking_prefix_ids(enable_thinking)), 1
+
+    def _logit_softcap(self) -> float | None:
+        """final_logit_softcapping（E2B/E4B 为 30.0；小模型保持真实值）：logits = tanh(z / cap) · cap。"""
+        cap = self._model.config.get_text_config().final_logit_softcapping
+        return None if cap is None else float(cap)
+
+    def _vision_modules(self) -> list[Any]:
+        inner = self._model.model
+        mods = [inner.vision_tower, inner.embed_vision]
+        for name in ("audio_tower", "embed_audio"):  # 真实 E2B/E4B 带音频塔；小模型没有
+            if getattr(inner, name, None) is not None:
+                mods.append(getattr(inner, name))
+        return mods
+
+    def _training_forward_kwargs(self, items: Sequence[ModelInputs], asm: Any, image_kw: dict[str, torch.Tensor],
+                                 query_mask: torch.Tensor | None,
+                                 query_embeds: torch.Tensor | None) -> dict[str, Any]:
+        """内层模型的输入，与 _input_embeds / _per_layer_inputs 同一种并入方式：图像位置换成 pad 再查表（× embed_scale），
+        图像位置并入视觉特征，查询位置换成 query_embeds；PLE 的 token 身份取同一组 id（查询位置用占位符自己的行，D17-11）；
+        一维位置 cumsum(mask) − 1（与 generate 相同）。"""
+        ids = asm.input_ids
+        llm_ids = torch.where(ids == self._ids[IMAGE_TOKEN], self._ids[PAD], ids)
+        embeds = self._model.get_input_embeddings()(llm_ids)
+        if image_kw:
+            feats = self._image_features_from(image_kw, [len(i.span) for inp in items for i in inp.images])
+            embeds = scatter_rows(embeds, ids == self._ids[IMAGE_TOKEN], feats, what="图像特征")
+        if query_mask is not None:
+            embeds = scatter_rows(embeds, query_mask, query_embeds.repeat(len(items), 1), what="查询嵌入")
+        per_layer = self._model.model.language_model.get_per_layer_inputs(llm_ids, None)
+        return {"inputs_embeds": embeds, "per_layer_inputs": per_layer, "attention_mask": asm.attention_mask,
+                "mm_token_type_ids": asm.mm_token_type_ids, "position_ids": cumsum_positions(asm.attention_mask)}
+
+    def _decode_positions(self, kw: dict[str, Any]) -> torch.Tensor:
+        return cumsum_positions(kw["attention_mask"])
+
+    def _decode_step_extra(self, batch: int) -> dict[str, Any]:
+        return {}  # HF 在预填之后不再传 mm_token_type_ids（Gemma4ForConditionalGeneration.prepare_inputs_for_generation）
+
+    # ---- 检查点钩子（DEV-0020 第二部分；公共实现见 src/adapters/checkpoint.py 的 CheckpointSupport）----
+
+    def _vocab_facts(self) -> dict[str, Any]:
+        """规模事实：恢复时必须相同（grid token 与查询占位符的 id 由 <unusedN> 的集合决定）。"""
+        return {"n_rows": int(self._model.get_input_embeddings().weight.shape[0]), "len_tokenizer": len(self._tok),
+                "n_unused": len(self._unused_ids), "unused_first": self._unused_ids[0], "unused_last": self._unused_ids[-1]}
+
+    def _token_state_fresh(self) -> bool:
+        return self._n_grid_tokens == 0 and not self._taken and self._query_token_id is None
+
+    def _token_registry(self) -> dict[str, Any]:
+        grid = [{"name": n, "id": i, "surface": self._grid_token_surfaces[n]}
+                for n, i in sorted(self._grid_token_ids.items(), key=lambda kv: kv[1])]
+        qid = self._query_token_id
+        query = {"id": qid, "surface": self.query_token_surface, "row_allocated": qid is not None,
+                 "in_tokenizer": qid is not None, "injected": qid is not None, "n": self._query_n,
+                 "position_mode": self._query_mode}
+        return {"grid_tokens": grid, "query": query, "vocab": self._vocab_facts()}
+
+    def _restore_registration(self, table: Any) -> None:
+        """restore_tokens 的登记一步：grid token 取最小的几个 <unusedN>、查询占位符取余下最大的；与表不同就报错（什么都不改）；
+        再注册（不初始化）。"""
+        if table["vocab"] != self._vocab_facts():
+            raise TokenRestoreError(f"规模事实不同（表 {table['vocab']}，本适配器 {self._vocab_facts()}）")
+        grid = sorted(table["grid_tokens"], key=lambda g: g["id"])
+        free = [i for i in self._unused_ids if i not in self._taken]
+        plan = free[: len(grid)]
+        if [g["id"] for g in grid] != plan:
+            raise TokenRestoreError(f"按本适配器的规则重新登记，grid token 的 id 是 {plan[:3]}…，表里是 {[g['id'] for g in grid][:3]}…")
+        if any(g["surface"] != self._unused_surface[g["id"]] for g in grid):
+            raise TokenRestoreError("grid token 的 surface 与 <unusedN> 对不上")
+        vocab = self._tok.get_vocab()
+        clash = [g["name"] for g in grid if g["name"] in vocab]
+        if clash:
+            raise TokenRestoreError(f"这些名字已在词表里：{clash[:5]}")
+        q = table["query"]
+        if q["row_allocated"]:
+            rest = [i for i in free if i not in set(plan)]
+            if q["id"] != max(rest) or q["surface"] != self._unused_surface[q["id"]]:
+                raise TokenRestoreError(f"查询占位符的 id {q['id']} 与本适配器推算的 {max(rest)} 不同")
+        if grid:
+            ids = self._register_unused([g["surface"] for g in grid])
+            self._taken.update(ids)
+            names = [g["name"] for g in grid]
+            self._n_grid_tokens = len(names)
+            self._grid_token_ids = dict(zip(names, ids))
+            self._grid_token_surfaces = {g["name"]: g["surface"] for g in grid}
+        if q["row_allocated"]:
+            (qid,) = self._register_unused([q["surface"]])
+            self._taken.add(qid)
+            self._query_token_id = qid
+
+    def _row_tables(self) -> list[tuple[str, Any]]:
+        return [("embed", self._model.get_input_embeddings().weight),
+                ("lm_head", self._model.get_output_embeddings().weight),
+                ("per_layer", self._model.get_per_layer_input_embeddings().weight)]
+
 
     # ------------------------------------------------------------------
     # 内部
@@ -1086,11 +1215,14 @@ class Gemma4Adapter(ModelAdapter):
                 raise ValueError(f"{where}：query_embeds 形状 {tuple(query_embeds.shape)}，期望 {want}")
 
     def _image_features(self, inputs: ModelInputs) -> torch.Tensor:
-        t = inputs.tensors
+        return self._image_features_from(inputs.tensors, [len(i.span) for i in inputs.images])
+
+    def _image_features_from(self, t: Any, want: Sequence[int]) -> torch.Tensor:
+        """pixel_values / image_position_ids（一条输入的，或整批按行拼接的）→ [Σ want, hidden]；每张图的特征个数与 want 逐个核对。"""
         out = self._model.model.get_image_features(t["pixel_values"], t["image_position_ids"], return_dict=True)
         sizes = [int(f.shape[0]) for f in out.pooler_output]
-        if sizes != [len(i.span) for i in inputs.images]:
-            raise RuntimeError(f"每张图的视觉特征个数 {sizes} 与图像区间 {[len(i.span) for i in inputs.images]} 不一致")
+        if sizes != list(want):
+            raise RuntimeError(f"每张图的视觉特征个数 {sizes} 与图像区间 {list(want)} 不一致")
         feats = torch.cat(out.pooler_output, dim=0).to(device=self._device, dtype=self._dtype)
         n_expected = sum(sizes)
         if tuple(feats.shape) != (n_expected, self.hidden_size()):
@@ -1124,6 +1256,8 @@ class Gemma4Adapter(ModelAdapter):
 
     def _run(self, inputs: ModelInputs, query_embeds: torch.Tensor | None, *, where: str) -> tuple[torch.Tensor, ...]:
         self._check_entry(inputs, query_embeds, where=where)
+        if inputs.query_span is not None and query_embeds is None:
+            raise ValueError(f"{where}：输入里有查询 token，必须显式传 query_embeds（D21-2；不再静默用占位符的行）")
         embeds = self._input_embeds(inputs, query_embeds)
         per_layer = self._per_layer_inputs(inputs)
         t = inputs.tensors

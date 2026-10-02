@@ -18,6 +18,10 @@
   进程里第一次生成含 JIT、内核编译与库初始化，记账之前先调用 warmup()，它的耗时不进记账。
 - 受限选项读数（DEV-0016，D36-4、D36-6）：option_logits 只做一次前向，读第一个生成位置的 logits，每个选项取它所有单 token
   写法（OPTION_SPELLING_TEMPLATES）里 logit 的最大值，在选项集合上做 softmax。结果是 OptionScores，规则写在它的说明里。
+- E3 的训练侧接口（DEV-0020，D21-2）：training_forward、restricted_logits、chunked_lm_loss、generate_restricted、train_mode /
+  eval_mode、set_gradient_checkpointing、class_name_spans（第一部分，实现在 src/adapters/training.py）；token_table、restore_tokens、
+  lora_target_modules、inject_lora、merge_lora、save_trained、load_trained（第二部分，实现在 src/adapters/checkpoint.py）。
+  这里只写接口说明；基类的实现一律报 NotImplementedError（不是抽象方法：只做推理的替身不必实现它们），三个家族都实现。
 """
 
 from __future__ import annotations
@@ -309,6 +313,11 @@ _REQUIRED_KWONLY: dict[str, tuple[str, ...]] = {
 _REQUIRED_NO_DEFAULT: dict[str, tuple[str, ...]] = {
     "hidden_states": ("layers",),
 }
+# DEV-0020 的训练侧接口：实现通常来自 mixin（不在子类的 __dict__ 里），所以按 MRO 解析到的函数检查（只要不是基类的占位实现）
+_REQUIRED_KWONLY_RESOLVED: dict[str, tuple[str, ...]] = {
+    "training_forward": ("enable_thinking",),
+    "generate_restricted": ("enable_thinking", "max_new_tokens", "stop_ids"),
+}
 
 
 class ModelAdapter(abc.ABC):
@@ -330,6 +339,15 @@ class ModelAdapter(abc.ABC):
                     par = sig.parameters.get(p)
                     if par is None or par.default is not par.empty:
                         raise TypeError(f"{cls.__name__}.{meth} 的 {p} 必须由调用方显式传入，不能有默认值")
+        for meth, params in _REQUIRED_KWONLY_RESOLVED.items():
+            fn = getattr(cls, meth, None)
+            if fn is None or fn is ModelAdapter.__dict__.get(meth):
+                continue
+            sig = inspect.signature(fn)
+            for p in params:
+                par = sig.parameters.get(p)
+                if par is None or par.kind is not inspect.Parameter.KEYWORD_ONLY or par.default is not par.empty:
+                    raise TypeError(f"{cls.__name__}.{meth} 的 {p} 必须是无默认值的关键字参数（D1）")
 
     @abc.abstractmethod
     def load(self, model_id: str, dtype: Any) -> None:
@@ -436,6 +454,7 @@ class ModelAdapter(abc.ABC):
 
         query_embeds（D10 的接口扩展，DEV-0003）：形状 [n_query, hidden_size]。非 None 时，前向前把查询位置的
         输入嵌入替换成它，E3a 的可学习查询 token 从这里进；inputs 里必须有查询 token，个数一致。
+        反过来，inputs 里有查询 token 时必须给 query_embeds，不给就报错（DEV-0020，D21-2：原来静默用占位符的行）。
         """
 
     @abc.abstractmethod
@@ -485,3 +504,75 @@ class ModelAdapter(abc.ABC):
         """只要一个框（如 RefCOCO 的 REC），建在 parse_boxes 之上（规则见 src.parsing.one_box）：
         parse_boxes 失败 → 原样给出失败原因（没有框就是 no_box）；成功但零个框 → no_box；多于一个框 → multiple_boxes。"""
         return one_box(self.parse_boxes(text, width=width, height=height))
+
+    # ------------------------------------------------------------------
+    # E3 的训练侧接口（DEV-0020，D21-2）。实现与规则的细节：第一部分在 src/adapters/training.py，第二部分在
+    # src/adapters/checkpoint.py；三个家族都实现，基类只报 NotImplementedError。
+    # ------------------------------------------------------------------
+
+    def training_forward(self, inputs_list: Sequence[ModelInputs], target_ids_list: Sequence[Sequence[int]], *,
+                         enable_thinking: bool, return_hidden: Any = None, query_embeds: Any = None) -> Any:
+        """教师强制版的 generate：每行的提示（思考前缀、system 轮、助手头）与左填充、位置编码都与 generate_batch 相同，目标
+        token 接在提示后面；返回预测各目标 token 的最后一层隐藏状态（最终归一化之后、lm_head 之前，带梯度），位置 t 预测
+        第 t+1 个 token（training.TrainingOutput）。return_hidden（training.HiddenRequest）另外返回指定层在查询 / 图像 / 给定区间上的
+        隐藏状态（带梯度）。输入里有查询 token 时必须给 query_embeds（[n_query, hidden]，各行共用）。不强制 no_grad。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 training_forward")
+
+    def restricted_logits(self, hidden: Any, allowed_ids: Any) -> Any:
+        """唯一的受限 logits（训练损失与受限解码都调它）：只对 allowed 的 lm_head 行做矩阵乘，fp32，含 final_logit_softcapping。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 restricted_logits")
+
+    def chunked_lm_loss(self, hidden: Any, target_ids: Any, *, chunk_size: int, reduction: str = "mean") -> Any:
+        """全词表 LM 交叉熵，按位置分块（与 restricted_logits 同一种 logits 算法）。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 chunked_lm_loss")
+
+    def generate_restricted(self, inputs_list: Sequence[ModelInputs], allowed_ids: Sequence[int], *, max_new_tokens: int,
+                            stop_ids: Sequence[int], enable_thinking: bool) -> list[GenerationResult]:
+        """受限 greedy 解码：每一步的 logits 都由 restricted_logits 算，不经过全词表 logits 与 logits 处理器；
+        提示、填充、位置编码与 generate_batch 相同。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 generate_restricted")
+
+    def train_mode(self) -> None:
+        """LLM 切到训练模式（视觉塔默认冻结，保持 eval）。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 train_mode")
+
+    def eval_mode(self) -> None:
+        """全部切回 eval；生成类方法要求 eval 模式。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 eval_mode")
+
+    def set_gradient_checkpointing(self, enabled: bool) -> None:
+        """梯度检查点（use_reentrant=False）。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 set_gradient_checkpointing")
+
+    def class_name_spans(self, inputs: ModelInputs, names: Sequence[str]) -> list[Span]:
+        """每个类别名在提示（ModelInputs 的 input_ids）里的 token 区间（E3a 开放词汇头；拼法见 training.CLASS_NAME_SEPARATOR）。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 class_name_spans")
+
+    def token_table(self) -> dict[str, Any]:
+        """新增 token 的表：名字 → id、每行在输入嵌入与 lm_head（Gemma 另有 PLE）里的 sha256（按 bf16 原始字节）、查询 token 的
+        登记、家族与模型 revision。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 token_table")
+
+    def restore_tokens(self, table: Mapping[str, Any], rows: Mapping[str, Any]) -> None:
+        """只核对、不初始化的恢复：重新登记同样的名字（id 必须与表相同），把保存的行写回去，写回后哈希必须与表相同。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 restore_tokens")
+
+    def lora_target_modules(self) -> list[str]:
+        """LoRA 的目标模块：只含 LLM 的线性层（视觉塔、投影层与 lm_head 不含）。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 lora_target_modules")
+
+    def inject_lora(self, *, r: int, lora_alpha: float, lora_dropout: float = 0.0, init_lora_weights: Any = True) -> None:
+        """注入 LoRA（必须在 add_grid_tokens、inject_query_tokens 之后；顺序反了报错）。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 inject_lora")
+
+    def merge_lora(self) -> None:
+        """在内存里合并 LoRA（merge_and_unload）；合并后的权重不落盘（D34）。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 merge_lora")
+
+    def save_trained(self, directory: Any, *, extra: Mapping[str, Any] | None = None, query_embeds: Any = None) -> Any:
+        """检查点：LoRA（peft 格式）、token 表与新增行、查询 token 的嵌入、extra 张量，加 manifest；不存合并后的权重（D34）。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 save_trained")
+
+    def load_trained(self, directory: Any, *, merge: bool = True) -> Any:
+        """从检查点恢复：base（固定 revision）→ restore_tokens → 挂 LoRA（merge=True 时在内存里合并）→ 核对 manifest。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 load_trained")

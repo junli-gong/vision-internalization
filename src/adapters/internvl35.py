@@ -39,7 +39,9 @@ tokenizer / config 读取并断言，不写死 token id，不写死层号（简�
 - 新增 token（D13-1）：先复用嵌入里超出 tokenizer 的 257 个预留行（id 151679–151935）；累计需要的行数超过现有行数时，把嵌入
   （不共享时连同 lm_head）扩到恰好需要的行数，已有行逐位不变；从不缩表，不调用 `resize_token_embeddings`。新 token 的嵌入行与
   lm_head 行各自写成自己基础词表行的精确均值。lm_head 是否与嵌入共享以运行时为准：真实 2B 的 config 顶层写 tie，但 checkpoint
-  里两者不同，transformers 没有绑定（§7.1），所以这里不拿 config 校验共享状态，只记录。
+  里两者不同，transformers 没有绑定（§7.1），所以这里不拿 config 校验共享状态，只记录。查询占位符固定取预留区的末行（151935），
+  grid token 跳过它（DEV-0020；与 Qwen 共用 qwen35.ReservedRowTokens）。
+- E3 的训练侧接口（DEV-0020）：见 src/adapters/training.py 与 src/adapters/checkpoint.py；本模块只提供家族钩子。
 - 层号（base.py 的层号约定，D15-2）：就是 HF `output_hidden_states` 元组的下标。0 = 视觉特征并入之后的嵌入输出，
   i = 第 i 个 decoder 层之后；最后一个下标（num_layers()）是最终归一化之后的值。
 - vision_features = `multi_modal_projector` 的输出，就是前向时并入嵌入序列的那组向量，与第 0 层图像位置逐位相同。
@@ -55,6 +57,7 @@ torchvision，`InternVLVideoProcessor` 构造不出来，官方处理器没法�
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import hashlib
 import json
@@ -69,6 +72,8 @@ from PIL import Image
 
 from src.adapters import batching, registry
 from src.adapters.image_policy import TilePolicy
+from src.adapters.checkpoint import CheckpointSupport, base_fingerprint
+from src.adapters.training import TrainingSupport, cumsum_positions, scatter_rows
 from src.adapters.base import (
     ORDERS,
     POSITION_MODES,
@@ -87,8 +92,10 @@ from src.adapters.base import (
 # 与 Qwen 适配器共用同一份实现，不另写：设备/dtype 入口断言的异常类型、E3a 查询占位符的名字、
 # allowed_token_ids 的 logits 限制（简报 §12：限制的实现要处处一致），以及几个小工具。
 from src.adapters.qwen35 import (
+    _QUERY_SLOT,
     QUERY_PLACEHOLDER,
     AdapterDeviceError,
+    ReservedRowTokens,
     _AllowedTokensProcessor,
     _canonical_device,
     _named_params_and_buffers,
@@ -179,7 +186,7 @@ def tiles_of(info: ImageTokenInfo) -> int:
     return h // TILE_GRID_HW[0]
 
 
-class InternVL35Adapter(ModelAdapter):
+class InternVL35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, ModelAdapter):
     """InternVL3.5-HF（2B/4B）适配器。ModelInputs 是单条样本；generate_batch 左填充拼批（DEV-0011）。vLLM 另开任务。
 
     设备与 tile 策略在构造时给定，dtype 在 load 时给定。进入任何模型算子之前，入口断言检查输入与模型的 device/dtype，
@@ -213,6 +220,10 @@ class InternVL35Adapter(ModelAdapter):
         self._grid_token_ids: dict[str, int] = {}
         self._query_token_id: int | None = None
         self._query_n: int | None = None
+        self._n_tok_at_attach: int | None = None  # attach 时的 len(tokenizer)：预留区 = [它, 嵌入行数)
+        self._n_rows_at_attach: int | None = None
+        self._query_row: int | None = None  # 查询占位符的固定 id = 预留区末行（DEV-0020，与 Qwen 同一规则）
+        self._query_row_ready = False
 
     # ------------------------------------------------------------------
     # 属性
@@ -459,6 +470,10 @@ class InternVL35Adapter(ModelAdapter):
         self._tied = tied
         self._config_tie = {"top": bool(getattr(cfg, "tie_word_embeddings", False)),
                             "text": bool(getattr(tc, "tie_word_embeddings", False))}
+        self._n_tok_at_attach = len(tokenizer)
+        self._n_rows_at_attach = int(n_rows)
+        self._query_row = int(n_rows) - 1 if n_rows > len(tokenizer) else None
+        self._base_fingerprint = base_fingerprint(model)  # 检查点核对 base 用（DEV-0020）
 
         # 模板自检：user 轮以 <|im_start|>user\n 开头、<|im_end|>\n 结束；assistant 头与 system 轮都能干净地拆出来。
         # 失败就撤销挂载。
@@ -536,16 +551,25 @@ class InternVL35Adapter(ModelAdapter):
                 raise RuntimeError(f"pixel_values 形状 {tuple(pv.shape)}，期望 ({sum(n_tiles)}, 3, {TILE_PX}, {TILE_PX})")
             tensors["pixel_values"] = pv.to(device=self._device, dtype=self._dtype)
 
-        # 3. 展开图像占位符并分词；指令两侧分别分词，拼接必须与整段分词逐个相同
+        # 3. 展开图像占位符并分词；指令两侧分别分词，拼接必须与整段分词逐个相同。
+        #    查询块（DEV-0020）：渲染时是哨兵 _QUERY_SLOT，在这里切开，拼进 [占位符 id] × n（同 Qwen）。
         n_pre = prefix.count(IMG_CONTEXT)
         if n_pre + suffix.count(IMG_CONTEXT) != n_img:
             raise RuntimeError("模板里的图像占位符个数与图数不一致")
         pre_exp = self._expand(prefix, n_tiles[:n_pre])
         post_exp = self._expand(suffix, n_tiles[n_pre:])
-        ids_pre, ids_ins, ids_post = self._encode(pre_exp), self._encode(instruction), self._encode(post_exp)
-        ids = ids_pre + ids_ins + ids_post
-        if ids != self._encode(pre_exp + instruction + post_exp):
+        post_head, post_tail = post_exp, ""
+        if self._query_n is not None:
+            if _QUERY_SLOT in pre_exp or post_exp.count(_QUERY_SLOT) != 1:
+                raise RuntimeError("查询块的哨兵没有恰好出现在指令之后一次")
+            post_head, post_tail = post_exp.split(_QUERY_SLOT)
+        ids_pre, ids_ins, ids_head = self._encode(pre_exp), self._encode(instruction), self._encode(post_head)
+        if ids_pre + ids_ins + ids_head != self._encode(pre_exp + instruction + post_head):
             raise ValueError("指令与相邻模板文本在分词时合并，指令区间无法精确定位")
+        ids_post = ids_head
+        if self._query_n is not None:
+            ids_post = ids_head + [self._query_token_id] * self._query_n + self._encode(post_tail)
+        ids = ids_pre + ids_ins + ids_post
         instruction_span = Span(len(ids_pre), len(ids_pre) + len(ids_ins))
 
         # 4. 图像区间：<IMG_CONTEXT> 的连续段，个数、长度、前后标记逐项核对
@@ -748,6 +772,7 @@ class InternVL35Adapter(ModelAdapter):
                        where: str) -> list[GenerationResult]:
         self._require_loaded()
         batching.check_generate_args(enable_thinking, max_new_tokens)
+        self._require_eval(where)
         items = batching.check_inputs_list(inputs_list, where=where)
         batching.check_reserved(gen_kwargs, _RESERVED_GEN_KWARGS)
         for inp in items:
@@ -771,10 +796,15 @@ class InternVL35Adapter(ModelAdapter):
         """generate / generate_batch / option_logits 共用的拼批：每行的提示（prompt_ids）左填充成一批，各行的 tile 按行的顺序拼接。"""
         rows = [self._prompt_row(inp, enable_thinking) for inp in items]
         kw: dict[str, Any] = batching.batch_prompt(rows, pad_id=self._ids[END_OF_TEXT], device=self._device)
-        with_images = [inp for inp in items if inp.images]
-        if with_images:
-            kw["pixel_values"] = torch.cat([inp.tensors["pixel_values"] for inp in with_images], dim=0)
+        kw.update(self._image_kw(items))
         return rows, kw
+
+    def _image_kw(self, items: Sequence[ModelInputs]) -> dict[str, torch.Tensor]:
+        """各行的 tile 按行的顺序拼进同一个 pixel_values（没有图时为空）。_batch_kw 与训练前向共用。"""
+        with_images = [inp for inp in items if inp.images]
+        if not with_images:
+            return {}
+        return {"pixel_values": torch.cat([inp.tensors["pixel_values"] for inp in with_images], dim=0)}
 
     def option_logits(
         self,
@@ -788,6 +818,7 @@ class InternVL35Adapter(ModelAdapter):
         （与 generate 相同）。"""
         self._require_loaded()
         batching.check_enable_thinking(enable_thinking)
+        self._require_eval("option_logits")
         items = batching.check_inputs_list(inputs_list, where="option_logits")
         opts = batching.check_options(options, len(items))
         for inp in items:
@@ -831,8 +862,9 @@ class InternVL35Adapter(ModelAdapter):
         """登记 n 个查询 token；之后的 build_inputs 把它们放在 user 内容最后一项之后。可重复调用以改变 n。
 
         position_mode 只接受 "seq1d"（一维顺序位置，与文本相同）；"grid2d" 报 ValueError（见模块说明）。
-        占位符是 add_tokens 新增的一个专用 token（QUERY_PLACEHOLDER，与 Qwen 适配器同名），首次调用时加入，嵌入行（与 lm_head 行）
-        按 D13-1 初始化为基础词表行的均值。它不计入 E3b 的 300 个 token 预算，但占用一个嵌入行。
+        占位符固定是预留区的末行（151935；规则与 Qwen 相同，见 qwen35.ReservedRowTokens；DEV-0020），首次调用时分配，嵌入行
+        （与 lm_head 行）按 D13-1 初始化为基础词表行的均值。它不计入 E3b 的 300 个 token 预算，但占用一个嵌入行。前向时它的嵌入
+        一律由 query_embeds 替换（必须显式传，D21-2）。首次调用（分配占位符的行）必须在 inject_lora 之前；之后再调只改个数与模式，不碰任何行，LoRA 之后也可以。
         """
         self._require_loaded()
         if isinstance(n, bool) or not isinstance(n, int) or n < 1:
@@ -842,7 +874,10 @@ class InternVL35Adapter(ModelAdapter):
         if position_mode == "grid2d":
             raise ValueError(_GRID2D_UNSUPPORTED)
         if self._query_token_id is None:
-            (self._query_token_id,) = self._add_new_tokens([QUERY_PLACEHOLDER])
+            self._check_tokens_mutable("inject_query_tokens")  # 首次注入要分配行：必须在 inject_lora 之前
+            q = self._require_query_row()
+            self._allocate_query_row(init=True)
+            self._query_token_id = q
         self._query_n = n
 
     def clear_query_tokens(self) -> None:
@@ -852,11 +887,13 @@ class InternVL35Adapter(ModelAdapter):
     def add_grid_tokens(self, names: Sequence[str]) -> dict[str, int]:
         """加入像素 token 通道用的新 token，返回 名字 → id。
 
-        预算按累计计（≤ MAX_NEW_GRID_TOKENS，查询占位符不计）。先复用 257 个预留嵌入行；累计需要的行数超过现有行数时，
-        嵌入（lm_head 不共享时连同 lm_head）扩到恰好需要的行数，已有的行逐位不变，从不缩表（D13-1）。
-        新 token 的嵌入行与 lm_head 行各自写成自己基础词表行的精确均值；共享时只写一次。
+        预算按累计计（≤ MAX_NEW_GRID_TOKENS，查询占位符不计）。先复用 257 个预留嵌入行，id 从 attach 时的 len(tokenizer) 起连续取，
+        跳过预留区末行（查询占位符的固定 id，DEV-0020）；累计需要的行数超过现有行数时，嵌入（lm_head 不共享时连同 lm_head）
+        扩到恰好需要的行数，已有的行逐位不变，从不缩表（D13-1）。新 token 的嵌入行与 lm_head 行各自写成自己基础词表行的
+        精确均值；共享时只写一次。必须在 inject_lora 之前调用。
         """
         self._require_loaded()
+        self._check_tokens_mutable("add_grid_tokens")
         if isinstance(names, str):
             raise TypeError("names 必须是字符串的序列，不能是单个字符串")
         names = list(names)
@@ -892,6 +929,53 @@ class InternVL35Adapter(ModelAdapter):
         return parse_boxes(text, width=width, height=height)  # 模块级函数（方法体里的名字按全局作用域查找）
 
     # ------------------------------------------------------------------
+    # 训练侧钩子（DEV-0020；公共实现见 src/adapters/training.py 的 TrainingSupport）
+    # ------------------------------------------------------------------
+
+    def _pad_id(self) -> int:
+        return self._ids[END_OF_TEXT]
+
+    def _stop_ids(self) -> list[int]:
+        return [self._ids[s] for s in STOP_TOKENS]
+
+    def _forward_scope(self) -> Any:
+        return contextlib.nullcontext()
+
+    def _user_index_shift(self, enable_thinking: bool) -> tuple[int, int]:
+        """提示行 = system 轮（开思考时）+ user 轮（ModelInputs）+ 助手头：ModelInputs 的下标整体后移 system 轮的长度。"""
+        return len(self.system_prefix_ids(enable_thinking)), 0
+
+    def _logit_softcap(self) -> float | None:
+        return None  # InternVL3.5（Qwen3 LLM）没有 final_logit_softcapping
+
+    def _current_query_mode(self) -> PositionMode | None:
+        return "seq1d" if self._query_n is not None else None  # 只支持一维位置
+
+    def _vision_modules(self) -> list[Any]:
+        return [self._model.model.vision_tower, self._model.model.multi_modal_projector]
+
+    def _training_forward_kwargs(self, items: Sequence[ModelInputs], asm: Any, image_kw: dict[str, torch.Tensor],
+                                 query_mask: torch.Tensor | None,
+                                 query_embeds: torch.Tensor | None) -> dict[str, Any]:
+        """内层模型的输入：嵌入查表 → <IMG_CONTEXT> 位置并入视觉特征 → 查询位置换成 query_embeds（同 _input_embeds）；
+        一维位置 cumsum(mask) − 1（与 generate 相同）。"""
+        ids = asm.input_ids
+        embeds = self._model.get_input_embeddings()(ids)
+        if image_kw:
+            feats = self._image_features_from(image_kw, [len(i.span) for inp in items for i in inp.images])
+            embeds = scatter_rows(embeds, ids == self._ids[IMG_CONTEXT], feats, what="图像特征")
+        if query_mask is not None:
+            embeds = scatter_rows(embeds, query_mask, query_embeds.repeat(len(items), 1), what="查询嵌入")
+        return {"inputs_embeds": embeds, "attention_mask": asm.attention_mask,
+                "position_ids": cumsum_positions(asm.attention_mask)}
+
+    def _decode_positions(self, kw: dict[str, Any]) -> torch.Tensor:
+        return cumsum_positions(kw["attention_mask"])
+
+    def _decode_step_extra(self, batch: int) -> dict[str, Any]:
+        return {}
+
+    # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
 
@@ -904,7 +988,7 @@ class InternVL35Adapter(ModelAdapter):
         instr = {"type": "text", "text": instruction}
         content = [instr, *imgs] if order == "instruction_first" else [*imgs, instr]
         if self._query_n is not None:
-            content.append({"type": "text", "text": QUERY_PLACEHOLDER * self._query_n})
+            content.append({"type": "text", "text": _QUERY_SLOT})  # build_inputs 在这里拼进 [占位符 id] × n
         return content
 
     def _render(self, messages: list[dict[str, Any]], *, add_generation_prompt: bool = False) -> str:
@@ -930,11 +1014,13 @@ class InternVL35Adapter(ModelAdapter):
         return "".join(out)
 
     def _check_instruction(self, instruction: str) -> None:
-        if _SENTINEL in instruction:
-            raise ValueError(f"指令里含有内部哨兵字符串 {_SENTINEL!r}")
+        for sentinel in (_SENTINEL, _QUERY_SLOT):
+            if sentinel in instruction:
+                raise ValueError(f"指令里含有内部哨兵字符串 {sentinel!r}")
         ids = set(self._encode(instruction))
         forbidden = [s for s in _STRUCTURAL_TOKENS if self._ids[s] in ids]
-        if self._query_token_id is not None and self._query_token_id in ids:
+        # 查询占位符：不论是否已登记进 tokenizer，字面出现就算（DEV-0020 起它平时不在 tokenizer 里）
+        if QUERY_PLACEHOLDER in instruction or (self._query_token_id is not None and self._query_token_id in ids):
             forbidden.append(QUERY_PLACEHOLDER)
         if forbidden:
             raise ValueError(f"指令里含有结构性 token：{forbidden}")
@@ -1011,16 +1097,20 @@ class InternVL35Adapter(ModelAdapter):
                 raise ValueError(f"{where}：query_embeds 形状 {tuple(query_embeds.shape)}，期望 {want}")
 
     def _image_features(self, inputs: ModelInputs) -> torch.Tensor:
-        """与 InternVLModel.forward 相同的调用：视觉塔 → 去 CLS → pixel shuffle → multi_modal_projector；参数取 config 的值。"""
+        return self._image_features_from(inputs.tensors, [len(i.span) for i in inputs.images])
+
+    def _image_features_from(self, t: Any, sizes: Sequence[int]) -> torch.Tensor:
+        """与 InternVLModel.forward 相同的调用：视觉塔 → 去 CLS → pixel shuffle → multi_modal_projector；参数取 config 的值。
+        t 是一条输入的张量，或整批按行拼接的 pixel_values。"""
         cfg = self._model.config
         out = self._model.model.get_image_features(
-            pixel_values=inputs.tensors["pixel_values"],
+            pixel_values=t["pixel_values"],
             vision_feature_layer=cfg.vision_feature_layer,
             vision_feature_select_strategy=cfg.vision_feature_select_strategy,
             return_dict=True,
         )
         feats = out.pooler_output.reshape(-1, self.hidden_size()).to(device=self._device, dtype=self._dtype)
-        n_expected = sum(len(i.span) for i in inputs.images)
+        n_expected = sum(sizes)
         if tuple(feats.shape) != (n_expected, self.hidden_size()):
             raise RuntimeError(f"视觉特征形状 {tuple(feats.shape)}，期望 ({n_expected}, {self.hidden_size()})")
         return feats
@@ -1040,6 +1130,8 @@ class InternVL35Adapter(ModelAdapter):
 
     def _run(self, inputs: ModelInputs, query_embeds: torch.Tensor | None, *, where: str) -> tuple[torch.Tensor, ...]:
         self._check_entry(inputs, query_embeds, where=where)
+        if inputs.query_span is not None and query_embeds is None:
+            raise ValueError(f"{where}：输入里有查询 token，必须显式传 query_embeds（D21-2；不再静默用占位符的行）")
         embeds = self._input_embeds(inputs, query_embeds)
         pos = self.position_ids(inputs)
         out = self._model(
@@ -1060,55 +1152,6 @@ class InternVL35Adapter(ModelAdapter):
         idx = [torch.arange(i.span.start, i.span.end) for i in inputs.images]
         cat = torch.cat(idx) if idx else torch.empty(0, dtype=torch.long)
         return cat.to(inputs.tensors["input_ids"].device)
-
-    def _add_new_tokens(self, names: list[str]) -> list[int]:
-        """加 token 的公共路径（grid token 与查询占位符）：分词器 → 行数（必要时扩表）→ 行初始化。"""
-        vocab = self._tok.get_vocab()
-        clash = [n for n in names if n in vocab]
-        if clash:
-            raise ValueError(f"这些 token 已在词表里：{clash[:5]}")
-        n_before = len(self._tok)
-        expected = list(range(n_before, n_before + len(names)))
-        n_added = self._tok.add_tokens(names, special_tokens=True)
-        ids = [self._tok.convert_tokens_to_ids(n) for n in names]
-        if n_added != len(names) or ids != expected:
-            raise RuntimeError(f"add_tokens 加了 {n_added} 个，id {ids[:3]}…，期望从 {n_before} 起连续")
-        for name, i in zip(names, ids):
-            if self._encode(name) != [i]:
-                raise RuntimeError(f"{name!r} 没有分词成单个 token")
-        if self._encode("".join(names)) != ids:
-            raise RuntimeError("新 token 首尾相接时没有逐个分词")
-        self._ensure_rows(n_before + len(names))
-        rows = self._model.get_input_embeddings().weight.shape[0]
-        if max(ids) >= rows or self._model.get_output_embeddings().weight.shape[0] != rows:
-            raise RuntimeError(f"新 id 超出嵌入行数 {rows}")
-        self._init_rows(ids)
-        return ids
-
-    def _ensure_rows(self, needed: int) -> None:
-        """行数不够时扩到恰好 needed 行（不共享时 lm_head 同步），已有行逐位不变；够了什么都不做，从不缩表。"""
-        emb = self._model.get_input_embeddings()
-        head = self._model.get_output_embeddings()
-        n_old = emb.weight.shape[0]
-        if needed <= n_old:
-            return
-        with torch.no_grad():
-            pairs = [(emb, "num_embeddings")] + ([] if self._tied else [(head, "out_features")])
-            for mod, size_attr in pairs:
-                old = mod.weight.data
-                new = torch.empty((needed, old.shape[1]), dtype=old.dtype, device=old.device)
-                new[:n_old] = old
-                new[n_old:] = self._base_mean(old)
-                mod.weight.data = new  # 同一个 Parameter 对象：共享的 lm_head 跟着变
-                setattr(mod, size_attr, needed)
-                if not torch.equal(mod.weight[:n_old], old):
-                    raise RuntimeError("扩表后已有的行不再逐位相同")
-        if self._tied and head.weight is not emb.weight:
-            raise RuntimeError("扩表后 lm_head 与嵌入不再共享")
-        if head.weight.shape[0] != needed or emb.weight.shape[0] != needed:
-            raise RuntimeError("扩表后嵌入与 lm_head 行数不一致")
-        head.out_features = needed  # 共享时 Parameter 已随嵌入变了，这里只同步 nn.Linear 的属性
-        self._model.config.get_text_config().vocab_size = needed
 
     def _base_mean(self, weight: torch.Tensor) -> torch.Tensor:
         """基础词表行 [0, n_base_vocab) 的均值：float64 分块累加，再转回参数 dtype。"""

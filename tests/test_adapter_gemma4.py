@@ -698,7 +698,7 @@ def test_query_causal_prefix_bitwise_equal(fresh, images):
     with torch.no_grad():
         sa = ad.sequence_hidden_states(inp, layers, query_embeds=qa)
         sb = ad.sequence_hidden_states(inp, layers, query_embeds=qb)
-        plain = ad.sequence_hidden_states(inp, layers)
+        plain = ad.sequence_hidden_states(inp, layers, query_embeds=torch.zeros(16, 64))  # DEV-0020：必须显式给
     qs, qe = inp.query_span.start, inp.query_span.end
     for l in layers:
         assert torch.equal(sa[l][:qs], sb[l][:qs]) and torch.equal(sa[l][:qs], plain[l][:qs]), l
@@ -715,11 +715,10 @@ def test_query_embeds_replace_placeholder_and_carry_grad(fresh, images):
     assert torch.equal(hs.query[0], qe.detach())
     hs.query[4].pow(2).sum().backward()
     assert qe.grad is not None and qe.grad.abs().sum() > 0  # E3a 的可学习查询从这里得到梯度
-    with torch.no_grad():
-        plain = ad.hidden_states(inp, [0])
+    with pytest.raises(ValueError, match="query_embeds"):  # DEV-0020 第 8 条：不给 query_embeds 报错（原来静默用占位符行）
+        ad.hidden_states(inp, [0])
     emb = ad.model.get_input_embeddings()
     row = emb.weight[ad.query_token_id]
-    assert torch.equal(plain.query[0], (row * emb.embed_scale).expand(4, -1))  # 不给 query_embeds 时：占位符行 × embed_scale
     assert torch.equal(row, _base_mean(emb.weight))  # 占位符行按 D13-1 初始化为基础行均值
     ple = ad.model.get_per_layer_input_embeddings().weight
     assert torch.equal(ple[ad.query_token_id], _base_mean(ple))

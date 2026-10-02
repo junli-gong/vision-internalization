@@ -12,6 +12,8 @@
   三个家族都接受 seed（默认 0）与 init_std（默认 None = 保持 HF 的随机初始化）。真模型不接受任何 family_kw；不认识的键报 TypeError。
   init_std（批处理核对用）：把全部二维及以上的浮点参数重新取成 N(0, init_std²)（种子 seed）。HF 默认初始化下小模型的 greedy 输出
   几乎与输入无关（Qwen 小模型每步都生成同一个换行 token），批量与逐条"逐个相同"就成了空话；取 0.05 左右，输出随指令与图变化。
+- 构造方式记在适配器的 build_spec 上（DEV-0020）：{key, tiny, family_kw, image_policy}，save_trained 写进 manifest，
+  load_trained(directory, device=…) 按它重建同一个 base（真模型按固定 revision 加载；小模型按同样的种子重建），再恢复检查点。
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from typing import Any
 
 import torch
 
-from src.adapters import registry
+from src.adapters import checkpoint, registry
 from src.adapters.base import ModelAdapter
 from src.adapters.image_policy import (
     E1_IMAGE_POLICIES,
@@ -29,6 +31,7 @@ from src.adapters.image_policy import (
     SoftTokenBudget,
     TilePolicy,
     check_policy,
+    parse_policy,
 )
 
 # 小模型接受的 family_kw 与默认值（与此前 scripts/smoke_adapter.py、scripts/health_check.py 里各自的写法相同）
@@ -83,6 +86,12 @@ def make_adapter(key: str, *, device: str | torch.device, dtype: torch.dtype, im
             reinit_parameters(model, std=kw["init_std"], seed=kw["seed"])
         return model
 
+    spec = {"key": key, "tiny": tiny, "family_kw": dict(kw), "image_policy": checkpoint.policy_spec(policy)}
+
+    def done(ad: ModelAdapter) -> ModelAdapter:
+        ad.build_spec = spec  # DEV-0020：检查点重建 base 用
+        return ad
+
     if family == registry.FAMILY_QWEN35:
         from src.adapters import qwen35
 
@@ -92,10 +101,10 @@ def make_adapter(key: str, *, device: str | torch.device, dtype: torch.dtype, im
             comps = qwen35.load_pinned_components(key)
             model = finish(qwen35.build_tiny_model(comps[0], tie_word_embeddings=kw["tie_word_embeddings"], dtype=dtype,
                                                    seed=kw["seed"]))
-            return qwen35.make_tiny_adapter(comps, **size_kw, device=device, model=model, source_key=key)
+            return done(qwen35.make_tiny_adapter(comps, **size_kw, device=device, model=model, source_key=key))
         ad = qwen35.Qwen35Adapter(device=device, **size_kw)
         ad.load(key, dtype)
-        return ad
+        return done(ad)
 
     if family == registry.FAMILY_GEMMA4:
         from src.adapters import gemma4
@@ -105,11 +114,11 @@ def make_adapter(key: str, *, device: str | torch.device, dtype: torch.dtype, im
             comps = gemma4.load_pinned_components(key)
             model = finish(gemma4.build_tiny_model(comps.config, dtype=dtype, seed=kw["seed"],
                                                    generation_config=comps.generation_config))
-            return gemma4.make_tiny_adapter(comps, max_soft_tokens=policy.max_soft_tokens, device=device, model=model,
-                                            source_key=key)
+            return done(gemma4.make_tiny_adapter(comps, max_soft_tokens=policy.max_soft_tokens, device=device,
+                                                 model=model, source_key=key))
         ad = gemma4.Gemma4Adapter(device=device, max_soft_tokens=policy.max_soft_tokens)
         ad.load(key, dtype)
-        return ad
+        return done(ad)
 
     if family == registry.FAMILY_INTERNVL35:
         from src.adapters import internvl35
@@ -120,12 +129,27 @@ def make_adapter(key: str, *, device: str | torch.device, dtype: torch.dtype, im
             comps = internvl35.load_pinned_components(key)
             model = finish(internvl35.build_tiny_model(comps[0], tie_word_embeddings=kw["tie_word_embeddings"],
                                                        dtype=dtype, seed=kw["seed"]))
-            return internvl35.make_tiny_adapter(comps, **tile_kw, device=device, model=model, source_key=key)
+            return done(internvl35.make_tiny_adapter(comps, **tile_kw, device=device, model=model, source_key=key))
         ad = internvl35.InternVL35Adapter(device=device, **tile_kw)
         ad.load(key, dtype)
-        return ad
+        return done(ad)
 
     raise ValueError(f"make_adapter 还不支持 {family} 家族（{key}）")  # 注册表新增家族时在这里加一支
 
 
-__all__ = ["default_image_policy", "make_adapter", "reinit_parameters"]
+def load_trained(directory: Any, *, device: str | torch.device, dtype: torch.dtype | None = None,
+                 merge: bool = True) -> tuple[ModelAdapter, "checkpoint.TrainedCheckpoint"]:
+    """按检查点 manifest 里的 build_spec 重建 base（真模型按固定 revision 加载，小模型按同样的种子与 init_std 重建；dtype 不给时取
+    manifest 记的 dtype），再调 adapter.load_trained（restore_tokens → 挂 LoRA → merge=True 时在内存里合并）。返回 (适配器, 检查点内容)。"""
+    man = checkpoint.read_manifest(directory)
+    spec = man.get("build_spec")
+    if not spec:
+        raise checkpoint.CheckpointError("检查点没有记录构造方式（适配器不是 make_adapter 构造的）：请自己构造同一个 base，"
+                                         "再调 adapter.load_trained")
+    dt = dtype if dtype is not None else getattr(torch, man["dtype"])
+    ad = make_adapter(spec["key"], device=device, dtype=dt, image_policy=parse_policy(spec["image_policy"]),
+                      tiny=bool(spec["tiny"]), **dict(spec["family_kw"]))
+    return ad, ad.load_trained(directory, merge=merge)
+
+
+__all__ = ["default_image_policy", "load_trained", "make_adapter", "reinit_parameters"]
