@@ -1,0 +1,100 @@
+RUN-0014 / second instance / 2026-10-02
+
+Scope
+Original package stage 0/1 environment and readiness checks only. No main
+experiment, E1 evaluation, training or newly developed local training code.
+Actual GPU: NVIDIA A800-SXM4-80GB, not A100. The archive retains the original
+collect_results.sh naming convention a100_results_0014_*.tar.gz.
+
+Machine and runtime
+Host: autodl-container-q549gxtv7x-5e3aa552
+Endpoint: connect.bjb1.seetacloud.com:55433
+WORK: /root/autodl-tmp/visint-0014-run2
+Allocated cgroup resources after GPU boot: 18 CPU cores, 120 GiB RAM.
+GPU: 1 x A800-SXM4-80GB, 81920 MiB, MIG disabled.
+Driver 580.126.09; Python 3.12.3; torch 2.13.0+cu130; CUDA runtime 13.0.
+torchvision 0.28.0+cu130; accelerate 1.15.0; transformers 5.17.0.
+pip check: No broken requirements found.
+Data disk: 50 GB, approximately 22 GB used and 29 GB available at finish.
+CUDA available; BF16 supported; BF16 matrix forward/backward verified.
+
+Source and preparation
+Commit: 6dcf31a05c7c7ef9f6125c8b6219ae46fb088568
+Original source tar SHA256:
+a26b78d8de2748a0e71d34e29d75735908ad39463fb270780f3ac7ae3e69145f
+All 4218 original regular files match the source tar. No source, config,
+tests, thresholds or original package scripts were modified.
+Original setup_env.sh and prefetch.sh used. Added runtime dependencies
+torchvision and accelerate that were missing from the initial setup.
+Official Hugging Face connectivity failed; hf-mirror.com was used.
+The user explicitly authorized using their read token with this mirror.
+Token validity check and Gemma config access both returned HTTP 200;
+the fixed Gemma weight download subsequently completed successfully.
+Credentials were not saved in notes, source, credential cache or result logs.
+Gemma repo: google/gemma-4-E2B-it
+Gemma revision: 3e22461f65e89153144f8adb70e3b8c2cc9845a7
+Gemma model.safetensors: 10246621918 bytes.
+Final cache: 94 blob files, 16881071539 bytes; all SHA256/Git blob SHA1
+checks matched; no incomplete downloads. Test image SHA256 matched.
+Original model cards and small files for all eight models are cached.
+NLTK server download timed out during no-GPU preparation. Official
+punkt_tab English files were downloaded locally, uploaded, and verified
+against the four protocol hashes; related 63 tests passed.
+
+Execution and retained incomplete attempt
+No-GPU preparation used 0.5 core / 2 GiB; 114 targeted tests and all
+three tiny smoke checks passed. Test collection found 1410 tests.
+The first GPU attempt began at 16:09 Beijing time, but bash -lc reset
+OMP_NUM_THREADS and MKL_NUM_THREADS to the provider defaults of 0.
+That incomplete attempt was stopped; its logs are preserved under
+results_0014/attempt_login_env and are not a full-suite result.
+Restarted at 16:32 Beijing time with a non-login shell and explicit
+OMP_NUM_THREADS=8 and MKL_NUM_THREADS=8, verified in the pytest process.
+Original run_all.sh completed at 16:47:40 Beijing time.
+It initially ran with SKIP_GEMMA=1 because credentials were unavailable
+at launch. After authorized prefetch, the exact Gemma smoke and batching
+commands from run_all.sh were executed separately, with the same flags,
+after the main run had finished. They completed at 16:50:11 Beijing time.
+Their results and exit codes are included in the same results directory.
+
+Full pytest result
+2 failed, 1407 passed, 1 skipped, 23 warnings in 767.75 seconds.
+pytest exit code: 1. This is NOT an all-green result.
+Failure 1: tests/test_synth_3d_tasks.py:408,
+test_speed_at_least_20_per_second_single_core[rotation3d].
+Measured 19.12263308503498 samples/s; required >= 20.
+Failure 2: tests/test_synth_occlusion.py:113,
+test_speed_at_least_50_per_second_single_core.
+Measured 36.352866661648335 samples/s; required >= 50.
+Both measure CPU process time, not GPU inference performance. Thresholds
+were not relaxed. Full failure traces remain in results_0014/pytest.txt.
+Skip: tests/test_metrics_seg.py:129, optional cv2 dependency unavailable.
+No additional targeted rerun changes the above full-suite result.
+
+Smoke and batching results
+Tiny Qwen, Gemma and InternVL: all_ok=true, each rc=0.
+Real Qwen 0.8B, Gemma E2B and InternVL 2B: all_ok=true, each rc=0.
+All three real-weight runs used CUDA / BF16 with the original test image.
+Batching scripts: ok=true, each rc=0; NOT a claim of exact output equality
+or formal task-level batching acceptance.
+
+Model                  Sequential/s  Batch4/s  Batch8/s  Equal tokens B4/B8
+Qwen3.5-0.8B           0.485651      1.304793  2.054177  5/8, 3/8
+Gemma-4-E2B-it         0.518205      0.965076  1.304243  5/8, 4/8
+InternVL3.5-2B-HF      0.805390      1.069645  2.113571  7/8, 7/8
+Raw-text equal counts are the same as token-equal counts in this run.
+The eight free-form prompts are a readiness measurement, not E1's formal
+benchmark, task-answer agreement threshold or a main research result.
+
+Evidence and handoff
+results_0014/steps.log: each step exit code, including Gemma supplement.
+results_0014/facts.txt: GPU, runtime, dependency and disk facts.
+results_0014/gpu_preflight.txt: GPU and BF16 forward/backward evidence.
+results_0014/final_integrity.json: source/cache hashes and credential scan.
+results_0014/preparation/: no-GPU preparation evidence.
+results_0014/attempt_login_env/: retained incomplete launch attempt.
+results_0014/smoke_*.json and vb_*.json: complete raw measurements.
+Original collect_results.sh used to produce the final archive.
+Readiness checks do not establish main-experiment success or prove every
+future training configuration fits. CPU throughput failures remain open
+for the project owner's acceptance decision.

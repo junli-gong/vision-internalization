@@ -1,0 +1,77 @@
+........................................................................ [  5%]
+........................................................................ [ 10%]
+........................................................................ [ 15%]
+........................................................................ [ 20%]
+........................................................................ [ 25%]
+........................................................................ [ 30%]
+........................................................................ [ 35%]
+........................................................................ [ 40%]
+........................................................................ [ 45%]
+........................................................................ [ 51%]
+........................................................................ [ 56%]
+........................................................................ [ 61%]
+....................s................................................... [ 66%]
+........................................................................ [ 71%]
+........................................................................ [ 76%]
+........................................................................ [ 81%]
+........................................................................ [ 86%]
+...............F........................................................ [ 91%]
+......F................................................................. [ 97%]
+..........................................                               [100%]
+=================================== FAILURES ===================================
+__________ test_speed_at_least_20_per_second_single_core[rotation3d] ___________
+
+task = 'rotation3d'
+
+    @pytest.mark.parametrize("task", ["rotation3d", "viewpoint"])
+    def test_speed_at_least_20_per_second_single_core(task):
+        generate(task, "train", 0)
+        t = time.process_time()
+        n = 40
+        for i in range(n):
+            generate(task, "train", 3000 + i)
+        rate = n / (time.process_time() - t)
+        print(f"{task}: {rate:.1f} samples/s (CPU time, single process)")
+>       assert rate >= 20
+E       assert 19.12263308503498 >= 20
+
+tests/test_synth_3d_tasks.py:408: AssertionError
+----------------------------- Captured stdout call -----------------------------
+rotation3d: 19.1 samples/s (CPU time, single process)
+________________ test_speed_at_least_50_per_second_single_core _________________
+
+    def test_speed_at_least_50_per_second_single_core():
+        generate("occlusion", "train", 0)  # 预热（import、单位形状缓存）
+        t = time.process_time()
+        n = 60
+        for i in range(n):
+            generate("occlusion", "train", 1000 + i)
+        rate = n / (time.process_time() - t)
+        print(f"occlusion: {rate:.1f} samples/s (CPU time, single process)")
+>       assert rate >= 50
+E       assert 36.352866661648335 >= 50
+
+tests/test_synth_occlusion.py:113: AssertionError
+----------------------------- Captured stdout call -----------------------------
+occlusion: 36.4 samples/s (CPU time, single process)
+=============================== warnings summary ===============================
+tests/test_adapter_batching.py: 14 warnings
+  /root/autodl-tmp/visint-0014-run2/venv/lib/python3.12/site-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+tests/test_adapter_internvl35.py::test_processor_default_is_the_opposite_of_preprocessor_config
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[False-instruction_first-single]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[False-instruction_first-multi]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[False-image_first-single]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[False-image_first-multi]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[True-instruction_first-single]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[True-instruction_first-multi]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[True-image_first-single]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[True-image_first-multi]
+  /root/autodl-tmp/visint-0014-run2/venv/lib/python3.12/site-packages/numpy/_core/fromnumeric.py:45: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+    return conv.wrap(result, to_scalar=False)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_metrics_seg.py:129: could not import 'cv2': No module named 'cv2'
+2 failed, 1407 passed, 1 skipped, 23 warnings in 767.75s (0:12:47)
