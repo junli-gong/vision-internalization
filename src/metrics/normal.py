@@ -53,3 +53,58 @@ def normal_metrics(errors: Sequence[np.ndarray]) -> dict[str, float] | None:
     for t in NORMAL_ANGLE_THRESHOLDS:
         out[f"within_{t:g}"] = float(np.mean(allerr < t))
     return out
+
+
+# ---------------------------------------------------------------------------
+# 逐图汇总（DEV-0023，E2 探针）：评测集全部像素的误差放不进内存时，逐图记可相加的汇总，再算数据集级指标与 bootstrap
+# ---------------------------------------------------------------------------
+
+# 逐图直方图的箱宽（度），只用于数据集级中位角误差。箱内线性插值，与 np.median 之差 ≤ 一个箱宽 + 两个中间值之差的一半
+# （像素数为偶数时 np.median 取两个中间值的平均；评测集有上亿个像素，后一项可以忽略；tests/test_e2_metrics.py 钉住）。
+# mean 与 within_* 不经过直方图，逐像素精确。
+NORMAL_HIST_BIN_DEG = 0.1
+
+
+def normal_image_summary(errors: np.ndarray, bin_deg: float = NORMAL_HIST_BIN_DEG) -> dict:
+    """一张图的角误差（normal_angular_errors 的输出）→ 可逐图相加的汇总：
+
+    sum（误差和，度）、n（像素数）、within（各阈值 NORMAL_ANGLE_THRESHOLDS 下 误差 < 阈值 的像素数，与 normal_metrics 同一个比较）、
+    hist（[0, 180] 上箱宽 bin_deg 的计数，180° 落在最后一箱）。
+    """
+    e = np.asarray(errors, dtype=np.float64).reshape(-1)
+    n_bins = int(round(180.0 / bin_deg))
+    idx = np.clip((e / bin_deg).astype(np.int64), 0, n_bins - 1)
+    return {
+        "sum": float(e.sum()),
+        "n": int(e.size),
+        "within": np.array([int(np.count_nonzero(e < t)) for t in NORMAL_ANGLE_THRESHOLDS], dtype=np.int64),
+        "hist": np.bincount(idx, minlength=n_bins).astype(np.int64),
+    }
+
+
+def hist_median(hist: np.ndarray, bin_deg: float = NORMAL_HIST_BIN_DEG) -> float | None:
+    """由直方图求中位数：取累计计数首次达到 n/2 的那一箱，箱内按计数线性插值。空直方图返回 None。"""
+    h = np.asarray(hist, dtype=np.float64)
+    n = float(h.sum())
+    if n <= 0:
+        return None
+    cum = np.cumsum(h)
+    k = int(np.searchsorted(cum, n / 2.0, side="left"))
+    before = float(cum[k - 1]) if k > 0 else 0.0
+    frac = (n / 2.0 - before) / h[k] if h[k] > 0 else 0.0
+    return float((k + frac) * bin_deg)
+
+
+def normal_metrics_from_summaries(summaries: Sequence[dict], bin_deg: float = NORMAL_HIST_BIN_DEG) -> dict[str, float] | None:
+    """数据集级法向指标（逐像素汇总，与 normal_metrics 同口径）：mean、within_* 与把全部误差拼在一起算的结果相同（浮点求和顺序
+    不同，差在 1e-12 量级）；median 由合计直方图插值（误差界见 NORMAL_HIST_BIN_DEG）。没有任何有效像素返回 None。"""
+    n = int(sum(int(s["n"]) for s in summaries))
+    if n == 0:
+        return None
+    total = float(sum(float(s["sum"]) for s in summaries))
+    within = np.sum([np.asarray(s["within"]) for s in summaries], axis=0)
+    hist = np.sum([np.asarray(s["hist"]) for s in summaries], axis=0)
+    out = {"mean": total / n, "median": hist_median(hist, bin_deg), "n_pixels": n}
+    for t, w in zip(NORMAL_ANGLE_THRESHOLDS, within):
+        out[f"within_{t:g}"] = float(w) / n
+    return out
