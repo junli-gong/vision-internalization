@@ -1182,3 +1182,34 @@
    - **按 v1 判**：RUN-0021 的 4 个模型全部通过。各项读数记作"合并的数值噪声底"，写进 E3 的预注册。
    - **改代码**：把判据改进 `scripts/check_training_interfaces.py`，交给下一个改适配器的开发任务，同时补上 `base.py` 的 `trainable_token_rows` 桩（D45-5）。在此之前，用这条规则人工判。
 
+## D49 — DEV-0022（E2/E3 训练数据落地、去重报告）合入与偏离裁定（2026-10-02）
+
+1. **合入**（fba37dd，无返工）。合入前验证：普通与 server-parity 条件都是 1773 passed + 11 skipped。
+2. **四个训练数据源**（`scripts/data/land_train.py`；落在 A800，合计约 10.5 GB）：
+   - `refcoco_train`（D11-1）：
+     - 三者 train 图像并集 28,158 张，减去评测图像 3,751 张，剩 24,407 张，约 4.15 GB；
+     - 图像从 COCO `train2014.zip` 用 Range 取。
+   - `nyu_depth_train`（D11-2）：
+     - BTS 清单 24,231 对，去掉 bookstore_0001d–j 的 1,383 对，剩 22,848 对，约 3.96 GB；
+     - 数据从 HF `aradhye/nyu_depth_v2` 的固定 revision 用 Range 取，清单是 `cleinc/bts` 固定 commit 的副本。
+   - `nyu_normals`：法向 GT 选定 Bae 2021 的 `nyu_dataset.zip`，GT 来自 GeoNet。
+     - 795 + 654 张，与 splits.mat 的 train/test 下标逐个相同，训练与测试同源，满足 D11-2 第 3 点；
+     - 数据许可未声明，交项目负责人确认（N20），确认前不做法向训练。
+   - `ade20k`：MIT 官方 zip，train 20,210 + val 2,000。
+   - 训练加载器默认读去重剔除清单，**没有清单就报错**（硬约束 7）。
+3. **去重**（`scripts/data/dedupe_report.py`）：
+   - 各机器导出"图像键 + 感知哈希"清单，在一台机器上比较；
+   - 阈值暂定为汉明距离 ≤ 8，报告列 0–12 各档的计数，并用评测集之间的已知重合标定；
+   - 正式阈值等 A800 上的第一份报告出来后再定。
+4. **偏离全部接受**：
+   - `refcoco_train` 的 `--limit 3` 没在开发机上真跑，因为要先取约 139 MB 标注。不在开发机补跑，在 A800 上首次运行时验证。
+   - 实测体积比任务书写的小：RefCOCO 训练图 4.15 GB，而 5.25 GB 是含评测图的并集。
+   - 法向 train 795 张里有 50 张是 E1 的 NYU 开发子集，按"开发子集算评测集"剔除。
+   - 清单的 `script.path` 在各落地源里改写；`ADE_NUM_CLASSES` 加了 reduce_zero_label 的说明，训练时是否映射留给 E3 定。
+5. **遗留**：
+   - E1 的 `download_many` 在 `DiskRedLine` 后不会取消已提交的下载，交给下一个改数据代码的任务；
+   - 给 `Manifest` 加 `script` 参数。
+6. **运行安排**：
+   - B200 先导出评测集的哈希清单，入库，几 MB（RUN-0023）；
+   - A800 的脚本包加上落地、训练哈希导出与本地比较，在 RUN-0022 合作者还没跑时更新它。
+
