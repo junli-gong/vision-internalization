@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RUN-0022 第 3 步：在 GPU 上跑全部检查。不需要联网（权重与数据已由 prefetch.sh 下好）。
+# RUN-0022 第 3 步（第二版）：在 GPU 上跑全部检查，最后出训练数据的去重报告。不需要联网（权重与数据已由 prefetch.sh 下好）。
 # 用法：bash run_all.sh <工作目录> [结果目录，默认 <工作目录>/results_0022]
 # 某一步失败不会中断后面的步骤；每一步的退出码记在 <结果目录>/steps.log。预计 2.5–3.5 小时，大头是全量测试（CPU）。
 set -uo pipefail
@@ -97,6 +97,24 @@ if [ -f "$WORK/data/refcoco/MANIFEST.json" ]; then
   done
 else
   step train_iface_skipped_no_refcoco 0
+fi
+
+# 8. 训练集与评测集的去重（硬约束 7）：导出本机训练数据的感知哈希，与 B200 评测数据的清单（随代码快照）比对。
+#    剔除清单写在 $WORK/data/dedupe/，以后训练时加载器自动读取；报告与清单另复制一份进结果目录。
+EVAL_HASHES="experiments/P0/0023_eval_hashes/eval_hashes_b200.json"
+NTRAIN=0; for s in refcoco_train nyu_depth_train ade20k nyu_normals; do [ -f "$WORK/data/$s/MANIFEST.json" ] && NTRAIN=$((NTRAIN+1)); done
+if [ "$NTRAIN" -gt 0 ]; then   # 落地成功几个源就比对几个，缺的在报告里写明
+  python scripts/data/dedupe_report.py --export-hashes "$WORK/data" --out "$OUT/train_hashes_a800.json" \
+    > "$OUT/dedupe_export.log" 2>&1
+  step dedupe_export $?
+  python scripts/data/dedupe_report.py --train-root "$WORK/data" --eval-manifest "$EVAL_HASHES" \
+    --out "$WORK/data/dedupe" > "$OUT/dedupe_report.log" 2>&1
+  step dedupe_report $?
+  mkdir -p "$OUT/dedupe" && cp "$WORK"/data/dedupe/* "$OUT/dedupe/" 2>/dev/null
+  du -sh "$WORK"/data/* > "$OUT/data_sizes.txt" 2>&1
+  for m in "$WORK"/data/*/MANIFEST.json; do cp "$m" "$OUT/MANIFEST_$(basename "$(dirname "$m")").json"; done
+else
+  step dedupe_skipped_no_train_data 0
 fi
 
 df -h "$WORK" >> "$OUT/facts.txt"

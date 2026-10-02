@@ -1,11 +1,14 @@
-# RUN-0022：A800 环境搭建与就绪检查（第二版）
+# RUN-0022（第二版）：A800 环境搭建、就绪检查与训练数据落地
 
 **给协助运行的合作者。** 上一个包（RUN-0014）在 A100 上跑通了，谢谢你补装了漏掉的依赖。这个包换到 A800 上：
 - 修掉了上次的三处疏漏：torchvision、accelerate 和 README 文件；
-- 多做三件事，为以后在这台机器上训练做准备：
+- 多做几件事，为以后在这台机器上训练做准备：
   - 下齐 Qwen 与 InternVL 的全部权重，并逐文件核对；
   - 跑一遍训练接口的核对；
-  - 用健康检查和另一台机器逐题对比。
+  - 用健康检查和另一台机器逐题对比；
+  - 落地训练数据（约 10.5 GB），并与评测数据做去重。
+
+上次的 A800 结果（重跑 RUN-0014 原包）已经收到：三个家族都通过了。这个包请在扩好的大盘上跑。
 
 **不需要改任何代码。** 照下面的步骤跑，把结果压缩包和一份 notes.txt 传回同一个 Google Drive 文件夹。遇到报错不要自己修代码，原样记下来；环境类的问题（缺包、网络）可以像上次那样处理，在 notes.txt 里写明。
 
@@ -24,19 +27,35 @@
 ## 1. 需要准备
 
 - **一块 A800**，80 GB 最好；40 GB 也能跑完本包。
-- **大盘上约 80 GB 空间**：
+- **大盘上约 100 GB 空间**（50 GB 的盘放不下）：
   - 权重约 50 GB；带 Gemma 约 75 GB；
   - 环境约 8 GB；
   - RefCOCO 开发数据约 1.1 GB；
+  - NYUv2 官方集约 1.3 GB，落地时临时多占约 3 GB；
+  - E2/E3 训练数据约 10.5 GB；
   - 其余是代码与结果。
 - **Python 3.12**：没有的话用 conda 建一个，再用 `PYTHON=<路径>` 指给脚本。
-- **Gemma 4**：是受限模型，要先在 <https://huggingface.co/google/gemma-4-E2B-it> 用你的 HF 账号接受条款，再 `hf auth login`。拿不到的话，第 2、3 步都加 `SKIP_GEMMA=1`，回传时说明。
+- **Gemma 4**：是受限模型。
+  - 上次的 Gemma 权重如果还在，可以 `export HF_HOME=<上次的 hf 目录>` 复用，不用再下。
+  - 要重新下，请用一个只读权限的 token。不要把有写权限的 token 发给第三方镜像。
+  - 拿不到的话，第 2、3 步都加 `SKIP_GEMMA=1`，回传时说明。
 - **网络**：第 1、2 步要能访问：
   - PyPI、download.pytorch.org；
   - huggingface.co：慢的话 `export HF_ENDPOINT=https://hf-mirror.com`，每个文件都会核对哈希；
-  - images.cocodataset.org、web.archive.org：后者是 RefCOCO 标注的存档地址。
+  - images.cocodataset.org：COCO 图像，用 Range 只取需要的约 4 GB；
+  - web.archive.org：RefCOCO 标注的存档；
+  - horatio.cs.nyu.edu：NYUv2 官方集；
+  - ADE20K 官方站，以及 Google Drive（法向数据）。
 
   第 3 步离线跑。
+
+**连不上时怎么办**：每个数据源都是独立的，失败只记日志，不影响别的步骤。
+- **web.archive.org 不通**：在能访问的电脑上下载下面 3 个文件，放进 `<工作目录>/refer_zips/`，再重跑第 2 步。已落好的会自动跳过。
+  - `https://web.archive.org/web/20220413011718if_/https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcoco.zip`
+  - `https://web.archive.org/web/20220413011656if_/https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcoco+.zip`
+  - `https://web.archive.org/web/20220413012904if_/https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcocog.zip`
+- **Google Drive 不通**：法向数据（nyu_normals）会失败，照实回传即可，暂时用不到。
+- **huggingface.co 不通**：`export HF_ENDPOINT=https://hf-mirror.com`。
 
 ## 2. 步骤
 
@@ -46,7 +65,7 @@
 # 第 1 步：约 15–30 分钟
 bash setup_env.sh <工作目录>
 
-# 第 2 步：约 30–90 分钟，下载约 50 GB（取决于网速）
+# 第 2 步：约 1–3 小时，下载约 65 GB（取决于网速；中断了重跑即可，已下好的会跳过）
 bash prefetch.sh <工作目录>
 
 # 第 3 步：约 2.5–3.5 小时（大头是 CPU 上的全量测试，约 1 小时）
@@ -68,6 +87,8 @@ bash collect_results.sh <工作目录>
 - **三个 `smoke_tiny_*.json`、三个 `smoke_<模型>.json`**：`all_ok` 为 true。
 - **`health_vs_b200.txt`**：逐题和另一台机器比。相同或不同都正常，这正是要量的跨机器差异。
 - **两个 `train_iface_<模型>.json`**：`pass` 为 true 或 false 都照实传回。如果 RefCOCO 没落地成功，这一步会跳过，`steps.log` 里写着 `train_iface_skipped_no_refcoco`。
+- **`prefetch_logs/land_*.log`**：每个数据源的落地日志，失败的照实传回。
+- **`dedupe/dedupe_report.md`**：训练数据与评测数据之间的重合统计。剔除清单 `train_exclusions.json` 留在 `<工作目录>/data/dedupe/`，以后训练要用，**不要删 `<工作目录>/data`**。
 
 ## 4. 回传
 
