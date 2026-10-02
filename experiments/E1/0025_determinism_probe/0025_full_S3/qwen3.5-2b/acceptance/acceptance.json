@@ -1,0 +1,200 @@
+{
+ "version": 3,
+ "header": {
+  "model": "qwen3.5-2b",
+  "revision": "15852e8c16360a2fea060d615a32b45270f8a8fc",
+  "policy": "default",
+  "device": "cuda",
+  "dtype": "bf16",
+  "tiny": false,
+  "prompt_config_sha256": "5de1aec711fad0140db0cf27094d66e460cf2999ffcd5456f1964bc5b9851158",
+  "batch_size_a": 64,
+  "batch_size_b": 48,
+  "frozen": true,
+  "limit": null,
+  "count_questions": "countbenchqa",
+  "gpu": "NVIDIA B200"
+ },
+ "protocol": {
+  "version": 3,
+  "rule": "开发子集上，(i) 同一批配置（batch_protocol）跑两遍（A1、A2），每个任务的 predictions.jsonl 逐字节相同；(ii) 换一种批组成（B，见 composition_b）再跑一遍，按组比较 A1 与 B 的标题指标（严格读数）：两遍逐样本配对、bootstrap 的 95% CI 落在 [−δ, +δ] 以内（δ 按组的 metric_class 取 delta）。所有任务过 (i)、所有能判的组过 (ii) 才算通过。A1 与 B 之间的指标差及其 CI 记作数值噪声底，写进结果；E3 里小于它的效应不做解读。不再以 batch-1 为参照（D36-1）；三种一致口径（逐位、IoU ≥ 0.9、按判定结果）在 A1 与 B 之间照算，只作参考。",
+  "composition_b": {
+   "batch_size": 48,
+   "rule": "批大小 48，其余同 batch_protocol（顺序不变、左填充、受限字母读数按字母集合分批）。批大小与 64 不同，除了被字母集合变化或末尾截短的批，B 里没有哪一批与 A 的组成相同：每条样本的同批邻居与填充长度都变了。比 64 小，显存不会比正式运行更紧。D43 随 A 由 16/12 改为 64/48。"
+  },
+  "delta": {
+   "accuracy": 0.02,
+   "iou": 0.02
+  },
+  "take_salt_purpose": "e1_acceptance_v3",
+  "groups": [
+   {
+    "name": "short_text",
+    "tasks": [
+     "refexp_box",
+     "count"
+    ],
+    "metric": "accuracy_pooled",
+    "metric_class": "accuracy",
+    "n_min": 300,
+    "take": "all",
+    "rule": "自由生成的短输出（生成上限都是 256）合为一组：定位的 Acc@0.5 与计数的准确率都是逐条 0/1，合并成一个池，统计量是池内 0/1 的均值。定位开发子集 600 句全取；计数开发子集只有 49 条，单独凑不够 300，所以并进这一组。"
+   },
+   {
+    "name": "letter",
+    "tasks": [
+     "rel_depth_nyu",
+     "rel_depth_blink",
+     "spatial_cvbench",
+     "spatial_embspatial"
+    ],
+    "metric": "accuracy_pooled",
+    "metric_class": "accuracy",
+    "n_min": 300,
+    "take": "all",
+    "rule": "受限字母读数（1 个 token）的四个任务合为一组：开发子集 250 + 12 + 50 + 50 = 362 条，统计量是池内 0/1 的均值。"
+   },
+   {
+    "name": "polygon",
+    "tasks": [
+     "refexp_poly"
+    ],
+    "metric": "cIoU",
+    "metric_class": "iou",
+    "n_min": 500,
+    "take": 500,
+    "rule": "RefCOCO、RefCOCO+、RefCOCOg 三个开发子集共 600 句，取 500 句；统计量 cIoU（ratio of sums）。"
+   },
+   {
+    "name": "grid",
+    "tasks": [
+     "grid16"
+    ],
+    "metric": "gIoU",
+    "metric_class": "iou",
+    "n_min": 500,
+    "take": 500,
+    "rule": "同样的 600 句里取 500 句；统计量 gIoU（逐条 IoU 的均值）。"
+   },
+   {
+    "name": "detection",
+    "tasks": [
+     "ovd"
+    ],
+    "metric": "F1@0.5",
+    "metric_class": "accuracy",
+    "n_min": null,
+    "take": 500,
+    "rule": "RefCOCO 三个开发子集用到的 COCO train2014 图（去重，按 image id 升序，多于 500 张时取 500 张），GT 是这些图在 instances_train2014 里的全部标注（数据源 coco_train2014_e1dev）；类别表是 COCO 的 80 类。统计量 F1@0.5（逐图 (TP, FP, n_GT)，stats.f1_statistic），按准确率类取 δ。D36 没有给检测的 n。"
+   }
+  ],
+  "take_rule": "组的 take 是整数、且某个任务的开发样本多于它时，按 sha256(salt|<take_salt_purpose>:<组名>|样本 id) 升序取前 take 个（src/data/subsets.seeded_sample），再按原样本顺序排列；take = all 时全取。--limit（只用于调试与 --tiny）在 take 之前截断。",
+  "basis": "D36-1（N15 → 按判定结果比，并改三处）"
+ },
+ "batch_protocol": {
+  "version": 1,
+  "batch_size": 64,
+  "padding_side": "left",
+  "order": "selection",
+  "letter_batches": "same_letters",
+  "rule": "批配置是协议的一部分，全部子集、全部模型相同（D36-1）：每批 batch_size 条（最后一批可以不满）；左填充（src/adapters/batching，三个家族都只实现了左填充）；样本顺序就是 src/e1/tasks.select 给出的固定顺序，不按长度或别的键重排；每批由这个顺序里连续的样本组成；受限字母读数的任务另加一条：字母集合一变就另起一批。批划分在整份样本上一次算好（src/e1/runner.batch_plan）；续跑时没写完的那一批整批重跑，所以续跑与一次跑完的批组成相同。批大小进运行身份（config.yaml），续跑不能换。真模型运行换批大小要显式加 run_e1.py --allow-unfrozen-batch，config.yaml 记 frozen = false。",
+  "basis": "D36-1；D43：RUN-0016 实测，8 个模型的主评测按 16 外推 29.3、按 64 外推 17.0 GPU 小时，思考子集的实测也多在 64；64 下没有 OOM，显存峰值 69.8 GB（internvl3.5-4b-hf）。原值 16（RUN-0012、RUN-0013 批量那遍）"
+ },
+ "all_pass": true,
+ "rerun_all_identical": true,
+ "rerun_not_identical": [],
+ "groups_judged": [
+  "short_text"
+ ],
+ "groups_failed": [],
+ "groups_not_evaluated": [],
+ "groups_below_n_min": [],
+ "groups": [
+  {
+   "group": "short_text",
+   "tasks": [
+    "refexp_box"
+   ],
+   "metric": "accuracy_pooled",
+   "metric_class": "accuracy",
+   "delta": 0.02,
+   "n": 600,
+   "n_min": 300,
+   "n_below_min": false,
+   "metric_a1": 0.86,
+   "metric_b": 0.86,
+   "diff": 0.0,
+   "diff_ci": {
+    "estimate": 0.0,
+    "low": -0.006666666666666599,
+    "high": 0.006666666666666599,
+    "level": 0.95,
+    "n_resamples": 1000
+   },
+   "within_delta": true,
+   "pass": true,
+   "note": null,
+   "tasks_missing": [
+    "count"
+   ]
+  }
+ ],
+ "tasks": [
+  {
+   "task": "refexp_box",
+   "group": "short_text",
+   "n": 600,
+   "take": {
+    "group": "short_text",
+    "take": "all",
+    "n_before": 600,
+    "n": 600
+   },
+   "rerun": {
+    "task": "refexp_box",
+    "n": 600,
+    "n_diff": 0,
+    "diff_ids": [],
+    "raw_text_diff": 0,
+    "predictions_sha256": {
+     "A1": "320edc1d2664705265c08319e525f0306f1d5800b0c6ba4dc019ba9635510b21",
+     "A2": "320edc1d2664705265c08319e525f0306f1d5800b0c6ba4dc019ba9635510b21"
+    },
+    "file_identical": true,
+    "identical": true
+   },
+   "reference": {
+    "agreement_rate": {
+     "bitwise": 0.3466666666666667,
+     "iou90": 0.9883333333333333,
+     "outcome": 0.9933333333333333
+    },
+    "raw_text_equal_rate": 0.33666666666666667,
+    "metric": "acc@0.5",
+    "metric_a1": 0.86,
+    "metric_b": 0.86,
+    "diff": 0.0,
+    "diff_ci": {
+     "estimate": 0.0,
+     "low": -0.006666666666666599,
+     "high": 0.006666666666666599,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "note": null
+   }
+  }
+ ],
+ "argv": [
+  "--acceptance",
+  "--model",
+  "qwen3.5-2b",
+  "--task",
+  "refexp_box",
+  "--data-root",
+  "/home/ubuntu/workspace/wzg/gjl/vision-internalization/data",
+  "--out",
+  "/home/ubuntu/workspace/wzg/gjl/vision-internalization/repo/experiments/E1/0025_determinism_probe/0025_full_S3"
+ ],
+ "written_utc": "2026-10-02T13:40:29+00:00"
+}

@@ -1,0 +1,79 @@
+experiment: E1
+framework: src/e1（DEV-0014；协议 v2：DEV-0017）
+model:
+  key: qwen3.5-2b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-2B
+  revision: 15852e8c16360a2fea060d615a32b45270f8a8fc
+  adapter_model_key: qwen3.5-2b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+task: refexp_box
+subset: dev
+generation:
+  enable_thinking: false
+  max_new_tokens: 256
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  readout:
+    kind: text
+    parse: one_box
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: 5de1aec711fad0140db0cf27094d66e460cf2999ffcd5456f1964bc5b9851158
+  entry:
+    template: Locate {expression} in the image. Report bbox coordinates in JSON format.
+    native: true
+    provenance: predecessor_cookbook
+    source_url: https://github.com/QwenLM/Qwen3-VL/blob/0dcc180d854f4b132f8059b10bbf0b5fd5dae9ed/cookbooks/2d_grounding.ipynb
+    parse: one_box
+    max_new_tokens: 256
+data:
+  n_samples: 600
+  sample_ids_sha256: 41845f242e31ea5f01f7ec58dbba706caca2d311e35bacbf5e082412c379703e
+  has_gt: true
+  selection_stats:
+    refcoco/val/dev:
+      n_total: 10834
+      n_kept: 200
+      excluded_by_reason: {}
+    refcoco+/val/dev:
+      n_total: 10758
+      n_kept: 200
+      excluded_by_reason: {}
+    refcocog/val/dev:
+      n_total: 4896
+      n_kept: 200
+      excluded_by_reason: {}
+    n: 600
+    acceptance_take:
+      group: short_text
+      take: all
+      n_before: 600
+      n: 600
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: null
+map_ci_resamples: 0
+batch_size: 48
+batch_protocol:
+  protocol_version: 1
+  batch_size: 48
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: false
+  frozen_batch_size: 64
