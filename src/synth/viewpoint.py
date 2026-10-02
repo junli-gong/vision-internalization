@@ -2,7 +2,8 @@
 
 场景
 - 圆形地板：世界原点为中心、y = 0、半径 VIEW_FLOOR_RADIUS_M（折线化为 VIEW_FLOOR_SEGMENTS 边形），纯色、平面着色；纯色背景。
-- 3–4 个实体（VIEW_NUM_OBJECTS），身份从该划分的实体身份池抽（球也可以），"颜色 + 名词"的简称在场景里互不相同；
+- 2–3 个实体（VIEW_NUM_OBJECTS；任务版本 4 起物体放大，大多数场景只摆得下 2 个），身份从该划分的实体身份池抽（球也可以），
+  "颜色 + 名词"的简称在场景里互不相同；
   摆放姿态、偏航角（整数度）均匀，外接半径 VIEW_RADIUS_M；最低点贴在地板上（中心高度向上取到 SCENE_QUANTUM_M），
   中心的水平位置均匀落在半径 VIEW_PLACE_RADIUS_M 的圆内；两两外接半径之和加 VIEW_MIN_GAP_M 以内不放，所以互不穿插。
 - 相机看向地板中心：方位角（整数度）均匀、俯角 VIEW_ELEVATION_DEG（整数度）、距离 VIEW_DISTANCE_M。
@@ -16,9 +17,13 @@
 
 合格条件（不满足就整个场景重来）
 - 两个视角里：相机高度 ≥ VIEW_MIN_CAMERA_HEIGHT_M；全部物体与地板顶点的深度在 D_MIN–D_MAX 内（留 1 cm 余量）。
-- 被点名的物体：两个视角里都完整在画布内（顶点投影离边缘 ≥ CANVAS_MARGIN_PX），可见像素 ≥ VIEW_MIN_VISIBLE_PX，
+- 被点名的物体：两个视角里都完整在画布内（顶点投影离边缘 ≥ CANVAS_MARGIN_PX），可见像素 ≥ min_target_px(H, W)
+  （= max(VIEW_MIN_VISIBLE_PX, ceil(VIEW_MIN_TARGET_CELLS · H · W / 32²))：在 32×32 网格上约 100 格，D28-13，任务版本 4），
   且可见像素 / 自身完整轮廓的像素 ≥ VIEW_MIN_VISIBLE_FRAC；新视角的 mask 与旧视角不同。
-  满足条件的物体里按随机顺序取第一个当目标。
+  候选（两个视角里都完整在画布内的物体）先排成随机顺序，取第一个全部合格的当目标。
+  只为省时间的两步（不改变结果：随机顺序在它们之前定下，被它们去掉的候选本来就不合格；tests 钉住关掉预筛后样本逐位不变）：
+  渲染前先用顶点投影的凸包面积（整数精确）去掉不可能够大的候选（VIEW_HULL_PRECHECK_FRAC）；先渲染旧视角，
+  只在旧视角里有合格候选时才渲染新视角。
 
 目标、基线与附加输出
 - target_mask：新视角下目标的可见 mask（= 新视角物体 ID 图里的目标）；object_masks：新视角下全部物体的可见 mask。
@@ -48,6 +53,8 @@ from src.synth.constants import (
     VIEW_FLOOR_SEGMENTS,
     VIEW_MIN_CAMERA_HEIGHT_M,
     VIEW_MIN_GAP_M,
+    VIEW_HULL_PRECHECK_FRAC,
+    VIEW_MIN_TARGET_CELLS,
     VIEW_MIN_VISIBLE_FRAC,
     VIEW_MIN_VISIBLE_PX,
     VIEW_MOVES,
@@ -58,6 +65,8 @@ from src.synth.constants import (
     VIEW_RADIUS_M,
     VIEW_SHIFT_BINS_CM,
 )
+from src.constants import GRID_SIZE_E3B
+from src.synth.raster import UNITS
 from src.synth.render3d import (
     CameraSpec,
     FloorSpec,
@@ -70,6 +79,7 @@ from src.synth.render3d import (
     inside_canvas,
     posed_vertices,
     project_float,
+    project_units,
     qscene,
     render_posed,
     vertices_ok,
@@ -204,9 +214,51 @@ def centroid_shift_px(scene: Scene3D, cam0: CameraSpec, cam1: CameraSpec) -> tup
     return int(round(uv[1][0] - uv[0][0])), int(round(uv[1][1] - uv[0][1]))
 
 
+def min_target_px(height: int, width: int) -> int:
+    """被点名物体在两个视角里可见像素的下限：max(VIEW_MIN_VISIBLE_PX, ceil(VIEW_MIN_TARGET_CELLS · H · W / GRID_SIZE_E3B²))。"""
+    cells_px = -(-VIEW_MIN_TARGET_CELLS * int(height) * int(width) // (GRID_SIZE_E3B * GRID_SIZE_E3B))
+    return max(VIEW_MIN_VISIBLE_PX, cells_px)
+
+
+def hull_area2_units(p: np.ndarray, height: int, width: int) -> int:
+    """顶点（相机坐标）投影到 1/256 px 整数单位后的凸包面积的两倍（整数单位²，精确；Andrew 单调链 + 鞋带公式，全用 Python 整数）。"""
+    uu, vv = project_units(p, height, width)
+    pts = sorted(set(zip(uu.tolist(), vv.tolist())))
+    if len(pts) < 3:
+        return 0
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower: list = []
+    for q in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], q) <= 0:
+            lower.pop()
+        lower.append(q)
+    upper: list = []
+    for q in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], q) <= 0:
+            upper.pop()
+        upper.append(q)
+    hull = lower[:-1] + upper[:-1]
+    a2 = 0
+    for k in range(len(hull)):
+        x0, y0 = hull[k]
+        x1, y1 = hull[(k + 1) % len(hull)]
+        a2 += x0 * y1 - x1 * y0
+    return abs(a2)
+
+
+def _hull_big_enough(p: np.ndarray, height: int, width: int, min_px: int) -> bool:
+    """预筛：凸包面积 ≥ VIEW_HULL_PRECHECK_FRAC × min_px（整数比较，精确）。"""
+    num, den = VIEW_HULL_PRECHECK_FRAC
+    return hull_area2_units(p, height, width) * den >= 2 * min_px * UNITS * UNITS * num
+
+
 def _attempt(ctx: GenContext, move: str):
     rng = ctx.rng
     h, w = ctx.height, ctx.width
+    min_px = min_target_px(h, w)
     last = ctx.bin == len(VIEW_ORBIT_BINS) - 1
     bg = tuple(pick(rng, BACKGROUND_COLORS))
     cam0 = CameraSpec(
@@ -233,20 +285,31 @@ def _attempt(ctx: GenContext, move: str):
     for cam, vs in ((cam0, verts0), (cam1, verts1)):
         if not vertices_ok(floor_vertices(floor, cam), h, w) or not all(vertices_ok(p, h, w) for p in vs):
             return None
-    cands = [k for k in range(len(objs)) if inside_canvas(verts0[k], h, w, CANVAS_MARGIN_PX) and inside_canvas(verts1[k], h, w, CANVAS_MARGIN_PX)]
+    cands = [k for k in range(len(objs)) if inside_canvas(verts0[k], h, w, CANVAS_MARGIN_PX)
+             and inside_canvas(verts1[k], h, w, CANVAS_MARGIN_PX)]
     if not cands:
         return None
+    # 候选的随机顺序先定下来（随机流与后面的预筛、分步渲染无关），目标 = 这个顺序里第一个全部合格的候选
+    order = [cands[pos] for pos in _shuffled(rng, len(cands))]
+    # 只为省时间：凸包预筛去掉的候选不可能通过像素判定；没有候选就不渲染（tests 钉住：关掉预筛，样本逐位不变）
+    order = [k for k in order if _hull_big_enough(verts0[k], h, w, min_px) and _hull_big_enough(verts1[k], h, w, min_px)]
+    if not order:
+        return None
     f0 = render_posed(scene, cam0, verts0, want_rgb=True, want_amodal=True)
+    ok0 = []
+    for k in order:
+        n0, a0 = int(np.count_nonzero(f0.mask(k))), int(np.count_nonzero(f0.amodal[k]))
+        if n0 >= min_px and n0 >= VIEW_MIN_VISIBLE_FRAC * a0:
+            ok0.append(k)
+    if not ok0:  # 旧视角里没有合格的候选：新视角不必渲染
+        return None
     f1 = render_posed(scene, cam1, verts1, want_rgb=False, want_amodal=True)
     stats = None
-    for pos in _shuffled(rng, len(cands)):
-        k = cands[pos]
+    for k in ok0:
         m0, m1 = f0.mask(k), f1.mask(k)
         n0, n1 = int(np.count_nonzero(m0)), int(np.count_nonzero(m1))
         a0, a1 = int(np.count_nonzero(f0.amodal[k])), int(np.count_nonzero(f1.amodal[k]))
-        if min(n0, n1) < VIEW_MIN_VISIBLE_PX:
-            continue
-        if n0 < VIEW_MIN_VISIBLE_FRAC * a0 or n1 < VIEW_MIN_VISIBLE_FRAC * a1:
+        if n1 < min_px or n1 < VIEW_MIN_VISIBLE_FRAC * a1:
             continue
         if np.array_equal(m0, m1):
             continue
@@ -254,7 +317,8 @@ def _attempt(ctx: GenContext, move: str):
         break
     if stats is None:
         return None
-    return {"scene": scene, "cam1": cam1, "f0": f0, "f1": f1, "stats": stats, "amount": amount, "value": value}
+    return {"scene": scene, "cam1": cam1, "f0": f0, "f1": f1, "stats": stats, "amount": amount, "value": value,
+            "min_px": min_px}
 
 
 def generate(ctx: GenContext) -> Sample:
@@ -313,6 +377,7 @@ def generate(ctx: GenContext) -> Sample:
             "visible_px": [n0, n1],
             "amodal_px": [a0, a1],
             "visible_fraction": [n0 / a0, n1 / a1],
+            "min_visible_px": res["min_px"],
             "translate_shift_px": [dx, dy],
             "depth_range_m": depth_range_m(f1.depth_units),
             "input_depth_range_m": depth_range_m(f0.depth_units),

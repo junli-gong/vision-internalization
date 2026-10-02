@@ -48,7 +48,6 @@ from decimal import Decimal
 import numpy as np
 
 from src.constants import D_MAX, D_MIN
-from src.grid.codec import cell_edges, mask_to_grid
 from src.synth.constants import (
     CAMERA_FOCAL_FRAC,
     DEPTH_QUANTUM_M,
@@ -61,6 +60,7 @@ from src.synth.constants import (
 )
 from src.synth.dmath import CTX, quantize_dec, rot_cs
 from src.synth.raster import HALF, MAX_ABS_COORD_PX, UNITS, rasterize_units
+from src.synth.relief import cell_depth_units
 from src.synth.shapes import appearance
 from src.synth.solids import REST_MATRICES, describe_solid, unit_mesh
 
@@ -555,17 +555,7 @@ def render_scene(
 def depth_grid(depth_units: np.ndarray, mask: np.ndarray, n: int) -> np.ndarray:
     """(n, n) float32 米：mask 的网格（mask_to_grid）为 1 的格子里，mask 像素深度的平均（整数单位精确求和，
     四舍五入取偶到整数单位）；其余格子为 0。"""
-    m = np.asarray(mask, dtype=bool)
-    g = mask_to_grid(m, n)
-    h, w = m.shape
-    re_, ce_ = cell_edges(h, n), cell_edges(w, n)
-    du = np.where(m, depth_units, 0).astype(np.int64)
-    s = np.add.reduceat(np.add.reduceat(du, re_[:-1], axis=0), ce_[:-1], axis=1)
-    c = np.add.reduceat(np.add.reduceat(m.astype(np.int64), re_[:-1], axis=0), ce_[:-1], axis=1)
-    cs = np.maximum(c, 1)
-    q, r = np.divmod(s, cs)
-    up = (2 * r > cs) | ((2 * r == cs) & (q % 2 == 1))
-    units = np.where(g == 1, q + up.astype(np.int64), 0)
+    _g, units = cell_depth_units(depth_units, mask, n)  # 整数规则只在 relief.cell_depth_units 定义一处
     return (units.astype(np.float64) * DEPTH_QUANTUM_M).astype(np.float32)
 
 

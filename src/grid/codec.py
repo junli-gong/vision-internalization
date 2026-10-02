@@ -215,3 +215,102 @@ def parse_grid_text(text: str, n: int) -> GridParse:
     if any(len(r) != n for r in rows):
         return GridParse(None, GridParseFailure.WRONG_COL_COUNT)
     return GridParse(np.array(rows, dtype=np.uint8), None)
+
+
+# ---------------------------------------------------------------------------
+# E5 a 类的起伏网格：33 个符号的文本 ↔ 代码数组（DEV-0018，D28-13）
+# ---------------------------------------------------------------------------
+#
+# 一张 N×N 网格同时编码 mask 与"目标相对深度（起伏）"：每格一个代码 c ∈ {0, …, RELIEF_NUM_LEVELS}，
+# c = 0 为背景，c = k + 1 为起伏档 k（k = 0 最近、RELIEF_NUM_LEVELS − 1 最远；档的定义见 src/synth/relief.py）。
+# 代码 c 的文本符号是 RELIEF_SYMBOLS[c]：背景 "."，32 档依次是 "0"–"9" 再接 "A"–"V"。代码数组用 uint8。
+# mask = 代码 > 0。这里只定义编码与解析；起伏怎么量化由生成器（src/synth/relief.py）定义并 import 这里的常量。
+
+RELIEF_NUM_LEVELS = 32
+RELIEF_BACKGROUND_SYMBOL = "."
+RELIEF_LEVEL_SYMBOLS = "0123456789ABCDEFGHIJKLMNOPQRSTUV"
+RELIEF_SYMBOLS = RELIEF_BACKGROUND_SYMBOL + RELIEF_LEVEL_SYMBOLS
+if len(RELIEF_LEVEL_SYMBOLS) != RELIEF_NUM_LEVELS or len(set(RELIEF_SYMBOLS)) != RELIEF_NUM_LEVELS + 1:  # pragma: no cover
+    raise ImportError("起伏网格的符号表与档数不一致")
+_RELIEF_CODE = {ch: k for k, ch in enumerate(RELIEF_SYMBOLS)}
+_RELIEF_SYMBOL_SET = frozenset(RELIEF_SYMBOLS)
+# 纯起伏网格行：只有 33 个符号，符号之间可有空格、制表符或逗号（行首尾的分隔符也允许）
+_RELIEF_LINE = re.compile(r"[ \t,]*[.0-9A-V](?:[ \t,]*[.0-9A-V])*[ \t,]*")
+
+
+def as_relief_codes(x: np.ndarray, name: str = "relief") -> np.ndarray:
+    """只接受取值在 [0, RELIEF_NUM_LEVELS] 的整数数组，返回 uint8。浮点与越界一律拒绝。"""
+    a = np.asarray(x)
+    if not np.issubdtype(a.dtype, np.integer) or a.dtype == np.bool_:
+        raise ValueError(f"{name} 必须是整数代码数组，收到 dtype {a.dtype}")
+    if a.size and (int(a.min()) < 0 or int(a.max()) > RELIEF_NUM_LEVELS):
+        raise ValueError(f"{name} 含 [0, {RELIEF_NUM_LEVELS}] 以外的代码（范围 [{a.min()}, {a.max()}]）")
+    return a.astype(np.uint8)
+
+
+def relief_grid_to_text(codes: np.ndarray) -> str:
+    """N×N 起伏代码 → 文本：每行 N 个符号（RELIEF_SYMBOLS[代码]），无分隔，行间换行，末尾无换行。"""
+    c = as_relief_codes(codes)
+    if c.ndim != 2 or c.shape[0] != c.shape[1]:
+        raise ValueError(f"网格必须是 N×N，收到形状 {c.shape}")
+    return "\n".join("".join(RELIEF_SYMBOLS[v] for v in row) for row in c.tolist())
+
+
+def _classify_relief_line(line: str, n: int) -> str:
+    """'grid' / 'dirty' / 'text'，规则与 _classify_line 相同，只是"网格符号"换成 33 个起伏符号。
+
+    污染行：起伏符号至少 ⌈N/2⌉ 个，并且占该行非分隔字符的一半或以上，同时还含别的字符（小写字母、标点、W–Z 等）。
+    """
+    if _RELIEF_LINE.fullmatch(line):
+        return "grid"
+    n_sym = sum(1 for c in line if c in _RELIEF_SYMBOL_SET)
+    non_sep = sum(1 for c in line if c not in _SEPARATORS)
+    if n_sym >= math.ceil(n / 2) and 2 * n_sym >= non_sep and n_sym < non_sep:
+        return "dirty"
+    return "text"
+
+
+def parse_relief_grid_text(text: str, n: int) -> GridParse:
+    """从模型输出里找恰好 N 行、每行恰好 N 个起伏符号（RELIEF_SYMBOLS）的块，返回 uint8 代码数组（0 背景，k + 1 = 档 k）。
+
+    与 parse_grid_text 同一套规则（D10、D12），只是符号表换成 33 个：逐行分类（纯网格行 / 污染行 / 文本行）→ 连续的非文本行
+    组成一段 → 候选块 = 含至少一条纯网格行、或含至少 ⌈N/2⌉ 条污染行的段；没有候选块 NO_GRID，多于一个 MULTIPLE_BLOCKS；
+    恰好一个时依次查污染行（ILLEGAL_CHAR）、行数（WRONG_ROW_COUNT）、每行符号数（WRONG_COL_COUNT）。不补齐、不截断、不猜。
+    只认大写的 A–V（提示里写明）；小写字母、W–Z 与其他字符都不是符号。符号之间可有空格、制表符或逗号。
+    注意 "." 本身是符号：单独一行的 "." 或 "..." 也会被当成网格行（与说明文字之间有文本行隔开时，它会成为另一个候选块，
+    于是判 MULTIPLE_BLOCKS——不猜）。
+    """
+    if n <= 0:
+        raise ValueError("n 必须为正")
+    segments: list[list[tuple[str, str]]] = []
+    current: list[tuple[str, str]] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        kind = _classify_relief_line(line, n)
+        if kind == "text":
+            if current:
+                segments.append(current)
+                current = []
+        else:
+            current.append((kind, line))
+    if current:
+        segments.append(current)
+
+    min_dirty = math.ceil(n / 2)
+    candidates = [
+        seg for seg in segments
+        if any(k == "grid" for k, _ in seg) or sum(1 for k, _ in seg if k == "dirty") >= min_dirty
+    ]
+    if not candidates:
+        return GridParse(None, GridParseFailure.NO_GRID)
+    if len(candidates) > 1:
+        return GridParse(None, GridParseFailure.MULTIPLE_BLOCKS)
+    block = candidates[0]
+    if any(k == "dirty" for k, _ in block):
+        return GridParse(None, GridParseFailure.ILLEGAL_CHAR)
+    if len(block) != n:
+        return GridParse(None, GridParseFailure.WRONG_ROW_COUNT)
+    rows = [[_RELIEF_CODE[c] for c in line if c in _RELIEF_SYMBOL_SET] for _, line in block]
+    if any(len(r) != n for r in rows):
+        return GridParse(None, GridParseFailure.WRONG_COL_COUNT)
+    return GridParse(np.array(rows, dtype=np.uint8), None)

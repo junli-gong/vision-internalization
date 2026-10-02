@@ -27,10 +27,16 @@
     深度、没有厚度的平面图形（深度方差为 0），旋转后正交投影，质心 μ → c₀ + M(μ − c₀)，协方差 Σ → M Σ Mᵀ，
     其中 M 是旋转矩阵左上角的 2×2 块（水平轴：diag(1, cos θ)；竖直轴：diag(cos θ, 1)），c₀ = 画布中心（旋转中心的投影）。
     把这组矩变过去的仿射就是 x' = c₀ + M(x − c₀)，作用在当前 mask 上。θ = 90° 时 M 奇异，结果为空。
+  * "copy_flat"（DEV-0018）：mask 同 copy，起伏取常数档（relief.FLAT_LEVEL）——"预测一个平面"，只在起伏上与 copy 不同。
 - 参考上界（用了真值，不参与"在想象"的判定）："gt_affine_upper"：warp2d.moment_matched_affine 从真值按矩匹配拟合的
   二维仿射作用在当前 mask 上，作为"任何二维方法的上界"参考线。meta["baseline_roles"] 标明各基线的角色。
 - extras："depth"（旋转后的深度图，float32 米，0 = 背景）、"depth_grid"（旋转后实体的 N×N 深度网格，见
   render3d.depth_grid）、"input_depth"（旋转前的深度图）。
+- 起伏（DEV-0018，D28-13，任务版本 4；定义见 src/synth/relief.py）：extras["relief_grid"] 是目标的 N×N 起伏代码
+  （uint8，0 背景、k + 1 = 档 k，33 个取值；半径取实体的外接半径），extras["baseline_relief_<基线名>"] 是各基线的起伏代码：
+  copy = 输入视角的起伏；instr_affine、gt_affine_upper = 输入深度图连同 mask 一起做同一个仿射（最近邻）后的起伏；
+  copy_flat = 常数档。基线起伏代码 > 0 的格子与该基线的网格逐位相同。meta["relief"] 记半径、档宽、目标的格数 / 平均深度 /
+  标准差 / 截断格数，以及各基线的起伏误差（relief.relief_score）。
 
 跨机器逐位复现（D24 的标准：a 在任何平台上逐位相同）：见 render3d.py、warp2d.py 的说明；元数据只写整数、
 2 的幂网格上的量化值与整数计数之比。
@@ -77,7 +83,16 @@ from src.synth.sample import (
 from src.synth.seeding import coin, pick, randint, uniform
 from src.synth.shapes import max_equivalent_rotation
 from src.synth.solids import rotation_period_about, sample_solid_identity
-from src.synth.warp2d import affine_warp, mask_moments, moment_matched_affine
+from src.grid.codec import RELIEF_NUM_LEVELS
+from src.synth.relief import (
+    FLAT_LEVEL,
+    RELIEF_TARGET_KEY,
+    baseline_relief_key,
+    flat_codes,
+    relief_grid,
+    relief_score,
+)
+from src.synth.warp2d import affine_warp_values, mask_moments, moment_matched_affine
 
 AXIS_PHRASES = {
     "horizontal": "the horizontal axis (the image's left-right direction)",
@@ -101,7 +116,7 @@ TEMPLATES = (
     "Suppose the {obj} is rotated by {angle} degrees about {axis} through its center, so that {direction}. "
     "Give the mask of the {obj} after the rotation.",
 )
-BASELINE_ROLES = {"copy": "trivial", "instr_affine": "trivial", "gt_affine_upper": "reference_upper_bound"}
+BASELINE_ROLES = {"copy": "trivial", "copy_flat": "trivial", "instr_affine": "trivial", "gt_affine_upper": "reference_upper_bound"}
 
 
 def rotation_matrix(axis: str, signed_deg: int) -> Mat3:
@@ -191,20 +206,52 @@ def generate(ctx: GenContext) -> Sample:
     instruction = TEMPLATES[template_id].format(obj=desc, angle=theta, axis=AXIS_PHRASES[axis], direction=direction)
 
     m0, m1 = res["m0"], res["m1"]
+    n = ctx.grid_size
+    before, after = res["before"], res["after"]
     a_instr, t_instr = instruction_affine(axis, sign * theta, h, w)
     fit = moment_matched_affine(m0, m1)
-    target = make_prediction(m1, ctx.grid_size)
+    # 二维仿射基线的起伏：把输入视角的深度图连同 mask 一起做同一个仿射（最近邻取样），再按目标的规则算起伏
+    m_instr, d_instr = affine_warp_values(m0, before.depth_units, a_instr, t_instr)
+    m_fit, d_fit = affine_warp_values(m0, before.depth_units, fit.a, fit.t)
+    target = make_prediction(m1, n)
+    copy = make_prediction(m0, n)
     baselines = {
-        "copy": make_prediction(m0, ctx.grid_size),
-        "instr_affine": make_prediction(affine_warp(m0, a_instr, t_instr), ctx.grid_size),
-        "gt_affine_upper": make_prediction(fit.mask, ctx.grid_size),
+        "copy": copy,
+        "copy_flat": copy,
+        "instr_affine": make_prediction(m_instr, n),
+        "gt_affine_upper": make_prediction(m_fit, n),
     }
-    before, after = res["before"], res["after"]
+    rel_target = relief_grid(after.depth_units, m1, n, obj.radius)
+    rel_copy = relief_grid(before.depth_units, m0, n, obj.radius)
+    rel_base = {
+        "copy": rel_copy,
+        "copy_flat": None,
+        "instr_affine": relief_grid(d_instr, m_instr, n, obj.radius),
+        "gt_affine_upper": relief_grid(d_fit, m_fit, n, obj.radius),
+    }
+    base_codes = {k: (flat_codes(copy.grid) if v is None else v.codes) for k, v in rel_base.items()}
     extras = {
         "depth": after.depth_m(),
-        "depth_grid": depth_grid(after.depth_units, m1, ctx.grid_size),
+        "depth_grid": depth_grid(after.depth_units, m1, n),
         "input_depth": before.depth_m(),
+        RELIEF_TARGET_KEY: rel_target.codes,
+        **{baseline_relief_key(k): v for k, v in base_codes.items()},
     }
+    t_score = relief_score(rel_target.codes, rel_target.codes)
+    relief_meta = {
+        "definition": "src/synth/relief.py（D28-13）",
+        "num_levels": RELIEF_NUM_LEVELS,
+        "radius_m": obj.radius,
+        "level_width_m": 2.0 * obj.radius / RELIEF_NUM_LEVELS,
+        "flat_level": FLAT_LEVEL,
+        "target": {"n_cells": rel_target.n_cells, "mean_depth_m": rel_target.mean_depth_m(),
+                   "std_levels": t_score.target_std_levels, "n_clipped": rel_target.n_clipped},
+        "input": {"n_cells": rel_copy.n_cells, "mean_depth_m": rel_copy.mean_depth_m(), "n_clipped": rel_copy.n_clipped},
+        "baseline_error": {},
+    }
+    for name in sorted(base_codes):
+        sc = relief_score(base_codes[name], rel_target.codes)
+        relief_meta["baseline_error"][name] = {"error": sc.error, "n_eval_cells": sc.n_eval_cells, "reason": sc.reason}
     meta = ctx.base_meta()
     meta.update(
         {
@@ -230,6 +277,7 @@ def generate(ctx: GenContext) -> Sample:
             "gt_affine_upper": {"rotation_deg": fit.rotation_deg, "reflect": fit.reflect},
             "baseline_roles": dict(BASELINE_ROLES),
             "baseline_iou": baseline_iou_meta(baselines, target.mask, target.grid),
+            "relief": relief_meta,
             "attempts": attempt,
         }
     )
