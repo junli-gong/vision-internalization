@@ -1,0 +1,91 @@
+........................................................................ [  4%]
+........................................................................ [  8%]
+........................................................................ [ 12%]
+........................................................................ [ 16%]
+........................................................................ [ 20%]
+........................................................................ [ 24%]
+........................................................................ [ 28%]
+........................................................................ [ 33%]
+........................................................................ [ 37%]
+........................................................................ [ 41%]
+........................................................................ [ 45%]
+........................................................................ [ 49%]
+........................................................................ [ 53%]
+.......................s.......................ssss.............ssss.... [ 57%]
+.......s................................................................ [ 61%]
+........................................................................ [ 66%]
+................................................s....................... [ 70%]
+........................................................................ [ 74%]
+........................................................................ [ 78%]
+........................................................................ [ 82%]
+........................................................................ [ 86%]
+...........................................F............................ [ 90%]
+..................................F..................................... [ 94%]
+........................................................................ [ 99%]
+.................                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_speed_at_least_20_per_second_single_core[rotation3d] ___________
+
+task = 'rotation3d'
+
+    @pytest.mark.parametrize("task", ["rotation3d", "viewpoint"])
+    def test_speed_at_least_20_per_second_single_core(task):
+        generate(task, "train", 0)
+        t = time.process_time()
+        n = 40
+        for i in range(n):
+            generate(task, "train", 3000 + i)
+        rate = n / (time.process_time() - t)
+        print(f"{task}: {rate:.1f} samples/s (CPU time, single process)")
+>       assert rate >= 20
+E       assert 15.870888670098736 >= 20
+
+tests/test_synth_3d_tasks.py:408: AssertionError
+----------------------------- Captured stdout call -----------------------------
+rotation3d: 15.9 samples/s (CPU time, single process)
+________________ test_speed_at_least_50_per_second_single_core _________________
+
+    def test_speed_at_least_50_per_second_single_core():
+        generate("occlusion", "train", 0)  # 预热（import、单位形状缓存）
+        t = time.process_time()
+        n = 60
+        for i in range(n):
+            generate("occlusion", "train", 1000 + i)
+        rate = n / (time.process_time() - t)
+        print(f"occlusion: {rate:.1f} samples/s (CPU time, single process)")
+>       assert rate >= 50
+E       assert 37.82385312579749 >= 50
+
+tests/test_synth_occlusion.py:113: AssertionError
+----------------------------- Captured stdout call -----------------------------
+occlusion: 37.8 samples/s (CPU time, single process)
+=============================== warnings summary ===============================
+tests/test_adapter_batching.py: 14 warnings
+  /root/autodl-tmp/visint-0022/venv/lib/python3.12/site-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+tests/test_adapter_internvl35.py::test_processor_default_is_the_opposite_of_preprocessor_config
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[False-instruction_first-single]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[False-instruction_first-multi]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[False-image_first-single]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[False-image_first-multi]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[True-instruction_first-single]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[True-instruction_first-multi]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[True-image_first-single]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[True-image_first-multi]
+  /root/autodl-tmp/visint-0022/venv/lib/python3.12/site-packages/numpy/_core/fromnumeric.py:45: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+    return conv.wrap(result, to_scalar=False)
+
+tests/test_adapter_training_logits.py::test_chunked_lm_loss_no_grad_path_and_validation[qwen3.5-0.8b]
+  /root/autodl-tmp/visint-0022/vision-internalization/tests/test_adapter_training_logits.py:121: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+  Consider using tensor.detach() first. (Triggered internally at /__w/pytorch/pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:822.)
+    assert abs(float(a) - float(b)) <= LOSS_RTOL * max(1.0, abs(float(b)))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_synth_3d_tasks.py::test_speed_at_least_20_per_second_single_core[rotation3d]
+FAILED tests/test_synth_occlusion.py::test_speed_at_least_50_per_second_single_core
+SKIPPED [9] tests/test_health_ifeval.py:177: 找不到 punkt_tab：设 NLTK_DATA 指向含 tokenizers/punkt_tab 的目录（python -m nltk.downloader -d <目录> punkt_tab）
+SKIPPED [1] tests/test_health_ifeval.py:279: 找不到 punkt_tab：设 NLTK_DATA 指向含 tokenizers/punkt_tab 的目录（python -m nltk.downloader -d <目录> punkt_tab）
+SKIPPED [1] tests/test_metrics_seg.py:129: could not import 'cv2': No module named 'cv2'
+2 failed, 1732 passed, 11 skipped, 24 warnings in 1206.51s (0:20:06)

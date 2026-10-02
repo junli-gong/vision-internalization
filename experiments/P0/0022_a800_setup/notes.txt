@@ -1,0 +1,54 @@
+RUN-0022 A800 环境搭建与就绪检查回传说明
+完成日期：2026-10-03（北京时间）
+
+1. 机器与环境
+主机：autodl-container-q549gxtv7x-5e3aa552。
+GPU：NVIDIA A800-SXM4-80GB，81920 MiB 显存；驱动 580.126.09。
+Python 3.12.3；torch 2.13.0+cu130；torchvision 0.28.0+cu130；CUDA runtime 13.0。
+GPU capability (8, 0)，BF16 支持；BF16 矩阵计算、反向传播和梯度有限性检查通过。
+有卡 cgroup 配额：18 核 CPU、120 GiB 内存；run_all.sh 采用 OMP_NUM_THREADS=16。
+数据盘扩容为 250 GiB，检查结束时约 82 GiB 已用、169 GiB 可用。
+工作目录：/root/autodl-tmp/visint-0022。旧 RUN-0014 目录保留。
+
+2. 环境与下载处理
+使用原版 setup_env.sh，TORCH_CUDA=cu130；SciPy 从自动安装的 1.18.1 调整为 B200 参考的 1.18.0，仅调整本轮 venv。
+15 个关键依赖版本与 B200 参考一致，pip check 无依赖冲突。
+使用 HF_ENDPOINT=https://hf-mirror.com、HF_HUB_DISABLE_XET=1；SKIP_GEMMA 未启用（含 Gemma）。
+复用旧实例的三份已核验模型缓存，并下载其余五份固定 revision 权重；八个模型全部通过 verify_weights.py，最后一行为 ALL_OK。
+Gemma E4B 下载遇到一次连接中断，下载器续传后完成，完整文件哈希通过。
+HF 凭据仅用于经用户授权的镜像访问，未写入交付文件。
+COCO 测试图 SHA256 检查通过。
+
+3. 原版 run_all.sh 结果
+运行时间：2026-10-02 23:22:27 至 2026-10-03 00:40:37（北京时间），约 78 分钟。
+原脚本整体退出码 0；该脚本会在单项失败后继续，不能把整体退出码解释为所有测试通过。
+全量 pytest：1732 passed、2 failed、11 skipped，耗时 1206.51 秒。
+失败一：test_speed_at_least_20_per_second_single_core[rotation3d]，实测 15.8709 samples/s，要求至少 20。
+失败二：test_speed_at_least_50_per_second_single_core（occlusion），实测 37.8239 samples/s，要求至少 50。
+这两个失败均为单进程 CPU 生成速度断言；功能用例未新增失败。任务书允许较慢 CPU 未达到速度门槛，结果原样保留。
+11 项跳过：10 项因原脚本未设置 NLTK_DATA 找不到 punkt_tab，1 项因未安装可选 cv2。
+补充检查：仅设置 NLTK_DATA 指向此前已核验的本轮 nltk_data，重跑 tests/test_health_ifeval.py，63 passed，日志为 pytest_ifeval_with_nltk.txt。
+生成器摘要：occlusion、physics、imagery、rotation3d、viewpoint 均 60/60 equal。
+三个 tiny smoke 和四个真实 BF16 smoke（Qwen 0.8B、9B、InternVL 2B、Gemma E2B）均 all_ok=true。
+三个真实模型健康检查均 rc=0，题数齐全：每个模型有 MMLU-Pro 100 题（letter/free256/fmt32 三个读数）、GSM8K 50 题、IFEval 50 题。
+IFEval 按本包要求只生成、不评分。
+Qwen 日志提示 causal_conv1d 使用参考 PyTorch 实现，计算正确但较慢；未额外更换依赖或改代码。
+
+4. 与 B200 的对比
+MMLU-Pro letter 逐题选择一致率：Qwen 0.8B 98/100，Qwen 9B 100/100，InternVL 2B 99/100。
+MMLU-Pro letter 准确率（本机 / B200）：Qwen 0.8B 15% / 16%，Qwen 9B 53% / 53%，InternVL 2B 35% / 35%。
+GSM8K flexible 准确率（本机 / B200）：Qwen 0.8B 48% / 58%，Qwen 9B 86% / 86%，InternVL 2B 82% / 80%。
+原始回答逐字一致率和其余读数见 health_vs_b200.txt；未替团队判定差异是否通过研究验收。
+
+5. RefCOCO 与训练接口
+web.archive.org 在本机连接超时。原脚本扩容后再次尝试，等待约五分钟仍无下载进展，结束该下载子进程（rc=143）；prefetch.sh 按原设计继续执行。
+没有 data/refcoco/MANIFEST.json；run_all.sh 记录 train_iface_skipped_no_refcoco rc=0，两个训练接口检查均未执行。
+公开备份的三个 refs pickle 的 LFS 元数据哈希与源码记录一致，但官方 ZIP、instances 来源及 ZIP CRC 未核验，未用其伪造正式数据清单。
+本次是环境与就绪检查，尚未完成真实模型的受限 logits / LoRA 合并训练接口验证，也未执行完整主实验训练。
+
+6. 源码与交付
+固定 commit：cd210a278ce433fa0826fc9b94ccdc5c7839bda6。
+原源码压缩包 SHA256：faf8642acb18a915d5a62b38d5f87e08c3df558cd991d9fc4358e0c502718efc。
+运行后对原包内 4492 个文件逐字节检查，changed_or_missing=[]；源码、配置、测试和原包脚本未修改。
+结果压缩包由原版 collect_results.sh 生成；包含原运行结果、补充 IFEval 日志、CUDA/BF16 检查和源码一致性证据。
+所有检查进程已结束，服务器 GPU 空闲；服务器仍保持开机状态。
