@@ -105,7 +105,7 @@ def test_land_cli_lists_optional_source_outside_all():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert mod.parse_args(["countbenchqa_questions", "--root", "/tmp/x"]).source == "countbenchqa_questions"
-    assert mod.OPTIONAL_LANDERS == {"countbenchqa_questions": CQ.land} and "countbenchqa_questions" not in mod.LANDERS
+    assert mod.OPTIONAL_LANDERS["countbenchqa_questions"] is CQ.land and "countbenchqa_questions" not in mod.LANDERS
 
 
 def test_load_count_questions_checks_manifest_and_rows(tmp_path):
@@ -132,9 +132,11 @@ def test_select_without_landed_questions_fails_loudly(tmp_path):
     shutil.copytree(FIXTURE_DIR / "root" / "countbench", root / "countbench")
     paths = DataPaths(root=root, dev_subsets=FIXTURE_DIR / "dev_subsets.json", eval_subsets=FIXTURE_DIR / "eval_subsets.json",
                       nyu_pairs=FIXTURE_DIR / "nyu_pairs.json")
-    assert all(COUNTBENCHQA_FIELD not in s.fields for s in select("count", "dev", paths).samples)
+    assert all(COUNTBENCHQA_FIELD not in s.fields for s in select("count", "dev", paths, count_questions="heuristic").samples)
     with pytest.raises(FileNotFoundError):  # 没落地就报错，不静默退回启发式
         select("count", "dev", paths, count_questions="countbenchqa")
+    with pytest.raises(FileNotFoundError):  # D36-2 起默认就是人工问句
+        select("count", "dev", paths)
 
 
 def test_fixture_manifest_matches_fixture_file():

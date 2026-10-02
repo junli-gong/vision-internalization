@@ -21,7 +21,8 @@ REPO = Path(__file__).resolve().parents[1]
 CFG_PATH = REPO / "configs" / "e1_prompts.json"
 # 配置的 sha256：配置改了（包括按截断率调 max_new_tokens）就要更新这里，并在 max_new_tokens_adjustments 里记理由；
 # 冻结后写进 PREREGISTRATION.md 的 E1 条目。
-E1_PROMPTS_SHA256 = "e9fade2b64ecf337db03585ef3206ed8b90c523e4bec2b42dae8f0b6890744c6"  # DEV-0015（DEV-0014 为 974d3d73…）
+# DEV-0017（协议 v2：受限字母读数、三列、批配置、验收 v3、CountBench 默认人工问句）；DEV-0015 为 e9fade2b…，DEV-0014 为 974d3d73…
+E1_PROMPTS_SHA256 = "4dd027b4c63098f7b1f9feb3dd64b5ed6a2c1b8e9571c52b28db86f2098c39d2"
 FAM = registry.FAMILIES
 
 
@@ -61,11 +62,15 @@ RUN0012_MODELS = ("qwen3.5-0.8b", "qwen3.5-2b", "qwen3.5-4b", "qwen3.5-9b", "gem
 
 
 def test_max_new_tokens_after_dev0015_adjustment(cfg):
-    """DEV-0015 §1：按 RUN-0012 开发子集的截断率调整后的生成上限（三个家族相同）；思考 4096 / 8192 不变（D28-10）。"""
+    """DEV-0015 §1：按 RUN-0012 开发子集的截断率调整后的生成上限（三个家族相同）；思考 4096 / 8192 不变（D28-10）。
+    DEV-0017：选择题与点对任务在 eval、dev 上是受限字母读数，实际上限是 1；条目的 1024 留给 free 子集的自由作答诊断。"""
+    letter = set(cfg.data["letter_readout"]["tasks"])
     for t, n in DEV0015_MAX_NEW.items():
         for fam in FAM:
-            assert cfg.max_new_tokens(t, fam, "eval") == n
-            assert cfg.max_new_tokens(t, fam, "dev") == n and cfg.max_new_tokens(t, fam, "extra") == n
+            assert cfg.entry(t, fam)["max_new_tokens"] == n
+            eff = 1 if t in letter else n
+            assert cfg.max_new_tokens(t, fam, "eval") == eff and cfg.max_new_tokens(t, fam, "dev") == eff
+            assert cfg.max_new_tokens(t, fam, "extra") == n and cfg.max_new_tokens(t, fam, "free") == n
             assert cfg.max_new_tokens(t, fam, "think") == 4096 and cfg.max_new_tokens(t, fam, "think8192") == 8192
 
 
@@ -78,7 +83,7 @@ def test_max_new_tokens_adjustment_record(cfg):
         assert set(a) == {"date", "task", "families", "from", "to", "basis", "source", "decided_by", "rule"}, t
         assert a["date"] == "2026-10-01" and sorted(a["families"]) == sorted(FAM)
         assert a["from"] == PREREG_DRAFT_MAX_NEW[t] and a["to"] == DEV0015_MAX_NEW[t]
-        assert all(cfg.max_new_tokens(t, f, "eval") == a["to"] for f in FAM)
+        assert all(cfg.entry(t, f)["max_new_tokens"] == a["to"] for f in FAM)
         assert "截断率" in a["rule"] and "不看准确率" in a["rule"] and "RUN-0012" in a["basis"]
         if a["from"] == a["to"]:  # 不调的两项只写最大值与例外，数字由下一个测试核对
             assert a["basis"].startswith("不调")
@@ -116,7 +121,7 @@ def test_max_new_tokens_basis_matches_run0012_metrics(cfg):
 
 def test_thinking_only_on_think_subsets_and_greedy(cfg):
     assert {s: cfg.enable_thinking(s) for s in P.SUBSET_KINDS} == {"eval": False, "dev": False, "think": True,
-                                                                  "think8192": True, "extra": False}
+                                                                  "think8192": True, "extra": False, "free": False}
     dec = cfg.decoding()
     assert dec["do_sample"] is False and dec["num_beams"] == 1 and dec["repetition_penalty"] == 1.0
     assert cfg.order == "image_first"
@@ -256,7 +261,10 @@ def test_countbenchqa_config_points_at_pinned_source(cfg):
     assert CQ.SPEC["repo"] in q["source"] and CQ.SPEC["path"] in q["source"] and "Apache-2.0" in q["source"]
     assert CQ.SPEC["commit"] in CQ.SPEC["url"] and CQ.SPEC["path"] in CQ.SPEC["url"]
     assert f"{CQ.SPEC['n_questions']} 条" in q["pairing"]
-    assert P.DEFAULT_COUNT_QUESTIONS == "heuristic" and "默认关" in q["status"]
+    # D36-2：默认改用人工问句；报告里注明出自 PaliGemma、Gemma 家族可能见过
+    assert P.DEFAULT_COUNT_QUESTIONS == "countbenchqa" and q["status"].startswith("默认（D36-2）")
+    assert "PaliGemma" in q["provenance_note"] and "Gemma 家族可能见过" in q["provenance_note"]
+    assert cfg.countbenchqa_note == q["provenance_note"] and "heuristic" in q["status"]
     assert all(r in q["rule"] for r in P.COUNTBENCHQA_RULES) and "extras.question" in q["rule"]
 
 
@@ -304,8 +312,9 @@ def test_validate_rejects_bad_countbenchqa_question_part(cfg):
 
 def test_select_attaches_countbenchqa_questions_from_fixture():
     paths = DataPaths.fixtures()
-    plain = select("count", "eval", paths)
+    plain = select("count", "eval", paths, count_questions="heuristic")
     qa = select("count", "eval", paths, count_questions="countbenchqa")
+    assert [s.fields for s in select("count", "eval", paths).samples] == [s.fields for s in qa.samples]  # 默认 = countbenchqa
     assert [s.id for s in plain.samples] == [s.id for s in qa.samples]
     assert all(P.COUNTBENCHQA_FIELD not in s.fields for s in plain.samples) and "count_questions" not in plain.stats
     doc = json.loads((paths.root / "countbenchqa_questions" / "countbench_paired_questions.json").read_text())

@@ -15,6 +15,13 @@ grid_to_mask 回填到原图。
 - 失败的诊断（DEV-0015 §3；只描述失败长什么样，失败原因不变）：failure_detail 给每条失败记一个标签——多边形任务给出了
   框或点（wrong_shape:<键名>）、拒绝作答（refusal）；另记关思考时输出里自发出现思考标记的条数（think_marker_when_off）。
   规则与正则见 failure_detail、think_marker_when_off；只读 predictions.jsonl 的 failure、text、raw_text，旧的输出也能重算。
+
+协议 v2（DEV-0017，D36-6；定义写在 configs/e1_prompts.json 的 report_columns、refusal_by_person）：
+- 受限字母读数（score_letter）：生成的唯一一个 token 按字母表映射回字母，不经过文本解析，途径记 letter_token。
+- 三列（three_columns）：每个标题指标给出严格读数（= headline）、有效率与条件读数。有效 = 解析成功且 failure_detail 不是
+  refusal（is_valid）；条件读数只在有效样本上算同一个指标（检测只用有效的图及其 GT）。valid 给出有效与无效的条数。
+- 拒答按人物分列（refusal_by_person，RefCOCO 系三个任务）：被指代物体的类别是 person 与否，各报拒答率、有效率、严格读数与
+  条件读数。
 """
 
 from __future__ import annotations
@@ -27,9 +34,9 @@ from typing import Any, Callable, Iterable, Mapping, NamedTuple, Sequence
 import numpy as np
 
 from src.adapters import gemma4, internvl35, qwen35
-from src.constants import BOX_ACC_IOU_THRESHOLD, GRID_SIZE_E1
+from src.constants import BOX_ACC_IOU_THRESHOLD, DETECTION_OPERATING_IOU, GRID_SIZE_E1
 from src.data.records import Sample
-from src.e1.tasks import groups_of
+from src.e1.tasks import CHOICE_TASKS, groups_of
 from src.executors.raster import polygons_to_mask, rle_to_mask
 from src.grid.codec import GridParseFailure, grid_to_mask, parse_grid_text
 from src.metrics.box import box_acc_at_iou, box_sample_iou
@@ -37,6 +44,7 @@ from src.metrics.detection import (
     canonical_order,
     detection_bootstrap_statistic,
     detection_map,
+    operating_point,
     per_image_counts,
 )
 from src.metrics.seg import ciou, giou, mask_inter_union, sample_iou
@@ -54,9 +62,13 @@ from src.parsing import (
 from src.stats import CI, bootstrap_ci, f1_statistic, ratio_of_sums
 
 COORD_TASKS = frozenset({"refexp_box", "refexp_poly", "ovd"})
-MCQ_TASKS = frozenset({"rel_depth_nyu", "rel_depth_blink", "spatial_cvbench", "spatial_embspatial"})
+MCQ_TASKS = frozenset(CHOICE_TASKS)
 MASK_TASKS = frozenset({"refexp_poly", "grid16"})
 UNKNOWN_CATEGORY_ID = -1  # 编造类别与无标签的框：不在 GT 的类别表里，COCOeval 忽略、F1 记 FP（D12 N6）
+# 拒答按人物分列（configs/e1_prompts.json 的 refusal_by_person；tests 钉住两处相同）
+REFUSAL_BY_PERSON_TASKS: tuple[str, ...] = ("refexp_box", "refexp_poly", "grid16")
+PERSON_CATEGORY = "person"  # COCO category_id 1；加载器给的是 RefCOCO categories 表里的名字（Sample.fields.category）
+LETTER_ROUTE = "letter_token"
 
 _FAILURES = {e.value: e for e in list(ParseFailure) + list(GridParseFailure)}
 if len(_FAILURES) != len(ParseFailure) + len(GridParseFailure):
@@ -256,8 +268,10 @@ def score_generation(task: str, parser: str, sample: Sample, result: Any, *, ada
         p = parse_generation(result, parse_mcq, letters=list(extras["letters"]), options=list(extras["options"]))
         out["failure"] = None if p.failure is None else p.failure.value
         out["parsed"] = None if p.failure else {"letter": p.value, "route": p.route}
-        gt = sample.gt["answer"] if task != "rel_depth_nyu" else sample.gt["closer"]
+        gt = choice_gt(task, sample)
         out["score"] = {"gt": gt, "correct": p.failure is None and p.value == gt}
+    elif parser == LETTER_ROUTE:
+        raise ValueError("受限字母读数走 score_letter（要字母表），不走 score_generation")
     elif parser == "boxes":
         p = parse_generation(result, adapter.parse_boxes, width=w, height=h)
         out["failure"] = None if p.failure is None else p.failure.value
@@ -277,6 +291,30 @@ def score_generation(task: str, parser: str, sample: Sample, result: Any, *, ada
     if task in COORD_TASKS:
         out["coord_le1_decimal"] = coord_all_le1_decimal(result.text)
     return out
+
+
+def choice_gt(task: str, sample: Sample) -> str:
+    """选择题与点对任务的正确字母（NYU 点对的 GT 是更近的那个点 A/B，其余是 answer）。"""
+    return sample.gt["closer"] if task == "rel_depth_nyu" else sample.gt["answer"]
+
+
+def score_letter(task: str, sample: Sample, result: Any, *, table: Any, letters: Sequence[str]) -> dict[str, Any]:
+    """受限字母读数（letter_readout）的一条：生成的唯一一个 token 按字母表（src/e1/letters.LetterTable）映射回字母，
+    不经过文本解析；解析不会失败，途径记 letter_token。
+
+    入口断言：恰好 1 个 token，且它是本题某个字母的一种写法；否则说明 allowed_token_ids 的限制没生效，抛错而不是判错。"""
+    if task not in MCQ_TASKS:
+        raise ValueError(f"{task} 不是选择题或点对任务，不能用受限字母读数")
+    ids = [int(i) for i in result.token_ids]
+    if len(ids) != 1:
+        raise RuntimeError(f"{sample.id}：受限字母读数应恰好生成 1 个 token，得到 {len(ids)} 个：{ids[:8]}")
+    lt = table.letter_of(ids[0])
+    if lt is None or lt not in letters:
+        raise RuntimeError(f"{sample.id}：生成的 token {ids[0]} 不是本题字母 {list(letters)} 的写法（allowed_token_ids 没生效？）")
+    gt = choice_gt(task, sample)
+    return {"failure": None,
+            "parsed": {"letter": lt, "route": LETTER_ROUTE, "token_id": ids[0], "spelling": table.spelling_of(ids[0])},
+            "score": {"gt": gt, "correct": lt == gt}}
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +445,135 @@ def per_sample_metric(task: str, recs: Sequence[Mapping[str, Any]]):
     return "accuracy", np.array([float(r["score"]["correct"]) for r in recs]), None
 
 
+def ovd_per_image_counts(samples: Sequence[Sample], recs: Sequence[Mapping[str, Any]]) -> list[tuple[int, int, int]]:
+    """每张图在 IoU = DETECTION_OPERATING_IOU 下的 (TP, FP, n_GT)，与样本同序。按数据集（source）分组建 GT（ovd_gt，与
+    metrics 同一份构造），operating_point 与标题 F1@0.5 同一个函数；解析失败的图没有预测（TP = FP = 0）。"""
+    out: dict[str, tuple[int, int, int]] = {}
+    by_src: dict[str, list[int]] = {}
+    for k, s in enumerate(samples):
+        by_src.setdefault(s.source, []).append(k)
+    for idx in by_src.values():
+        ss, rs = [samples[k] for k in idx], [recs[k] for k in idx]
+        gt = _ovd_gt(ss)
+        preds, xywh = [], []
+        for s, r in zip(ss, rs):
+            if r["parsed"] is None:
+                continue
+            for box, cid in zip(r["parsed"]["boxes"], r["parsed"]["category_ids"]):
+                x0, y0, x1, y1 = box
+                preds.append({"image_id": int(s.fields["image_id"]), "category_id": int(cid), "bbox_xyxy": box})
+                xywh.append([x0, y0, x1 - x0, y1 - y0])
+        per = {row[0]: (int(row[1]), int(row[2]), int(row[3]))
+               for row in operating_point(gt, preds, xywh, DETECTION_OPERATING_IOU)["per_image"]}
+        for s in ss:
+            out[s.id] = per[int(s.fields["image_id"])]
+    return [out[s.id] for s in samples]
+
+
+def f1_from_counts(counts: Sequence[tuple[int, int, int]]) -> dict[str, Any]:
+    """逐图 (tp, fp, n_gt) → F1@0.5 的 {value, ci, n}（stats.f1_statistic；n_gt 总和为 0 时 value 为 null）。"""
+    if not counts:
+        return {"value": None, "ci": None, "n": 0}
+    arr = np.asarray(counts, dtype=np.float64)
+    if arr[:, 2].sum() == 0:
+        return {"value": None, "ci": None, "n": len(counts)}
+    out = {"value": f1_statistic(arr), "ci": None, "n": len(counts)}
+    try:
+        out["ci"] = ci_dict(bootstrap_ci(arr, statistic=f1_statistic))
+    except ValueError:  # 某次重采样上 F1 无定义（极小样本）
+        pass
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 三列（DEV-0017；configs/e1_prompts.json 的 report_columns）与拒答按人物分列（refusal_by_person）
+# ---------------------------------------------------------------------------
+
+
+def is_valid(task: str, rec: Mapping[str, Any]) -> bool:
+    """有效 = 解析成功、且没有被判为拒答（D36-6；拒答按 D33 的 failure_detail，它只给失败的记录打 refusal）。"""
+    return rec["failure"] is None and failure_detail(task, rec) != "refusal"
+
+
+def validity(task: str, records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """有效与无效的条数：无效 = 拒答（refusal）+ 其他解析失败。"""
+    n = len(records)
+    n_valid = sum(1 for r in records if is_valid(task, r))
+    n_ref = sum(1 for r in records if failure_detail(task, r) == "refusal")
+    return {"n": n, "n_valid": n_valid, "rate": _rate(n_valid, n), "n_invalid": n - n_valid, "n_refusal": n_ref,
+            "n_other_failure": n - n_valid - n_ref}
+
+
+def metric_of(name: str, records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """标题指标名 → 这些记录上的 {value, ci, n}（与 headline 同一个算法；空集合为 null）。检测另算（f1_from_counts）。"""
+    if name in ("acc@0.5", "accuracy"):
+        return _mean_ci([float(r["score"]["correct"]) for r in records])
+    if name == "cIoU":
+        return _ratio_ci([(r["score"]["inter"], r["score"]["union"]) for r in records])
+    if name == "gIoU":
+        return _mean_ci([r["score"]["iou"] for r in records])
+    raise ValueError(f"未知的标题指标 {name!r}")
+
+
+def _strict(h: Mapping[str, Any]) -> dict[str, Any]:
+    return {"value": h["value"], "ci": h["ci"], "n": h["n"]}
+
+
+def three_columns(task: str, records: Sequence[Mapping[str, Any]], headline: Sequence[Mapping[str, Any]]) -> list[dict]:
+    """非检测任务：每个标题指标 → 严格读数（headline 原值）、有效率、条件读数（只在有效记录上算）。"""
+    v = validity(task, records)
+    ok = [r for r in records if is_valid(task, r)]
+    return [{"name": h["name"], "scope": h["scope"], "strict": _strict(h), "n": v["n"], "n_valid": v["n_valid"],
+             "valid_rate": v["rate"], "conditional": metric_of(h["name"], ok)} for h in headline]
+
+
+def _ovd_three_columns(samples: Sequence[Sample], records: Sequence[Mapping[str, Any]],
+                       by_ds: Mapping[str, list[int]], headline: Sequence[Mapping[str, Any]]) -> list[dict]:
+    """检测：按图计有效率；条件 F1@0.5 只用有效的图及其 GT（同一个 operating_point）。ODinW 的标题是各数据集的平均，
+    条件读数也取各数据集条件 F1 的平均（不给 CI）。"""
+    def cond_f1(ds: str) -> dict[str, Any]:
+        idx = [i for i in by_ds[ds] if is_valid("ovd", records[i])]
+        return f1_from_counts(ovd_per_image_counts([samples[i] for i in idx], [records[i] for i in idx]))
+
+    cols = []
+    for h in headline:
+        odinw = h["scope"] == "odinw13_mean_over_datasets"
+        dss = sorted(k for k in by_ds if k.startswith("odinw13/")) if odinw else [h["scope"]]
+        v = validity("ovd", [records[i] for ds in dss for i in by_ds[ds]])
+        if odinw:
+            vals = [c["value"] for c in (cond_f1(ds) for ds in dss) if c["value"] is not None]
+            cond = {"value": float(np.mean(vals)) if vals else None, "ci": None, "n": len(vals),
+                    "note": "各数据集条件 F1 的算术平均，不给 CI"}
+        else:
+            cond = cond_f1(dss[0])
+        cols.append({"name": h["name"], "scope": h["scope"], "strict": _strict(h), "n": v["n"], "n_valid": v["n_valid"],
+                     "valid_rate": v["rate"], "conditional": cond})
+    return cols
+
+
+def refusal_by_person(task: str, samples: Sequence[Sample], records: Sequence[Mapping[str, Any]],
+                      metric: str) -> dict[str, Any] | None:
+    """RefCOCO 系任务：按被指代物体是不是 person 分列（类别取 Sample.fields.category；没有类别的记 unknown）。
+    每组：条数、拒答条数与拒答率、有效率、严格读数与条件读数（metric = 该任务的第一个标题指标）。"""
+    if task not in REFUSAL_BY_PERSON_TASKS:
+        return None
+    groups: dict[str, list[int]] = {}
+    for k, s in enumerate(samples):
+        cat = s.fields.get("category")
+        g = "unknown" if cat is None else ("person" if cat == PERSON_CATEGORY else "non_person")
+        groups.setdefault(g, []).append(k)
+    out: dict[str, Any] = {"metric": metric, "person_category": PERSON_CATEGORY, "rule_version": DIAG_RULE_VERSION}
+    for g in ("person", "non_person", "unknown"):
+        rs = [records[k] for k in groups.get(g, [])]
+        if g == "unknown" and not rs:
+            continue
+        v = validity(task, rs)
+        out[g] = {"n": v["n"], "n_refusal": v["n_refusal"], "refusal_rate": _rate(v["n_refusal"], v["n"]),
+                  "n_valid": v["n_valid"], "valid_rate": v["rate"], "strict": metric_of(metric, rs),
+                  "conditional": metric_of(metric, [r for r in rs if is_valid(task, r)])}
+    return out
+
+
 def aggregate(task: str, samples: Sequence[Sample], records: Sequence[Mapping[str, Any]], *, has_gt: bool,
               map_ci_resamples: int = 0, enable_thinking: bool | None = None) -> dict[str, Any]:
     """predictions.jsonl 的记录（与 samples 同序）→ metrics.json 的内容（不含运行标识，调用方补）。
@@ -435,6 +602,10 @@ def aggregate(task: str, samples: Sequence[Sample], records: Sequence[Mapping[st
         k = sum(1 for r in records if r.get("coord_le1_decimal"))
         m["diagnostics"]["coord_all_le1_with_decimal"] = {"n": k, "rate": _rate(k, n)}
     m["diagnostics"].update(failure_diagnostics(task, records, enable_thinking=enable_thinking))
+    m["valid"] = validity(task, records)
+    m["three_columns"] = []
+    readouts = Counter(r.get("readout", "text") for r in records)
+    m["readout"] = {k: readouts[k] for k in sorted(readouts)}
     groups = _groups(task, samples)
 
     if task == "ovd":
@@ -464,6 +635,10 @@ def aggregate(task: str, samples: Sequence[Sample], records: Sequence[Mapping[st
                                       "n": len(vals), "note": "各数据集 F1 的算术平均（ODinW 惯例），不给 CI；各数据集的 CI 见 breakdown"})
                 aps = [v["AP"]["mean"] for v in odinw.values() if v.get("AP") and v["AP"]["mean"] is not None]
                 m["odinw13_mean_AP"] = float(np.mean(aps)) if aps else None
+            for ds in sorted(k for k in per_ds if k != "coco_val2017" and not k.startswith("odinw13/")):
+                if per_ds[ds].get("F1_50"):  # 检测的开发核对（RefCOCO 开发图 + coco_train2014_e1dev 的 GT）
+                    m["headline"].append({"name": "F1@0.5", "scope": ds, **per_ds[ds]["F1_50"]})
+            m["three_columns"] = _ovd_three_columns(samples, records, by_ds, m["headline"])
         n_pred = sum(r["score"]["n_pred"] for r in records)
         n_fab = sum(r["score"]["n_fabricated"] for r in records)
         m["fabricated"] = {"n_pred_boxes": n_pred, "n_fabricated": n_fab, "rate": _rate(n_fab, n_pred),
@@ -483,6 +658,10 @@ def aggregate(task: str, samples: Sequence[Sample], records: Sequence[Mapping[st
         m["headline"].append({"name": "cIoU", "scope": "all", **_ratio_ci(pairs)})
     else:
         m["headline"].append({"name": name, "scope": "all", **_mean_ci(list(values))})
+    m["three_columns"] = three_columns(task, records, m["headline"])
+    rbp = refusal_by_person(task, samples, records, m["headline"][0]["name"])
+    if rbp is not None:
+        m["refusal_by_person"] = rbp
     if task == "refexp_box":
         m["mean_iou"] = float(np.mean([r["score"]["iou"] for r in records])) if records else None
         assert m["headline"][0]["value"] == box_acc_at_iou([r["score"]["iou"] for r in records])  # 与 metrics.box 同一判据
@@ -528,23 +707,35 @@ def aggregate(task: str, samples: Sequence[Sample], records: Sequence[Mapping[st
 __all__ = [
     "COORD_TASKS",
     "DIAG_RULE_VERSION",
+    "LETTER_ROUTE",
     "MCQParse",
     "MCQ_TASKS",
+    "PERSON_CATEGORY",
+    "REFUSAL_BY_PERSON_TASKS",
     "REFUSAL_RE",
     "THINK_MARKERS",
     "UNKNOWN_CATEGORY_ID",
     "WRONG_SHAPE_KEYS",
     "WRONG_SHAPE_RE",
     "aggregate",
+    "choice_gt",
     "coord_all_le1_decimal",
     "distribution",
+    "f1_from_counts",
     "failure_detail",
     "failure_diagnostics",
     "failure_enum",
     "gt_mask",
+    "is_valid",
+    "metric_of",
+    "ovd_gt",
+    "ovd_per_image_counts",
     "parse_mcq",
     "per_sample_metric",
-    "ovd_gt",
+    "refusal_by_person",
     "score_generation",
+    "score_letter",
     "think_marker_when_off",
+    "three_columns",
+    "validity",
 ]

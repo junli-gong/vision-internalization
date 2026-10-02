@@ -1,16 +1,19 @@
 #!/usr/bin/env python
-"""E1 评测框架的入口（DEV-0014）：逐模型、逐任务地跑 T 文本通道零样本基线；另有批处理验收与吞吐估算两种模式。
+"""E1 评测框架的入口（DEV-0014；协议 v2：DEV-0017）：逐模型、逐任务地跑 T 文本通道零样本基线；另有批处理验收与吞吐估算两种模式。
 
 运行（服务器；--out 是本次运行的目录 experiments/E1/<NNNN_slug>，结果写进 <out>/<模型>/<任务>…/）：
-    python scripts/run_e1.py --model qwen3.5-0.8b --task refexp_box --subset eval --batch-size 32 \\
+    python scripts/run_e1.py --model qwen3.5-0.8b --task refexp_box --subset eval \\
         --data-root $PROJ/data --out experiments/E1/0011_e1_main [--resume] [--limit N]
     # 思考子集：--subset think（预算 4096）/ think8192；附加对照：--subset extra --policy qwen:1024（或 internvl:native）
-批处理验收（D28-5；开发子集，batch=1 与 --batch-size 各跑一遍）：
-    python scripts/run_e1.py --acceptance --model qwen3.5-0.8b --task all --batch-size 16 --data-root $PROJ/data --out <dir> \\
-        [--agreement bitwise|iou90|outcome]
-    # 三种一致口径（N15）都算、都写进表；--agreement 只决定 all_pass 用哪一种（默认 bitwise，D32）。
-    # 已跑完的验收换口径重算：同一条命令加 --resume（两遍都已完成，不再生成，只重新比较）。
-吞吐与算力估算（开发子集，每个 --batch-sizes 各测一遍，外推到各子集的 n）：
+    # 选择题与点对任务的 eval、dev 是受限字母读数（1 个 token）；自由作答的诊断：--subset free（think 子集的 id，关思考）
+批配置冻结（configs/e1_prompts.json 的 batch_protocol，D36-1）：--batch-size 默认取冻结值（16）；真模型给别的值要加
+--allow-unfrozen-batch（config.yaml 记 frozen = false）。--tiny 默认 4，不受此限。
+批处理验收 v3（D36-1；开发子集；A1、A2 = 冻结的批配置跑两遍，B = composition_b 的批大小跑一遍；规则见配置的 acceptance）：
+    python scripts/run_e1.py --acceptance --model qwen3.5-0.8b --task all --data-root $PROJ/data --out <dir> [--resume]
+    # 写 <out>/<模型>/acceptance/{A1,A2,B}/… 与 acceptance.json、acceptance.md；检测要先落地 coco_train2014_e1dev。
+    # 已跑完的验收重新比较：同一条命令加 --resume（三遍都已完成，不再生成）。--alt-batch-size 只用于 --tiny 或配
+    # --allow-unfrozen-batch。
+吞吐与算力估算（开发子集，每个 --batch-sizes 各测一遍，外推到各子集的 n；外推用冻结的批大小，没测时退回推荐值）：
     python scripts/run_e1.py --estimate --model qwen3.5-0.8b --task all --batch-sizes 1 8 16 32 --data-root $PROJ/data \\
         --out <dir> [--estimate-think]
 开发机彩排（小型随机模型、CPU、tests/fixtures/e1 的小数据）：上面任一条加 --tiny，可省 --data-root。
@@ -18,8 +21,8 @@
 --task：一个或多个任务名，或 all（refexp_box refexp_poly grid16 count ovd rel_depth_nyu rel_depth_blink spatial_cvbench
 spatial_embspatial）。--policy：default（E1 冻结的口径，D28-3）、qwen:1024（Qwen 约 1K token）、internvl:native（InternVL 原生
 动态 tile）；后两个只用于 --subset extra 的附加对照（也可用于 --estimate 量它们的吞吐）。
---count-questions：计数的问句来源，heuristic（默认，从 caption 取对象）或 countbenchqa（big_vision 的人工问句，要先落地
-countbenchqa_questions；DEV-0015 §4，项目负责人批准前不改默认）。只影响 count。
+--count-questions：计数的问句来源，countbenchqa（默认，D36-2：big_vision 的人工问句，出自 PaliGemma，Gemma 家族可能见过；
+要先落地 countbenchqa_questions）或 heuristic（从 caption 取对象）。只影响 count。
 退出码：0 = 跑完；2 = 出错（报错先写进 <out>/<模型>/errors/，再退出；argparse 用法错误也是 2）。
 """
 
@@ -65,6 +68,8 @@ POLICY_FAMILY = {"qwen:1024": registry.FAMILY_QWEN35, "internvl:native": registr
 TINY_INIT_STD = 0.05  # 与 validate_batching 相同：小模型重取参数，否则 greedy 输出几乎与输入无关
 DEFAULT_MAP_CI_RESAMPLES = 0  # mAP 的 CI 默认不算：每次重采样都跑 COCOeval，GPU 空等；标题 F1@0.5 的 CI 照常算
 RUN_DIR_NAME = re.compile(r"[0-9]{4}_[A-Za-z0-9][A-Za-z0-9_.-]*")
+TINY_BATCH_SIZE = 4  # --tiny 的默认批大小（fixture 每个任务只有几条；不受冻结的批配置约束）
+TINY_ALT_BATCH_SIZE = 3  # --tiny 验收的 B 遍批大小（与 4 不同，fixture 上也能换出不同的批组成）
 
 
 def resolve_policy(tag: str, family: str):
@@ -78,13 +83,19 @@ def resolve_policy(tag: str, family: str):
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--acceptance", action="store_true", help="批处理验收（开发子集，batch=1 与 --batch-size 各一遍）")
+    mode.add_argument("--acceptance", action="store_true",
+                      help="批处理验收 v3（开发子集；冻结的批配置跑两遍 A1、A2，composition_b 跑一遍 B）")
     mode.add_argument("--estimate", action="store_true", help="吞吐与算力估算（开发子集，--batch-sizes 各一遍）")
     p.add_argument("--model", required=True, help="注册键（src/adapters/registry.py）")
     p.add_argument("--task", nargs="+", required=True, help=f"任务名或 all：{list(TASKS)}")
     p.add_argument("--subset", default="eval", choices=SUBSET_KINDS, help="运行模式的子集（验收与估算一律用开发子集）")
     p.add_argument("--policy", default="default", choices=POLICIES, help="图像口径；默认 E1 冻结的口径（D28-3）")
-    p.add_argument("--batch-size", type=int, help="批大小（默认 16；--tiny 默认 4）；1 = 逐条 generate")
+    p.add_argument("--batch-size", type=int, help=f"批大小（默认取冻结的 batch_protocol.batch_size；--tiny 默认 {TINY_BATCH_SIZE}）；"
+                                                  "1 = 逐条 generate。真模型给别的值要加 --allow-unfrozen-batch")
+    p.add_argument("--alt-batch-size", type=int, help="--acceptance 的 B 遍批大小（默认取 acceptance.composition_b.batch_size；"
+                                                      f"--tiny 默认 {TINY_ALT_BATCH_SIZE}）")
+    p.add_argument("--allow-unfrozen-batch", action="store_true",
+                   help="真模型运行允许用冻结值以外的批大小（config.yaml 记 frozen = false；不是协议口径）")
     p.add_argument("--batch-sizes", type=int, nargs="+", help="--estimate 用的批大小（默认 1 8 16 32；--tiny 默认 1 2 4）")
     p.add_argument("--out", required=True, help="本次运行的目录（experiments/E1/<NNNN_slug>）")
     p.add_argument("--resume", action="store_true", help="续跑：跳过 predictions.jsonl 里已完成的 id")
@@ -103,14 +114,11 @@ def parse_args(argv=None):
     p.add_argument("--estimate-n", type=int, default=64, help="--estimate：每个任务最多用多少条开发样本（默认 64）")
     p.add_argument("--estimate-think", action="store_true", help="--estimate：另测开思考（预算 4096）的吞吐")
     p.add_argument("--estimate-think-n", type=int, default=8, help="--estimate-think 用的开发样本数（默认 8）")
-    p.add_argument("--agreement", choices=A.AGREEMENTS,
-                   help=f"--acceptance：all_pass 用哪种一致口径（默认 {A.DEFAULT_AGREEMENT}，D32；三种都会算出来）")
     p.add_argument("--count-questions", choices=COUNT_QUESTION_SOURCES, default=DEFAULT_COUNT_QUESTIONS,
-                   help=f"计数的问句来源（默认 {DEFAULT_COUNT_QUESTIONS}；countbenchqa = big_vision 的人工问句）")
+                   help=f"计数的问句来源（默认 {DEFAULT_COUNT_QUESTIONS}：big_vision 的人工问句，D36-2；heuristic = 从 caption 取对象）")
     a = p.parse_args(argv)
-    if a.agreement is not None and not a.acceptance:
-        p.error("--agreement 只用于 --acceptance")
-    a.agreement = a.agreement or A.DEFAULT_AGREEMENT
+    if a.alt_batch_size is not None and not a.acceptance:
+        p.error("--alt-batch-size 只用于 --acceptance")
     if a.task == ["all"]:
         a.task = list(TASKS)
     bad = [t for t in a.task if t not in TASKS]
@@ -131,18 +139,23 @@ def parse_args(argv=None):
             p.error("附加口径只用于 --subset extra（主口径冻结，D28-3）")
     a.device = a.device or ("cpu" if a.tiny else "cuda")
     a.dtype = a.dtype or ("fp32" if a.tiny else "bf16")
-    a.batch_size = a.batch_size or (4 if a.tiny else 16)
+    if a.tiny:  # 真模型的默认批大小取配置里冻结的值（resolve_batch_sizes，在读配置之后）
+        a.batch_size = a.batch_size or TINY_BATCH_SIZE
+        if a.acceptance:
+            a.alt_batch_size = a.alt_batch_size or TINY_ALT_BATCH_SIZE
     a.batch_sizes = a.batch_sizes or ([1, 2, 4] if a.tiny else [1, 8, 16, 32])
     if a.map_ci_resamples is None:
         a.map_ci_resamples = DEFAULT_MAP_CI_RESAMPLES
-    for name in ("batch_size", "limit", "estimate_n", "estimate_think_n"):
+    for name in ("batch_size", "alt_batch_size", "limit", "estimate_n", "estimate_think_n"):
         v = getattr(a, name)
         if v is not None and v < 1:
             p.error(f"--{name.replace('_', '-')} 必须是正整数")
     if any(b < 1 for b in a.batch_sizes) or a.map_ci_resamples < 0:
         p.error("--batch-sizes 必须都是正整数，--map-ci-resamples 不能为负")
-    if a.acceptance and a.batch_size == 1:
-        p.error("--acceptance 的 --batch-size 必须 > 1（另一遍固定是 batch=1）")
+    if a.acceptance and 1 in (a.batch_size, a.alt_batch_size):
+        p.error("--acceptance 的批大小必须 > 1（A、B 两种批组成都走 generate_batch，与正式运行同一条路径）")
+    if a.acceptance and a.batch_size is not None and a.batch_size == a.alt_batch_size:
+        p.error("--acceptance 的 B 遍批大小必须与 A 遍不同（否则两种批组成相同）")
     if not a.tiny and not (a.data_root or os.environ.get("VISINT_DATA_ROOT")):
         p.error("真模型运行要给 --data-root（或设 VISINT_DATA_ROOT）")
     if not a.tiny and not RUN_DIR_NAME.fullmatch(Path(a.out).name):
@@ -189,57 +202,100 @@ def _headline(m) -> str:
     return "; ".join(f"{h['name']}({h['scope']})={h['value']}" for h in m["headline"]) or "（无 GT）"
 
 
+def resolve_batch_sizes(a, prompts) -> tuple[int, int | None]:
+    """(A 遍 / 正式运行的批大小, 验收 B 遍的批大小)。真模型：默认取冻结值（batch_protocol、acceptance.composition_b）；
+    给了别的值要 --allow-unfrozen-batch，否则报错（D36-1：批配置是协议的一部分）。--tiny 用 parse_args 定的小值。"""
+    frozen = prompts.batch_protocol()["batch_size"]
+    alt_cfg = prompts.acceptance()["composition_b"]["batch_size"]
+    bs = a.batch_size if a.batch_size is not None else frozen
+    alt = (a.alt_batch_size if a.alt_batch_size is not None else alt_cfg) if a.acceptance else None
+    if not a.tiny and not a.allow_unfrozen_batch:
+        if bs != frozen:
+            raise ValueError(f"--batch-size {bs} 不是冻结的批大小 {frozen}（configs/e1_prompts.json 的 batch_protocol）；"
+                             "确要换就加 --allow-unfrozen-batch")
+        if a.acceptance and alt != alt_cfg:
+            raise ValueError(f"--alt-batch-size {alt} 不是协议的 composition_b.batch_size {alt_cfg}；确要换就加 --allow-unfrozen-batch")
+    if a.acceptance and (alt == bs or 1 in (bs, alt)):
+        raise ValueError(f"验收的两种批大小必须都 > 1 且不同，收到 A = {bs}、B = {alt}")
+    return bs, alt
+
+
 def cmd_run(a, argv) -> int:
     prompts = load_prompt_config(a.prompts)
+    bs, _ = resolve_batch_sizes(a, prompts)
     paths = data_paths(a)
     entry, policy, ad = build_adapter(a)
     for task in a.task:
         sel = selection(task, a.subset, paths, a.limit, a.count_questions)
-        spec = make_spec(a, entry, policy, ad, task, a.subset, a.batch_size)
+        spec = make_spec(a, entry, policy, ad, task, a.subset, bs)
         m = run_task(ad, spec, sel, prompts, paths, a.out, resume=a.resume, argv=argv)
         print(f"{entry.key} {task}/{a.subset} n={m['n']} parse_fail={m['parse']['failure_rate']} "
-              f"trunc={m['truncation']['rate']} {_headline(m)}")
+              f"trunc={m['truncation']['rate']} valid={m['valid']['rate']} {_headline(m)}")
     return 0
 
 
 def cmd_acceptance(a, argv) -> int:
+    """批处理验收 v3（规则见 configs/e1_prompts.json 的 acceptance 与 src/e1/acceptance 的 v3 一节）。"""
     prompts = load_prompt_config(a.prompts)
+    bs_a, bs_b = resolve_batch_sizes(a, prompts)
+    protocol, bp = prompts.acceptance(), prompts.batch_protocol()
     paths = data_paths(a)
     entry, policy, ad = build_adapter(a)
     base = Path(a.out) / entry.key / ("acceptance" if a.policy == "default" else f"acceptance__{policy_dirname(a.policy)}")
-    rows = []
+    sels = {}
     for task in a.task:
         sel = selection(task, "dev", paths, a.limit, a.count_questions)
-        recs = {}
-        for bs in (1, a.batch_size):
+        if not sel.has_gt:
+            raise RuntimeError(f"{task} 的开发核对没有 GT，验收 v3 要按判定结果比："
+                               f"{sel.stats.get('note', '')}")
+        sel.samples, st = A.take_samples(task, sel.samples, protocol)
+        sel.stats.update(acceptance_take=st, n=len(sel.samples))
+        sels[task] = sel
+    passes = dict(zip(A.PASSES_V3, (bs_a, bs_a, bs_b)))
+    recs: dict[str, dict[str, list]] = {p: {} for p in passes}
+    task_rows = []
+    for task in a.task:
+        files = {}
+        for p, bs in passes.items():
             spec = make_spec(a, entry, policy, ad, task, "dev", bs)
-            sub = base / f"bs{bs}"
-            run_task(ad, spec, sel, prompts, paths, sub, resume=a.resume, argv=argv)
-            recs[bs] = read_jsonl_tolerant(leaf_dir(sub, entry.key, task, "dev", a.policy) / "predictions.jsonl",
-                                           repair=False)
-        row = A.compare(task, sel.samples, recs[1], recs[a.batch_size], has_gt=sel.has_gt, batch_size=a.batch_size,
-                        agreement=a.agreement)
-        rows.append(row)
-        by = " ".join(f"{m}={row['agreement_by_mode'][m]['rate']}/{row['agreement_by_mode'][m]['pass']}" for m in A.AGREEMENTS)
-        print(f"[acceptance {entry.key} {task}] agree({a.agreement})={row['answer_agreement']} [{by}] "
-              f"raw_equal={row['raw_text_equal_rate']} diff={row['diff']} ci0={row['diff_ci_contains_0']} pass={row['pass']}")
+            run_task(ad, spec, sels[task], prompts, paths, base / p, resume=a.resume, argv=argv)
+            files[p] = leaf_dir(base / p, entry.key, task, "dev", a.policy) / "predictions.jsonl"
+            recs[p][task] = read_jsonl_tolerant(files[p], repair=False)
+        sel = sels[task]
+        rerun = A.rerun_identical(task, recs["A1"][task], recs["A2"][task], sha_a1=A.file_sha256(files["A1"]),
+                                  sha_a2=A.file_sha256(files["A2"]))
+        ref = A.reference_columns(task, sel.samples, recs["A1"][task], recs["B"][task], has_gt=sel.has_gt, batch_size_b=bs_b)
+        task_rows.append({"task": task, "group": A.group_of(task, protocol)["name"], "n": len(sel.samples),
+                          "take": sel.stats["acceptance_take"], "rerun": rerun, "reference": ref})
+        print(f"[acceptance {entry.key} {task}] n={len(sel.samples)} rerun_identical={rerun['identical']} "
+              f"(diff {rerun['n_diff']}) A1-B diff={ref['diff']} agree={ref['agreement_rate']}")
+    group_rows = []
+    for g in protocol["groups"]:
+        tasks = [t for t in g["tasks"] if t in sels]
+        if not tasks:
+            continue
+        row = A.noise_floor(g, protocol["delta"][g["metric_class"]],
+                            [(t, sels[t].samples, recs["A1"][t]) for t in tasks],
+                            [(t, sels[t].samples, recs["B"][t]) for t in tasks])
+        row["tasks_missing"] = [t for t in g["tasks"] if t not in sels]
+        group_rows.append(row)
+        print(f"[acceptance {entry.key} group {g['name']}] n={row['n']} diff={row['diff']} ci={row['diff_ci']} "
+              f"within±{row['delta']}={row['within_delta']}")
+    overall = A.overall_v3(task_rows, group_rows)
     header = {"model": entry.key, "revision": entry.revision, "policy": a.policy, "device": a.device, "dtype": a.dtype,
-              "tiny": a.tiny, "prompt_config_sha256": prompts.sha256, "batch_size": a.batch_size,
-              "agreement": a.agreement, "count_questions": a.count_questions}
-    by_mode = {m: A.overall(rows, m) for m in A.AGREEMENTS}
-    doc = {"header": header,
-           "criteria": {"answer_agreement_min": A.AGREEMENT_MIN, "mask_iou_agree": A.AGREE_MASK_IOU,
-                        "box_iou_agree": A.AGREE_BOX_IOU, "metric": "配对差的 95% CI 含 0",
-                        "agreement": a.agreement, "agreement_rules": dict(A.AGREEMENT_RULES)},
-           "agreement": a.agreement, "all_pass": by_mode[a.agreement]["all_pass"],
-           "not_evaluated": by_mode[a.agreement]["not_evaluated"], "all_pass_by_agreement": by_mode, "tasks": rows,
+              "tiny": a.tiny, "prompt_config_sha256": prompts.sha256, "batch_size_a": bs_a, "batch_size_b": bs_b,
+              "frozen": bs_a == bp["batch_size"] and bs_b == protocol["composition_b"]["batch_size"],
+              "limit": a.limit, "count_questions": a.count_questions,
+              "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() and a.device.startswith("cuda") else None}
+    doc = {"version": protocol["version"], "header": header, "protocol": protocol, "batch_protocol": bp, **overall,
+           "groups": group_rows, "tasks": task_rows, "argv": list(argv),
            "written_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
     base.mkdir(parents=True, exist_ok=True)
     (base / "acceptance.json").write_text(json.dumps(doc, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    (base / "acceptance.md").write_text(A.summary_markdown(entry.key, rows, header=header, agreement=a.agreement),
-                                        encoding="utf-8")
-    print(f"all_pass({a.agreement})={doc['all_pass']} not_evaluated={doc['not_evaluated']} "
-          f"by_agreement={ {m: v['all_pass'] for m, v in by_mode.items()} } -> {base / 'acceptance.json'}")
+    (base / "acceptance.md").write_text(A.summary_markdown_v3(entry.key, task_rows, group_rows, header=header,
+                                                              protocol=protocol, batch_protocol=bp), encoding="utf-8")
+    print(f"all_pass={overall['all_pass']} rerun_all_identical={overall['rerun_all_identical']} "
+          f"groups_failed={overall['groups_failed']} not_evaluated={overall['groups_not_evaluated']} -> {base / 'acceptance.json'}")
     return 0
 
 
@@ -257,9 +313,10 @@ def cmd_estimate(a, argv) -> int:
     header = {"model": entry.key, "revision": entry.revision, "policy": a.policy, "count_questions": a.count_questions,
               "image_policy": {"type": type(policy).__name__, **policy.as_dict()}, "device": a.device, "dtype": a.dtype,
               "tiny": a.tiny, "prompt_config_sha256": prompts.sha256, "batch_sizes": a.batch_sizes,
+              "frozen_batch_size": prompts.batch_protocol()["batch_size"],
               "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() and a.device.startswith("cuda") else None}
     totals = {}
-    for k in ("eval", "think", "think8192", "extra"):  # 没有任何一项可外推时记 null，不记 0
+    for k in EST.SUBSET_TOTALS:  # 没有任何一项可外推时记 null，不记 0
         vals = [r["gpu_hours"][k] for r in rows if r["gpu_hours"].get(k) is not None]
         totals[k] = sum(vals) if vals else None
     doc = {"header": header, "mem_headroom": EST.MEM_HEADROOM, "tasks": rows, "gpu_hours_total": totals,
