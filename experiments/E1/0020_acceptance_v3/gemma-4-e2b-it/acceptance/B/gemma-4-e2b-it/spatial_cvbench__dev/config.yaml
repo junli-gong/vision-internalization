@@ -1,0 +1,124 @@
+experiment: E1
+framework: src/e1（DEV-0014；协议 v2：DEV-0017）
+model:
+  key: gemma-4-e2b-it
+  family: gemma4
+  repo: google/gemma-4-E2B-it
+  revision: 3e22461f65e89153144f8adb70e3b8c2cc9845a7
+  adapter_model_key: gemma-4-e2b-it
+  tiny: false
+image_policy:
+  tag: default
+  type: SoftTokenBudget
+  max_soft_tokens: 280
+task: spatial_cvbench
+subset: dev
+generation:
+  enable_thinking: false
+  max_new_tokens: 1
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  readout:
+    kind: letter
+    parse: letter_token
+    spellings:
+    - '{letter}'
+    - ' {letter}'
+    table:
+      letters:
+      - A
+      - B
+      - C
+      - D
+      - E
+      - F
+      entries:
+        A:
+        - spelling: A
+          token_id: 236776
+          decoded: A
+        - spelling: ' A'
+          token_id: 562
+          decoded: ' A'
+        B:
+        - spelling: B
+          token_id: 236799
+          decoded: B
+        - spelling: ' B'
+          token_id: 603
+          decoded: ' B'
+        C:
+        - spelling: C
+          token_id: 236780
+          decoded: C
+        - spelling: ' C'
+          token_id: 565
+          decoded: ' C'
+        D:
+        - spelling: D
+          token_id: 236796
+          decoded: D
+        - spelling: ' D'
+          token_id: 622
+          decoded: ' D'
+        E:
+        - spelling: E
+          token_id: 236788
+          decoded: E
+        - spelling: ' E'
+          token_id: 645
+          decoded: ' E'
+        F:
+        - spelling: F
+          token_id: 236811
+          decoded: F
+        - spelling: ' F'
+          token_id: 633
+          decoded: ' F'
+      skipped: []
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: 5de1aec711fad0140db0cf27094d66e460cf2999ffcd5456f1964bc5b9851158
+  entry:
+    template: '{prompt}'
+    native: true
+    provenance: benchmark
+    source_url: https://huggingface.co/datasets/nyu-visionx/CV-Bench/tree/bc284db50d036958861cb60cdd7b77612052ce0d
+    parse: choice
+    max_new_tokens: 1024
+data:
+  n_samples: 50
+  sample_ids_sha256: 785a53e1f089f9bb4d3d423e9eafd9b2b94233151e62cd9d187a0b2975a6f7c0
+  has_gt: true
+  selection_stats:
+    population:
+      n_total: 2638
+      n_kept: 50
+      excluded_by_reason: {}
+    n: 50
+    acceptance_take:
+      group: letter
+      take: all
+      n_before: 50
+      n: 50
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: null
+map_ci_resamples: 0
+batch_size: 48
+batch_protocol:
+  protocol_version: 1
+  batch_size: 48
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: false
+  frozen_batch_size: 64
