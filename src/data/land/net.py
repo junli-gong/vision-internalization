@@ -384,3 +384,72 @@ class HTTPRangeFile(io.RawIOBase):
             out += take
             self.pos += take
         return out
+
+
+# ---------------------------------------------------------------------------
+# DEV-0022：给"按成员偏移批量取 zip 成员"用的两个通用函数（上面的函数行为不变）
+# ---------------------------------------------------------------------------
+
+
+class HTTPStatusError(FetchError):
+    """不可重试的 HTTP 状态（带状态码），调用方可据此决定是否刷新签名直链后重试。"""
+
+    def __init__(self, url: str, status: int) -> None:
+        super().__init__(url, f"HTTP {status}（不可重试）")
+        self.status = status
+
+
+def resolve_final_url(url: str, *, retries: int = DEFAULT_RETRIES, backoff: float = DEFAULT_BACKOFF, timeout: float = DEFAULT_TIMEOUT) -> tuple[str, int]:
+    """跟随重定向，返回 (最终 URL, 文件总长)。用 Range: bytes=0-0 探测，只取 1 个字节。
+
+    HF 的 resolve 直链 302 到带签名的 CDN 地址：先解析一次，之后的 Range 请求直接打 CDN，免得每个请求都过一遍
+    resolve（resolve 有频率限制）。服务器不回 206 就报错（不支持 Range 的服务器不能这样取成员）。"""
+
+    def go():
+        try:
+            with _open(url, headers={"Range": "bytes=0-0"}, timeout=timeout) as r:
+                cr = r.headers.get("Content-Range")
+                if getattr(r, "status", 200) != 206 or not cr or "/" not in cr:
+                    raise FetchError(url, "服务器不支持 Range（探测 bytes=0-0 没有得到 206）")
+                r.read()
+                return r.geturl(), int(cr.rsplit("/", 1)[1])
+        except (ConnectionError, TimeoutError, http.client.HTTPException) as e:
+            raise _Retryable(f"{type(e).__name__}: {e}") from e
+
+    return _with_retries(url, go, retries=retries, backoff=backoff, log=None)
+
+
+def range_get(
+    url: str,
+    start: int,
+    end_incl: int,
+    *,
+    expect_total: int | None = None,
+    retries: int = DEFAULT_RETRIES,
+    backoff: float = DEFAULT_BACKOFF,
+    timeout: float = DEFAULT_TIMEOUT,
+    log: Callable[[str], None] | None = None,
+) -> bytes:
+    """一次 Range 读 [start, end_incl]，带退避重试。expect_total 给了就核对 Content-Range 的总长（上游换了文件就报错）。
+
+    不可重试的 4xx 抛 HTTPStatusError（带状态码）；内容不对（不是 206、总长不符）抛 FetchError，不重试。"""
+
+    def go():
+        try:
+            with _open(url, headers={"Range": f"bytes={start}-{end_incl}"}, timeout=timeout) as r:
+                status = getattr(r, "status", 200)
+                if status != 206:
+                    raise FetchError(url, f"Range 请求得到 {status}，不是 206")
+                cr = r.headers.get("Content-Range") or ""
+                if expect_total is not None and cr.rsplit("/", 1)[-1] != str(expect_total):
+                    raise FetchError(url, f"Content-Range {cr!r} 的总长与期望 {expect_total} 不符（上游文件变了？）")
+                data = r.read()
+        except urllib.error.HTTPError as e:
+            raise HTTPStatusError(url, e.code) from e
+        except (ConnectionError, TimeoutError, http.client.HTTPException) as e:
+            raise _Retryable(f"读到一半断开：{type(e).__name__}: {e}") from e
+        if len(data) != end_incl - start + 1:
+            raise _Retryable(f"Range 读到 {len(data)} 字节，期望 {end_incl - start + 1}")
+        return data
+
+    return _with_retries(url, go, retries=retries, backoff=backoff, log=log)

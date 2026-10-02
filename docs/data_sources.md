@@ -882,3 +882,70 @@ image_base64 string
 |---|---|---|
 | `000000039769.jpg` | COCO val2017 | RUN-0001、0002、0004、0005 |
 | `000000000139.jpg` | COCO val2017 | RUN-0001、0002、0005 |
+
+## 训练数据的选定来源（DEV-0022；D11-1、D11-2、D11-7）
+
+- 核实时间：2026-10-02，开发机。只读了元数据：HEAD、HF API、GitHub API、各 zip 的中央目录（Range）。另有 `--limit 3` 的小样本落地，放在 scratch 目录，不入库。
+- 钉住的值都写在落地代码的 `SPEC` 里（`src/data/land/{refcoco_train,nyu_depth_train,nyu_normals,ade20k}.py`），测试核对。
+- "尾部"指 zip 从中央目录起点到文件末尾的字节，含 zip64 记录与 EOCD。
+  - 尾部的 sha256 相同，说明每个成员的名字、偏移、大小与 CRC32 都相同。
+  - 落地时先核对尾部，再逐个成员核对 CRC32。用本地副本（`--local-zip`）时也照此核对。
+
+| 源 | 选定来源与 revision | 尾部（中央目录） | 落地内容与实测体积 |
+|---|---|---|---|
+| `refcoco_train` | 图像：`http://images.cocodataset.org/zips/train2014.zip`。13,510,573,713 B，Last-Modified 2018-07-11，ETag `"289af3433b84b5b8622626b10146c1bc-1611"`，82,784 个条目，全部 stored。refs 与 mask：E1 钉住的 refer 存档（A §1.1 的 Wayback 快照），用 Range 只取 `refs(unc\|umd).p` 与 `instances.json` | train2014.zip：起点 13,500,707,642，9,866,071 B，sha256 `7b2e2131…549e`。refer 三个 zip 的尾部各 205–377 B，sha256 见 SPEC | 24,407 张图，4,146,591,678 B。中央目录的成员字节与 A §1.5 逐张 HEAD 的结果相同。另有三套 train 标注（估 ≤ 250 MB）。开发机抽了 3 个成员，与单图 URL 逐字节相同 |
+| `nyu_depth_train` | RGB 与深度：HF `aradhye/nyu_depth_v2@4d7f422d47e78ce7b59d4c635294564cca7fadba`，`nyu_depth_v2.zip`，6,857,931,462 B，LFS sha256 `0eb48e96…f37d`。清单：`cleinc/bts@5e3406b35d1497b2e55d2dd600524d1f4efacaed` 的 `train_test_inputs/nyudepthv2_train_files_with_gt.txt`，1,855,580 B，sha256 `66e2beb7…e0e9`。该文件自首个 commit d1ed7caf 起未改过，与仓库里的 P0 副本相同 | 起点 6,848,271,766，9,659,696 B，sha256 `2e8b36d1…836b`。成员表与 P0 的 listing 逐条相同 | 22,848 对，解压后 3,961,165,376 B。深度 PNG 为 16 位灰度、640×480，整数值 / 1000 = 米，0 为无效（BTS `bts_dataloader.py`）。focal 518.8579 |
+| `nyu_normals` | Bae, Budvytis, Cipolla 2021 的 `nyu_dataset.zip`（GeoNet 的 GT 与划分）。Drive 文件 id `1Rl-x6GwIXWdRW6LbnSayjIAfqCqygvYQ`，直链 `drive.usercontent.google.com/download?id=…&export=download&confirm=t`，支持 Range。1,008,950,467 B，Last-Modified 2022-05-02 | 起点 1,008,654,083，296,384 B，sha256 `0202a05c…3291` | train 795 + test 654 对（img + norm），1,008,804,374 B。PNG 为 8 位 RGBA，α 恒为 255。n = rgb/255×2−1，(0,0,0) 为无效。有效区在第 44–470 行、第 40–600 列，解码后长度为 0.987–1.010 |
+| `ade20k` | `https://data.csail.mit.edu/places/ADEchallenge/ADEChallengeData2016.zip`。967,382,037 B，Last-Modified 2022-07-22，ETag `"39a91415-5e46c686a7a37"`，44,429 个条目 | 起点 961,539,833，5,842,204 B，sha256 `d43af205…ac04` | train 20,210 + val 2,000 对，另有 objectInfo150.txt 与 sceneCategories.txt。即 zip 的全部文件，967,861,125 B。相邻成员合并成约 29 个 Range 请求 |
+
+**D11-1。** 用官方 pickle 的逐条统计（P0 的 `refs_image_ids.json`）计算：
+
+- 三者 train 划分图像的并集为 28,158 张，评测划分图像的并集为 6,549 张。
+- 剔除 3,751 张，保留 24,407 张。
+- 交叉：refcocog train ∩ refcoco 评测 = 1,860；refcoco train ∩ refcocog 评测 = 1,891。
+- 保留 id 的指纹钉在 SPEC 里。落地时用官方 pickle 重算并比对。
+
+**D11-2。** 规则：基础场景名属于 215 个官方 test 场景的帧全部去掉。
+
+- 结果：BTS 清单 24,231 对，去掉 1,383 对，剩 22,848 对。
+- 去掉的帧只来自 bookstore_0001d、e、f、g、h、i、j 这 7 个目录，分别为 242、158、348、189、119、114、213 帧。
+
+**法向来源的选择。** 选 Bae 2021。
+
+- 选它的理由：
+  - 中央目录可以用 Range 读到。
+  - 下标加 1 后，与 splits.mat 的 trainNdxs、testNdxs 逐个相同。
+  - 训练与测试同在一个包里，编码也相同，满足 D11-2"训练与测试同源、覆盖 654"。
+- 其他候选为什么不选：
+  - Eigen & Fergus 的 `normals_gt.tgz`：只有 Wayback 存档，又是 tar.gz，成员数核实不了。
+  - Ladický 2014：链接已失效，没有存档。
+  - GeoNet-test 镜像与 Marigold 的评测包：只有 654 张测试图。
+  - `tanganke/nyuv2`：是 288×384 的缩小版。
+- 许可：未声明。Bae 的仓库是 MIT（指代码）；GeoNet 没有 LICENSE。
+
+**去重（`scripts/data/dedupe_report.py`）。**
+
+- 阈值：感知哈希的汉明距离 ≤ 8，即 `PHASH_MAX_HAMMING`。报告另列 0–12 各档的计数。
+- 开发机的标定数据：
+
+| 情况 | 汉明距离 |
+|---|---|
+| 同一张 NYU test 图的两种加工：Bae 包的 PNG，对 BTS official_splits 的 JPEG（外圈置黑，平均像素差 16–23） | 2、4 |
+| 12 张真实图做合成变换：JPEG q50 | 0 |
+| 缩到一半 | ≤ 2 |
+| 亮度 ×1.2 | ≤ 6 |
+| 外圈 7 px 置黑 | ≤ 6 |
+| 四边各裁 3% | 0–14 |
+| 四边各裁 8% | 8–24 |
+| 水平翻转 | 30–34（感知哈希查不出） |
+| 12 张互不相同的真实图，两两之间 | 最小 24 |
+
+- 正式的标定写进去重报告，用评测集之间的已知重合：
+  - CV-Bench 的 COCO 图对 E1 的 COCO 子集，83 张；
+  - CV-Bench 的 NYU 图对 E1 的 NYU test，36 张；
+  - 法向包的 RGB 对 E1 的 NYU 654 张与开发子集 50 张。
+- 国内网络的备选：
+  - `--local-zip`：本地 zip，同样核对尾部 sha256 与 CRC32；
+  - `--refer-zip-dir`：refer 的三个 zip；
+  - `--hf-base https://hf-mirror.com`；
+  - BTS 清单：默认用仓库里的副本，不联网。
