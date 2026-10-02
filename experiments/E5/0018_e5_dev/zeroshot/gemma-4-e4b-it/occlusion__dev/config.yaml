@@ -1,0 +1,56 @@
+experiment: E5
+framework: src/e5（DEV-0018）
+system: zeroshot
+task: occlusion
+task_letter: c
+subset: dev
+data:
+  generator: src.synth.generate
+  split: val
+  n_per_bin: 4
+  n_samples: 12
+  sample_ids_sha256: ea15bc3fe20152d03592ec0e9ed64b5b001ab4d421ce7500c44e8f558de9b400
+  index_rule: 序号 0..B·n−1，档 = 序号 mod B（src/e5/protocol.py）
+  limit: null
+  task_generator_version: 2
+  synth_generator_version: 4
+  platform:
+    machine: x86_64
+    system: Linux
+n_resamples: 1000
+tiny: false
+model:
+  key: gemma-4-e4b-it
+  family: gemma4
+  repo: google/gemma-4-E4B-it
+  revision: ee0ef6023621cff504d758262d4e04895a5af4a2
+  adapter_model_key: gemma-4-e4b-it
+image_policy:
+  type: SoftTokenBudget
+  max_soft_tokens: 280
+generation:
+  enable_thinking: false
+  max_new_tokens: 2048
+  max_new_tokens_override: null
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+batching:
+  batch_size: 64
+  padding: left
+  order: eval_set_order
+  path: generate_batch
+prompt:
+  config: configs/e5_prompts.json
+  config_sha256: d84b6efc141c1bc281e6ea3adb5226602395ae1337e133bf5d0d34f7ed47402b
+  format: binary_image
+  template: '{instruction} Answer with a {n}x{n} binary grid over the image. Split
+    the image into {n} rows (top to bottom) and {n} columns (left to right) of equal
+    size. Output exactly {n} lines, each with {n} digits and no spaces: 1 if the cell
+    is mostly covered by the {target} as described above, otherwise 0. Output only
+    the grid.'

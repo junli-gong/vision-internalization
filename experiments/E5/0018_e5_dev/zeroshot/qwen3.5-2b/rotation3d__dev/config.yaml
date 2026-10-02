@@ -1,0 +1,65 @@
+experiment: E5
+framework: src/e5（DEV-0018）
+system: zeroshot
+task: rotation3d
+task_letter: a
+subset: dev
+data:
+  generator: src.synth.generate
+  split: val
+  n_per_bin: 4
+  n_samples: 16
+  sample_ids_sha256: cd451c7bac7ccbe5fd5587f6e1291fba4ef7047060ddd6321a0de2e5c273ce4a
+  index_rule: 序号 0..B·n−1，档 = 序号 mod B（src/e5/protocol.py）
+  limit: null
+  task_generator_version: 4
+  synth_generator_version: 4
+  platform:
+    machine: x86_64
+    system: Linux
+n_resamples: 1000
+tiny: false
+model:
+  key: qwen3.5-2b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-2B
+  revision: 15852e8c16360a2fea060d615a32b45270f8a8fc
+  adapter_model_key: qwen3.5-2b
+image_policy:
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+generation:
+  enable_thinking: false
+  max_new_tokens: 2048
+  max_new_tokens_override: null
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+batching:
+  batch_size: 64
+  padding: left
+  order: eval_set_order
+  path: generate_batch
+prompt:
+  config: configs/e5_prompts.json
+  config_sha256: d84b6efc141c1bc281e6ea3adb5226602395ae1337e133bf5d0d34f7ed47402b
+  format: relief_image
+  template: '{instruction} Answer with a {n}x{n} grid over the image that shows both
+    where the {target} is after the rotation and how far each part of it is from the
+    camera. Split the image into {n} rows (top to bottom) and {n} columns (left to
+    right) of equal size. Output exactly {n} lines, each with {n} characters and no
+    spaces. Write . for a cell that is not mostly covered by the {target}. For a covered
+    cell, write the depth of the {target}''s surface in that cell relative to the
+    average depth over all of its covered cells, using 32 steps written 0 1 2 3 4
+    5 6 7 8 9 A B C D E F G H I J K L M N O P Q R S T U V from nearest to farthest.
+    Each step is 1/16 of the {target}''s radius (the distance from its center to its
+    farthest point): G covers from the average depth to 1/16 radius farther, F covers
+    from 1/16 radius nearer up to the average depth, and so on; anything more than
+    one radius nearer or farther is written 0 or V. Output only the grid.'

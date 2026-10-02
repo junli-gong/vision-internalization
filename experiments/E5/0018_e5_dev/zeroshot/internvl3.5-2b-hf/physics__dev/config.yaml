@@ -1,0 +1,57 @@
+experiment: E5
+framework: src/e5（DEV-0018）
+system: zeroshot
+task: physics
+task_letter: d
+subset: dev
+data:
+  generator: src.synth.generate
+  split: val
+  n_per_bin: 4
+  n_samples: 16
+  sample_ids_sha256: 477e636d2c1074b0a4aad7f85c035442120f801f1314656631983ec3dcf498cd
+  index_rule: 序号 0..B·n−1，档 = 序号 mod B（src/e5/protocol.py）
+  limit: null
+  task_generator_version: 2
+  synth_generator_version: 4
+  platform:
+    machine: x86_64
+    system: Linux
+n_resamples: 1000
+tiny: false
+model:
+  key: internvl3.5-2b-hf
+  family: internvl3.5
+  repo: OpenGVLab/InternVL3_5-2B-HF
+  revision: 3f301ffcf3dcbb47893afae6650ea3e78d96fb6d
+  adapter_model_key: internvl3.5-2b-hf
+image_policy:
+  type: TilePolicy
+  crop_to_patches: false
+  max_patches: 1
+generation:
+  enable_thinking: false
+  max_new_tokens: 2048
+  max_new_tokens_override: null
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+batching:
+  batch_size: 64
+  padding: left
+  order: eval_set_order
+  path: generate_batch
+prompt:
+  config: configs/e5_prompts.json
+  config_sha256: d84b6efc141c1bc281e6ea3adb5226602395ae1337e133bf5d0d34f7ed47402b
+  format: binary_image
+  template: '{instruction} Answer with a {n}x{n} binary grid over the image. Split
+    the image into {n} rows (top to bottom) and {n} columns (left to right) of equal
+    size. Output exactly {n} lines, each with {n} digits and no spaces: 1 if the cell
+    is mostly covered by the {target} as described above, otherwise 0. Output only
+    the grid.'
