@@ -540,10 +540,9 @@ def test_query_embeds_replace_placeholder_and_carry_grad(fresh, images):
     assert torch.equal(hs.query[0], qe.detach())
     hs.query[4].pow(2).sum().backward()
     assert qe.grad is not None and qe.grad.abs().sum() > 0  # E3a 的可学习查询从这里得到梯度
-    with torch.no_grad():
-        plain = ad.hidden_states(inp, [0])
+    with pytest.raises(ValueError, match="query_embeds"):  # DEV-0020 第 8 条：不给 query_embeds 报错（原来静默用占位符行）
+        ad.hidden_states(inp, [0])
     row = ad.model.get_input_embeddings().weight[ad.query_token_id]
-    assert torch.equal(plain.query[0], row.expand(4, -1))  # 不给 query_embeds 时就是占位符行
     ex = ad.model.get_input_embeddings().weight[:N_BASE_VOCAB].double().mean(0).float()
     assert torch.equal(row, ex)  # 占位符行按 D9-3 初始化为基础行均值
 
@@ -570,11 +569,11 @@ def test_inject_query_tokens_validation_and_clear(fresh, images):
             ad.inject_query_tokens(n, mode)
     assert ad.query_token_id is None and len(ad.tokenizer) == LEN_TOKENIZER
     ad.inject_query_tokens(16, "grid2d")
-    assert ad.query_token_id == LEN_TOKENIZER  # 首个新增 id 落在预留行里
-    assert ad.tokenizer(QUERY_PLACEHOLDER * 3, add_special_tokens=False)["input_ids"] == [ad.query_token_id] * 3
+    assert ad.query_token_id == N_ROWS - 1  # DEV-0020：固定取预留区末行，平时不登记进 tokenizer
+    assert len(ad.tokenizer) == LEN_TOKENIZER
     assert ad.model.get_input_embeddings().weight.shape[0] == N_ROWS
     ad.inject_query_tokens(9, "seq1d")  # 再次登记只改个数与模式，不再加 token
-    assert len(ad.tokenizer) == LEN_TOKENIZER + 1
+    assert len(ad.tokenizer) == LEN_TOKENIZER
     inp = ad.build_inputs(images[:1], INSTR_A, "image_first")
     assert len(inp.query_span) == 9 and inp.query_position_mode == "seq1d"
     with pytest.raises(ValueError, match="generate"):
@@ -591,7 +590,8 @@ def test_query_placeholder_is_outside_grid_budget(fresh):
     names = [f"<g{i}>" for i in range(MAX_NEW_GRID_TOKENS)]
     ids = ad.add_grid_tokens(names)
     assert ad.n_grid_tokens == MAX_NEW_GRID_TOKENS
-    assert min(ids.values()) == LEN_TOKENIZER + 1
+    assert min(ids.values()) == LEN_TOKENIZER and ad.query_token_id == N_ROWS - 1  # DEV-0020：grid 从首个预留行起、跳过末行
+    assert ad.query_token_id not in ids.values()
     assert ad.model.get_input_embeddings().weight.shape[0] == LEN_TOKENIZER + 1 + MAX_NEW_GRID_TOKENS
     with pytest.raises(ValueError, match="上限"):
         ad.add_grid_tokens(["<extra>"])
@@ -666,10 +666,11 @@ def test_add_250_grows_to_exact_rows(fresh, monkeypatch, images, tied):
     ids = ad.add_grid_tokens([f"<g{i}>" for i in range(250)])
     emb = ad.model.get_input_embeddings().weight
     head = ad.model.get_output_embeddings().weight
-    assert emb.shape == head.shape == (LEN_TOKENIZER + 250, 64) == (248327, 64)
-    assert ad.model.config.text_config.vocab_size == 248327
+    # DEV-0020：预留区末行（248319）固定留给查询占位符，grid token 跳过它，所以多扩一行
+    assert emb.shape == head.shape == (LEN_TOKENIZER + 251, 64) == (248328, 64)
+    assert ad.model.config.text_config.vocab_size == 248328
     new = list(ids.values())
-    assert new == list(range(LEN_TOKENIZER, 248327))
+    assert new == list(range(LEN_TOKENIZER, N_ROWS - 1)) + list(range(N_ROWS, 248328))
     assert torch.equal(emb[:LEN_TOKENIZER], emb0[:LEN_TOKENIZER])  # 已有 token 的行逐位不变
     emb_mean = emb0[:N_BASE_VOCAB].double().mean(0).float()
     assert torch.equal(emb[new], emb_mean.expand(250, -1))  # 复用的 243 个预留行与扩出的 7 行都 = 均值
@@ -715,7 +716,7 @@ def test_rows_never_shrink(fresh, monkeypatch):
     snap = ad.model.get_input_embeddings().weight.detach().clone()
     ad.add_grid_tokens([f"<h{i}>" for i in range(10)])
     emb = ad.model.get_input_embeddings().weight
-    assert emb.shape[0] == ad.model.get_output_embeddings().weight.shape[0] == 248337
+    assert emb.shape[0] == ad.model.get_output_embeddings().weight.shape[0] == 248338  # 含查询占位符的末行（DEV-0020）
     assert torch.equal(emb[: snap.shape[0]], snap)
     ad2 = fresh(True)
     ad2.add_grid_tokens(["<g0>"])
