@@ -2,14 +2,17 @@
 
 数据一律经 src/data/loaders（已剔除开发子集与 D20 探针图，剔除逐条记录在加载统计里），子集 id 取自入库的清单：
 - eval：主口径的评测总体。定位跑全划分；多边形、网格取 configs/e1_eval_subsets.json 的 poly:*、grid16:*；检测是 COCO 500 + ODinW13。
-- dev：开发子集（configs/e1_dev_subsets.json；D11-6），只核对格式、截断率、解析失败，以及批处理验收。
-  检测没有开发子集（COCO 500 与 ODinW 都只有评测图）：这里用 RefCOCO unc val 开发子集里的图（COCO train2014）配 COCO 的 80 类
-  做格式核对，没有 GT，不算指标（偏离，见完成总结）。
+- dev：开发子集（configs/e1_dev_subsets.json；D11-6），只核对格式、截断率、解析失败，以及批处理验收。定位、多边形、网格都用
+  RefCOCO、RefCOCO+、RefCOCOg 三个开发子集（共 600 句；DEV-0017 起网格也用三个，验收要 500 句）。
+  检测没有开发子集（COCO 500 与 ODinW 都只有评测图）：用这三个开发子集用到的图（COCO train2014，去重、按 image id 升序）配
+  COCO 的 80 类。GT 取落地源 coco_train2014_e1dev（这些图在 instances_train2014 里的全部标注，DEV-0017 §6）：落地了就有 GT、
+  验收能按判定结果比；没落地时退回只核对格式（has_gt = False），选择统计里写明。
 - think / think8192：think:<任务> / think8192:<任务>（每任务 200 / 50 条），开思考。
+- free：选择题与点对任务的自由作答诊断（D36-6）：样本取 think:<任务> 的 id，关思考（标题是受限字母读数，见 prompts.readout）。
 - extra：附加对照的子集（extra:refcoco_unc_val → 定位，extra:coco_val2017 → 检测），配 --policy qwen:1024 或 internvl:native。
-计数的问句来源（count_questions，DEV-0015 §4）：heuristic（默认）不动样本；countbenchqa 把落地的人工问句
+计数的问句来源（count_questions，DEV-0015 §4；D36-2 起默认 countbenchqa）：countbenchqa 把落地的人工问句
 （<root>/countbenchqa_questions/，scripts/data/land_e1.py countbenchqa_questions）按行号放进 fields[COUNTBENCHQA_FIELD]，
-问句文件的 sha256 记进选择统计（因而进 config.yaml，续跑不能混用两种问句）。
+问句文件的 sha256 记进选择统计（因而进 config.yaml，续跑不能混用两种问句）；heuristic 不动样本。
 样本顺序固定：多划分的任务按 POLY_SPLITS 的划分顺序，划分内按加载器的 id 自然顺序；断点续传与逐字节复现都依赖它。
 """
 
@@ -26,20 +29,31 @@ from typing import Any, Callable
 from src.data import loaders as L
 from src.data.eval_subsets import EVAL_SUBSETS_PATH, POLY_SPLITS, subset_ids
 from src.data.nyu_pairs import PAIRS_PATH
-from src.data.records import Sample
+from src.data.records import Sample, xywh_to_xyxy
 from src.data.subsets import DEV_SUBSETS_PATH
-from src.e1.prompts import COUNT_QUESTION_SOURCES, COUNTBENCHQA_FIELD, DEFAULT_COUNT_QUESTIONS, SUBSET_KINDS, TASKS
+from src.e1.prompts import (
+    COUNT_QUESTION_SOURCES,
+    COUNTBENCHQA_FIELD,
+    DEFAULT_COUNT_QUESTIONS,
+    FREE_SUBSET,
+    SUBSET_KINDS,
+    TASKS,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "e1"
 
-# 每个任务支持哪些子集（extra 只给附加对照的两个任务）
+# 选择题与点对任务：自由作答解析为 choice；协议 v2 的标题是受限字母读数（configs/e1_prompts.json 的 letter_readout.tasks，
+# tests 钉住两者相同），自由作答只在 free 子集上作诊断
+CHOICE_TASKS: tuple[str, ...] = ("rel_depth_nyu", "rel_depth_blink", "spatial_cvbench", "spatial_embspatial")
+# 每个任务支持哪些子集（extra 只给附加对照的两个任务，free 只给选择题与点对任务）
 TASK_SUBSETS: dict[str, tuple[str, ...]] = {
-    t: ("eval", "dev", "think", "think8192") + (("extra",) if t in ("refexp_box", "ovd") else ()) for t in TASKS
+    t: ("eval", "dev", "think", "think8192") + (("extra",) if t in ("refexp_box", "ovd") else ())
+    + ((FREE_SUBSET,) if t in CHOICE_TASKS else ()) for t in TASKS
 }
 EXTRA_SUBSET_OF_TASK = {"refexp_box": "extra:refcoco_unc_val", "ovd": "extra:coco_val2017"}
 REFCOCO_DATASETS = ("refcoco", "refcoco+", "refcocog")
-OVD_DEV_SOURCE = "ovd_dev/refcoco_unc_val_images"
+OVD_DEV_SOURCE = "ovd_dev/refcoco_dev_images"
 
 
 @dataclass(frozen=True)
@@ -115,7 +129,7 @@ def _refcoco_unc_val(paths: DataPaths) -> L.LoadResult:
 def _select_refexp(task: str, subset: str, paths: DataPaths) -> Selection:
     st: dict[str, Any] = {}
     if subset == "dev":
-        samples, st = _refcoco_dev(paths, ("refcoco",) if task == "grid16" else REFCOCO_DATASETS)
+        samples, st = _refcoco_dev(paths, REFCOCO_DATASETS)
         return Selection(task, subset, samples, True, st)
     if subset == "eval" and task in ("refexp_box", "refexp_poly"):
         samples = []
@@ -158,22 +172,69 @@ def odinw_configs(root: Path) -> list[str]:
     return sorted({p.rsplit("/", 1)[0] for p in files if p.endswith("/annotations_e1sub.json")})
 
 
+def load_ovd_dev_annotations(root: Path) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """落地的检测开发图标注（coco_train2014_e1dev 源）→ (COCO 格式的标注, 统计)；没落地返回 None。
+    核对：文件 sha256 = 该源 MANIFEST 登记的值，不符就抛错（不静默退回无 GT）。"""
+    from src.data.land.coco_train2014_dev import SOURCE, SUBSET_FILE
+    from src.data.land.manifest import read_manifest
+
+    src = Path(root) / SOURCE
+    if not (src / SUBSET_FILE).exists():
+        return None
+    raw = (src / SUBSET_FILE).read_bytes()
+    sha = hashlib.sha256(raw).hexdigest()
+    want = read_manifest(src)["files"].get(SUBSET_FILE, {}).get("sha256")
+    if sha != want:
+        raise ValueError(f"{src / SUBSET_FILE}：sha256 {sha} 与 MANIFEST 登记的 {want} 不符")
+    return json.loads(raw.decode("utf-8")), {"source": SOURCE, "file": f"{SOURCE}/{SUBSET_FILE}", "sha256": sha}
+
+
+def _ovd_dev(paths: DataPaths) -> Selection:
+    """检测的开发核对（见模块说明）：三个 RefCOCO 开发子集的图（去重、按 image id 升序）× COCO 80 类，GT 来自
+    coco_train2014_e1dev（落地了才有）。框按 COCO 的 xywh → 绝对像素 xyxy，与 src/data/loaders 的检测样本同形。"""
+    recs, st = _refcoco_dev(paths, REFCOCO_DATASETS)
+    first: dict[int, Sample] = {}
+    for s in recs:
+        first.setdefault(int(s.fields["image_id"]), s)
+    got = load_ovd_dev_annotations(paths.root)
+    if got is None:
+        names, cids = _coco_categories(paths)
+        gt_of: dict[int, Any] = {i: None for i in first}
+        st["note"] = ("检测的开发图标注（coco_train2014_e1dev）没有落地：只核对格式，没有 GT"
+                      "（scripts/data/land_e1.py coco_train2014_e1dev）")
+    else:
+        coco, ann_st = got
+        cats = sorted(coco["categories"], key=lambda c: c["id"])
+        names, cids = [c["name"] for c in cats], [c["id"] for c in cats]
+        name_of = dict(zip(cids, names))
+        sizes = {im["id"]: (im["width"], im["height"]) for im in coco["images"]}
+        missing = sorted(set(first) - set(sizes))
+        if missing:
+            raise KeyError(f"检测的开发图标注里缺 {len(missing)} 张开发图，例如 {missing[:5]}（重新落地 coco_train2014_e1dev）")
+        bad = [i for i, s in first.items() if tuple(s.fields["image_size"]) != tuple(sizes[i])]
+        if bad:
+            raise ValueError(f"检测的开发图标注与 RefCOCO 的图宽高不符：{bad[:5]}")
+        by_img: dict[int, list[dict[str, Any]]] = {i: [] for i in first}
+        for a in sorted(coco["annotations"], key=lambda a: a["id"]):
+            if a["image_id"] in by_img:
+                by_img[a["image_id"]].append({"box": xywh_to_xyxy(a["bbox"]), "category_id": a["category_id"],
+                                              "category": name_of[a["category_id"]], "iscrowd": int(a.get("iscrowd", 0)),
+                                              "ann_id": a["id"]})
+        gt_of = by_img
+        st["annotations"] = ann_st
+        st["note"] = "检测没有开发子集：用三个 RefCOCO 开发子集的图（去重）配 COCO 80 类，GT 是这些图在 instances_train2014 里的全部标注"
+    samples = [Sample(id=f"{OVD_DEV_SOURCE}/{iid}", task="ovd", images=s.images, image_keys=s.image_keys,
+                      fields={"categories": names, "category_ids": cids, "image_id": iid,
+                              "image_size": list(s.fields["image_size"])},
+                      gt={"boxes": gt_of[iid]}, source=OVD_DEV_SOURCE, split="dev", phash=s.phash)
+               for iid, s in sorted(first.items())]
+    return Selection("ovd", "dev", samples, got is not None, st)
+
+
 def _select_ovd(subset: str, paths: DataPaths) -> Selection:
     st: dict[str, Any] = {}
     if subset == "dev":
-        names, ids = _coco_categories(paths)
-        recs, st = _refcoco_dev(paths, ("refcoco",))
-        seen: dict[int, Sample] = {}
-        for s in recs:
-            iid = int(s.fields["image_id"])
-            if iid not in seen:
-                seen[iid] = Sample(
-                    id=f"{OVD_DEV_SOURCE}/{iid}", task="ovd", images=s.images, image_keys=s.image_keys,
-                    fields={"categories": names, "category_ids": ids, "image_id": iid,
-                            "image_size": list(s.fields["image_size"])},
-                    gt={"boxes": None}, source=OVD_DEV_SOURCE, split="dev", phash=s.phash)
-        st["note"] = "检测没有开发子集：用 RefCOCO unc val 开发子集的图（去重）配 COCO 80 类，只核对格式，没有 GT"
-        return Selection("ovd", subset, [seen[k] for k in sorted(seen)], False, st)
+        return _ovd_dev(paths)
     coco = L.load_coco_ovd(paths.root, strict=paths.strict)
     st["coco_val2017"] = _stats(coco)
     if subset == "eval":
@@ -230,8 +291,8 @@ def _select_simple(task: str, subset: str, paths: DataPaths, count_questions: st
     res = load("dev" if subset == "dev" else "eval")
     st = {"population": _stats(res)}
     samples = res.records
-    if subset in ("think", "think8192"):
-        name = f"{subset}:{task}"
+    if subset in ("think", "think8192", FREE_SUBSET):
+        name = f"think:{task}" if subset == FREE_SUBSET else f"{subset}:{task}"  # free 用 think 子集的 id（D36-6）
         st["subset_name"] = name
         samples = _pick(samples, subset_ids(name, paths.eval_subsets), unit, name)
     if task == "count" and count_questions == "countbenchqa":
@@ -296,6 +357,7 @@ def groups_of(task: str, s: Sample) -> dict[str, str]:
 
 
 __all__ = [
+    "CHOICE_TASKS",
     "DataPaths",
     "EXTRA_SUBSET_OF_TASK",
     "OVD_DEV_SOURCE",
@@ -304,6 +366,7 @@ __all__ = [
     "default_nyu_cache",
     "groups_of",
     "load_count_questions",
+    "load_ovd_dev_annotations",
     "odinw_configs",
     "select",
 ]

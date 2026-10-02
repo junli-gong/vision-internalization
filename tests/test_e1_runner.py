@@ -51,6 +51,23 @@ def respond(instruction: str, size) -> tuple[str, bool]:
     return ("(A)", True) if h % 2 else ("B is closer" if "closer" in instruction else "B", True)
 
 
+class FakeTokenizer:
+    """只认单个字母与"空格 + 字母"两种写法的分词器（受限字母读数的字母表用 encode / decode；DEV-0017）：
+    "A" → 1065、" A" → 2065；其余写法拆成逐字符的多个 token。"""
+
+    def encode(self, text, add_special_tokens=False):
+        assert add_special_tokens is False
+        if len(text) == 1 and text.isalpha():
+            return [1000 + ord(text)]
+        if len(text) == 2 and text[0] == " " and text[1].isalpha():
+            return [2000 + ord(text[1])]
+        return [ord(c) for c in text]
+
+    def decode(self, ids):
+        (i,) = ids
+        return chr(i - 1000) if i < 2000 else " " + chr(i - 2000)
+
+
 class FakeAdapter:
     family = registry.FAMILY_QWEN35
     model_key = "fake(qwen3.5-0.8b)"
@@ -62,6 +79,9 @@ class FakeAdapter:
         self.fail_after = fail_after_batches
         self.n_batches = 0
         self.calls: list[tuple[str, int, bool]] = []
+        self.allowed: list[list[int] | None] = []  # 每批的 allowed_token_ids
+        self.max_new: list[int] = []
+        self.tokenizer = FakeTokenizer()
 
     def build_inputs(self, images, instruction, order):
         assert order == "image_first"
@@ -70,13 +90,23 @@ class FakeAdapter:
     def warmup(self, images=(), *, batch_size=1, **kw):
         return 0.0
 
-    def _rows(self, inputs, enable_thinking, max_new_tokens, where):
+    def _rows(self, inputs, enable_thinking, max_new_tokens, where, allowed=None):
         if self.fail_after is not None and self.n_batches >= self.fail_after:
             raise Interrupt("模拟中断")
         self.n_batches += 1
         self.calls.append((where, len(inputs), enable_thinking))
+        self.allowed.append(None if allowed is None else list(allowed))
+        self.max_new.append(max_new_tokens)
         out = []
         for inp in inputs:
+            if allowed is not None:  # 受限字母读数：在允许的 token 里确定地挑一个，1 个 token、没有停止 token
+                h = int(hashlib.sha256(f"{inp.instruction}|{inp.size}".encode()).hexdigest(), 16)
+                tid = sorted(allowed)[h % len(allowed)]
+                text = self.tokenizer.decode([tid])
+                out.append(GenerationResult(text=text, token_ids=(tid,), n_generated_tokens=1, n_prompt_tokens=40,
+                                            n_visual_tokens=12, wall_time_s=0.5 / len(inputs), raw_text=text, stopped=False,
+                                            n_image_pixels=12 * 1024, batch_size=len(inputs), batch_wall_time_s=0.5))
+                continue
             text, stopped = respond(inp.instruction, inp.size)
             n = max_new_tokens if not stopped else 1 + len(text) % 7
             out.append(GenerationResult(text=text, token_ids=tuple(range(n)), n_generated_tokens=n, n_prompt_tokens=40,
@@ -85,12 +115,12 @@ class FakeAdapter:
                                         batch_wall_time_s=0.5))
         return out
 
-    def generate(self, inputs, *, enable_thinking, max_new_tokens, **kw):
+    def generate(self, inputs, *, enable_thinking, max_new_tokens, allowed_token_ids=None, **kw):
         assert kw["do_sample"] is False and kw["num_beams"] == 1
-        return self._rows([inputs], enable_thinking, max_new_tokens, "generate")[0]
+        return self._rows([inputs], enable_thinking, max_new_tokens, "generate", allowed_token_ids)[0]
 
-    def generate_batch(self, inputs_list, *, enable_thinking, max_new_tokens, **kw):
-        return self._rows(list(inputs_list), enable_thinking, max_new_tokens, "generate_batch")
+    def generate_batch(self, inputs_list, *, enable_thinking, max_new_tokens, allowed_token_ids=None, **kw):
+        return self._rows(list(inputs_list), enable_thinking, max_new_tokens, "generate_batch", allowed_token_ids)
 
 
 def spec(task, subset="eval", bs=2, limit=None):
@@ -147,7 +177,9 @@ def test_end_to_end_files_and_resume_bytes(task, subset, paths, tmp_path):
     assert len(list((lp / "logs").glob("run_*.json"))) == 2
 
 
-def test_resume_repairs_partial_line_and_allows_other_batch_size(paths, tmp_path):
+def test_resume_repairs_partial_line_trims_to_batch_boundary_and_refuses_other_batch_size(paths, tmp_path):
+    """DEV-0017：批大小是运行身份的一部分（换了就拒绝续跑）；已完成的条数不在批的边界上时，退回到那一批的开头整批重跑，
+    批组成与一次跑完相同（逐字节相同）。"""
     sel = select("refexp_box", "eval", paths)
     R.run_task(FakeAdapter(), spec("refexp_box"), sel, PROMPTS, paths, tmp_path / "a", log=lambda _: None)
     ref = (leaf(tmp_path / "a", "refexp_box") / "predictions.jsonl").read_bytes()
@@ -155,11 +187,15 @@ def test_resume_repairs_partial_line_and_allows_other_batch_size(paths, tmp_path
     R.run_task(FakeAdapter(), spec("refexp_box"), sel, PROMPTS, paths, out, log=lambda _: None)
     p = leaf(out, "refexp_box") / "predictions.jsonl"
     lines = p.read_bytes().splitlines(keepends=True)
-    p.write_bytes(b"".join(lines[:7]) + lines[7][:25])  # 7 条完整 + 半行
+    p.write_bytes(b"".join(lines[:7]) + lines[7][:25])  # 7 条完整 + 半行；批大小 2 的边界是 6
+    with pytest.raises(ValueError, match="batch_size"):
+        R.run_task(FakeAdapter(), spec("refexp_box", bs=3), sel, PROMPTS, paths, out, resume=True, log=lambda _: None)
     fake = FakeAdapter()
-    R.run_task(fake, spec("refexp_box", bs=3), sel, PROMPTS, paths, out, resume=True, log=lambda _: None)
-    assert p.read_bytes() == ref and sum(n for _, n, _ in fake.calls) == len(sel.samples) - 7
-    assert {n for _, n, _ in fake.calls} <= {1, 2, 3}
+    R.run_task(fake, spec("refexp_box"), sel, PROMPTS, paths, out, resume=True, log=lambda _: None)
+    assert p.read_bytes() == ref and sum(n for _, n, _ in fake.calls) == len(sel.samples) - 6
+    assert {n for _, n, _ in fake.calls} <= {1, 2}
+    runs = sorted((leaf(out, "refexp_box") / "logs").glob("run_*.json"))
+    assert json.loads(runs[-1].read_text())["trimmed_to_batch_boundary"] == {"from": 7, "to": 6}
 
 
 def test_resume_refuses_changed_identity(paths, tmp_path):
@@ -186,10 +222,13 @@ def test_batch_size_one_uses_generate(paths, tmp_path):
 def test_count_with_countbenchqa_questions(paths, tmp_path):
     """DEV-0015 §4：--count-questions countbenchqa 时指令用人工问句，问句与来源进 predictions、config 与 metrics 分档；
     问句来源与样本不一致时拒绝运行；两种来源的输出不能混着续跑。"""
-    from src.e1.prompts import COUNTBENCHQA_FIELD
+    from src.e1.prompts import COUNTBENCHQA_FIELD, DEFAULT_COUNT_QUESTIONS
 
+    assert DEFAULT_COUNT_QUESTIONS == "countbenchqa" and spec("count").count_questions == "countbenchqa"  # D36-2
     sel = select("count", "eval", paths, count_questions="countbenchqa")
     sp = R.RunSpec(**{**spec("count").__dict__, "count_questions": "countbenchqa"})
+    heur = R.RunSpec(**{**spec("count").__dict__, "count_questions": "heuristic"})
+    plain_sel = select("count", "eval", paths, count_questions="heuristic")
     m = R.run_task(FakeAdapter(), sp, sel, PROMPTS, paths, tmp_path / "qa", log=lambda _: None)
     lf = leaf(tmp_path / "qa", "count")
     recs = R.read_jsonl_tolerant(lf / "predictions.jsonl", repair=False)
@@ -200,15 +239,18 @@ def test_count_with_countbenchqa_questions(paths, tmp_path):
     assert set(m["breakdown"]["object_rule"]) == {r["extras"]["object_rule"] for r in recs}
     cfg = (lf / "config.yaml").read_text()
     assert "count_questions: countbenchqa" in cfg and sel.stats["count_questions"]["sha256"] in cfg
+    assert m["count_questions"] == {"source": "countbenchqa", "note": PROMPTS.countbenchqa_note}  # D36-2：注明出处
+    assert PROMPTS.countbenchqa_note in (lf / "README.md").read_text()
     with pytest.raises(ValueError, match="问句来源不一致"):  # 样本带人工问句，RunSpec 却是 heuristic
-        R.run_task(FakeAdapter(), spec("count"), sel, PROMPTS, paths, tmp_path / "x", log=lambda _: None)
+        R.run_task(FakeAdapter(), heur, sel, PROMPTS, paths, tmp_path / "x", log=lambda _: None)
     with pytest.raises(ValueError, match="问句来源不一致"):
-        R.run_task(FakeAdapter(), sp, select("count", "eval", paths), PROMPTS, paths, tmp_path / "y", log=lambda _: None)
+        R.run_task(FakeAdapter(), sp, plain_sel, PROMPTS, paths, tmp_path / "y", log=lambda _: None)
     with pytest.raises(ValueError, match="续跑的配置与已有的不同"):
-        R.run_task(FakeAdapter(), spec("count"), select("count", "eval", paths), PROMPTS, paths, tmp_path / "qa", resume=True,
-                   log=lambda _: None)
-    plain = R.run_config(spec("count"), select("count", "eval", paths), PROMPTS, paths)
+        R.run_task(FakeAdapter(), heur, plain_sel, PROMPTS, paths, tmp_path / "qa", resume=True, log=lambda _: None)
+    plain = R.run_config(heur, plain_sel, PROMPTS, paths)
     assert plain["prompt"]["count_questions"] == "heuristic"
+    hm = R.run_task(FakeAdapter(), heur, plain_sel, PROMPTS, paths, tmp_path / "h", log=lambda _: None)
+    assert hm["count_questions"] == {"source": "heuristic", "note": None}
     assert "count_questions" not in R.run_config(spec("grid16"), select("grid16", "eval", paths), PROMPTS, paths)["prompt"]
 
 

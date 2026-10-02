@@ -1,13 +1,16 @@
 {
- "schema_version": 1,
- "name": "E1 提示配置（T 文本通道零样本基线；DEV-0014）",
+ "schema_version": 2,
+ "name": "E1 协议配置：提示、生成、受限字母读数、报告的三列、批配置与验收（T 文本通道零样本基线；DEV-0014，协议 v2 见 DEV-0017）",
  "status": "草稿，未冻结。冻结后 sha256 写进 PREREGISTRATION.md 的 E1 条目；之后改动只能新增修订条。",
  "rules": [
   "每个任务只用一个提示，不调提示（简报 §4 第 5 条，预注册草稿 §3）。",
   "有原生格式的任务（定位、检测）用各家族官方文档或 cookbook 的写法；多选与问答用 benchmark 自带的提示；没有原生格式的（多边形、16×16 数字网格、NYU 点对、计数）用统一提示。",
   "模板用 Python str.format 的占位符；渲染后去掉首尾空白（Qwen 的聊天模板会 trim 整段内容，三个家族统一处理）。",
   "开发子集只用于核对格式、截断率与解析失败，不看准确率。截断率高时可以调 max_new_tokens，调整写进 max_new_tokens_adjustments，附理由。",
-  "截断一律判解析失败（truncated），思考段未闭合单列（thinking_unclosed），都不从输出里解析（D22-3、D28-5）。"
+  "截断一律判解析失败（truncated），思考段未闭合单列（thinking_unclosed），都不从输出里解析（D22-3、D28-5）。",
+  "选择题与点对任务（CV-Bench、EmbSpatial、BLINK、NYU 点对）在 eval、dev 上用受限字母读数作标题（letter_readout）；自由作答只在 free 子集上作诊断（D36-6）。",
+  "所有任务报告三列：严格读数（标题）、有效率、条件读数（report_columns，D36-6）。",
+  "批配置（批大小、填充方向、排序）冻结为协议的一部分（batch_protocol）；批处理验收 v3 的规则在 acceptance（D36-1）。"
  ],
  "image_order": {
   "value": "image_first",
@@ -33,13 +36,73 @@
    "dev": false,
    "extra": false,
    "think": true,
-   "think8192": true
+   "think8192": true,
+   "free": false
   },
   "think_max_new_tokens": {
    "think": 4096,
    "think8192": 8192
   },
-  "think_note": "思考子集的 max_new_tokens 就是思考预算（含最终回答），D28-10：greedy，预算 4096，另做 8192 的敏感性检查。主口径一律关思考，每次显式设置（简报 §6.3、§12）。"
+  "think_note": "思考子集的 max_new_tokens 就是思考预算（含最终回答），D28-10：greedy，预算 4096，另做 8192 的敏感性检查。主口径一律关思考，每次显式设置（简报 §6.3、§12）。",
+  "free_note": "free 子集（选择题与点对任务的自由作答诊断，D36-6）：样本取 think:<任务> 子集的 id，关思考，生成上限取该任务的 max_new_tokens（1024），解析用该任务的 parse（choice）。"
+ },
+ "letter_readout": {
+  "version": 1,
+  "tasks": ["rel_depth_nyu", "rel_depth_blink", "spatial_cvbench", "spatial_embspatial"],
+  "subsets": ["eval", "dev"],
+  "max_new_tokens": 1,
+  "spellings": ["{letter}", " {letter}"],
+  "parse": "letter_token",
+  "rule": "只生成 1 个 token。allowed_token_ids = 本题实际选项字母（渲染时的 extras.letters：A、B、…；NYU 点对与 BLINK 是提示里 (A)、(B) 两项的 A、B）的全部写法：不带空格（\"A\"）与带前导空格（\" A\"）。每种写法用本家族分词器 encode(写法, add_special_tokens=False)，恰好得到 1 个 token 才收；不是单个 token 的写法跳过并记进字母表；某个字母一种写法都没有、或两个字母撞到同一个 token 就报错（src/e1/letters.py）。greedy 下生成的就是这些 token 里 logit 最大的一个，等价于每个字母取两种写法中较大的 logit、再在字母之间取最大（N14 → (c)，D36-4）。解析：生成的 token id 按字母表映射回字母，不经过文本解析；这条记录不算截断（1 个 token 就是全部回答）。generate_batch 的 allowed_token_ids 对整批相同，所以同一批的样本字母集合必须相同（batch_protocol.letter_batches）。字母表（每个字母的写法与 token id）写进每次运行的 config.yaml。",
+  "free_form_diagnostic": "自由作答（原提示、parse = choice、关思考、上限 1024）只在 free 子集上作诊断：样本 id 取 think:<任务> 子集（D36-6）。思考子集（think、think8192）开思考，照旧自由作答。",
+  "basis": "D36-6；D36-4（N14 → (c) 受限字母读数，同一字母的两种写法取较大的 logit）"
+ },
+ "report_columns": {
+  "version": 1,
+  "strict": "严格读数（预注册的标题）：在全部样本上算，解析失败（含截断、思考段未闭合、拒答）按错或 IoU 0 计。",
+  "valid_rate": "有效率 = 有效条数 / 全部条数；有效 = 解析成功、且没有被判为拒答（拒答用 D33 的诊断规则 src/e1/scoring.failure_detail；该规则只给解析失败的记录打 refusal，所以按现行规则，有效 = 解析成功）。检测按图计。受限字母读数的记录总是有效（生成的 token 一定映射到某个选项字母）。",
+  "conditional": "条件读数：只在有效样本上算同一个指标（定位 Acc@0.5；多边形 cIoU 与 gIoU；网格 gIoU 与 cIoU；计数与选择题准确率；检测 F1@0.5 只用有效的图及其 GT，ODinW 取各数据集条件 F1 的平均），附 bootstrap 95% CI；没有有效样本时为 null。",
+  "basis": "D36-6：格式与能力分开记"
+ },
+ "refusal_by_person": {
+  "version": 1,
+  "tasks": ["refexp_box", "refexp_poly", "grid16"],
+  "person_category": "person",
+  "rule": "按被指代物体的 COCO 类别分 person 与非 person：RefCOCO 每个 ref 带 category_id，加载器给出它在落地的 categories 表里的名字（Sample.fields.category），person 即 COCO 的 category_id 1。各报：条数、拒答条数与拒答率（D33 规则）、有效率、严格读数与条件读数（该任务的第一个标题指标）。非 person 上的条件读数是 D36-6 要求另给的那个数。缺类别的样本单列 unknown。",
+  "basis": "D36-6；D33-3（Gemma 定位约六成是拒答）"
+ },
+ "batch_protocol": {
+  "version": 1,
+  "batch_size": 16,
+  "padding_side": "left",
+  "order": "selection",
+  "letter_batches": "same_letters",
+  "rule": "批配置是协议的一部分，全部子集、全部模型相同（D36-1）：每批 batch_size 条（最后一批可以不满）；左填充（src/adapters/batching，三个家族都只实现了左填充）；样本顺序就是 src/e1/tasks.select 给出的固定顺序，不按长度或别的键重排；每批由这个顺序里连续的样本组成；受限字母读数的任务另加一条：字母集合一变就另起一批。批划分在整份样本上一次算好（src/e1/runner.batch_plan）；续跑时没写完的那一批整批重跑，所以续跑与一次跑完的批组成相同。批大小进运行身份（config.yaml），续跑不能换。真模型运行换批大小要显式加 run_e1.py --allow-unfrozen-batch，config.yaml 记 frozen = false。",
+  "basis": "D36-1；RUN-0012、RUN-0013 批量那遍用的就是 16"
+ },
+ "acceptance": {
+  "version": 3,
+  "rule": "开发子集上，(i) 同一批配置（batch_protocol）跑两遍（A1、A2），每个任务的 predictions.jsonl 逐字节相同；(ii) 换一种批组成（B，见 composition_b）再跑一遍，按组比较 A1 与 B 的标题指标（严格读数）：两遍逐样本配对、bootstrap 的 95% CI 落在 [−δ, +δ] 以内（δ 按组的 metric_class 取 delta）。所有任务过 (i)、所有能判的组过 (ii) 才算通过。A1 与 B 之间的指标差及其 CI 记作数值噪声底，写进结果；E3 里小于它的效应不做解读。不再以 batch-1 为参照（D36-1）；三种一致口径（逐位、IoU ≥ 0.9、按判定结果）在 A1 与 B 之间照算，只作参考。",
+  "composition_b": {
+   "batch_size": 12,
+   "rule": "批大小 12，其余同 batch_protocol（顺序不变、左填充、受限字母读数按字母集合分批）。批大小与 16 不同，除了被字母集合变化或末尾截短的批，B 里没有哪一批与 A 的组成相同：每条样本的同批邻居与填充长度都变了。比 16 小，显存不会比正式运行更紧。"
+  },
+  "delta": {"accuracy": 0.02, "iou": 0.02},
+  "take_salt_purpose": "e1_acceptance_v3",
+  "groups": [
+   {"name": "short_text", "tasks": ["refexp_box", "count"], "metric": "accuracy_pooled", "metric_class": "accuracy", "n_min": 300, "take": "all",
+    "rule": "自由生成的短输出（生成上限都是 256）合为一组：定位的 Acc@0.5 与计数的准确率都是逐条 0/1，合并成一个池，统计量是池内 0/1 的均值。定位开发子集 600 句全取；计数开发子集只有 49 条，单独凑不够 300，所以并进这一组。"},
+   {"name": "letter", "tasks": ["rel_depth_nyu", "rel_depth_blink", "spatial_cvbench", "spatial_embspatial"], "metric": "accuracy_pooled", "metric_class": "accuracy", "n_min": 300, "take": "all",
+    "rule": "受限字母读数（1 个 token）的四个任务合为一组：开发子集 250 + 12 + 50 + 50 = 362 条，统计量是池内 0/1 的均值。"},
+   {"name": "polygon", "tasks": ["refexp_poly"], "metric": "cIoU", "metric_class": "iou", "n_min": 500, "take": 500,
+    "rule": "RefCOCO、RefCOCO+、RefCOCOg 三个开发子集共 600 句，取 500 句；统计量 cIoU（ratio of sums）。"},
+   {"name": "grid", "tasks": ["grid16"], "metric": "gIoU", "metric_class": "iou", "n_min": 500, "take": 500,
+    "rule": "同样的 600 句里取 500 句；统计量 gIoU（逐条 IoU 的均值）。"},
+   {"name": "detection", "tasks": ["ovd"], "metric": "F1@0.5", "metric_class": "accuracy", "n_min": null, "take": 500,
+    "rule": "RefCOCO 三个开发子集用到的 COCO train2014 图（去重，按 image id 升序，多于 500 张时取 500 张），GT 是这些图在 instances_train2014 里的全部标注（数据源 coco_train2014_e1dev）；类别表是 COCO 的 80 类。统计量 F1@0.5（逐图 (TP, FP, n_GT)，stats.f1_statistic），按准确率类取 δ。D36 没有给检测的 n。"}
+  ],
+  "take_rule": "组的 take 是整数、且某个任务的开发样本多于它时，按 sha256(salt|<take_salt_purpose>:<组名>|样本 id) 升序取前 take 个（src/data/subsets.seeded_sample），再按原样本顺序排列；take = all 时全取。--limit（只用于调试与 --tiny）在 take 之前截断。",
+  "basis": "D36-1（N15 → 按判定结果比，并改三处）"
  },
  "max_new_tokens_adjustments": [
   {
@@ -148,7 +211,8 @@
   "polygon": "src.parsing.parse_polygons(text, width=W, height=H, axis_order=\"xy\")：0–1000 的 JSON 多边形 → 绝对像素",
   "grid16": "src.grid.codec.parse_grid_text(text, n=GRID_SIZE_E1)：恰好 16 行、每行 16 个 0/1 的块",
   "count": "src.parsing.parse_count(text)：非负整数",
-  "choice": "src.parsing.parse_choice(text, letters) 认选项字母；只有它判 no_choice 时，再用 src.parsing.parse_named_choice(text, 选项原文) 按选项原文匹配，匹配上就取该选项的字母（src/e1/scoring.parse_mcq；匹配途径逐条记录）"
+  "choice": "src.parsing.parse_choice(text, letters) 认选项字母；只有它判 no_choice 时，再用 src.parsing.parse_named_choice(text, 选项原文) 按选项原文匹配，匹配上就取该选项的字母（src/e1/scoring.parse_mcq；匹配途径逐条记录）",
+  "letter_token": "受限字母读数（letter_readout）：生成的唯一一个 token 的 id 按本家族的字母表（src/e1/letters.py）映射回选项字母，不做文本解析（src/e1/scoring.score_letter；途径记 letter_token）"
  },
  "count_question_rule": {
   "version": 1,
@@ -156,7 +220,8 @@
   "rule": "我们没有人工标注，按确定性规则从 caption 取 {object}（src/e1/prompts.count_object）：(1) 分词：英文词（可含连字符、撇号）、数字串、其余单个非空白字符；(2) 计数提及 = 第一个与 GT 计数相等的记号（英文数词不分大小写，或阿拉伯数字串）；(3) 向后取：先跳过紧跟的重复计数与括号（如 \"ten (10)\"、\"five 5\"），若下一个词是 of 再跳过 of 与限定词（the/a/an/these/those/my/our/your/his/her/their/its）；然后连续取纯字母词，遇到停用词（介词、连词、限定词与少数常见动词，列表见代码 COUNT_STOP_WORDS）、非字母记号或已取 4 个词就停；(4) 向后取到的为空时向前取：从计数提及往前跳过 of、set、sets、pack、group、lot、series、collection、block、a、an、the，再连续取纯字母的非停用词（最多 4 个），按原顺序拼；(5) 仍为空（或 caption 里找不到计数）时取 objects。保留 caption 里的原始大小写。每条样本的 object 与所走的规则分支写进 predictions.jsonl，metrics.json 按分支给出条数与准确率。"
  },
  "countbenchqa_questions": {
-  "status": "可选，默认关：run_e1.py --count-questions heuristic（上面的 count_question_rule）。用人工问句要加 --count-questions countbenchqa；项目负责人批准后再改默认（D32-3）。",
+  "status": "默认（D36-2）：run_e1.py 不加参数即用这套人工问句（--count-questions countbenchqa）。上面 count_question_rule 的启发式保留为可选：--count-questions heuristic。",
+  "provenance_note": "这套问句出自 Google 的 PaliGemma（CountBenchQA，big_vision 仓库），Gemma 家族可能见过（D36-2）。报告计数时一律注明。",
   "source": "google-research/big_vision 仓库（Apache-2.0）的 big_vision/datasets/countbenchqa/data/countbench_paired_questions.json，按固定 commit 落地：scripts/data/land_e1.py countbenchqa_questions（commit、URL 与 sha256 钉在 src/data/land/countbenchqa.py 的 SPEC）。",
   "pairing": "文件是 540 条 {\"question\": …} 的列表，第 k 条对应 CountBench 的第 k 行（0 起，即 countbench.jsonl 的 row）。依据：big_vision countbenchqa.py 的 _generate_examples_hf 按行号把问句并进 HF 打包版（df['question'] = df_question）。",
   "question_part": "How many {object} are there in the image?",
@@ -311,7 +376,7 @@
    }
   },
   "count": {
-   "description": "计数：CountBench（491 张有图，去掉开发子集 49 张）。标题准确率，按 GT 计数值分档。问句按 count_question_rule 由 caption 确定性生成（默认）；可选改用 countbenchqa_questions 的人工问句（--count-questions countbenchqa，默认关）。",
+   "description": "计数：CountBench（491 张有图，去掉开发子集 49 张）。标题准确率，按 GT 计数值分档。问句默认用 countbenchqa_questions 的人工问句（D36-2；出自 PaliGemma，Gemma 家族可能见过）；可选改回 count_question_rule 的启发式（--count-questions heuristic）。",
    "placeholders": {"object": "count_question_rule 从 caption 取出的计数对象"},
    "families": {
     "qwen3.5": {
@@ -347,7 +412,7 @@
    }
   },
   "rel_depth_nyu": {
-   "description": "相对深度：NYUv2 Eigen test 上构造的点对（每图 5 对，带 A、B 环形标记的渲染图）。标题点对准确率。",
+   "description": "相对深度：NYUv2 Eigen test 上构造的点对（每图 5 对，带 A、B 环形标记的渲染图）。标题点对准确率（受限字母读数，letter_readout）。",
    "placeholders": {},
    "choices": ["A is closer", "B is closer"],
    "families": {
@@ -384,7 +449,7 @@
    }
   },
   "rel_depth_blink": {
-   "description": "相对深度：BLINK Relative_Depth val（去掉开发子集 12 条）。标题准确率。",
+   "description": "相对深度：BLINK Relative_Depth val（去掉开发子集 12 条）。标题准确率（受限字母读数，letter_readout）。",
    "placeholders": {"prompt": "BLINK 每题自带的 prompt 字段（原样）"},
    "families": {
     "qwen3.5": {
@@ -420,7 +485,7 @@
    }
   },
   "spatial_cvbench": {
-   "description": "空间问答：CV-Bench test（去掉开发子集）。标题准确率，按 2D/3D 分列，另报官方的合成准确率。",
+   "description": "空间问答：CV-Bench test（去掉开发子集）。标题准确率（受限字母读数，letter_readout），按 2D/3D 分列，另报官方的合成准确率。",
    "placeholders": {"prompt": "CV-Bench 每题自带的 prompt 字段（原样）"},
    "families": {
     "qwen3.5": {
@@ -456,7 +521,7 @@
    }
   },
   "spatial_embspatial": {
-   "description": "空间问答：EmbSpatial-Bench test（去掉开发子集）。标题准确率，按关系与数据源分列。",
+   "description": "空间问答：EmbSpatial-Bench test（去掉开发子集）。标题准确率（受限字母读数，letter_readout），按关系与数据源分列。",
    "placeholders": {"question": "question 字段（原样）", "options": "answer_options 按 option_format 逐行列出"},
    "option_format": "{letter}. {text}",
    "option_joiner": "\n",

@@ -1,5 +1,14 @@
-"""批处理验收（D28-5；DEV-0014 任务书 §3，DEV-0015 §2）：开发子集上，同一模型与任务，逐条（batch = 1，走 generate）跑一遍、
-批量跑一遍，比较两遍的 predictions.jsonl。
+"""批处理验收。
+
+v3（DEV-0017 §3；D36-1；协议写在 configs/e1_prompts.json 的 acceptance 与 batch_protocol；scripts/run_e1.py --acceptance）：
+开发子集上，A1、A2 = 冻结的批配置跑两遍，B = 换一种批组成（composition_b）跑一遍。
+- (i) rerun_identical：每个任务 A1 与 A2 的 predictions.jsonl 逐字节相同（predictions.jsonl 不含墙钟）。
+- (ii) noise_floor：任务按输出类型合成组（acceptance.groups），组内样本在 A1 与 B 之间逐条配对，统计量（池内 0/1 均值、cIoU、
+  gIoU、F1@0.5）之差的配对 bootstrap 95% CI 落在 [−δ, +δ] 以内。这个差与 CI 就是数值噪声底。
+- 通过 = 全部任务过 (i) 且能判的组全部过 (ii)；不再以 batch-1 为参照。下面 v2 的三种一致口径在 A1 与 B 之间照算，只作参考。
+
+v2（D28-5；DEV-0014 任务书 §3，DEV-0015 §2；保留作 v3 的参考列）：开发子集上，同一模型与任务，逐条（batch = 1，走 generate）
+跑一遍、批量跑一遍，比较两遍的 predictions.jsonl。
 
 报告（每个任务一行）：
 - 解析后答案的一致率，三种口径都算（N15；规则见各 _agree_* 函数与 AGREEMENT_RULES）：
@@ -18,14 +27,17 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+import hashlib
+from pathlib import Path
+
 from src.constants import BOX_ACC_IOU_THRESHOLD, DETECTION_OPERATING_IOU
 from src.data.records import Sample
-from src.e1.scoring import ovd_gt, per_sample_metric
+from src.data.subsets import seeded_sample
+from src.e1.scoring import ovd_per_image_counts, per_sample_metric
 from src.executors.geometry import box_iou
 from src.executors.raster import polygons_to_mask
 from src.grid.codec import grid_to_mask
-from src.metrics.detection import operating_point
-from src.stats import bootstrap_ci, paired_bootstrap_ci
+from src.stats import bootstrap_ci, f1_statistic, paired_bootstrap_ci, ratio_of_sums
 
 AGREEMENT_MIN = 0.98  # D28-5
 AGREE_MASK_IOU = 0.9  # 多边形与网格：两遍解析出的 mask（原图尺寸）IoU ≥ 此值算一致
@@ -42,8 +54,8 @@ AGREEMENT_RULES = {
                f"检测：每张图在 IoU {DETECTION_OPERATING_IOU} 下的 TP 与 FP 计数相同（要 GT；没有 GT 记 null）；"
                f"计数、点对、多选：值相等（两遍都失败 → 一致，一遍失败一遍成功 → 不一致）；多边形、网格：mask IoU ≥ {AGREE_MASK_IOU}",
 }
-OUTCOME_NO_GT_NOTE = ("检测的开发子集（RefCOCO 开发子集的图）没有 GT：落地的 refcoco_unc.json 只含被指代的标注，不是这些图的全部 "
-                      "COCO 标注（src/data/land/refcoco.build_eval_json），算不出每张图的 TP/FP")
+OUTCOME_NO_GT_NOTE = ("检测的开发核对（RefCOCO 开发子集的图）没有 GT：这些图在 instances_train2014 里的全部标注"
+                      "（coco_train2014_e1dev，DEV-0017）没有落地，落地的 refcoco 文件只含被指代的标注，算不出每张图的 TP/FP")
 
 
 def _mask(task: str, rec: Mapping[str, Any]) -> np.ndarray:
@@ -113,27 +125,8 @@ def answers_agree_iou(task: str, a: Mapping[str, Any], b: Mapping[str, Any]) -> 
 
 
 def _ovd_tp_fp(samples: Sequence[Sample], recs: Sequence[Mapping[str, Any]]) -> list[tuple[int, int]]:
-    """每张图在 IoU = DETECTION_OPERATING_IOU 下的 (TP, FP)，与样本同序。按数据集（source）分组建 GT（与 metrics 同一份
-    scoring.ovd_gt），operating_point 与标题 F1@0.5 同一个函数；解析失败的图没有预测（TP = FP = 0）。"""
-    out: dict[str, tuple[int, int]] = {}
-    by_src: dict[str, list[int]] = {}
-    for k, s in enumerate(samples):
-        by_src.setdefault(s.source, []).append(k)
-    for idx in by_src.values():
-        ss, rs = [samples[k] for k in idx], [recs[k] for k in idx]
-        gt = ovd_gt(ss)
-        preds, xywh = [], []
-        for s, r in zip(ss, rs):
-            if r["parsed"] is None:
-                continue
-            for box, cid in zip(r["parsed"]["boxes"], r["parsed"]["category_ids"]):
-                x0, y0, x1, y1 = box
-                preds.append({"image_id": int(s.fields["image_id"]), "category_id": int(cid), "bbox_xyxy": box})
-                xywh.append([x0, y0, x1 - x0, y1 - y0])
-        per = {row[0]: (int(row[1]), int(row[2])) for row in operating_point(gt, preds, xywh, DETECTION_OPERATING_IOU)["per_image"]}
-        for s in ss:
-            out[s.id] = per[int(s.fields["image_id"])]
-    return [out[s.id] for s in samples]
+    """每张图在 IoU = DETECTION_OPERATING_IOU 下的 (TP, FP)，与样本同序（scoring.ovd_per_image_counts 去掉 n_GT）。"""
+    return [(tp, fp) for tp, fp, _ in ovd_per_image_counts(samples, recs)]
 
 
 def agreement_flags(task: str, mode: str, samples: Sequence[Sample], single: Sequence[Mapping[str, Any]],
@@ -184,7 +177,12 @@ def compare(task: str, samples: Sequence[Sample], single: Sequence[Mapping[str, 
     }
     spec = per_sample_metric(task, single) if (has_gt and n) else None
     if spec is None:
-        out["metric_note"] = "没有 GT（检测的开发子集）或空集合：只比一致率与 raw_text" if n else "空集合"
+        if not n:
+            out["metric_note"] = "空集合"
+        elif task == "ovd" and has_gt:
+            out["metric_note"] = "检测的指标差按图另算（F1@0.5：验收 v3 的 reference_columns 与 detection 组）"
+        else:
+            out["metric_note"] = "没有 GT（检测的开发子集）或空集合：只比一致率与 raw_text"
     else:
         name, a, stat = spec
         _, b, _ = per_sample_metric(task, batched)
@@ -277,7 +275,194 @@ def summary_markdown(model_key: str, rows: Sequence[Mapping[str, Any]], *, heade
     return "\n".join(lines) + "\n"
 
 
+# ---------------------------------------------------------------------------
+# v3（DEV-0017；D36-1）：冻结批配置重跑逐位相同 + 两种批组成之间 ±δ（数值噪声底）
+# ---------------------------------------------------------------------------
+
+PASSES_V3: tuple[str, ...] = ("A1", "A2", "B")  # A1、A2：冻结的批配置；B：composition_b
+
+
+def group_of(task: str, protocol: Mapping[str, Any]) -> dict[str, Any]:
+    """任务所属的组（acceptance.groups；配置校验保证每个任务恰好在一组里）。"""
+    for g in protocol["groups"]:
+        if task in g["tasks"]:
+            return dict(g)
+    raise KeyError(f"{task} 不在任何验收组里")
+
+
+def take_samples(task: str, samples: Sequence[Sample], protocol: Mapping[str, Any]) -> tuple[list[Sample], dict[str, Any]]:
+    """按组的 take 取样本（acceptance.take_rule）：take 是整数且样本多于它时，按 sha256(salt|<purpose>:<组名>|id) 升序取前
+    take 个（src/data/subsets.seeded_sample），保持原样本顺序；否则全取。返回 (样本, 记录)。"""
+    g = group_of(task, protocol)
+    st = {"group": g["name"], "take": g["take"], "n_before": len(samples)}
+    if g["take"] == "all" or len(samples) <= g["take"]:
+        st["n"] = len(samples)
+        return list(samples), st
+    purpose = f"{protocol['take_salt_purpose']}:{g['name']}"
+    chosen = set(seeded_sample([s.id for s in samples], g["take"], purpose))
+    out = [s for s in samples if s.id in chosen]
+    st.update(n=len(out), purpose=purpose)
+    return out, st
+
+
+def file_sha256(path: str | Path) -> str | None:
+    p = Path(path)
+    return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else None
+
+
+def rerun_identical(task: str, a1: Sequence[Mapping[str, Any]], a2: Sequence[Mapping[str, Any]], *,
+                    sha_a1: str | None = None, sha_a2: str | None = None) -> dict[str, Any]:
+    """(i)：同一批配置的两遍逐位相同。逐条比整条记录（predictions.jsonl 的一行，不含墙钟）；给了两个文件的 sha256 时
+    还要求文件逐字节相同。"""
+    if [r["id"] for r in a1] != [r["id"] for r in a2]:
+        raise ValueError(f"{task}：A1 与 A2 的样本不同或不同序")
+    diff = [x["id"] for x, y in zip(a1, a2) if x != y]
+    same_file = None if sha_a1 is None or sha_a2 is None else sha_a1 == sha_a2
+    identical = not diff and same_file is not False
+    return {"task": task, "n": len(a1), "n_diff": len(diff), "diff_ids": diff[:50],
+            "raw_text_diff": sum(1 for x, y in zip(a1, a2) if x["raw_text"] != y["raw_text"]),
+            "predictions_sha256": {"A1": sha_a1, "A2": sha_a2}, "file_identical": same_file, "identical": identical}
+
+
+def group_values(group: Mapping[str, Any], parts: Sequence[tuple[str, Sequence[Sample], Sequence[Mapping[str, Any]]]]):
+    """一组的逐样本值与统计量：parts = [(任务, 样本, 记录)]（组内各任务按组定义的顺序拼接）。
+    accuracy_pooled：各任务逐条 0/1 拼成一列，均值；cIoU：(交, 并)，ratio_of_sums；gIoU：逐条 IoU，均值；
+    F1@0.5：逐图 (TP, FP, n_GT)，f1_statistic。返回 (逐样本数组, statistic；None = 均值)。"""
+    metric = group["metric"]
+    if metric == "accuracy_pooled":
+        arrs = [per_sample_metric(t, rs)[1] for t, _, rs in parts]
+        return (np.concatenate(arrs) if arrs else np.zeros(0)), None
+    if len(parts) != 1:
+        raise ValueError(f"组 {group['name']} 的统计量 {metric} 只用于单个任务")
+    task, ss, rs = parts[0]
+    if metric == "cIoU":
+        return per_sample_metric(task, rs)[1], ratio_of_sums
+    if metric == "gIoU":
+        return per_sample_metric(task, rs)[1], None
+    if metric == "F1@0.5":
+        return np.asarray(ovd_per_image_counts(ss, rs), dtype=np.float64).reshape(-1, 3), f1_statistic
+    raise ValueError(f"未知的组统计量 {metric!r}")
+
+
+def noise_floor(group: Mapping[str, Any], delta: float, parts_a: Sequence[tuple[str, Sequence[Sample], Sequence[Mapping]]],
+                parts_b: Sequence[tuple[str, Sequence[Sample], Sequence[Mapping]]]) -> dict[str, Any]:
+    """(ii)：一组在 A1 与 B 之间的指标差（A1 − B）与配对 bootstrap 95% CI；CI ⊂ [−δ, +δ] 即通过。
+    样本在两遍之间按 id 对齐（同一份选择，只有批组成不同）。空组或统计量无定义时 pass 为 null，写明原因。"""
+    for (ta, sa, ra), (tb, sb, rb) in zip(parts_a, parts_b):
+        if ta != tb or [r["id"] for r in ra] != [r["id"] for r in rb] or [s.id for s in sa] != [r["id"] for r in ra]:
+            raise ValueError(f"组 {group['name']}：A1 与 B 的样本不同或不同序（{ta}）")
+    n = sum(len(ra) for _, _, ra in parts_a)
+    n_min = group.get("n_min")
+    out: dict[str, Any] = {"group": group["name"], "tasks": [t for t, _, _ in parts_a], "metric": group["metric"],
+                           "metric_class": group["metric_class"], "delta": delta, "n": n, "n_min": n_min,
+                           "n_below_min": None if n_min is None else n < n_min,
+                           "metric_a1": None, "metric_b": None, "diff": None, "diff_ci": None, "within_delta": None,
+                           "pass": None, "note": None}
+    if n == 0:
+        out["note"] = "空组"
+        return out
+    a, stat = group_values(group, parts_a)
+    b, _ = group_values(group, parts_b)
+    f = stat if stat is not None else (lambda x: float(np.mean(x)))
+    out["metric_a1"], out["metric_b"] = float(f(a)), float(f(b))
+    if not (np.isfinite(out["metric_a1"]) and np.isfinite(out["metric_b"])):
+        out["note"] = "统计量无定义（如 cIoU 的并为 0、检测没有 GT 框）"
+        out["metric_a1"] = out["metric_a1"] if np.isfinite(out["metric_a1"]) else None
+        out["metric_b"] = out["metric_b"] if np.isfinite(out["metric_b"]) else None
+        return out
+    out["diff"] = out["metric_a1"] - out["metric_b"]
+    try:
+        ci = paired_bootstrap_ci(a, b, statistic=stat)
+    except ValueError as e:
+        out["note"] = f"CI 无定义：{e}"
+        return out
+    out["diff_ci"] = _ci(ci)
+    out["within_delta"] = bool(-delta <= ci.low and ci.high <= delta)
+    out["pass"] = out["within_delta"]
+    return out
+
+
+def reference_columns(task: str, samples: Sequence[Sample], a1: Sequence[Mapping[str, Any]], b: Sequence[Mapping[str, Any]],
+                      *, has_gt: bool, batch_size_b: int) -> dict[str, Any]:
+    """A1 与 B 之间的参考列（不参与判定）：三种一致口径的一致率、raw_text 逐字相同的比例、本任务标题指标之差与配对 CI。"""
+    row = compare(task, samples, a1, b, has_gt=has_gt, batch_size=batch_size_b)
+    out = {"agreement_rate": {m: row["agreement_by_mode"][m]["rate"] for m in AGREEMENTS},
+           "raw_text_equal_rate": row["raw_text_equal_rate"], "metric": row["metric"], "metric_a1": row["metric_single"],
+           "metric_b": row["metric_batched"], "diff": row["diff"], "diff_ci": row["diff_ci"], "note": row["metric_note"]}
+    if task == "ovd" and has_gt and samples:  # compare 不算检测的指标差；这里按图算 F1@0.5（与 detection 组同一个统计量）
+        nf = noise_floor({"name": "ovd", "metric": "F1@0.5", "metric_class": "accuracy", "n_min": None}, 0.0,
+                         [(task, samples, a1)], [(task, samples, b)])
+        out.update(metric="F1@0.5", metric_a1=nf["metric_a1"], metric_b=nf["metric_b"], diff=nf["diff"],
+                   diff_ci=nf["diff_ci"], note=nf["note"])
+    return out
+
+
+def overall_v3(task_rows: Sequence[Mapping[str, Any]], group_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """总判定：(i) 全部任务逐位相同；(ii) 能判的组全部在 ±δ 以内。没有一组能判时 all_pass 为 null。"""
+    rerun_ok = all(r["rerun"]["identical"] for r in task_rows)
+    judged = [g for g in group_rows if g["pass"] is not None]
+    groups_ok = all(g["pass"] for g in judged)
+    return {"all_pass": (rerun_ok and groups_ok) if judged else None, "rerun_all_identical": rerun_ok,
+            "rerun_not_identical": [r["task"] for r in task_rows if not r["rerun"]["identical"]],
+            "groups_judged": [g["group"] for g in judged], "groups_failed": [g["group"] for g in judged if not g["pass"]],
+            "groups_not_evaluated": [g["group"] for g in group_rows if g["pass"] is None],
+            "groups_below_n_min": [g["group"] for g in group_rows if g["n_below_min"]]}
+
+
+def summary_markdown_v3(model_key: str, task_rows: Sequence[Mapping[str, Any]], group_rows: Sequence[Mapping[str, Any]], *,
+                        header: Mapping[str, Any], protocol: Mapping[str, Any], batch_protocol: Mapping[str, Any]) -> str:
+    o = overall_v3(task_rows, group_rows)
+    lines = [f"# 批处理验收 v3 · {model_key}", "",
+             f"- 规则（configs/e1_prompts.json 的 acceptance，v{protocol['version']}）：{protocol['rule']}",
+             f"- 本次 A1、A2：batch_size = {header['batch_size_a']}，{batch_protocol['padding_side']} 填充，"
+             f"顺序 {batch_protocol['order']}，{batch_protocol['letter_batches']}；B：batch_size = {header['batch_size_b']}。"
+             f"{'是' if header['frozen'] else '不是'}协议的冻结值（A {batch_protocol['batch_size']}、"
+             f"B {protocol['composition_b']['batch_size']}）",
+             f"- composition_b 的规则：{protocol['composition_b']['rule']}",
+             f"- δ：{protocol['delta']}；组与合并规则见下表与配置的 groups；{protocol['take_rule']}",
+             f"- {dict(header)}", "",
+             "## 判定", "",
+             f"- all_pass：**{_f(o['all_pass'])}**；(i) 重跑逐位相同：{_f(o['rerun_all_identical'])}"
+             f"（不同的任务：{'、'.join(o['rerun_not_identical']) or '—'}）；(ii) 不通过的组：{'、'.join(o['groups_failed']) or '—'}；"
+             f"不判的组：{'、'.join(o['groups_not_evaluated']) or '—'}；n 低于 n_min 的组：{'、'.join(o['groups_below_n_min']) or '—'}",
+             "", "## 数值噪声底（A1 与 B 之间，按组）", "",
+             "| 组 | 任务 | 统计量 | n | n_min | A1 | B | 差（A1 − B） | 配对差 95% CI | δ | CI ⊂ ±δ |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
+    for g in group_rows:
+        ci = g["diff_ci"]
+        ci_s = f"[{_f(ci['low'])}, {_f(ci['high'])}]" if ci else "—"
+        lines.append(f"| {g['group']} | {'、'.join(g['tasks'])} | {g['metric']} | {g['n']} | {_f(g['n_min'])} | "
+                     f"{_f(g['metric_a1'])} | {_f(g['metric_b'])} | {_f(g['diff'])} | {ci_s} | {_f(g['delta'])} | "
+                     f"{_f(g['within_delta'])} |")
+    head = ["任务", "组", "n", "(i) A1 = A2 逐位", "不同的条数"] + [f"{AGREEMENT_LABELS[m]} 一致率（A1 vs B）" for m in AGREEMENTS]
+    head += ["raw_text 逐字相同（A1 vs B）", "指标", "A1", "B", "差", "配对差 95% CI"]
+    lines += ["", "## 逐任务（(i) 的判定；A1 与 B 之间的一致率与指标差只作参考）", "",
+              "| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    for r in task_rows:
+        ref, ci = r["reference"], r["reference"]["diff_ci"]
+        cells = [r["task"], r["group"], str(r["n"]), _f(r["rerun"]["identical"]), str(r["rerun"]["n_diff"])]
+        cells += [_f(ref["agreement_rate"][m]) for m in AGREEMENTS]
+        cells += [_f(ref["raw_text_equal_rate"]), ref["metric"] or "—", _f(ref["metric_a1"]), _f(ref["metric_b"]),
+                  _f(ref["diff"]), f"[{_f(ci['low'])}, {_f(ci['high'])}]" if ci else "—"]
+        lines.append("| " + " | ".join(cells) + " |")
+    notes = [f"- 组 {g['group']}：{g['note']}" for g in group_rows if g["note"]]
+    notes += [f"- {r['task']}：{r['reference']['note']}" for r in task_rows if r["reference"]["note"]]
+    if notes:
+        lines += ["", "注："] + notes
+    return "\n".join(lines) + "\n"
+
+
 __all__ = [
+    "PASSES_V3",
+    "file_sha256",
+    "group_of",
+    "group_values",
+    "noise_floor",
+    "overall_v3",
+    "reference_columns",
+    "rerun_identical",
+    "summary_markdown_v3",
+    "take_samples",
     "AGREEMENTS",
     "AGREEMENT_LABELS",
     "AGREEMENT_MIN",

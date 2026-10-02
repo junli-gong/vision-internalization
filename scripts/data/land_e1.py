@@ -5,8 +5,10 @@
                                    [--workers 8] [--limit N] [--dry-run]
 
 源：refcoco、coco_val2017、odinw13、countbench、nyuv2、blink_reldepth、cvbench、embspatial、all（按此顺序逐个）。
-另有可选的源 countbenchqa_questions（DEV-0015：big_vision 的 CountBench 人工问句，31 KB；E1 默认不用它），只能单独点名，
-不在 all 里。
+另有两个可选的源，只能单独点名，不在 all 里：
+- countbenchqa_questions（DEV-0015：big_vision 的 CountBench 人工问句，31 KB；D36-2 起是 E1 计数的默认问句）；
+- coco_train2014_e1dev（DEV-0017：RefCOCO 开发子集的图在 COCO instances_train2014 里的全部标注，检测的开发核对与验收用；
+  要先落地 refcoco；Range 只取 zip 里的 instances_train2014.json 成员，约 107 MB 进 TMPDIR，--root 里只写子集标注）。
 
 - 可断点续传、幂等：已落地且 sha256 与上次清单相符的文件跳过；下载先写 .part，续传用 Range。
 - 每个源写 <root>/<源>/MANIFEST.json（来源 URL 与 revision、每个文件的 sha256 与字节数、许可原文、落地时间、脚本的
@@ -30,7 +32,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.data.land import coco, countbenchqa, hfbench, nyuv2, odinw, refcoco  # noqa: E402
+from src.data.land import coco, coco_train2014_dev, countbenchqa, hfbench, nyuv2, odinw, refcoco  # noqa: E402
 from src.data.land.common import DryRun, LandContext  # noqa: E402
 from src.data.land.manifest import BudgetExceeded, DiskRedLine, read_manifest  # noqa: E402
 from src.data.land.net import MAX_CONCURRENCY  # noqa: E402
@@ -45,9 +47,10 @@ LANDERS = {
     "cvbench": hfbench.land_cvbench,
     "embspatial": hfbench.land_embspatial,
 }
-# 可选的源：只能单独点名，不在 all 里（DEV-0015 §4：CountBench 人工问句默认不用，项目负责人批准后再定）
+# 可选的源：只能单独点名，不在 all 里（DEV-0015 §4 的 CountBench 人工问句；DEV-0017 §6 的检测开发图标注，依赖 refcoco）
 OPTIONAL_LANDERS = {
     "countbenchqa_questions": countbenchqa.land,
+    "coco_train2014_e1dev": coco_train2014_dev.land,
 }
 
 

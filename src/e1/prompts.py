@@ -4,9 +4,16 @@
 这里只读它；模板之外的规则（CountBench 问句的对象怎么取、多选题选项怎么排）写在本模块，配置的 count_question_rule 是它的
 说明文字，tests 钉住两者一致。渲染后去掉首尾空白（Qwen 的聊天模板会 trim 整段内容）。
 
-CountBench 的问句有两个来源（DEV-0015 §4；run_e1.py --count-questions）：heuristic（默认，count_question_rule 从 caption 取对象）
-与 countbenchqa（big_vision 的人工问句，配置的 countbenchqa_questions）。用哪个由样本决定：src/e1/tasks.select 在
-countbenchqa 模式下把问句放进 fields[COUNTBENCHQA_FIELD]，render 见到它就用整句问句（规则见 countbenchqa_instruction）。
+CountBench 的问句有两个来源（DEV-0015 §4；run_e1.py --count-questions）：countbenchqa（默认，D36-2：big_vision 的人工问句，
+配置的 countbenchqa_questions）与 heuristic（可选，count_question_rule 从 caption 取对象）。用哪个由样本决定：
+src/e1/tasks.select 在 countbenchqa 模式下把问句放进 fields[COUNTBENCHQA_FIELD]，render 见到它就用整句问句
+（规则见 countbenchqa_instruction）。
+
+协议 v2（DEV-0017，D36）在配置里另有五节，结构由 validate 核对，规则文字写在配置里：
+- letter_readout：选择题与点对任务在 eval、dev 上的受限字母读数（readout、max_new_tokens、letter_spellings；实现见
+  src/e1/letters.py）；自由作答的诊断用 free 子集（think:<任务> 的 id，关思考）。
+- report_columns、refusal_by_person：三列（严格读数、有效率、条件读数）与按人物 / 非人物分列的拒答诊断（src/e1/scoring）。
+- batch_protocol：冻结的批配置（批大小、左填充、样本顺序、按字母集合分批）；acceptance：批处理验收 v3（src/e1/acceptance）。
 """
 
 from __future__ import annotations
@@ -25,7 +32,7 @@ from src.parsing.answers import NUMBER_WORDS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROMPTS_PATH = REPO_ROOT / "configs" / "e1_prompts.json"
-PROMPTS_SCHEMA_VERSION = 1
+PROMPTS_SCHEMA_VERSION = 2  # DEV-0017：加了 letter_readout、report_columns、refusal_by_person、batch_protocol、acceptance
 
 # 9 个任务（键名与 src/data/eval_subsets.THINK_TASKS 相同）
 TASKS: tuple[str, ...] = (
@@ -39,7 +46,8 @@ TASKS: tuple[str, ...] = (
     "spatial_cvbench",
     "spatial_embspatial",
 )
-PARSERS: tuple[str, ...] = ("one_box", "boxes", "polygon", "grid16", "count", "choice")
+PARSERS: tuple[str, ...] = ("one_box", "boxes", "polygon", "grid16", "count", "choice", "letter_token")
+ENTRY_PARSERS: tuple[str, ...] = PARSERS[:-1]  # 任务条目里的 parse（自由作答）；letter_token 只由 letter_readout 选用
 PROVENANCES: tuple[str, ...] = (
     "official_doc",  # 本家族官方文档的原文
     "predecessor_cookbook",  # 前代模型的官方 cookbook（Qwen3-VL → Qwen3.5）
@@ -51,8 +59,15 @@ PROVENANCES: tuple[str, ...] = (
     "unified_benchmark_wording",  # 统一提示，措辞取自别的 benchmark（非原生）
 )
 NATIVE_PROVENANCES = frozenset({"official_doc", "predecessor_cookbook", "benchmark"})
-SUBSET_KINDS: tuple[str, ...] = ("eval", "dev", "think", "think8192", "extra")
+SUBSET_KINDS: tuple[str, ...] = ("eval", "dev", "think", "think8192", "extra", "free")
 THINK_SUBSETS: tuple[str, ...] = ("think", "think8192")
+FREE_SUBSET = "free"  # 选择题与点对任务的自由作答诊断（D36-6）：think:<任务> 的 id，关思考，上限取任务条目的 max_new_tokens
+READOUTS: tuple[str, ...] = ("text", "letter")  # text = 自由生成后解析；letter = 受限字母读数（letter_readout）
+PADDING_SIDES: tuple[str, ...] = ("left",)  # src/adapters/batching 只实现了左填充
+BATCH_ORDERS: tuple[str, ...] = ("selection",)  # 样本顺序 = src/e1/tasks.select 的固定顺序
+LETTER_BATCHES: tuple[str, ...] = ("same_letters",)  # 受限字母读数：字母集合一变就另起一批
+ACCEPTANCE_VERSION = 3
+ACCEPTANCE_METRICS: tuple[str, ...] = ("accuracy_pooled", "cIoU", "gIoU", "F1@0.5")
 REQUIRED_FAMILY_FIELDS: tuple[str, ...] = (
     "template",
     "native",
@@ -100,10 +115,15 @@ def validate(cfg: Mapping[str, Any]) -> None:
     tm = gen.get("think_max_new_tokens", {})
     if set(tm) != set(THINK_SUBSETS) or any(isinstance(v, bool) or not isinstance(v, int) or v < 1 for v in tm.values()):
         bad.append(f"generation.think_max_new_tokens 必须对 {THINK_SUBSETS} 各给一个正整数")
+    if not isinstance(gen.get("free_note"), str):
+        bad.append("generation.free_note 必须说明 free 子集")
+    bad += _validate_protocol(cfg)
     if not isinstance(cfg.get("max_new_tokens_adjustments"), list):
         bad.append("max_new_tokens_adjustments 必须是列表（调整记录）")
     if set(cfg.get("parse_functions", {})) != set(PARSERS):
         bad.append(f"parse_functions 必须恰好说明 {PARSERS}")
+    if not str(cfg.get("countbenchqa_questions", {}).get("provenance_note", "")).strip():
+        bad.append("countbenchqa_questions.provenance_note 必须注明问句的出处（D36-2）")
     if "rule" not in cfg.get("count_question_rule", {}) or cfg["count_question_rule"].get("version") != COUNT_RULE_VERSION:
         bad.append(f"count_question_rule 必须有 rule，version = {COUNT_RULE_VERSION}（src/e1/prompts.py）")
     qpart = cfg.get("countbenchqa_questions", {}).get("question_part")
@@ -139,8 +159,8 @@ def validate(cfg: Mapping[str, Any]) -> None:
             n = e["max_new_tokens"]
             if isinstance(n, bool) or not isinstance(n, int) or n < 1:
                 bad.append(f"{where}: max_new_tokens 必须是正整数")
-            if e["parse"] not in PARSERS:
-                bad.append(f"{where}: parse {e['parse']!r} 不在 {PARSERS}")
+            if e["parse"] not in ENTRY_PARSERS:
+                bad.append(f"{where}: parse {e['parse']!r} 不在 {ENTRY_PARSERS}")
             if isinstance(e["template"], str):
                 try:
                     used = _placeholders(e["template"])
@@ -161,6 +181,79 @@ def validate(cfg: Mapping[str, Any]) -> None:
             bad.append(f"{t}: 要给两个选项原文 choices（选项原文匹配用）")
     if bad:
         raise PromptConfigError("提示配置不合格：\n- " + "\n- ".join(bad))
+
+
+def _posint(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 1
+
+
+def _validate_protocol(cfg: Mapping[str, Any]) -> list[str]:
+    """协议 v2 的五节（DEV-0017）：letter_readout、report_columns、refusal_by_person、batch_protocol、acceptance。"""
+    bad: list[str] = []
+    tasks = cfg.get("tasks", {})
+    lr = cfg.get("letter_readout", {})
+    lt = lr.get("tasks", [])
+    if not lt or not set(lt) <= set(TASKS) or len(set(lt)) != len(lt):
+        bad.append("letter_readout.tasks 必须是不重复的任务名")
+    for t in lt:
+        for fam, e in tasks.get(t, {}).get("families", {}).items():
+            if e.get("parse") != "choice":
+                bad.append(f"letter_readout：{t}/{fam} 的自由作答解析必须是 choice")
+    subs = lr.get("subsets", [])
+    if not subs or not set(subs) <= set(SUBSET_KINDS) - set(THINK_SUBSETS) - {FREE_SUBSET}:
+        bad.append("letter_readout.subsets 只能取关思考、非 free 的子集")
+    if lr.get("max_new_tokens") != 1:
+        bad.append("letter_readout.max_new_tokens 必须是 1")
+    sp = lr.get("spellings", [])
+    if (not isinstance(sp, list) or not sp or len(set(sp)) != len(sp)
+            or any(not isinstance(x, str) or x.count("{letter}") != 1 or _placeholders(x) != {"letter"} for x in sp)):
+        bad.append("letter_readout.spellings 必须是不重复、各含一个 {letter} 的写法")
+    if lr.get("parse") != "letter_token":
+        bad.append("letter_readout.parse 必须是 letter_token")
+    for k in ("rule", "free_form_diagnostic", "basis"):
+        if not str(lr.get(k, "")).strip():
+            bad.append(f"letter_readout.{k} 不能为空")
+    rc = cfg.get("report_columns", {})
+    if any(not str(rc.get(k, "")).strip() for k in ("strict", "valid_rate", "conditional")):
+        bad.append("report_columns 必须定义 strict、valid_rate、conditional")
+    rp = cfg.get("refusal_by_person", {})
+    if not rp.get("tasks") or not set(rp["tasks"]) <= {"refexp_box", "refexp_poly", "grid16"} or not rp.get("person_category"):
+        bad.append("refusal_by_person 要给 RefCOCO 系的任务与 person_category")
+    bp = cfg.get("batch_protocol", {})
+    if not _posint(bp.get("batch_size")):
+        bad.append("batch_protocol.batch_size 必须是正整数")
+    if (bp.get("padding_side") not in PADDING_SIDES or bp.get("order") not in BATCH_ORDERS
+            or bp.get("letter_batches") not in LETTER_BATCHES):
+        bad.append(f"batch_protocol：padding_side ∈ {PADDING_SIDES}，order ∈ {BATCH_ORDERS}，letter_batches ∈ {LETTER_BATCHES}")
+    ac = cfg.get("acceptance", {})
+    if ac.get("version") != ACCEPTANCE_VERSION:
+        bad.append(f"acceptance.version 必须是 {ACCEPTANCE_VERSION}")
+    bb = ac.get("composition_b", {}).get("batch_size")
+    if not _posint(bb) or bb == bp.get("batch_size"):
+        bad.append("acceptance.composition_b.batch_size 必须是正整数，且与 batch_protocol.batch_size 不同")
+    delta = ac.get("delta", {})
+    if set(delta) != {"accuracy", "iou"} or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 < v < 1
+                                                for v in delta.values()):
+        bad.append("acceptance.delta 必须给 accuracy 与 iou 两个 (0, 1) 之间的数")
+    groups = ac.get("groups", [])
+    covered = [t for g in groups for t in g.get("tasks", [])]
+    if sorted(covered) != sorted(TASKS):
+        bad.append("acceptance.groups 必须恰好覆盖每个任务一次")
+    if len({g.get("name") for g in groups}) != len(groups):
+        bad.append("acceptance.groups 的组名不能重复")
+    for g in groups:
+        if g.get("metric") not in ACCEPTANCE_METRICS or g.get("metric_class") not in delta:
+            bad.append(f"acceptance 组 {g.get('name')!r}：metric ∈ {ACCEPTANCE_METRICS}，metric_class ∈ delta 的键")
+        if not (g.get("take") == "all" or _posint(g.get("take"))):
+            bad.append(f"acceptance 组 {g.get('name')!r}：take 必须是 all 或正整数")
+        if g.get("n_min") is not None and not _posint(g.get("n_min")):
+            bad.append(f"acceptance 组 {g.get('name')!r}：n_min 必须是正整数或 null")
+        multi = {"refexp_poly", "grid16", "ovd"} & set(g.get("tasks", []))
+        if multi and (g.get("metric") == "accuracy_pooled" or len(g.get("tasks", [])) != 1):
+            bad.append(f"acceptance 组 {g.get('name')!r}：多边形、网格、检测各自单独成组，不进 0/1 的池")
+    if not str(ac.get("take_salt_purpose", "")).strip():
+        bad.append("acceptance.take_salt_purpose 不能为空")
+    return bad
 
 
 @dataclass(frozen=True)
@@ -193,15 +286,43 @@ class PromptConfig:
     def enable_thinking(self, subset: str) -> bool:
         return bool(self.data["generation"]["enable_thinking"][subset_kind(subset)])
 
+    def readout(self, task: str, subset: str) -> str:
+        """这个任务在这个子集上怎么读答案：letter（受限字母读数：letter_readout 的任务 × 子集）或 text（自由生成后解析）。"""
+        if task not in TASKS:
+            raise KeyError(f"未知任务 {task!r}")
+        lr = self.data["letter_readout"]
+        return "letter" if task in lr["tasks"] and subset_kind(subset) in lr["subsets"] else "text"
+
     def max_new_tokens(self, task: str, family: str, subset: str) -> int:
-        """思考子集取思考预算（think 4096、think8192 8192），其余取该任务该家族的生成上限。"""
+        """实际生成用的上限：受限字母读数取 letter_readout.max_new_tokens（1）；思考子集取思考预算（think 4096、
+        think8192 8192）；其余（含 free 子集）取该任务该家族条目的 max_new_tokens。"""
         kind = subset_kind(subset)
+        if self.readout(task, kind) == "letter":
+            return int(self.data["letter_readout"]["max_new_tokens"])
         if kind in THINK_SUBSETS:
             return int(self.data["generation"]["think_max_new_tokens"][kind])
         return int(self.entry(task, family)["max_new_tokens"])
 
-    def parser(self, task: str, family: str) -> str:
+    def parser(self, task: str, family: str, subset: str | None = None) -> str:
+        """解析函数名。给了 subset 且是受限字母读数时为 letter_token，否则取条目的 parse。"""
+        if subset is not None and self.readout(task, subset) == "letter":
+            return self.data["letter_readout"]["parse"]
         return self.entry(task, family)["parse"]
+
+    def letter_spellings(self) -> tuple[str, ...]:
+        return tuple(self.data["letter_readout"]["spellings"])
+
+    def batch_protocol(self) -> dict[str, Any]:
+        """冻结的批配置（batch_size、padding_side、order、letter_batches 与规则文字）。"""
+        return dict(self.data["batch_protocol"])
+
+    def acceptance(self) -> dict[str, Any]:
+        """批处理验收 v3 的协议（composition_b、delta、groups、take 的规则；深拷贝）。"""
+        return json.loads(json.dumps(self.data["acceptance"]))
+
+    @property
+    def countbenchqa_note(self) -> str:
+        return self.data["countbenchqa_questions"]["provenance_note"]
 
     def render(self, task: str, family: str, sample: Sample) -> Rendered:
         e = self.entry(task, family)
@@ -321,7 +442,7 @@ def count_object(caption: str, count: int) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 COUNT_QUESTION_SOURCES: tuple[str, ...] = ("heuristic", "countbenchqa")
-DEFAULT_COUNT_QUESTIONS = "heuristic"  # 项目负责人批准人工问句之前不改（D32-3）
+DEFAULT_COUNT_QUESTIONS = "countbenchqa"  # D36-2：默认用人工问句；启发式保留为可选（--count-questions heuristic）
 COUNTBENCHQA_FIELD = "countbenchqa_question"  # src/e1/tasks.select 在 countbenchqa 模式下放进 Sample.fields 的键
 COUNTBENCHQA_RULES: tuple[str, ...] = ("countbenchqa", "countbenchqa_free_form")
 
@@ -344,6 +465,8 @@ def countbenchqa_instruction(template: str, question_part: str, question: str) -
 
 
 __all__ = [
+    "ACCEPTANCE_METRICS",
+    "ACCEPTANCE_VERSION",
     "COUNTBENCHQA_FIELD",
     "COUNTBENCHQA_RULES",
     "COUNT_FALLBACK_OBJECT",
@@ -353,10 +476,13 @@ __all__ = [
     "COUNT_RULE_VERSION",
     "COUNT_STOP_WORDS",
     "DEFAULT_COUNT_QUESTIONS",
+    "ENTRY_PARSERS",
+    "FREE_SUBSET",
     "PARSERS",
     "PROMPTS_PATH",
     "PromptConfig",
     "PromptConfigError",
+    "READOUTS",
     "Rendered",
     "SUBSET_KINDS",
     "TASKS",
