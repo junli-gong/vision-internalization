@@ -1345,3 +1345,27 @@
    - `format_boxes`；
    - `check_training_interfaces --checkpoint` 改用检查点自己的 grid token。
 
+## D57 — DEV-0026（E1 的 RefCOCO 读本地 refer zip、落地遗留）合入与偏离裁定；refer zip 的完整 sha256 钉住（2026-10-03）
+
+1. **合入**（7fd2385，返工一轮）。
+   - 返工的起因是管理员钉住完整 sha256 之后，两条用 fixture zip 的测试没有替换这个值。返工只改测试，并补上"真实钉住值拒绝别的 zip"的测试。
+   - 合入前验证：普通与 server-parity 条件都是 1992 passed + 11 skipped。
+2. **内容**：
+   - `land_e1.py refcoco --refer-zip-dir`：与训练源共用同一份读本地 zip 的代码，钉住值只定义一处（`refcoco.SPEC`）。
+     - 核对：尾部 sha256、成员 CRC32、refs 的 sha256，以及 instances 的字节数与 CRC；
+     - 不给这个参数时，行为与 B200 的落地逐项相同。
+   - `--mirror-hf-base`：jxu124 镜像比对用的 HF 地址，只在显式给出时生效。
+   - `download_many` 在磁盘红线处取消：没开始的不再联网，进行中的在下一块停下。
+   - `Manifest(script=...)`。
+   - `scripts/data/refer_zip_sha256.py`：refer zip 的完整性工具。
+3. **钉住完整 sha256**（管理员常量级修改，提交 530e4a5）：开发机从钉住的 Wayback 快照下载 3 个 zip，核对字节数、中央目录 sha256 与全部成员 CRC 后：
+   - refcoco.zip `7f924bb7…`（53,993,993 B）；
+   - refcoco+.zip `5f123811…`（45,613,210 B）；
+   - refcocog.zip `3d1f7e5b…`（56,712,951 B）。
+4. **偏离全部接受**：
+   - 新增 `--mirror-hf-base`；
+   - 共用函数放在 `refcoco.py`；
+   - `refcoco_train` 的几处只增不改的变化；
+   - ade20k、nyu_depth_train、nyu_normals 仍在改写 script 字段：行为正确，下次改到这些文件时顺手改成传参。
+5. **待用户答复**：3 个 zip 能不能经 Drive 交给 A800 的合作者，团队内部使用。不行的话，RUN-0026 里 RefCOCO 相关的部分跳过。
+

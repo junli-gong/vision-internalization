@@ -38,7 +38,7 @@
 
 | DEV | 发出 | 合入 commit | 内容 | 状态 |
 |---|---|---|---|---|
-| 0026 | 2026-10-03 | — | E1 的 RefCOCO 落地支持本地 refer zip（A800 连不上 web.archive.org）+ download_many 在磁盘红线处取消 + Manifest 的 script 参数 + refer zip 的完整性工具（D55；模式 B，worktree agent） | 已派发 |
+| 0026 | 2026-10-03 | 7fd2385 | E1 的 RefCOCO 落地支持本地 refer zip（A800 连不上 web.archive.org）+ download_many 在磁盘红线处取消 + Manifest 的 script 参数 + refer zip 的完整性工具（D55；模式 B，worktree agent） | 已合入（返工 1 轮：测试跟着完整 sha256 的钉住值改；1992 passed + 11 skipped；D57） |
 | 0025 | 2026-10-02 | 03354c9 | E3b 像素 token 通道的训练框架，第一部分：67 个网格 token 的词表与目标、指代分割与深度的样本、叠加反馈修正对、C3 稀疏文本对照、LoRA 训练循环、检查点与续跑、记账（模式 B，worktree agent） | 已合入（无返工；1976 passed + 11 skipped；D56） |
 | 0024 | 2026-10-02 | 38dddae | E2 开跑前的加固（独立审查的发现：去重清单缺键报错、记录评测集、场景过滤复查、网格顺序的确定性测试、L_N_pre、按位置分开的指标）+ 训练接口核对的 v1 判据 + base 的 trainable_token_rows 桩（D53；模式 B，worktree agent） | 已合入（无返工；1920 passed + 11 skipped；D54） |
 | 0023 | 2026-10-02 | 5957901 | E2 探针框架：冻结模型，在线训练逐层线性探针与两层卷积探针（深度、语义分割、法向、指令在前的指代分割），视觉编码器参考线（投影后 = 第 0 层，投影前可选）（模式 B，worktree agent） | 已合入（无返工；1861 passed + 11 skipped；D52） |
@@ -693,4 +693,5 @@
     - (c) **兑现**：每个模型的 GSM8K 都有 ≥ 1 条原文不同（实际 22–30 条），字母读数 ≥ 97/100（98–100）；
     - (d) 训练接口核对因 RefCOCO 没落地，没跑。
 - **DEV-0025 合入**（D56）：E3b 训练框架第一部分。下一步是第二部分（评测、叠加反馈多轮、合并核对、`format_boxes`），以及 A800 上的增量包 RUN-0026。
+- **DEV-0026 合入**（D57）：E1 的 RefCOCO 可以读本地 refer zip；3 个 zip 的完整 sha256 已钉住。A800 增量包 RUN-0026 已经写好，等用户答复 refer zip 能否经 Drive 转交。
 
