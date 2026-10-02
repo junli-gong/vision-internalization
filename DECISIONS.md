@@ -884,3 +884,22 @@
    - 属于简报第 9 节自由探索范围内的实现选择，可以直接做并记录，不必等裁定。
    - 需要裁定的事项，尽量每天合并成一份清单。
 
+## D37 — DEV-0016（option_logits 接口 + 健康检查 v3）合入与偏离裁定（2026-10-01）
+
+1. **合入**（9be235e，无返工）：
+   - 适配器新增 `option_logits`：取第一个生成位置的 logits，每个选项在它的单 token 写法（"X" 与 " X"）上取最大 logit，在选项集合上做 fp32 softmax。
+   - 健康检查 v3：MMLU-Pro 的标题是受限字母读数，另报正确选项的平均概率；free256 与 fmt32 作诊断。按 D36-4，**G3 之前不再动**。
+   - 三个家族中，A–J 的两种写法都是单 token。
+   - 与 `generate(allowed_token_ids)` 的一致性：第一步的 scores 逐位相同，选中的 token 相同；测试覆盖了两种写法各自胜出的情形。
+   - 合入前验证：普通与 server-parity 条件都是 1444 passed + 11 skipped。
+2. **偏离全部接受**：
+   - 用 `generate(max_new_tokens=1, output_logits=True)` 取原始 logits，不手写 forward。这样位置编码、填充与 GDN 都与 `generate_batch` 走同一条路径；与独立 forward 的差 ≤ 1e-6。
+   - 平局规则：取 token id 较小者，与 HF greedy 的 argmax 相同。
+   - 批量与逐条：choice 逐个相同，概率有 ≤ 2e-6 的舍入差。
+   - 读数命名：`mmlu_pro_letter`、`mmlu_pro_free256`、`mmlu_pro_fmt32`。
+   - 两边都是 v2 时，MMLU-Pro 不标红。
+   - 记账：一次 option_logits 记作生成 1 个 token。
+   - mean_p_gold 报差值与配对 CI，不做符号检验。
+3. **已知局限**：NYU 点对与 BLINK 的选项写作 "(A)"，模型的第一个 token 可能先写 "("。受限读数仍能选出字母，但 "(" 那部分概率不在读数里。E1 如果要用概率，写法是否加 "(X"，等 E1 预注册时定。
+4. **遗留**：GPU 上 option_logits 与受限生成的一致性还没在算力机上实测，在下一个健康检查 v3 的基座运行里加审计。
+
