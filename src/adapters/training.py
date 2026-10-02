@@ -682,47 +682,84 @@ def first_divergence(a: Sequence[int], b: Sequence[int]) -> int | None:
     return None if len(a) == len(b) else min(len(a), len(b))
 
 
+def generation_agreement(a: Sequence[GenerationResult], b: Sequence[GenerationResult]) -> dict[str, Any]:
+    """两组生成结果逐行比较（restricted_consistency 与 checkpoint 的合并核对共用）：
+    exact_rows（整行相同的比例）、token_agreement = n_agree_tokens / n_tokens（每行第一个分歧之前的 token 数、两者较长者的
+    token 数，按行求和再比）、first_divergence（每行第一个分歧的位置，相同为 None）、lengths（每行 (len a, len b)）。"""
+    if len(a) != len(b) or not a:
+        raise ValueError(f"两组生成结果的行数不同或为空：{len(a)} 与 {len(b)}")
+    div = [first_divergence(x.token_ids, y.token_ids) for x, y in zip(a, b)]
+    longer = [max(len(x.token_ids), len(y.token_ids)) for x, y in zip(a, b)]
+    agree = [n if d is None else d for d, n in zip(div, longer)]
+    return {"n_rows": len(div), "exact_rows": sum(d is None for d in div) / len(div),
+            "token_agreement": sum(agree) / max(1, sum(longer)), "n_agree_tokens": sum(agree), "n_tokens": sum(longer),
+            "first_divergence": div, "lengths": [(len(x.token_ids), len(y.token_ids)) for x, y in zip(a, b)]}
+
+
+def top2_gap(logits: torch.Tensor) -> torch.Tensor:
+    """每行 logits 的前两名之差（fp32，[N]）；只有一列时为 +inf。"""
+    if logits.shape[-1] < 2:
+        return torch.full(logits.shape[:-1], float("inf"), dtype=torch.float32, device=logits.device)
+    v = logits.float().topk(2, dim=-1).values
+    return v[..., 0] - v[..., 1]
+
+
 def restricted_consistency(ad: Any, inputs_list: Sequence[ModelInputs], allowed_ids: Sequence[int], *,
                            max_new_tokens: int, stop_ids: Sequence[int], enable_thinking: bool) -> dict[str, Any]:
     """训练与推理的受限 logits 一致性读数（D21-2；简报 §12）。CPU fp32 上两项都应为 1.0；GPU bf16 上写成一致率。
 
-    - decode_vs_generate_batch：generate_restricted 与 generate_batch(allowed_token_ids=allowed) 的 token 序列逐行比较：
-      exact_rows（整行相同的比例）、token_agreement（第一个分歧之前的 token 数 / 两者较长者的 token 数，按行求和再比）、
-      first_divergence（每行第一个分歧的位置，相同为 None）。
+    - decode_vs_generate_batch：generate_restricted 与 generate_batch(allowed_token_ids=allowed) 的 token 序列逐行比较
+      （generation_agreement 的各项：exact_rows、token_agreement、first_divergence、lengths 等）。另有每行第一个分歧处的
+      logit 差（DEV-0021）：分歧位置 d 之前两条序列相同，所以教师强制 logits（见下）在位置 d 上对两者都有效；
+      divergence_gaps[行] = |L[受限解码的 token] − L[generate_batch 的 token]|，divergence_top2_gaps[行] = L 的前两名之差
+      （没有分歧的行为 None）。
     - teacher_forcing：把受限解码的序列当目标做 training_forward，每个位置 argmax(restricted_logits) 是否等于解码出的 token：
       agreement（相同的位置数 / 总数；教师强制下每个位置独立，不累积）、disagreements（不同位置的 (行, 位置, 解码 token,
-      教师强制 argmax, 两者在教师强制 logits 上的差)；bf16 下应当都是近乎平局的位置）。
+      教师强制 argmax, 两者在教师强制 logits 上的差)；bf16 下应当都是近乎平局的位置）、disagreement_top2_gaps（与 disagreements
+      逐项对应：该位置教师强制 logits 的前两名之差；解码 token 恰是第二名时与上面的差相同）。
     """
     allowed = sorted(int(i) for i in allowed_ids)
     gen = ad.generate_batch(list(inputs_list), enable_thinking=enable_thinking, max_new_tokens=max_new_tokens,
                             allowed_token_ids=allowed)
     res = ad.generate_restricted(list(inputs_list), allowed, max_new_tokens=max_new_tokens, stop_ids=list(stop_ids),
                                  enable_thinking=enable_thinking)
-    div = [first_divergence(g.token_ids, r.token_ids) for g, r in zip(gen, res)]
-    longer = [max(len(g.token_ids), len(r.token_ids)) for g, r in zip(gen, res)]
-    agree = [n if d is None else d for d, n in zip(div, longer)]
+    agreement = generation_agreement(gen, res)
+    div = agreement["first_divergence"]
     with torch.no_grad():
         tf = ad.training_forward(list(inputs_list), [list(r.token_ids) for r in res], enable_thinking=enable_thinking)
-        logits = ad.restricted_logits(tf.target_hidden, allowed)
+        logits = ad.restricted_logits(tf.target_hidden, allowed).cpu()
+    gap2 = top2_gap(logits)
     allowed_t = torch.tensor(allowed, dtype=torch.long)
-    am = allowed_t[logits.argmax(dim=-1).cpu()]
+    am = allowed_t[logits.argmax(dim=-1)]
     tgt = tf.target_ids.cpu()
+    rows_of = tf.target_rows.cpu()
     col = {t: k for k, t in enumerate(allowed)}
     bad = (am != tgt).nonzero().flatten().tolist()
-    disagreements = []
+    disagreements, dis_top2 = [], []
     for n in bad:
-        b = int(tf.target_rows[n])
+        b = int(rows_of[n])
         lg = logits[n]
         disagreements.append((b, n - tf.target_offsets[b], int(tgt[n]), int(am[n]),
                               float(lg[col[int(am[n])]] - lg[col[int(tgt[n])]])))
+        dis_top2.append(float(gap2[n]))
+    div_gaps: list[float | None] = []
+    div_top2: list[float | None] = []
+    for b, d in enumerate(div):
+        r_ids, g_ids = res[b].token_ids, gen[b].token_ids
+        if d is None or d >= len(r_ids) or d >= len(g_ids):  # 停止 token 计入 token_ids，分歧总在两者都有的位置上
+            div_gaps.append(None)
+            div_top2.append(None)
+            continue
+        n = tf.target_offsets[b] + d
+        lg = logits[n]
+        div_gaps.append(abs(float(lg[col[int(r_ids[d])]] - lg[col[int(g_ids[d])]])))
+        div_top2.append(float(gap2[n]))
     n_tok = int(tgt.numel())
     return {
         "n_rows": len(res),
-        "decode_vs_generate_batch": {"exact_rows": sum(d is None for d in div) / len(div),
-                                     "token_agreement": sum(agree) / max(1, sum(longer)),
-                                     "first_divergence": div},
+        "decode_vs_generate_batch": {**agreement, "divergence_gaps": div_gaps, "divergence_top2_gaps": div_top2},
         "teacher_forcing": {"n_tokens": n_tok, "agreement": 1.0 if n_tok == 0 else 1.0 - len(bad) / n_tok,
-                            "disagreements": disagreements},
+                            "disagreements": disagreements, "disagreement_top2_gaps": dis_top2},
     }
 
 
@@ -759,6 +796,7 @@ __all__ = [
     "chunked_lm_loss",
     "cumsum_positions",
     "first_divergence",
+    "generation_agreement",
     "greedy_restricted_loop",
     "restricted_consistency",
     "join_class_names",
@@ -766,4 +804,5 @@ __all__ = [
     "restricted_logits",
     "restricted_targets",
     "scatter_rows",
+    "top2_gap",
 ]

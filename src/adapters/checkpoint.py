@@ -19,6 +19,12 @@
 - 顺序约束：inject_lora 必须在 add_grid_tokens、inject_query_tokens（以及 restore_tokens）之后；之后再调它们报 TokenOrderError。
 - inject_lora 用 peft 的 get_peft_model 原地包装（适配器的 model 仍是同一个对象，前向与生成照常走它，LoRA 生效）；peft 会把
   base 的参数全部设为不求梯度。merge_lora 在内存里 merge_and_unload，合并后的权重不落盘（D34）。
+- 新增 token 行的训练开关 trainable_token_rows（DEV-0021；规则见 TRAINABLE_ROWS_RULE）：inject_lora 之后调用，只让这些
+  grid token 的嵌入行（不共享时连同 lm_head 行）求梯度（权重上的梯度掩码钩子），行留在原权重里，保存、恢复、合并照旧。
+
+**合并核对**（简报 §12；DEV-0021）：merge_consistency（单批、单个思考开关）；多批与两种思考开关用 merge_side（一侧的生成与
+教师强制隐藏状态）+ compare_merge_sides（逐 run 比较；分歧处与 argmax 不同处的 logit 差），scripts/check_training_interfaces.py
+用它们做评测前的标准核对。
 
 **检查点目录**（save_trained 写；load_trained 读；只存这几样，不存合并后的权重，D34）
 - `lora/adapter_config.json`、`lora/adapter_model.safetensors`：peft 格式（LoraConfig.save_pretrained +
@@ -33,6 +39,7 @@
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 import os
@@ -67,6 +74,25 @@ LORA_TARGET_SUFFIXES: Mapping[str, tuple[str, ...]] = {
                              "per_layer_input_gate", "per_layer_projection", "per_layer_model_projection"),
     registry.FAMILY_INTERNVL35: ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"),
 }
+
+
+FROZEN_PROBE_ROWS = 512  # trainable_token_rows：冻结行抽样核对的行数（均匀取，另加全部其余新增行）
+TRAINABLE_ROWS_RULE = (
+    "trainable_token_rows(names_or_ids)：在 inject_lora 之后调用（peft 注入时把 base 的参数全部设为不求梯度）。输入嵌入（不共享"
+    "时另有 lm_head）的权重改为求梯度，并在权重上挂一个梯度掩码钩子：反向传播得到的梯度在这些行以外一律置 0（torch.where，"
+    "不受 NaN 影响）；共享权重时嵌入与 lm_head 是同一个 Parameter，只挂一次，嵌入查表与 lm_head 两条路径的梯度先相加再过掩码。"
+    "行仍在原来的权重张量里，所以生成、restricted_logits、token_table / token_rows、save_trained、restore_tokens、merge_lora "
+    "都不用改，看到的就是训练后的值。代价与约束：梯度与优化器状态是整个 [V, hidden] 的稠密张量；冻结行梯度为 0 时 Adam / SGD 的"
+    "更新恰为 0（逐位不变），但 AdamW 的 weight decay 不看梯度，会改所有行，所以这些参数必须放进 weight_decay = 0 的参数组。"
+    "save_trained 会核对冻结行的抽样（FROZEN_PROBE_ROWS 行加全部其余新增行）与打开时逐位相同，不同就报错。"
+)
+
+
+def _frozen_probe_rows(n_rows: int, trainable: Sequence[int], new_rows: Sequence[int]) -> list[int]:
+    """冻结行的抽样：在 [0, n_rows) 上均匀取 FROZEN_PROBE_ROWS 行，加上全部其余新增行（grid token 与查询占位符），去掉要训练的行。"""
+    even = torch.linspace(0, n_rows - 1, steps=min(FROZEN_PROBE_ROWS, n_rows)).round().long().tolist()
+    skip = set(int(i) for i in trainable)
+    return sorted((set(even) | set(int(i) for i in new_rows)) - skip)
 
 
 class CheckpointError(RuntimeError):
@@ -204,57 +230,165 @@ def _load_tensors(path: Path) -> dict[str, torch.Tensor]:
     return load_file(str(path))
 
 
+@dataclass
+class MergeSide:
+    """merge_side 的结果，每个 run（一批输入 × 一种思考开关）一项：generate_batch 的结果（generate=False 时为 None）、
+    教师强制的目标（每行一个 token 列表）、目标隐藏状态 target_hidden [N, hidden]（模型所在设备，已 detach）与每行的偏移。"""
+
+    generations: list[list[Any]] | None
+    targets: list[list[list[int]]]
+    hidden: list[torch.Tensor]
+    offsets: list[tuple[int, ...]]
+
+    def targets_are_own_generations(self, k: int) -> bool:
+        """第 k 个 run 的教师强制目标就是本侧自己生成的序列（这时分歧位置上的 logits 对两侧都有效）。"""
+        return self.generations is not None and self.targets[k] == [list(r.token_ids) for r in self.generations[k]]
+
+
+def merge_side(ad: Any, runs: Sequence[tuple[Sequence[Any], bool]], *, max_new_tokens: int,
+               allowed_ids: Sequence[int] | None = None, targets: Sequence[Sequence[Sequence[int]]] | None = None,
+               generate: bool = True) -> MergeSide:
+    """合并核对的一侧（DEV-0021）：对每个 run = (inputs, enable_thinking) 做 generate_batch（allowed_ids 给了就受限；
+    generate=False 时不生成），再以 targets[k]（不给时取本侧生成的序列）做 training_forward，记下目标隐藏状态。"""
+    if not generate and targets is None:
+        raise ValueError("generate=False 时必须给 targets")
+    if targets is not None and len(targets) != len(runs):
+        raise ValueError(f"targets 有 {len(targets)} 项，runs 有 {len(runs)} 项")
+    allowed = None if allowed_ids is None else sorted(int(i) for i in allowed_ids)
+    gens_all: list[list[Any]] | None = [] if generate else None
+    all_targets, hidden, offsets = [], [], []
+    for k, (inputs, thinking) in enumerate(runs):
+        inputs = list(inputs)
+        gens = None
+        if generate:
+            kw: dict[str, Any] = {} if allowed is None else {"allowed_token_ids": allowed}
+            gens = ad.generate_batch(inputs, enable_thinking=thinking, max_new_tokens=max_new_tokens, **kw)
+            gens_all.append(gens)  # type: ignore[union-attr]
+        tgt = [list(t) for t in targets[k]] if targets is not None else [list(r.token_ids) for r in gens]
+        with torch.no_grad():
+            tf = ad.training_forward(inputs, tgt, enable_thinking=thinking)
+        all_targets.append(tgt)
+        hidden.append(tf.target_hidden.detach())
+        offsets.append(tuple(tf.target_offsets))
+    return MergeSide(gens_all, all_targets, hidden, offsets)
+
+
+def _logits_and_columns(ad: Any, allowed_ids: Sequence[int] | None) -> tuple[Any, Any, Any]:
+    """(logits 函数, 列 → token id, token id → 列)。logits 只用 training.project（唯一的算法）：全词表时 lm_head 先升到 fp32
+    一次（每块不再重复转换）；allowed_ids 给了就只取这些行（与 restricted_logits 相同：先 index_select 再 project）。"""
+    from src.adapters.training import check_allowed_ids, project
+
+    weight, cap = ad.lm_head_weight().detach(), ad._logit_softcap()
+    if allowed_ids is None:
+        w = weight.float()
+        return (lambda h: project(h, w, softcap=cap)), (lambda c: int(c)), (lambda t: int(t))
+    allowed = sorted(int(i) for i in allowed_ids)
+    idx = check_allowed_ids(allowed, int(weight.shape[0]), device=weight.device)
+    w = weight.index_select(0, idx).float()
+    col = {t: k for k, t in enumerate(allowed)}
+    return (lambda h: project(h, w, softcap=cap)), (lambda c: allowed[int(c)]), (lambda t: col[int(t)])
+
+
+def compare_teacher_forced(h_a: torch.Tensor, h_b: torch.Tensor, logits_fn: Any, col_to_id: Any, *,
+                           chunk_size: int = 256) -> dict[str, Any]:
+    """同一组目标上的两份目标隐藏状态 → logits 的比较（按 chunk_size 分块，每块的 logits 用完即弃）：
+    max_abs_hidden、max_abs_logit、argmax_agreement，以及 argmax 不同的位置 disagreements =
+    [(位置 n, a 的 argmax, b 的 argmax, gap, top2_gap)]：gap = max(L_a[a] − L_a[b], L_b[b] − L_b[a])（两侧各自对自己的选择领先
+    多少，取大者），top2_gap = 两侧前两名之差的较大者。gap ≥ top2_gap；对方的选择恰是第二名时两者相同。"""
+    from src.adapters.training import top2_gap
+
+    if h_a.shape != h_b.shape:
+        raise ValueError(f"两份隐藏状态的形状不同：{tuple(h_a.shape)} 与 {tuple(h_b.shape)}")
+    n = int(h_a.shape[0])
+    max_logit, agree, dis = 0.0, 0, []
+    with torch.no_grad():
+        max_h = float((h_a.float() - h_b.float()).abs().max()) if n else 0.0
+        for s in range(0, n, chunk_size):
+            la, lb = logits_fn(h_a[s: s + chunk_size]), logits_fn(h_b[s: s + chunk_size])
+            max_logit = max(max_logit, float((la - lb).abs().max()))
+            aa, ab = la.argmax(-1), lb.argmax(-1)
+            bad = (aa != ab).nonzero().flatten()
+            agree += int(la.shape[0]) - int(bad.numel())
+            if bad.numel():
+                la_m, lb_m, aa_m, ab_m = la[bad], lb[bad], aa[bad, None], ab[bad, None]
+                gap = torch.maximum(la_m.gather(1, aa_m) - la_m.gather(1, ab_m),
+                                    lb_m.gather(1, ab_m) - lb_m.gather(1, aa_m)).squeeze(1)
+                t2 = torch.maximum(top2_gap(la_m), top2_gap(lb_m))
+                cols = zip(bad.tolist(), aa_m[:, 0].tolist(), ab_m[:, 0].tolist(), gap.tolist(), t2.tolist())
+                dis += [(s + i, col_to_id(x), col_to_id(y), g, t) for i, x, y, g, t in cols]  # 一次搬到 CPU，不逐项同步
+    return {"n_tokens": n, "max_abs_hidden": max_h, "max_abs_logit": max_logit,
+            "argmax_agreement": agree / n if n else 1.0, "disagreements": dis}
+
+
+def compare_merge_sides(ad: Any, a: MergeSide, b: MergeSide, *, allowed_ids: Sequence[int] | None = None,
+                        chunk_size: int = 256) -> list[dict[str, Any]]:
+    """合并核对两侧的逐 run 比较（DEV-0021；logits 用 ad 的 lm_head，两侧的 lm_head 必须相同——LoRA 不含 lm_head，新增行由
+    token 表核对）。b 的教师强制目标必须与 a 的相同。每个 run 一项：
+    - generate（两侧都生成了时）：generation_agreement 的各项，另加 divergence_gaps / divergence_top2_gaps：每行第一个分歧处
+      （a 的目标就是 a 自己生成的序列时，该位置的教师强制 logits 对两侧都有效）两侧 logits 上 |L[a 的 token] − L[b 的 token]|
+      的较大者、前两名之差的较大者；没有分歧的行为 None。
+    - teacher_forcing：compare_teacher_forced 的各项；disagreements 的位置换成 (行, 行内位置)。"""
+    from src.adapters.training import generation_agreement, top2_gap
+
+    if len(a.targets) != len(b.targets) or a.targets != b.targets:
+        raise ValueError("两侧的教师强制目标不同：b 要用 a 的目标（merge_side(targets=a.targets)）")
+    logits_fn, col_to_id, id_to_col = _logits_and_columns(ad, allowed_ids)
+    out = []
+    for k in range(len(a.targets)):
+        offs = a.offsets[k]
+        tf = compare_teacher_forced(a.hidden[k], b.hidden[k], logits_fn, col_to_id, chunk_size=chunk_size)
+
+        rows_of = [bisect.bisect_right(offs, n) - 1 for n, *_ in tf["disagreements"]]
+        tf["disagreements"] = [(r, n - offs[r], x, y, g, t2) for r, (n, x, y, g, t2) in zip(rows_of, tf["disagreements"])]
+        rep: dict[str, Any] = {"teacher_forcing": tf}
+        if a.generations is not None and b.generations is not None:
+            ga, gb = a.generations[k], b.generations[k]
+            gen = generation_agreement(ga, gb)
+            gaps: list[float | None] = [None] * len(ga)
+            top2: list[float | None] = [None] * len(ga)
+            if a.targets_are_own_generations(k):
+                pos, xs, ys, rows = [], [], [], []
+                for r, d in enumerate(gen["first_divergence"]):
+                    if d is not None and d < len(ga[r].token_ids) and d < len(gb[r].token_ids):
+                        rows.append(r)
+                        pos.append(offs[r] + d)
+                        xs.append(id_to_col(ga[r].token_ids[d]))
+                        ys.append(id_to_col(gb[r].token_ids[d]))
+                if rows:
+                    with torch.no_grad():
+                        p = torch.tensor(pos, dtype=torch.long, device=a.hidden[k].device)
+                        la, lb = logits_fn(a.hidden[k].index_select(0, p)), logits_fn(b.hidden[k].index_select(0, p))
+                        x = torch.tensor(xs, dtype=torch.long, device=la.device)[:, None]
+                        y = torch.tensor(ys, dtype=torch.long, device=la.device)[:, None]
+                        g = torch.maximum((la.gather(1, x) - la.gather(1, y)).abs(),
+                                          (lb.gather(1, x) - lb.gather(1, y)).abs()).squeeze(1)
+                        t2 = torch.maximum(top2_gap(la), top2_gap(lb))
+                    for i, r in enumerate(rows):
+                        gaps[r], top2[r] = float(g[i]), float(t2[i])
+            rep["generate"] = {**gen, "divergence_gaps": gaps, "divergence_top2_gaps": top2}
+        out.append(rep)
+    return out
+
+
 def merge_consistency(ad: Any, inputs_list: Sequence[Any], *, max_new_tokens: int, enable_thinking: bool,
                       allowed_ids: Sequence[int] | None = None, chunk_size: int = 256) -> dict[str, Any]:
     """LoRA 合并前后的一致性读数（简报 §12"合并 LoRA"；D21-2：GPU 上写成一致率）。**会把适配器的 LoRA 合并**。
 
     - generate：合并前后 generate_batch（allowed_ids 给了就受限）的 token 序列：exact_rows、token_agreement（第一个分歧之前的
-      token 数 / 两者较长者，按行求和再比）、first_divergence。
+      token 数 / 两者较长者，按行求和再比）、first_divergence；另有分歧处的 logit 差（compare_merge_sides）。
     - teacher_forcing：合并前生成的序列当目标，合并前后 training_forward 的目标隐藏状态最大绝对差（max_abs_hidden）、logits 的
-      最大绝对差（max_abs_logit；allowed_ids 给了用 restricted_logits，否则全词表按 chunk_size 分块）、argmax 一致率。
-    before / after 是两次 generate_batch 的原始结果。
+      最大绝对差（max_abs_logit；allowed_ids 给了用受限的行，否则全词表按 chunk_size 分块）、argmax 一致率与不一致的位置。
+    before / after 是两次 generate_batch 的原始结果。多批、两种思考开关一起核对时用 merge_side + compare_merge_sides
+    （scripts/check_training_interfaces.py）。
     """
-    from src.adapters.training import first_divergence, project
-
     if ad.lora_state != "injected":
         raise LoraStateError("merge_consistency 要在注入 LoRA、未合并时调用")
-    inputs = list(inputs_list)
-    gen_kw: dict[str, Any] = {"enable_thinking": enable_thinking, "max_new_tokens": max_new_tokens}
-    allowed = None if allowed_ids is None else sorted(int(i) for i in allowed_ids)
-    if allowed is not None:
-        gen_kw["allowed_token_ids"] = allowed
-    before = ad.generate_batch(inputs, **gen_kw)
-    targets = [list(r.token_ids) for r in before]
-    with torch.no_grad():
-        h0 = ad.training_forward(inputs, targets, enable_thinking=enable_thinking).target_hidden.clone()
+    runs = [(list(inputs_list), enable_thinking)]
+    before = merge_side(ad, runs, max_new_tokens=max_new_tokens, allowed_ids=allowed_ids)
     ad.merge_lora()
-    after = ad.generate_batch(inputs, **gen_kw)
-    with torch.no_grad():
-        h1 = ad.training_forward(inputs, targets, enable_thinking=enable_thinking).target_hidden
-        max_logit, agree = 0.0, 0
-        for s in range(0, h0.shape[0], chunk_size):
-            if allowed is not None:
-                l0, l1 = ad.restricted_logits(h0[s: s + chunk_size], allowed), ad.restricted_logits(h1[s: s + chunk_size], allowed)
-            else:
-                w, cap = ad.lm_head_weight(), ad._logit_softcap()
-                l0, l1 = project(h0[s: s + chunk_size], w, softcap=cap), project(h1[s: s + chunk_size], w, softcap=cap)
-            max_logit = max(max_logit, float((l0 - l1).abs().max()))
-            agree += int((l0.argmax(-1) == l1.argmax(-1)).sum())
-    div = [first_divergence(a.token_ids, b.token_ids) for a, b in zip(before, after)]
-    longer = [max(len(a.token_ids), len(b.token_ids)) for a, b in zip(before, after)]
-    n = int(h0.shape[0])
-    return {
-        "n_rows": len(inputs),
-        "before": before,
-        "after": after,
-        "generate": {"exact_rows": sum(x is None for x in div) / len(div),
-                     "token_agreement": sum(k if x is None else x for x, k in zip(div, longer)) / max(1, sum(longer)),
-                     "first_divergence": div},
-        "teacher_forcing": {"n_tokens": n,
-                            "max_abs_hidden": float((h0 - h1).abs().max()) if n else 0.0,
-                            "max_abs_logit": max_logit,
-                            "argmax_agreement": agree / n if n else 1.0},
-    }
+    after = merge_side(ad, runs, max_new_tokens=max_new_tokens, allowed_ids=allowed_ids, targets=before.targets)
+    (rep,) = compare_merge_sides(ad, before, after, allowed_ids=allowed_ids, chunk_size=chunk_size)
+    return {"n_rows": len(runs[0][0]), "before": before.generations[0], "after": after.generations[0], **rep}
 
 
 # ---------------------------------------------------------------------------
@@ -268,11 +402,15 @@ class CheckpointSupport:
 
     家族钩子：`_token_registry()`（grid token、查询占位符、规模事实）、`_token_state_fresh()`、`_restore_registration(table)`
     （先核对 id 再登记，不初始化）、`_row_tables()`（[(种类, 权重)]，含 lm_head；共享时 lm_head 就是嵌入）。
+    trainable_token_rows 只用 `_row_tables()` 与 grid_token_ids，不需要新的家族钩子。
     """
 
     _lora_state: str = "none"  # none / injected / merged
     _peft: Any = None
     build_spec: dict[str, Any] | None = None  # factory.make_adapter 记下的构造方式（load_trained 重建 base 用）
+    _trainable_row_ids: tuple[int, ...] | None = None  # trainable_token_rows 打开的行
+    _row_grad_hooks: tuple[Any, ...] | list[Any] = ()  # 梯度掩码钩子的 handle（再调 trainable_token_rows 时先移除）
+    _frozen_row_probes: tuple[Any, ...] | list[Any] = ()  # (参数, 抽样的冻结行 id, 打开时的值)：save_trained 核对
 
     # ------------------------------------------------------------------
     # 身份
@@ -445,6 +583,81 @@ class CheckpointSupport:
         return sum(p.numel() for n, p in self._model.named_parameters() if "lora_" in n)
 
     # ------------------------------------------------------------------
+    # 新增 token 行的训练开关（DEV-0021）
+    # ------------------------------------------------------------------
+
+    @property
+    def trainable_token_row_ids(self) -> tuple[int, ...] | None:
+        """trainable_token_rows 打开的行（升序）；没打开时为 None。"""
+        return self._trainable_row_ids
+
+    def trainable_token_rows(self, names_or_ids: Sequence[str | int]) -> list[torch.nn.Parameter]:
+        """让这些 grid token 的行求梯度，其余行冻结（规则见 TRAINABLE_ROWS_RULE）。返回要交给优化器的参数（输入嵌入；不共享时
+        另有 lm_head；共享时两者是同一个张量，只返回一次）。这些参数要放进 weight_decay = 0 的参数组（见规则）。
+        必须在 inject_lora 之后、合并之前调用；再调一次就换成新的行集合。"""
+        self._require_loaded()
+        if self._lora_state != "injected":
+            raise LoraStateError(f"trainable_token_rows 要在 inject_lora 之后、合并之前调用（当前 LoRA 状态：{self._lora_state}）："
+                                 "peft 注入时会把 base 的参数全部设为不求梯度")
+        ids = self._resolve_grid_rows(names_or_ids)
+        tables = dict(self._row_tables())
+        emb, head = tables["embed"], tables["lm_head"]
+        if (emb is head) != bool(self.tied_word_embeddings):
+            raise RuntimeError(f"tied_word_embeddings = {self.tied_word_embeddings}，但嵌入与 lm_head "
+                               f"{'是' if emb is head else '不是'}同一个张量")
+        for h in self._row_grad_hooks:
+            h.remove()
+        params = [emb] if emb is head else [emb, head]
+        hooks, probes = [], []
+        trainable = torch.tensor(ids, dtype=torch.long)
+        new_rows = self.token_table()["row_ids"]
+        for w in params:
+            mask = torch.zeros((w.shape[0], 1), dtype=torch.bool, device=w.device)
+            mask[trainable.to(w.device)] = True
+            w.requires_grad_(True)
+            hooks.append(w.register_hook(lambda g, m=mask: torch.where(m, g, torch.zeros((), dtype=g.dtype, device=g.device))))
+            probe = _frozen_probe_rows(int(w.shape[0]), ids, new_rows)
+            idx = torch.tensor(probe, dtype=torch.long, device=w.device)
+            probes.append((w, idx, w.detach().index_select(0, idx).clone()))
+        self._row_grad_hooks = hooks
+        self._frozen_row_probes = probes
+        self._trainable_row_ids = tuple(ids)
+        return params
+
+    def _resolve_grid_rows(self, names_or_ids: Sequence[str | int]) -> list[int]:
+        """grid token 的名字或 id → 升序的 id（非空、不重复、都是本适配器加过的 grid token）。"""
+        if isinstance(names_or_ids, (str, bytes, int)) or torch.is_tensor(names_or_ids):
+            raise TypeError("names_or_ids 必须是 grid token 名字或 id 的序列（单个也放进列表）")
+        items = list(names_or_ids)
+        if not items:
+            raise ValueError("names_or_ids 为空")
+        grid = self.grid_token_ids
+        valid = set(grid.values())
+        ids = []
+        for x in items:
+            if isinstance(x, str):
+                if x not in grid:
+                    raise ValueError(f"{x!r} 不是本适配器加过的 grid token（已加 {len(grid)} 个）")
+                ids.append(grid[x])
+            elif isinstance(x, int) and not isinstance(x, bool):
+                if x not in valid:
+                    raise ValueError(f"id {x} 不是 grid token 的行（只有新增的 grid token 行能打开训练）")
+                ids.append(int(x))
+            else:
+                raise TypeError(f"names_or_ids 的项必须是名字或 id，收到 {x!r}")
+        if len(set(ids)) != len(ids):
+            raise ValueError("names_or_ids 里有重复的 token")
+        return sorted(ids)
+
+    def _check_frozen_rows(self) -> None:
+        """trainable_token_rows 之后，冻结行的抽样（含其余新增行）必须与打开时逐位相同；否则多半是优化器对这个参数做了
+        weight decay（AdamW 的衰减不看梯度，会改所有行）。"""
+        for w, idx, rows in self._frozen_row_probes:
+            if not torch.equal(w.detach().index_select(0, idx), rows):
+                raise CheckpointError("trainable_token_rows 之外的嵌入 / lm_head 行变了：这些参数必须放进 weight_decay = 0 的参数组"
+                                      "（梯度掩码只让冻结行的梯度为 0，AdamW 的 weight decay 仍会改它们）")
+
+    # ------------------------------------------------------------------
     # 检查点
     # ------------------------------------------------------------------
 
@@ -454,6 +667,7 @@ class CheckpointSupport:
         self._require_loaded()
         if self._lora_state == "merged":
             raise LoraStateError("LoRA 已经合并：合并后的权重不存盘（D34），检查点要在合并之前存")
+        self._check_frozen_rows()
         d = Path(directory)
         if d.exists() and (not d.is_dir() or any(d.iterdir())):
             raise CheckpointError(f"{d} 已存在且不是空目录")
@@ -505,6 +719,7 @@ class CheckpointSupport:
             "build_spec": self.build_spec,
             "image_policy": policy_spec(self.image_policy),
             "lora": lora,
+            "trainable_token_rows": None if self._trainable_row_ids is None else list(self._trainable_row_ids),
             "query": {"n": q.get("n"), "position_mode": q.get("position_mode")},
             "extra_keys": sorted(extra),
             "files": files,
