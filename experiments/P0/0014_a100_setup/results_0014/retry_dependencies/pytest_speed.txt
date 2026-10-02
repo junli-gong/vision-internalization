@@ -1,0 +1,38 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+__________ test_speed_at_least_20_per_second_single_core[rotation3d] ___________
+
+task = 'rotation3d'
+
+    @pytest.mark.parametrize("task", ["rotation3d", "viewpoint"])
+    def test_speed_at_least_20_per_second_single_core(task):
+        generate(task, "train", 0)
+        t = time.process_time()
+        n = 40
+        for i in range(n):
+            generate(task, "train", 3000 + i)
+        rate = n / (time.process_time() - t)
+        print(f"{task}: {rate:.1f} samples/s (CPU time, single process)")
+>       assert rate >= 20
+E       assert 12.365347284121754 >= 20
+
+tests/test_synth_3d_tasks.py:408: AssertionError
+----------------------------- Captured stdout call -----------------------------
+rotation3d: 12.4 samples/s (CPU time, single process)
+________________ test_speed_at_least_50_per_second_single_core _________________
+
+    def test_speed_at_least_50_per_second_single_core():
+        generate("occlusion", "train", 0)  # 预热（import、单位形状缓存）
+        t = time.process_time()
+        n = 60
+        for i in range(n):
+            generate("occlusion", "train", 1000 + i)
+        rate = n / (time.process_time() - t)
+        print(f"occlusion: {rate:.1f} samples/s (CPU time, single process)")
+>       assert rate >= 50
+E       assert 27.564369300617 >= 50
+
+tests/test_synth_occlusion.py:113: AssertionError
+----------------------------- Captured stdout call -----------------------------
+occlusion: 27.6 samples/s (CPU time, single process)
+2 failed in 7.26s

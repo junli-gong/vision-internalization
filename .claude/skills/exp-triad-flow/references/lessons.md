@@ -110,6 +110,15 @@
 - **防睡眠进程可能被终止** — 后台的 `caffeinate -ims` 以退出码 144 结束过一次；看到它的 task-notification
   立即重挂，并用 `pmset -g assertions` 确认断言生效。
 
+- **给无 Claude Code 的机器打包**：
+  - setup 脚本要把目标机器上**所有**运行时依赖装齐，包括本机从基础环境继承、所以 requirements 里没写的那些（例如 torchvision、accelerate）；
+  - prefetch 要覆盖测试会读的全部小文件（含 `*.md`）；
+  - 启动脚本显式设 `OMP_NUM_THREADS`；
+  - 权重按清单核对哈希；
+  - 环境改动之后，要求重跑一遍全量测试。
+
+  做法：先在一台干净的 venv 里按包的说明从头跑一遍，再上传。
+
 ## 数据获取（共享机、外部源）
 - **先探体积再下载；zip 用 Range 抽取 central directory 定点取文件**，省 99% 流量。
 - **公共 Drive 配额按文件计、随请求大小退化** — 探针要探真正的大文件并用 ≥256 KiB 请求；

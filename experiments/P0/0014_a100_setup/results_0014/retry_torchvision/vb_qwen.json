@@ -1,0 +1,21 @@
+{
+ "script": "scripts/validate_batching.py",
+ "argv": [
+  "--model",
+  "qwen3.5-0.8b",
+  "--jsonl",
+  "/root/autodl-tmp/visint-0014/results_0014/vb_rows.jsonl",
+  "--batch-sizes",
+  "4",
+  "8",
+  "--out",
+  "/root/autodl-tmp/visint-0014/results_0014/retry_torchvision/vb_qwen.json"
+ ],
+ "mode": "real",
+ "started_utc": "2026-10-02T05:10:32+00:00",
+ "ok": false,
+ "timing_note": "吞吐只含 model.generate 的墙钟（GenerationResult.wall_time_s / batch_wall_time_s），预热不计；build_inputs 单列",
+ "error": "ValueError('Using a `device_map`, `tp_plan`, `torch.device` context manager or setting `torch.set_default_device(device)` requires `accelerate`. You can install it with `pip install accelerate`')",
+ "traceback": "Traceback (most recent call last):\n  File \"/root/autodl-tmp/visint-0014/vision-internalization/scripts/validate_batching.py\", line 296, in main\n    run(args, report)\n  File \"/root/autodl-tmp/visint-0014/vision-internalization/scripts/validate_batching.py\", line 205, in run\n    ad = make_adapter(key, device=args.device, dtype=DTYPES[args.dtype], image_policy=policy, tiny=args.tiny,\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/autodl-tmp/visint-0014/vision-internalization/src/adapters/factory.py\", line 97, in make_adapter\n    ad.load(key, dtype)\n  File \"/root/autodl-tmp/visint-0014/vision-internalization/src/adapters/qwen35.py\", line 463, in load\n    model = AutoModelForImageTextToText.from_pretrained(\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/autodl-tmp/visint-0014/venv/lib/python3.12/site-packages/transformers/models/auto/auto_factory.py\", line 402, in from_pretrained\n    return model_class.from_pretrained(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/autodl-tmp/visint-0014/venv/lib/python3.12/site-packages/transformers/modeling_utils.py\", line 4164, in from_pretrained\n    device_map = check_and_set_device_map(device_map)  # warn, error and fix the device map\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/autodl-tmp/visint-0014/venv/lib/python3.12/site-packages/transformers/integrations/accelerate.py\", line 137, in check_and_set_device_map\n    raise ValueError(\nValueError: Using a `device_map`, `tp_plan`, `torch.device` context manager or setting `torch.set_default_device(device)` requires `accelerate`. You can install it with `pip install accelerate`\n",
+ "wall_time_s": 5.99
+}

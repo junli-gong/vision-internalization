@@ -1,0 +1,49 @@
+RUN-0014 A100 execution notes (2026-10-02 UTC)
+
+Host: autodl-container-4c754cbcba-aaf0b54e
+GPU: NVIDIA A100-PCIE-40GB, 40960 MiB, driver 580.105.08, compute capability 8.0
+Instance: 10 CPU cores, 72 GB RAM, 50 GB data disk
+Work directory: /root/autodl-tmp/visint-0014
+Package revision: 6dcf31a05c7c7ef9f6125c8b6219ae46fb088568
+
+CUDA check: torch 2.13.0+cu130, CUDA 13.0, cuda.is_available() true;
+bf16 matrix multiplication on the A100 returned the expected value 16.0.
+
+SKIP_GEMMA=1 was used. Full Gemma 4 weights were unavailable without access;
+the tiny Gemma smoke test still passed.
+
+Initial run_all.sh results are in results_0014/. It recorded 1395 passed,
+4 failed, 11 skipped in pytest. The three tiny smoke tests passed. Both
+real-weight smoke tests and both batching checks initially exited with rc=2
+because torchvision was absent. The first follow-up attempt in
+results_0014/retry_torchvision/ then exposed missing accelerate.
+
+Only the work-directory virtual environment was changed: torchvision
+0.28.0+cu130 (paired with torch 2.13.0+cu130) and accelerate 1.15.0 were
+installed. pip check reported no broken requirements. OMP_NUM_THREADS was
+set to 8 for follow-up checks; the instance default was 0 and produced a
+libgomp warning. No project code, config, or test files were modified.
+
+Final GPU results in results_0014/retry_dependencies/:
+- Qwen3.5-0.8B real-weight smoke: all_ok=true, 87.55 s.
+- InternVL3.5-2B-HF real-weight smoke: all_ok=true, 22.59 s.
+- Qwen batching: script ok=true; sequential 0.334 samples/s, batch 4
+  0.969 samples/s (5/8 token sequences equal), batch 8 1.431 samples/s
+  (3/8 equal).
+- InternVL batching: script ok=true; sequential 0.512 samples/s, batch 4
+  0.696 samples/s (7/8 equal), batch 8 1.311 samples/s (7/8 equal).
+  Equality rates are measurements, not script failures.
+
+Targeted pytest follow-up:
+- InternVL 4B model-card test: passed after downloading its README.md
+  into the local Hugging Face cache from hf-mirror.com.
+- Tiny acceptance all-tasks test: passed in 246.61 s with OMP_NUM_THREADS=8;
+  the initial run had timed out at 900 s.
+- Two single-core synthetic-data speed tests still failed on this CPU:
+  rotation3d 12.4/s versus required 20/s; occlusion 27.6/s versus 50/s.
+  Original rates were 13.5/s and 27.1/s, respectively.
+
+The original pytest output and all follow-up outputs are retained; the full
+1,410-test suite was not rerun after environment fixes. The Hugging Face
+mirror was used only to prefetch assets into the work directory. The
+results archive does not include model weights.
