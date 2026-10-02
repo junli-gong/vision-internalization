@@ -1,0 +1,619 @@
+{
+ "per_model": {
+  "qwen3.5-0.8b": {
+   "pass": false,
+   "failures": {
+    "restricted": [
+     "restricted/thinking_on：生成的 token_agreement 0.7643 < 0.995",
+     "restricted/thinking_on：生成分歧处的 logit 差最大 0.1416 ≥ 0.125"
+    ],
+    "merge": [
+     "merge/thinking_on：生成的 token_agreement 0.5852 < 0.995",
+     "merge/thinking_on：教师强制的 argmax_agreement 0.9920 < 0.995",
+     "merge/thinking_on：生成分歧处的 logit 差最大 0.5251 ≥ 0.125",
+     "merge/thinking_on：教师强制不一致处的 logit 差最大 0.5921 ≥ 0.125",
+     "merge/thinking_off：随机 LoRA 太弱，0.990 的行与 base 相同（> 0.5）",
+     "merge/thinking_off：随机 LoRA 太弱，教师强制 argmax 与 base 相同的比例 0.9998 > 0.99"
+    ]
+   },
+   "criteria": {
+    "status": "提议值（D42-4）：RUN 实测后由管理员冻结",
+    "exact": false,
+    "exact_reason": "GPU / bf16：一致率（D21-2）",
+    "per_thinking_mode": true,
+    "min_agreement": 0.995,
+    "max_gap": 0.125,
+    "gap_definition": "不一致位置上两种实现所选两个 token 在参照 logits 上之差（见脚本说明）；top2_gap 只报告不判",
+    "restricted": [
+     "decode_vs_generate_batch.token_agreement ≥ min_agreement",
+     "teacher_forcing.agreement ≥ min_agreement",
+     "decode_vs_generate_batch.gap.max < max_gap 且 teacher_forcing.gap.max < max_gap（exact 时：exact_rows = 1 且没有不一致的位置）"
+    ],
+    "merge": [
+     "generate.token_agreement ≥ min_agreement",
+     "teacher_forcing.argmax_agreement ≥ min_agreement",
+     "generate.gap.max < max_gap 且 teacher_forcing.gap.max < max_gap（exact 时：exact_rows = 1 且没有不一致的位置）",
+     "随机 LoRA 的前提：effect_vs_base.generate.exact_rows ≤ 0.5，effect_vs_base.teacher_forcing.argmax_agreement ≤ 0.99"
+    ],
+    "effect_max_exact_rows": 0.5,
+    "effect_max_argmax_agreement": 0.99
+   },
+   "allowed": {
+    "ids": [
+     15,
+     16,
+     198,
+     248044,
+     248046
+    ],
+    "stop_ids": [
+     248046,
+     248044
+    ],
+    "tokens": [
+     {
+      "role": "digit_0",
+      "text": "0",
+      "id": 15,
+      "token": "0"
+     },
+     {
+      "role": "digit_1",
+      "text": "1",
+      "id": 16,
+      "token": "1"
+     },
+     {
+      "role": "newline",
+      "text": "\n",
+      "id": 198,
+      "token": "Ċ"
+     },
+     {
+      "role": "stop",
+      "text": null,
+      "id": 248046,
+      "token": "<|im_end|>"
+     },
+     {
+      "role": "stop",
+      "text": null,
+      "id": 248044,
+      "token": "<|endoftext|>"
+     }
+    ],
+    "probe": {
+     "grid_size": 16,
+     "n_tokens": 271,
+     "distinct_ids": [
+      15,
+      16,
+      198
+     ]
+    },
+    "rule": "tokenizer 编码 16×16 示例网格（grid_to_text）必须恰好由 0、1、换行三个单 token 组成，再加本家族的停止 token；不用新增的 grid token（均值初始化，logits 全同）"
+   },
+   "batch_protocol": {
+    "batch_size": 64,
+    "frozen": true,
+    "frozen_batch_size": 64,
+    "padding_side": "left",
+    "order": "selection",
+    "protocol_version": 1,
+    "n_batches": 4,
+    "batches": [
+     [
+      0,
+      64
+     ],
+     [
+      64,
+      128
+     ],
+     [
+      128,
+      192
+     ],
+     [
+      192,
+      200
+     ]
+    ],
+    "source": "configs/e1_prompts.json batch_protocol（src/e1/runner.batch_plan）"
+   },
+   "timing_s": {
+    "load_and_inputs_s": 5.43102935096249,
+    "restricted_s": 33.25643820920959,
+    "merge_before_s": 48.811764515936375,
+    "merge_after_s": 17.90433106990531,
+    "total_s": 105.4048524890095
+   },
+   "code": {
+    "commit": "2f7803541226d56d851344b74ca25acbff512af1",
+    "dirty": false,
+    "diff_shortstat": "",
+    "n_untracked": 0
+   },
+   "model": {
+    "key": "qwen3.5-0.8b",
+    "family": "qwen3.5",
+    "repo": "Qwen/Qwen3.5-0.8B",
+    "revision": "2fc06364715b967f1860aea9cf38778875588b17",
+    "adapter_model_key": "qwen3.5-0.8b",
+    "tiny": false,
+    "device": "cuda",
+    "dtype": "bf16",
+    "image_policy": "pixel_budget:300",
+    "tied_word_embeddings": true,
+    "tiny_init_std": null
+   },
+   "error": null
+  },
+  "gemma-4-e2b-it": {
+   "pass": false,
+   "failures": {
+    "restricted": [
+     "restricted/thinking_off：教师强制不一致处的 logit 差最大 1.4925 ≥ 0.125",
+     "restricted/thinking_on：生成的 token_agreement 0.9607 < 0.995",
+     "restricted/thinking_on：生成分歧处的 logit 差最大 0.4122 ≥ 0.125",
+     "restricted/thinking_on：教师强制不一致处的 logit 差最大 0.4122 ≥ 0.125"
+    ],
+    "merge": [
+     "merge/thinking_off：生成的 token_agreement 0.9404 < 0.995",
+     "merge/thinking_off：生成分歧处的 logit 差最大 1.0155 ≥ 0.125",
+     "merge/thinking_off：教师强制不一致处的 logit 差最大 0.7218 ≥ 0.125",
+     "merge/thinking_on：生成的 token_agreement 0.5688 < 0.995",
+     "merge/thinking_on：教师强制的 argmax_agreement 0.9899 < 0.995",
+     "merge/thinking_on：生成分歧处的 logit 差最大 1.4671 ≥ 0.125",
+     "merge/thinking_on：教师强制不一致处的 logit 差最大 3.8729 ≥ 0.125",
+     "merge/thinking_off：随机 LoRA 太弱，0.630 的行与 base 相同（> 0.5）",
+     "merge/thinking_off：随机 LoRA 太弱，教师强制 argmax 与 base 相同的比例 0.9967 > 0.99"
+    ]
+   },
+   "criteria": {
+    "status": "提议值（D42-4）：RUN 实测后由管理员冻结",
+    "exact": false,
+    "exact_reason": "GPU / bf16：一致率（D21-2）",
+    "per_thinking_mode": true,
+    "min_agreement": 0.995,
+    "max_gap": 0.125,
+    "gap_definition": "不一致位置上两种实现所选两个 token 在参照 logits 上之差（见脚本说明）；top2_gap 只报告不判",
+    "restricted": [
+     "decode_vs_generate_batch.token_agreement ≥ min_agreement",
+     "teacher_forcing.agreement ≥ min_agreement",
+     "decode_vs_generate_batch.gap.max < max_gap 且 teacher_forcing.gap.max < max_gap（exact 时：exact_rows = 1 且没有不一致的位置）"
+    ],
+    "merge": [
+     "generate.token_agreement ≥ min_agreement",
+     "teacher_forcing.argmax_agreement ≥ min_agreement",
+     "generate.gap.max < max_gap 且 teacher_forcing.gap.max < max_gap（exact 时：exact_rows = 1 且没有不一致的位置）",
+     "随机 LoRA 的前提：effect_vs_base.generate.exact_rows ≤ 0.5，effect_vs_base.teacher_forcing.argmax_agreement ≤ 0.99"
+    ],
+    "effect_max_exact_rows": 0.5,
+    "effect_max_argmax_agreement": 0.99
+   },
+   "allowed": {
+    "ids": [
+     1,
+     106,
+     107,
+     236770,
+     236771
+    ],
+    "stop_ids": [
+     106,
+     1
+    ],
+    "tokens": [
+     {
+      "role": "digit_0",
+      "text": "0",
+      "id": 236771,
+      "token": "0"
+     },
+     {
+      "role": "digit_1",
+      "text": "1",
+      "id": 236770,
+      "token": "1"
+     },
+     {
+      "role": "newline",
+      "text": "\n",
+      "id": 107,
+      "token": "\n"
+     },
+     {
+      "role": "stop",
+      "text": null,
+      "id": 106,
+      "token": "<turn|>"
+     },
+     {
+      "role": "stop",
+      "text": null,
+      "id": 1,
+      "token": "<eos>"
+     }
+    ],
+    "probe": {
+     "grid_size": 16,
+     "n_tokens": 271,
+     "distinct_ids": [
+      107,
+      236770,
+      236771
+     ]
+    },
+    "rule": "tokenizer 编码 16×16 示例网格（grid_to_text）必须恰好由 0、1、换行三个单 token 组成，再加本家族的停止 token；不用新增的 grid token（均值初始化，logits 全同）"
+   },
+   "batch_protocol": {
+    "batch_size": 64,
+    "frozen": true,
+    "frozen_batch_size": 64,
+    "padding_side": "left",
+    "order": "selection",
+    "protocol_version": 1,
+    "n_batches": 4,
+    "batches": [
+     [
+      0,
+      64
+     ],
+     [
+      64,
+      128
+     ],
+     [
+      128,
+      192
+     ],
+     [
+      192,
+      200
+     ]
+    ],
+    "source": "configs/e1_prompts.json batch_protocol（src/e1/runner.batch_plan）"
+   },
+   "timing_s": {
+    "load_and_inputs_s": 7.736551829148084,
+    "restricted_s": 53.76813946664333,
+    "merge_before_s": 84.8055514502339,
+    "merge_after_s": 30.445012282114476,
+    "total_s": 176.75708108209074
+   },
+   "code": {
+    "commit": "2f7803541226d56d851344b74ca25acbff512af1",
+    "dirty": false,
+    "diff_shortstat": "",
+    "n_untracked": 0
+   },
+   "model": {
+    "key": "gemma-4-e2b-it",
+    "family": "gemma4",
+    "repo": "google/gemma-4-E2B-it",
+    "revision": "3e22461f65e89153144f8adb70e3b8c2cc9845a7",
+    "adapter_model_key": "gemma-4-e2b-it",
+    "tiny": false,
+    "device": "cuda",
+    "dtype": "bf16",
+    "image_policy": "soft_tokens:280",
+    "tied_word_embeddings": true,
+    "tiny_init_std": null
+   },
+   "error": null
+  },
+  "internvl3.5-2b-hf": {
+   "pass": false,
+   "failures": {
+    "restricted": [],
+    "merge": [
+     "merge/thinking_off：生成的 token_agreement 0.9259 < 0.995",
+     "merge/thinking_off：生成分歧处的 logit 差最大 0.3056 ≥ 0.125",
+     "merge/thinking_off：教师强制不一致处的 logit 差最大 0.2909 ≥ 0.125",
+     "merge/thinking_on：生成的 token_agreement 0.6952 < 0.995",
+     "merge/thinking_on：生成分歧处的 logit 差最大 0.7002 ≥ 0.125",
+     "merge/thinking_on：教师强制不一致处的 logit 差最大 0.7562 ≥ 0.125",
+     "merge/thinking_off：随机 LoRA 太弱，0.505 的行与 base 相同（> 0.5）",
+     "merge/thinking_off：随机 LoRA 太弱，教师强制 argmax 与 base 相同的比例 0.9931 > 0.99"
+    ]
+   },
+   "criteria": {
+    "status": "提议值（D42-4）：RUN 实测后由管理员冻结",
+    "exact": false,
+    "exact_reason": "GPU / bf16：一致率（D21-2）",
+    "per_thinking_mode": true,
+    "min_agreement": 0.995,
+    "max_gap": 0.125,
+    "gap_definition": "不一致位置上两种实现所选两个 token 在参照 logits 上之差（见脚本说明）；top2_gap 只报告不判",
+    "restricted": [
+     "decode_vs_generate_batch.token_agreement ≥ min_agreement",
+     "teacher_forcing.agreement ≥ min_agreement",
+     "decode_vs_generate_batch.gap.max < max_gap 且 teacher_forcing.gap.max < max_gap（exact 时：exact_rows = 1 且没有不一致的位置）"
+    ],
+    "merge": [
+     "generate.token_agreement ≥ min_agreement",
+     "teacher_forcing.argmax_agreement ≥ min_agreement",
+     "generate.gap.max < max_gap 且 teacher_forcing.gap.max < max_gap（exact 时：exact_rows = 1 且没有不一致的位置）",
+     "随机 LoRA 的前提：effect_vs_base.generate.exact_rows ≤ 0.5，effect_vs_base.teacher_forcing.argmax_agreement ≤ 0.99"
+    ],
+    "effect_max_exact_rows": 0.5,
+    "effect_max_argmax_agreement": 0.99
+   },
+   "allowed": {
+    "ids": [
+     15,
+     16,
+     198,
+     151645
+    ],
+    "stop_ids": [
+     151645
+    ],
+    "tokens": [
+     {
+      "role": "digit_0",
+      "text": "0",
+      "id": 15,
+      "token": "0"
+     },
+     {
+      "role": "digit_1",
+      "text": "1",
+      "id": 16,
+      "token": "1"
+     },
+     {
+      "role": "newline",
+      "text": "\n",
+      "id": 198,
+      "token": "Ċ"
+     },
+     {
+      "role": "stop",
+      "text": null,
+      "id": 151645,
+      "token": "<|im_end|>"
+     }
+    ],
+    "probe": {
+     "grid_size": 16,
+     "n_tokens": 271,
+     "distinct_ids": [
+      15,
+      16,
+      198
+     ]
+    },
+    "rule": "tokenizer 编码 16×16 示例网格（grid_to_text）必须恰好由 0、1、换行三个单 token 组成，再加本家族的停止 token；不用新增的 grid token（均值初始化，logits 全同）"
+   },
+   "batch_protocol": {
+    "batch_size": 64,
+    "frozen": true,
+    "frozen_batch_size": 64,
+    "padding_side": "left",
+    "order": "selection",
+    "protocol_version": 1,
+    "n_batches": 4,
+    "batches": [
+     [
+      0,
+      64
+     ],
+     [
+      64,
+      128
+     ],
+     [
+      128,
+      192
+     ],
+     [
+      192,
+      200
+     ]
+    ],
+    "source": "configs/e1_prompts.json batch_protocol（src/e1/runner.batch_plan）"
+   },
+   "timing_s": {
+    "load_and_inputs_s": 4.32746456284076,
+    "restricted_s": 53.1330085368827,
+    "merge_before_s": 56.59591505303979,
+    "merge_after_s": 21.52284060092643,
+    "total_s": 135.58078580116853
+   },
+   "code": {
+    "commit": "2f7803541226d56d851344b74ca25acbff512af1",
+    "dirty": false,
+    "diff_shortstat": "",
+    "n_untracked": 0
+   },
+   "model": {
+    "key": "internvl3.5-2b-hf",
+    "family": "internvl3.5",
+    "repo": "OpenGVLab/InternVL3_5-2B-HF",
+    "revision": "3f301ffcf3dcbb47893afae6650ea3e78d96fb6d",
+    "adapter_model_key": "internvl3.5-2b-hf",
+    "tiny": false,
+    "device": "cuda",
+    "dtype": "bf16",
+    "image_policy": "tiles:false:1",
+    "tied_word_embeddings": false,
+    "tiny_init_std": null
+   },
+   "error": null
+  },
+  "qwen3.5-9b": {
+   "pass": false,
+   "failures": {
+    "restricted": [
+     "restricted/thinking_on：生成的 token_agreement 0.9779 < 0.995",
+     "restricted/thinking_on：生成分歧处的 logit 差最大 0.1552 ≥ 0.125"
+    ],
+    "merge": [
+     "merge/thinking_on：生成的 token_agreement 0.7229 < 0.995",
+     "merge/thinking_on：生成分歧处的 logit 差最大 0.3737 ≥ 0.125",
+     "merge/thinking_on：教师强制不一致处的 logit 差最大 0.2777 ≥ 0.125",
+     "merge/thinking_off：随机 LoRA 太弱，1.000 的行与 base 相同（> 0.5）",
+     "merge/thinking_off：随机 LoRA 太弱，教师强制 argmax 与 base 相同的比例 1.0000 > 0.99"
+    ]
+   },
+   "criteria": {
+    "status": "提议值（D42-4）：RUN 实测后由管理员冻结",
+    "exact": false,
+    "exact_reason": "GPU / bf16：一致率（D21-2）",
+    "per_thinking_mode": true,
+    "min_agreement": 0.995,
+    "max_gap": 0.125,
+    "gap_definition": "不一致位置上两种实现所选两个 token 在参照 logits 上之差（见脚本说明）；top2_gap 只报告不判",
+    "restricted": [
+     "decode_vs_generate_batch.token_agreement ≥ min_agreement",
+     "teacher_forcing.agreement ≥ min_agreement",
+     "decode_vs_generate_batch.gap.max < max_gap 且 teacher_forcing.gap.max < max_gap（exact 时：exact_rows = 1 且没有不一致的位置）"
+    ],
+    "merge": [
+     "generate.token_agreement ≥ min_agreement",
+     "teacher_forcing.argmax_agreement ≥ min_agreement",
+     "generate.gap.max < max_gap 且 teacher_forcing.gap.max < max_gap（exact 时：exact_rows = 1 且没有不一致的位置）",
+     "随机 LoRA 的前提：effect_vs_base.generate.exact_rows ≤ 0.5，effect_vs_base.teacher_forcing.argmax_agreement ≤ 0.99"
+    ],
+    "effect_max_exact_rows": 0.5,
+    "effect_max_argmax_agreement": 0.99
+   },
+   "allowed": {
+    "ids": [
+     15,
+     16,
+     198,
+     248044,
+     248046
+    ],
+    "stop_ids": [
+     248046,
+     248044
+    ],
+    "tokens": [
+     {
+      "role": "digit_0",
+      "text": "0",
+      "id": 15,
+      "token": "0"
+     },
+     {
+      "role": "digit_1",
+      "text": "1",
+      "id": 16,
+      "token": "1"
+     },
+     {
+      "role": "newline",
+      "text": "\n",
+      "id": 198,
+      "token": "Ċ"
+     },
+     {
+      "role": "stop",
+      "text": null,
+      "id": 248046,
+      "token": "<|im_end|>"
+     },
+     {
+      "role": "stop",
+      "text": null,
+      "id": 248044,
+      "token": "<|endoftext|>"
+     }
+    ],
+    "probe": {
+     "grid_size": 16,
+     "n_tokens": 271,
+     "distinct_ids": [
+      15,
+      16,
+      198
+     ]
+    },
+    "rule": "tokenizer 编码 16×16 示例网格（grid_to_text）必须恰好由 0、1、换行三个单 token 组成，再加本家族的停止 token；不用新增的 grid token（均值初始化，logits 全同）"
+   },
+   "batch_protocol": {
+    "batch_size": 64,
+    "frozen": true,
+    "frozen_batch_size": 64,
+    "padding_side": "left",
+    "order": "selection",
+    "protocol_version": 1,
+    "n_batches": 4,
+    "batches": [
+     [
+      0,
+      64
+     ],
+     [
+      64,
+      128
+     ],
+     [
+      128,
+      192
+     ],
+     [
+      192,
+      200
+     ]
+    ],
+    "source": "configs/e1_prompts.json batch_protocol（src/e1/runner.batch_plan）"
+   },
+   "timing_s": {
+    "load_and_inputs_s": 8.125063565094024,
+    "restricted_s": 65.18600112712011,
+    "merge_before_s": 97.39826501626521,
+    "merge_after_s": 36.737758417613804,
+    "total_s": 207.44873556587845
+   },
+   "code": {
+    "commit": "2f7803541226d56d851344b74ca25acbff512af1",
+    "dirty": false,
+    "diff_shortstat": "",
+    "n_untracked": 0
+   },
+   "model": {
+    "key": "qwen3.5-9b",
+    "family": "qwen3.5",
+    "repo": "Qwen/Qwen3.5-9B",
+    "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+    "adapter_model_key": "qwen3.5-9b",
+    "tiny": false,
+    "device": "cuda",
+    "dtype": "bf16",
+    "image_policy": "pixel_budget:300",
+    "tied_word_embeddings": false,
+    "tiny_init_std": null
+   },
+   "error": null
+  }
+ },
+ "nvidia_smi_peak_mib": {
+  "qwen3.5-0.8b": 7924,
+  "gemma-4-e2b-it": 19446,
+  "internvl3.5-2b-hf": 12934,
+  "qwen3.5-9b": 32232
+ },
+ "windows": {
+  "qwen3.5-0.8b": [
+   "10:56:27",
+   "10:58:17"
+  ],
+  "gemma-4-e2b-it": [
+   "10:58:17",
+   "11:01:52"
+  ],
+  "internvl3.5-2b-hf": [
+   "11:01:53",
+   "11:04:26"
+  ],
+  "qwen3.5-9b": [
+   "11:04:26",
+   "11:08:48"
+  ]
+ }
+}
