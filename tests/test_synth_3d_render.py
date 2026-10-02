@@ -26,7 +26,6 @@ from src.synth.constants import (
     SOLID_REST_POSES,
     UNIT_SHAPE_QUANTUM,
     VIEW_FLOOR_COLOR,
-    VIEW_FLOOR_RADIUS_M,
     VIEW_FLOOR_SEGMENTS,
 )
 from src.synth.raster import HALF, UNITS, rasterize
@@ -49,12 +48,18 @@ ALL_VARIANTS = [(f, v.index) for f in SOLID_FAMILIES for v in SO.SOLID_VARIANTS[
 FACE_COUNTS = {"box": 12, "sphere": 320, "cylinder": 64, "cone": 32, "torus": 256, "l_prism": 20}
 
 
+# 渲染测试自己的地板半径：DEV-0010 时 b 的 VIEW_FLOOR_RADIUS_M。DEV-0018 起 b 的地板放大到 2.4 m，渲染测试（含钉住的
+# 渲染摘要）固定用原值，与 b 的布局参数脱钩。
+RENDER_TEST_FLOOR_RADIUS_M = 1.7
+
+
 # ---------------------------------------------------------------------------
 # 网格
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("family,index", ALL_VARIANTS)
+
 def test_meshes_are_closed_oriented_and_normalized(family, index):
     v, f = SO.unit_mesh(family, index)
     assert not v.flags.writeable and not f.flags.writeable
@@ -366,7 +371,7 @@ def test_tilted_faces_and_floor_depth_match_independent_ray_casting():
     h = w = 256
     camera = CameraSpec(40, 25, 4.0)
     obj = _cube(0.4, center=(0.3, 0.4 + 1e-3, -0.2), yaw=30)
-    floor = FloorSpec(VIEW_FLOOR_RADIUS_M, VIEW_FLOOR_SEGMENTS, tuple(VIEW_FLOOR_COLOR))
+    floor = FloorSpec(RENDER_TEST_FLOOR_RADIUS_M, VIEW_FLOOR_SEGMENTS, tuple(VIEW_FLOOR_COLOR))
     scene = Scene3D(h, w, (255, 255, 255), camera, (obj,), floor)
     fr = render_scene(scene)
     f, cx, cy = intrinsics(h, w)
@@ -398,7 +403,7 @@ def test_tilted_faces_and_floor_depth_match_independent_ray_casting():
 
 def test_image_ids_and_depth_are_aligned_by_construction():
     camera = CameraSpec(200, 30, 4.5)
-    floor = FloorSpec(VIEW_FLOOR_RADIUS_M, VIEW_FLOOR_SEGMENTS, tuple(VIEW_FLOOR_COLOR))
+    floor = FloorSpec(RENDER_TEST_FLOOR_RADIUS_M, VIEW_FLOOR_SEGMENTS, tuple(VIEW_FLOOR_COLOR))
     objs = (  # 中心高度 = 外接半径：外接球整个在地板之上
         SolidSpec(0, "torus", 1, 3, "side_x", 40, 0.45, (0.5, 0.45, 0.2)),
         SolidSpec(1, "l_prism", 2, 7, "upright", 110, 0.5, (-0.4, 0.5, -0.3)),
@@ -456,7 +461,7 @@ def test_pinned_render_digest():
             fr = render_scene(scene, extra=extra)
             for a in (fr.id_map, fr.depth_units, fr.rgb):
                 h.update(a.tobytes())
-    floor = FloorSpec(VIEW_FLOOR_RADIUS_M, VIEW_FLOOR_SEGMENTS, tuple(VIEW_FLOOR_COLOR))
+    floor = FloorSpec(RENDER_TEST_FLOOR_RADIUS_M, VIEW_FLOOR_SEGMENTS, tuple(VIEW_FLOOR_COLOR))
     objs = tuple(
         SolidSpec(k, fam, 0, k, SOLID_REST_POSES[k % 3], 29 * k, 0.4, (math.cos(k) * 0.9, 0.45, math.sin(k) * 0.9))
         for k, fam in enumerate(SOLID_FAMILIES)

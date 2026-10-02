@@ -24,8 +24,10 @@ from __future__ import annotations
 # 历史：1 = DEV-0007（作废，没有产出过数据，D24）；2 = DEV-0009，跨机器逐位复现的修复；
 # 3 = DEV-0010，新增 a、b（3D）。c、d、e 的输出在版本 3 里没有变，仍记 2：版本号进种子，整体加一会改变它们已钉住的
 # 180 个摘要，所以改为按任务记版本（任务书 DEV-0010 的后备方案）。
-TASK_GENERATOR_VERSIONS = {"occlusion": 2, "physics": 2, "imagery": 2, "rotation3d": 3, "viewpoint": 3}
-SYNTH_GENERATOR_VERSION = 3
+# 4 = DEV-0018（D28-13）：a 加"目标相对深度（起伏）网格"与基线的起伏（src/synth/relief.py），b 放大物体。只改 a、b；
+# c、d、e 的输出不变，仍记 2。
+TASK_GENERATOR_VERSIONS = {"occlusion": 2, "physics": 2, "imagery": 2, "rotation3d": 4, "viewpoint": 4}
+SYNTH_GENERATOR_VERSION = 4
 if SYNTH_GENERATOR_VERSION != max(TASK_GENERATOR_VERSIONS.values()):  # pragma: no cover - 常量写错
     raise ImportError("SYNTH_GENERATOR_VERSION 必须等于各任务版本的最大值")
 
@@ -274,11 +276,14 @@ VIEW_ORBIT_PROB = 0.5
 # 难度档：第 k 档 = 环绕角的第 k 档或平移量的第 k 档（看移动类型）。前三档 [lo, hi)，最后一档两端都含。
 VIEW_ORBIT_BINS = ((10, 20), (20, 40), (40, 80), (80, 180))  # 整数度
 VIEW_SHIFT_BINS_CM = ((10, 20), (20, 40), (40, 80), (80, 120))  # 整数厘米
-VIEW_NUM_OBJECTS = (3, 4)  # 闭区间
-VIEW_RADIUS_M = (0.30, 0.50)  # 实体外接半径
-VIEW_PLACE_RADIUS_M = 1.1  # 物体中心离地板中心的最大水平距离
-VIEW_MIN_GAP_M = 0.05  # 物体水平外接圆之间的最小间隙（外接圆不相交，所以物体互不穿插）
-VIEW_FLOOR_RADIUS_M = 1.7  # 圆形地板：世界原点为中心、y = 0，折线化为 VIEW_FLOOR_SEGMENTS 边形
+# DEV-0018（D28-13，b 的任务版本 3 → 4）：物体放大，让被点名的物体在 32×32 网格上至少约占 100 格。相机（距离、俯角、
+# 移动的档位）不变，只把物体与布局放大（版本 3 的值：物体 3–4 个、外接半径 0.30–0.50 m、布局半径 1.1 m、间隙 0.05 m、
+# 地板半径 1.7 m；目标在 32×32 网格上的中位数约 15 格），并加一条目标可见面积的下限 VIEW_MIN_TARGET_CELLS。
+VIEW_NUM_OBJECTS = (2, 3)  # 闭区间（大物体放不下 4 个；摆不下第 3 个时只有 2 个）
+VIEW_RADIUS_M = (0.75, 1.10)  # 实体外接半径
+VIEW_PLACE_RADIUS_M = 1.3  # 物体中心离地板中心的最大水平距离（+ 最大外接半径 = 地板半径：物体不伸出地板）
+VIEW_MIN_GAP_M = 0.10  # 物体水平外接圆之间的最小间隙（外接圆不相交，所以物体互不穿插）
+VIEW_FLOOR_RADIUS_M = 2.4  # 圆形地板：世界原点为中心、y = 0，折线化为 VIEW_FLOOR_SEGMENTS 边形
 VIEW_FLOOR_SEGMENTS = 64
 VIEW_FLOOR_COLOR = (190, 184, 172)
 VIEW_DISTANCE_M = (4.0, 5.0)  # 相机到地板中心（相机看向地板中心）
@@ -286,3 +291,10 @@ VIEW_ELEVATION_DEG = (20, 40)  # 相机俯角（整数度，闭区间）
 VIEW_MIN_CAMERA_HEIGHT_M = 0.3  # 两个视角里相机都至少这么高
 VIEW_MIN_VISIBLE_FRAC = 0.5  # 被点名的物体在两个视角里：可见像素 / 自身完整轮廓的像素 的下限
 VIEW_MIN_VISIBLE_PX = 64  # 以及可见像素数的下限
+# 以及（DEV-0018）可见面积 ≥ VIEW_MIN_TARGET_CELLS 个"src.constants.GRID_SIZE_E3B × GRID_SIZE_E3B 网格的格子"：
+# 可见像素 ≥ ceil(VIEW_MIN_TARGET_CELLS · H · W / GRID_SIZE_E3B²)（512×512 画布上 25,600 像素）。按画布面积定义，与 cfg 的
+# grid_size 无关；网格上实际的格数由"格内占比 ≥ 0.5"的规则决定，所以是"约" 100 格（D28-13）。
+VIEW_MIN_TARGET_CELLS = 100
+# 渲染前的预筛（只省时间）：目标顶点投影的凸包面积（1/256 px 整数单位里精确求）< 下限 × 这个比例的候选直接去掉。
+# 像素中心数 ≤ 凸包面积 + 半周长 + 1（Pick 定理），所以 0.9 的余量不会去掉任何能通过像素判定的候选。
+VIEW_HULL_PRECHECK_FRAC = (9, 10)

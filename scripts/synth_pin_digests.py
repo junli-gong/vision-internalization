@@ -14,6 +14,7 @@ DEV-0009 格式的文件（清单里没有 generator_version）读入时按顶�
 用法（在仓库根目录；服务器用 $PROJ/venv 的 python）：
   python scripts/synth_pin_digests.py check                    # 逐个比对，打印不同的 case，不改文件；有不同时退出码 1
   python scripts/synth_pin_digests.py write --only rotation3d  # 只重写一个任务的清单（该任务版本加一、或新增任务之后）
+  python scripts/synth_pin_digests.py write --only rotation3d viewpoint  # 一次重写几个任务（几个任务的版本同时加一时）
   python scripts/synth_pin_digests.py write --only physics     # 在规范平台上填入 d 的摘要
   python scripts/synth_pin_digests.py write --only physics --out experiments/P0/NNNN_x/synth_digests_v2.json
       # 服务器 CC 不改 tests/：以仓库里的文件为底、只换 d 的清单，写到运行目录，由管理员复制回 tests/data/
@@ -129,7 +130,7 @@ def stale_tasks(data: dict) -> list[str]:
     return [t for t, b in data["tasks"].items() if t in TASK_GENERATOR_VERSIONS and b["generator_version"] != TASK_GENERATOR_VERSIONS[t]]
 
 
-def cmd_write(only: str | None, out: Path) -> None:
+def cmd_write(only: list[str] | None, out: Path) -> None:
     if only is None:
         old = load() if DIGEST_FILE.exists() else {"tasks": {}}
         tasks = {}
@@ -150,11 +151,12 @@ def cmd_write(only: str | None, out: Path) -> None:
         data = {"tasks": tasks}
     else:
         data = load()
-        others = [t for t in stale_tasks(data) if t != only]
+        others = [t for t in stale_tasks(data) if t not in only]
         if others:
-            raise SystemExit(f"这些任务的清单版本与代码不同：{others}。先分别用 --only 重写它们（或不带 --only 重写整个文件）")
+            raise SystemExit(f"这些任务的清单版本与代码不同：{others}。把它们也列进 --only（或不带 --only 重写整个文件）")
         tasks = dict(data["tasks"])
-        tasks[only] = task_block(only)
+        for t in only:
+            tasks[t] = task_block(t)
         data["tasks"] = {t: tasks[t] for t in TASKS if t in tasks}
     save(data, out)
     print(f"wrote {out}", {t: len(b["digests"]) for t, b in data["tasks"].items()})
@@ -192,7 +194,8 @@ def cmd_check() -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("mode", choices=["check", "write"])
-    ap.add_argument("--only", choices=list(TASKS), default=None, help="write 时只重写这个任务的清单（其余照抄仓库里的文件）")
+    ap.add_argument("--only", choices=list(TASKS), nargs="+", default=None,
+                    help="write 时只重写这些任务的清单（其余照抄仓库里的文件）；DEV-0018 起可以一次给多个")
     ap.add_argument("--out", type=Path, default=DIGEST_FILE, help="write 的输出路径，默认 tests/data/synth_digests_v2.json")
     a = ap.parse_args()
     if a.mode == "write":

@@ -77,23 +77,21 @@ def sqrt_spd2(sxx: float, sxy: float, syy: float) -> Mat2:
     return (((sxx + s) / t, sxy / t), (sxy / t, (syy + s) / t))
 
 
-def affine_warp(mask: np.ndarray, a: Mat2, t: tuple[float, float], stride: int = 1) -> np.ndarray:
-    """mask 在 x' = A·x + t 下的像，按输出像素中心反向映射取样。
+def _affine_sources(mask: np.ndarray, a: Mat2, t: tuple[float, float], stride: int):
+    """affine_warp 的取样：返回 (输出形状, 窗口 (i_lo, i_hi, j_lo, j_hi) 或 None, 窗口里每个输出像素是否落在前景上, 源行, 源列)。
 
-    stride > 1 时只在每隔 stride 个像素的格点上取样（像素 (stride·i, stride·j) 的中心），返回
-    (ceil(H/stride), ceil(W/stride)) 的数组，与 mask[::stride, ::stride] 一一对应（矩匹配搜索的粗评估用）。
+    窗口为 None 时结果全空（空 mask、A 奇异、像在画布外）。源行、源列只在"落在前景上"的位置有意义。
     """
     m = np.asarray(mask, dtype=bool)
     h, w = m.shape
     oh, ow = -(-h // stride), -(-w // stride)
-    out = np.zeros((oh, ow), dtype=bool)
     rows = np.nonzero(m.any(axis=1))[0]
     if rows.size == 0:
-        return out
+        return (oh, ow), None, None, None, None
     cols = np.nonzero(m.any(axis=0))[0]
     det = a[0][0] * a[1][1] - a[0][1] * a[1][0]
     if det == 0.0:
-        return out
+        return (oh, ow), None, None, None, None
     ia = inv2(a)
     # 前景包围盒 [c0, c1+1] × [r0, r1+1] 的四个角在变换下的像，决定需要取样的输出范围
     xs, ys = (float(cols[0]), float(cols[-1] + 1)), (float(rows[0]), float(rows[-1] + 1))
@@ -105,7 +103,7 @@ def affine_warp(mask: np.ndarray, a: Mat2, t: tuple[float, float], stride: int =
     i_lo = max(math.floor((min(py) - 0.5) / stride) - 1, 0)
     i_hi = min(math.ceil((max(py) - 0.5) / stride) + 1, oh - 1)
     if j_hi < j_lo or i_hi < i_lo:
-        return out
+        return (oh, ow), None, None, None, None
     qx = (np.arange(j_lo, j_hi + 1, dtype=np.float64) * stride + 0.5) - t[0]
     qy = (np.arange(i_lo, i_hi + 1, dtype=np.float64) * stride + 0.5) - t[1]
     sx = ia[0][0] * qx[None, :] + ia[0][1] * qy[:, None]
@@ -115,8 +113,40 @@ def affine_warp(mask: np.ndarray, a: Mat2, t: tuple[float, float], stride: int =
     valid = (fx >= 0) & (fx < w) & (fy >= 0) & (fy < h)
     jx = np.where(valid, fx, 0).astype(np.int64)
     iy = np.where(valid, fy, 0).astype(np.int64)
-    out[i_lo : i_hi + 1, j_lo : j_hi + 1] = valid & m[iy, jx]
+    return (oh, ow), (i_lo, i_hi, j_lo, j_hi), valid & m[iy, jx], iy, jx
+
+
+def affine_warp(mask: np.ndarray, a: Mat2, t: tuple[float, float], stride: int = 1) -> np.ndarray:
+    """mask 在 x' = A·x + t 下的像，按输出像素中心反向映射取样。
+
+    stride > 1 时只在每隔 stride 个像素的格点上取样（像素 (stride·i, stride·j) 的中心），返回
+    (ceil(H/stride), ceil(W/stride)) 的数组，与 mask[::stride, ::stride] 一一对应（矩匹配搜索的粗评估用）。
+    """
+    shape, win, hit, _iy, _jx = _affine_sources(mask, a, t, stride)
+    out = np.zeros(shape, dtype=bool)
+    if win is not None:
+        i_lo, i_hi, j_lo, j_hi = win
+        out[i_lo : i_hi + 1, j_lo : j_hi + 1] = hit
     return out
+
+
+def affine_warp_values(mask: np.ndarray, values: np.ndarray, a: Mat2, t: tuple[float, float]) -> tuple[np.ndarray, np.ndarray]:
+    """mask 连同逐像素的值（如深度单位）一起做 affine_warp（全分辨率）：返回 (像 mask, 像上的值)。
+
+    像 mask 与 affine_warp(mask, a, t) 逐位相同；像素 p' 在像里时，它的值 = 反向映射落到的那个源像素的值（最近邻），
+    其余位置为 0。值的 dtype 不变（DEV-0018：a 的二维仿射基线的起伏）。
+    """
+    v = np.asarray(values)
+    if v.shape != np.asarray(mask).shape:
+        raise ValueError(f"values 的形状 {v.shape} 与 mask 不同")
+    shape, win, hit, iy, jx = _affine_sources(mask, a, t, 1)
+    out = np.zeros(shape, dtype=bool)
+    vals = np.zeros(shape, dtype=v.dtype)
+    if win is not None:
+        i_lo, i_hi, j_lo, j_hi = win
+        out[i_lo : i_hi + 1, j_lo : j_hi + 1] = hit
+        vals[i_lo : i_hi + 1, j_lo : j_hi + 1] = np.where(hit, v[iy, jx], 0)
+    return out, vals
 
 
 def shift_mask(mask: np.ndarray, dx: int, dy: int) -> np.ndarray:
