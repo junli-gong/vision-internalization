@@ -21,7 +21,7 @@ from PIL import Image
 
 from src.data.dedupe import phash_image
 from src.data.land import net
-from src.data.land.manifest import GB, Manifest, check_budget
+from src.data.land.manifest import DEFAULT_SCRIPT, GB, Manifest, check_budget
 
 
 @dataclass
@@ -55,8 +55,9 @@ class LandContext:
         p.mkdir(parents=True, exist_ok=True)
         return p
 
-    def manifest(self, name: str) -> Manifest:
-        return Manifest(self.source_dir(name), name, root=self.root, tmpdir=self.tmpdir, min_free_gb=self.min_free_gb, log=self.log)
+    def manifest(self, name: str, *, script: str = DEFAULT_SCRIPT) -> Manifest:
+        """script：清单里记的落地入口（默认 E1 的 scripts/data/land_e1.py；训练源传 scripts/data/land_train.py）。"""
+        return Manifest(self.source_dir(name), name, root=self.root, tmpdir=self.tmpdir, min_free_gb=self.min_free_gb, log=self.log, script=script)
 
     def take(self, items: Sequence[Any]) -> list[Any]:
         return list(items if self.limit is None else items[: self.limit])
@@ -254,7 +255,7 @@ def download_images(ctx: LandContext, m: Manifest, src_dir: Path, jobs: Sequence
         extra = {k: v for k, v in job.meta.items() if k != "rel"}
         m.add_file(rel, sha256=res.sha256, nbytes=res.bytes, url=job.url, **meta, **extra)
         done[0] += 1
-        if done[0] % 500 == 0:  # 下载途中也盯着红线；DiskRedLine 会从线程池传回主线程，整个落地停止
+        if done[0] % 500 == 0:  # 下载途中也盯着红线；DiskRedLine 叫停其余下载（net.download_many），传回主线程，整个落地停止
             m.df(f"{step}（已完成 {done[0]}）")
 
     ok, failures = net.download_many(dl_jobs, workers=ctx.workers, retries=ctx.retries, backoff=ctx.backoff, log=ctx.log, on_done=on_done)
