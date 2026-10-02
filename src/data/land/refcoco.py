@@ -125,7 +125,10 @@ SPEC: dict[str, Any] = {
     },
     # 整个 zip 文件的 sha256（--refer-zip-dir 时核对）。中央目录推不出它（要读全部字节，含没取的 refs(google).p），
     # P0 与 B200 的落地清单也没记；None = 还没钉住：只记进清单、不比对。管理员下载后用 scripts/data/refer_zip_sha256.py 补钉。
-    "refer_zip_sha256": {"refcoco": None, "refcoco+": None, "refcocog": None},
+    # 管理员 2026-10-03 补钉（D57）：开发机从上面的 Wayback 快照下载，refer_zip_sha256.py 核对字节数、中央目录与成员 CRC 后算出
+    "refer_zip_sha256": {"refcoco": "7f924bb7ed8dc4568058e4ff626281918d56e5206f4c868c5a80f088f38c8bf0",
+                         "refcoco+": "5f1238112d63199e68da54a28f201471909b21ded7ed79a57d51b4c1443c6b45",
+                         "refcocog": "3d1f7e5b2ff2205940bf59de55f861f5f2cc1403fb980669933a7f9af1aa8211"},
     "image_url": "http://images.cocodataset.org/train2014/COCO_train2014_{id:012d}.jpg",
     # 评测划分三者并集 6,549 张、1,105,415,725 B（data_sources A §1.5，逐张 HEAD）；--limit 时按均值估。
     "eval_union_images": 6549,
