@@ -77,16 +77,21 @@ from src.adapters.training import TrainingSupport, cumsum_positions, scatter_row
 from src.adapters.base import (
     ORDERS,
     POSITION_MODES,
+    PRE_NORM_LAST,
     GenerationResult,
     HiddenStates,
     ImageTokenInfo,
+    LayerKey,
     ModelAdapter,
     ModelInputs,
     OptionScores,
     Order,
     PositionMode,
     Span,
+    capture_output,
+    captured_output,
     check_grid_token_names,
+    resolve_layer_keys,
 )
 
 # 与 Qwen 适配器共用同一份实现，不另写：设备/dtype 入口断言的异常类型、E3a 查询占位符的名字、
@@ -628,23 +633,28 @@ class InternVL35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, M
     # ------------------------------------------------------------------
 
     def hidden_states(
-        self, inputs: ModelInputs, layers: Sequence[int], *, query_embeds: torch.Tensor | None = None
+        self, inputs: ModelInputs, layers: Sequence[LayerKey], *, query_embeds: torch.Tensor | None = None
     ) -> HiddenStates:
         """指定层在图像 token 与查询 token 位置的隐藏状态（层号约定见 base.py）。只接受单 tile 的图（探针要整图网格）。
 
+        layers 里可以有 PRE_NORM_LAST（base.py）：最后一个 decoder 层的原始输出，在 _last_decoder_layer() 上挂前向钩子取得。
         不强制 no_grad：沿用调用方的梯度模式（E3a 训练要让梯度流回 query_embeds 与 LoRA）；
         只做推理时请在 torch.no_grad() 里调用。
         """
-        layer_list = self._check_layers(layers)
+        keys, layer_list, want_pre = resolve_layer_keys(layers, self._check_layers)
         self._require_single_tile(inputs, where="hidden_states")
-        hs = self._run(inputs, query_embeds, where="hidden_states")
+        with capture_output(self._last_decoder_layer()) if want_pre else contextlib.nullcontext({}) as cap:
+            hs = self._run(inputs, query_embeds, where="hidden_states")
+        rows = {l: hs[l][0] for l in layer_list}
+        if want_pre:
+            rows[PRE_NORM_LAST] = captured_output(cap, what="hidden_states")[0]
         img_idx = self._image_index(inputs)
-        image = {l: hs[l][0].index_select(0, img_idx) for l in layer_list}
+        image = {k: rows[k].index_select(0, img_idx) for k in keys}
         query = None
         if inputs.query_span is not None:
             q_idx = torch.arange(inputs.query_span.start, inputs.query_span.end, device=img_idx.device)
-            query = {l: hs[l][0].index_select(0, q_idx) for l in layer_list}
-        return HiddenStates(layers=tuple(layer_list), image=image, query=query)
+            query = {k: rows[k].index_select(0, q_idx) for k in keys}
+        return HiddenStates(layers=keys, image=image, query=query)
 
     def sequence_hidden_states(
         self, inputs: ModelInputs, layers: Sequence[int], *, query_embeds: torch.Tensor | None = None
@@ -914,6 +924,11 @@ class InternVL35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, M
         if len(self._model.model.language_model.layers) != n:
             raise RuntimeError("decoder 层数与 text_config.num_hidden_layers 不一致")
         return n
+
+    def _last_decoder_layer(self) -> torch.nn.Module:
+        """PRE_NORM_LAST 的钩子位置：LLM（Qwen3）的最后一个 decoder 层。Qwen3Model.forward 在层循环之后紧接 self.norm，
+        中间没有别的运算，所以它的输出就是最终归一化的输入。"""
+        return self._model.model.language_model.layers[self.num_layers() - 1]
 
     def hidden_size(self) -> int:
         self._require_loaded()

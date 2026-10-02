@@ -21,6 +21,7 @@ TASKS: tuple[str, ...] = ("depth", "semseg", "normals", "refseg")
 PROBE_KINDS: tuple[str, ...] = ("linear", "conv")
 REFERENCES: tuple[str, ...] = ("post_proj", "pre_proj")
 PRE_PROJ = "pre_proj"  # 参考线的特征键；LLM 层的键是整数层号
+PRE_NORM_SUFFIX = "_pre"  # 最后一层归一化之前的特征键 L{N}_pre（pre_norm_key；适配器的层键 base.PRE_NORM_LAST）
 
 # --tiny 能覆盖的规模参数（其余一律取正式配置）
 _TINY_TASK_KEYS = ("steps", "batch_size", "eval_every", "ckpt_every")
@@ -68,6 +69,11 @@ class E2Config:
     def default_layer_spec(self, model_key: str) -> str:
         lay = self.doc["layers"]
         return lay["per_model"].get(model_key, lay["default"])
+
+    @property
+    def pre_norm_last(self) -> bool:
+        """层集合是否默认加上 L{N}_pre（最后一个 decoder 层的原始输出，最终归一化之前；D53-3）。"""
+        return bool(self.doc["layers"]["pre_norm_last"])
 
 
 def load_config(path: str | Path = CONFIG_PATH) -> E2Config:
@@ -120,8 +126,15 @@ def expand_layers(spec: str, num_layers: int, *, always_include_last: bool = Tru
 
 
 def layer_label(key: int | str) -> str:
-    """特征键的显示名：整数层号 → "L12"，参考线 → 原名。"""
+    """特征键的显示名：整数层号 → "L12"，参考线与 L{N}_pre → 原名。"""
     return f"L{key}" if isinstance(key, int) else str(key)
+
+
+def pre_norm_key(num_layers: int) -> str:
+    """最后一层归一化之前的特征键：L{N}_pre（N = num_layers()；L{N} 是最终归一化之后的值，D19 的层号约定）。"""
+    if isinstance(num_layers, bool) or not isinstance(num_layers, int) or num_layers < 1:
+        raise ValueError(f"num_layers 必须是正整数，收到 {num_layers!r}")
+    return f"L{num_layers}{PRE_NORM_SUFFIX}"
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +194,7 @@ def curve_steps(steps: int, eval_every: int) -> list[int]:
 __all__ = [
     "CONFIG_PATH",
     "E2Config",
+    "PRE_NORM_SUFFIX",
     "PRE_PROJ",
     "PROBE_KINDS",
     "REFERENCES",
@@ -190,5 +204,6 @@ __all__ = [
     "layer_label",
     "load_config",
     "parse_layer_spec",
+    "pre_norm_key",
     "resolve_task",
 ]

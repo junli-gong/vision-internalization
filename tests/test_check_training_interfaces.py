@@ -59,8 +59,12 @@ def test_pinned_constants(cti):
     assert cti.TINY_INIT_STD == run_e1.TINY_INIT_STD  # 注释说"与 run_e1 相同"
     assert (cti.MAX_NEW_TOKENS, cti.THINKING, cti.DEFAULT_N) == (128, (False, True), 200)  # 任务书
     assert (cti.LORA_RANK, cti.LORA_ALPHA) == (32, 64)  # 简报 §8.4 的 rank；env_report §7 的 LoraConfig
-    assert (cti.MIN_AGREEMENT, cti.MAX_GAP) == (0.995, 0.125)  # D42-4 的提议值
-    assert cti.MAX_GAP == 2.0 ** -3 == torch.finfo(torch.bfloat16).eps * 16  # bf16 在 [16, 32) 的 ulp
+    # 判据 v1（D50-3）
+    assert cti.CRITERIA_VERSION == "v1"
+    assert (cti.RESTRICTED_MIN_TF_AGREEMENT, cti.RESTRICTED_MIN_EXACT_ROWS_OFF, cti.RESTRICTED_MAX_GAP) == (0.999, 0.95, 2.0)
+    assert (cti.MERGE_MIN_TF_AGREEMENT, cti.MERGE_MAX_MEDIAN_GAP) == (0.98, 0.5)
+    assert (cti.EFFECT_MAX_EXACT_ROWS, cti.PREMISE_MODES) == (0.5, ("thinking_on",))
+    assert not hasattr(cti, "MIN_AGREEMENT") and not hasattr(cti, "EFFECT_MAX_ARGMAX_AGREEMENT")  # 提议值（D42-4）已撤掉
     assert (cti.TASK, cti.SUBSET) == ("grid16", "dev")
 
 
@@ -133,36 +137,76 @@ def test_randomize_lora_scale_and_seed(cti):
 
 def test_summaries(cti):
     g = cti.gap_summary([0.01, None, 0.2, 0.05])
-    assert (g["n"], g["max"], g["frac_lt_threshold"]) == (3, 0.2, pytest.approx(2 / 3))
+    assert (g["n"], g["max"], g["frac_lt_threshold"], g["threshold"]) == (3, 0.2, 1.0, cti.RESTRICTED_MAX_GAP)
+    g = cti.gap_summary([0.01, None, 2.0, 2.5], threshold=2.0)
+    assert g["frac_lt_threshold"] == pytest.approx(1 / 3) and g["median"] == 2.0
     assert cti.gap_summary([None])["n"] == 0
     p = cti.position_summary([None, 0, 15, 16, 127], 128)
     assert (p["n"], p["min"], p["max"], p["histogram"]["0-15"], p["histogram"]["16-31"], p["histogram"]["112-127"]) == (
         4, 0, 127, 2, 1, 1)
 
 
-def _pair(agree=1.0, exact=1.0, gap=None, n_dis=0, key="agreement", no_gap=0):
-    gs = {"n": 0 if gap is None else 1, "max": gap}
-    gen = {"exact_rows": exact, "token_agreement": agree, "n_divergence_without_gap": no_gap, "gap": gs}
+def _pair(agree=1.0, exact=1.0, gap=None, n_dis=0, key="agreement", no_gap=0, gen_gap=None, median=None, tok=None):
+    """(生成的读数, 教师强制的读数)。gap = 教师强制不一致处的最大差（median 默认同 gap），gen_gap = 生成分歧处的最大差。"""
+    gs = {"n": 0 if gap is None else 1, "max": gap, "median": gap if median is None else median}
+    gg = {"n": 0 if gen_gap is None else 1, "max": gen_gap, "median": gen_gap}
+    gen = {"exact_rows": exact, "token_agreement": agree if tok is None else tok, "n_divergence_without_gap": no_gap, "gap": gg}
     tf = {key: agree, "n_disagreements": n_dis, "gap": gs}
     return gen, tf
 
 
-def test_judge_rules(cti):
+def test_judge_rules_v1(cti):
+    """D50-3 的 v1：每条判据单独触发；只报不判的项不影响通过。"""
     gpu, cpu = cti.criteria_block(False), cti.criteria_block(True)
-    assert (gpu["min_agreement"], gpu["max_gap"], cpu["min_agreement"]) == (0.995, 0.125, 1.0)
-    assert cti._judge_pair("x", *_pair(0.996, 0.9, 0.1, 3), "agreement", gpu) == []
-    assert cti._judge_pair("x", *_pair(0.994, 0.9, 0.1, 3), "agreement", gpu)  # 一致率不够
-    assert cti._judge_pair("x", *_pair(0.999, 0.9, 0.125, 1), "agreement", gpu)  # gap 不是 < 0.125
-    assert cti._judge_pair("x", *_pair(0.999, 0.9, 0.1, 1, no_gap=1), "agreement", gpu)  # 分歧算不出 gap
-    assert cti._judge_pair("x", *_pair(), "agreement", cpu) == []
-    assert cti._judge_pair("x", *_pair(1.0, 1.0, 0.0, 1), "agreement", cpu)  # CPU fp32：一个不同的位置也不行
-    assert cti._judge_pair("x", *_pair(0.999, 0.5), "agreement", cpu)
-    eff = {"thinking_off": {"generate": {"exact_rows": 0.6}, "teacher_forcing": {"argmax_agreement": 0.5}}}
+    assert gpu["version"] == cpu["version"] == "v1" and gpu["exact"] is False and cpu["exact"] is True
+    R = lambda mode, *a, **k: cti._judge_restricted("x", mode, *_pair(*a, **k), gpu)  # noqa: E731
+    off, on = "thinking_off", "thinking_on"
+    # restricted：教师强制 ≥ 0.999；关思考 exact_rows ≥ 0.95；不一致处差的最大值 < 2.0（教师强制与解码分歧都算）
+    assert R(off, 0.9993, 0.96, 1.49, 12) == [] and R(on, 0.9993, 0.76, 0.41, 3, gen_gap=0.41, tok=0.76) == []
+    assert R(off, 0.9989, 1.0, 0.1, 3)  # 教师强制一致率不够
+    assert R(on, 0.9989, 1.0, 0.1, 3)  # 两种开关都判
+    assert R(off, 0.9995, 0.94, 0.1, 1)  # 关思考 exact_rows 不够
+    assert R(on, 0.9995, 0.10, 0.1, 1, tok=0.2) == []  # 开思考 exact_rows、token_agreement 只报不判
+    assert R(off, 0.9995, 1.0, 2.0, 1)  # 教师强制的差不是 < 2.0
+    assert R(on, 0.9995, 0.5, 0.1, 1, gen_gap=2.5)  # 解码分歧处的差不是 < 2.0
+    assert R(on, 0.9995, 0.5, 0.1, 1, gen_gap=0.1, no_gap=1)  # 分歧算不出 gap
+    # merge：教师强制 ≥ 0.98；不一致处差的中位数 ≤ 0.5；生成只报不判；最大差只报不判
+    M = lambda *a, **k: cti._judge_merge("x", *_pair(*a, key="argmax_agreement", **k), gpu)  # noqa: E731
+    assert M(0.9899, 0.295, 3.87, 50, median=0.097, gen_gap=1.47, tok=0.57) == []
+    assert M(0.979, 1.0, 0.1, 5)
+    assert M(0.99, 1.0, 0.6, 5, median=0.51)
+    # CPU fp32：逐个相同
+    assert cti._judge_restricted("x", off, *_pair(), cpu) == [] and cti._judge_merge("x", *_pair(key="argmax_agreement"), cpu) == []
+    assert cti._judge_restricted("x", on, *_pair(1.0, 1.0, 0.0, 1), cpu)  # 一个不同的位置也不行
+    assert cti._judge_merge("x", *_pair(1.0, 0.5, key="argmax_agreement"), cpu)
+    # 前提：只在开思考时判 exact_rows ≤ 0.5；教师强制 argmax 与 base 的一致率只报不判
     gen, tf = _pair(key="argmax_agreement")
-    checks = {"merge": {"by_thinking": {"thinking_off": {"generate": gen, "teacher_forcing": tf}}, "effect_vs_base": eff}}
+    eff = {"thinking_off": {"generate": {"exact_rows": 1.0}, "teacher_forcing": {"argmax_agreement": 1.0}},
+           "thinking_on": {"generate": {"exact_rows": 0.01}, "teacher_forcing": {"argmax_agreement": 0.999}}}
+    checks = {"merge": {"by_thinking": {m: {"generate": gen, "teacher_forcing": tf} for m in (off, on)}, "effect_vs_base": eff}}
+    assert cti.judge(checks, cpu)["merge"] == [] and cti.judge(checks, gpu)["merge"] == []
+    eff["thinking_on"]["generate"]["exact_rows"] = 0.6
+    assert any("太弱" in m and "thinking_on" in m for m in cti.judge(checks, gpu)["merge"])
     assert any("太弱" in m for m in cti.judge(checks, cpu)["merge"])
-    eff["thinking_off"]["generate"]["exact_rows"] = 0.0
-    assert cti.judge(checks, cpu)["merge"] == []
+
+
+RUN0021 = REPO_ROOT / "experiments/E3/0021_train_iface_check"
+RUN0021_MODELS = ("gemma-4-e2b-it", "internvl3.5-2b-hf", "qwen3.5-0.8b", "qwen3.5-9b")
+
+
+def test_v1_rejudges_run0021_all_pass(cti):
+    """D50-3：RUN-0021 的 4 份 JSON（当时按提议值判，全部不过）按 v1 重判，4/4 通过。"""
+    for key in RUN0021_MODELS:
+        doc = json.loads((RUN0021 / f"{key}.json").read_text())
+        assert doc["model"]["key"] == key and doc["pass"] is False and doc["criteria"]["exact"] is False
+        r = cti.rejudge_document(doc)
+        assert r["criteria_version"] == "v1" and r["pass"] is True, (key, r["failures"])
+        assert set(r["failures"]) == {"restricted", "merge"}
+    bad = json.loads((RUN0021 / "gemma-4-e2b-it.json").read_text())
+    bad["checks"]["restricted"]["by_thinking"]["thinking_off"]["teacher_forcing"]["agreement"] = 0.998
+    assert cti.rejudge_document(bad)["pass"] is False
+    with pytest.raises(ValueError, match="format"):
+        cti.rejudge_document({"format": "x"})
 
 
 # ---------------------------------------------------------------------------
@@ -176,8 +220,10 @@ def test_tiny_rehearsal_passes(cti, key, tmp_path):
     assert doc["error"] is None, doc["error"]
     assert code == 0 and doc["pass"] is True, doc["failures"]
     assert set(doc) >= {"format", "argv", "written_utc", "code", "versions", "gpu", "model", "checkpoint", "data",
-                        "generation", "batch_protocol", "allowed", "criteria", "checks", "failures", "pass", "timing_s"}
+                        "generation", "batch_protocol", "allowed", "criteria_version", "criteria", "checks", "failures", "pass",
+                        "timing_s"}
     assert doc["criteria"]["exact"] is True and doc["model"]["revision"] and doc["model"]["key"] == key
+    assert doc["criteria_version"] == doc["criteria"]["version"] == cti.CRITERIA_VERSION
     assert doc["code"]["commit"] is None or len(doc["code"]["commit"]) == 40
     assert doc["data"]["n"] == FIXTURE_N and doc["batch_protocol"]["batches"] == [[0, 2], [2, 3]]
     assert doc["batch_protocol"]["frozen_batch_size"] == load_prompt_config().batch_protocol()["batch_size"]
@@ -191,8 +237,8 @@ def test_tiny_rehearsal_passes(cti, key, tmp_path):
         assert g["exact_rows"] == 1.0 and t["argmax_agreement"] == 1.0 and t["n_tokens"] == g["n_tokens"]
         assert t["max_abs_logit"] < 1e-3  # fp32：只差合并带来的求和顺序
         e = m["effect_vs_base"][mode]
-        assert e["generate"]["exact_rows"] <= cti.EFFECT_MAX_EXACT_ROWS  # 随机 LoRA 让输出明显偏离 base
-        assert e["teacher_forcing"]["argmax_agreement"] <= cti.EFFECT_MAX_ARGMAX_AGREEMENT
+        assert e["generate"]["exact_rows"] <= cti.EFFECT_MAX_EXACT_ROWS  # 随机 LoRA 让输出明显偏离 base（两种开关都偏离）
+        assert e["teacher_forcing"]["argmax_agreement"] <= 0.99  # randomize_lora 说明里小模型上的标定（只报不判，这里钉住）
         assert e["teacher_forcing"]["max_abs_logit"] > 1000 * t["max_abs_logit"]
     assert m["lora"]["r"] == 32 and m["lora"]["rel_scale"] == cti.LORA_REL_SCALE
 

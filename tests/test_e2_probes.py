@@ -167,6 +167,25 @@ def test_model_must_be_frozen_and_audit_is_recorded(qwen):
         qwen.model.eval()
 
 
+def test_pre_norm_last_feature_key(qwen):
+    """L{N}_pre（DEV-0024 I1）：同一次前向里向适配器要 PRE_NORM_LAST，特征键排在整数层之后，网格就是适配器读数的行主序视图。"""
+    from src.adapters.base import PRE_NORM_LAST
+    from src.data.train_loaders import load_ade20k
+    from src.e2.grid import tokens_to_grid
+
+    s = load_ade20k(E2Paths.fixtures().train_root, "val").records[0]
+    N = qwen.num_layers()
+    ex = FeatureExtractor(qwen, load_config(), "semseg", [0, N], [], pre_norm_last=True)
+    assert ex.keys == [0, N, f"L{N}_pre"] and ex.pre_norm == f"L{N}_pre"
+    raw, inp = ex.raw(s, phase="test")
+    assert ex.counters.by_phase["test"]["n_forward"] == 1  # 不多做前向
+    with torch.no_grad():
+        hs = qwen.hidden_states(inp, [N, PRE_NORM_LAST])
+    assert torch.equal(raw[f"L{N}_pre"], tokens_to_grid(hs.image[PRE_NORM_LAST], inp.images[0].grid_hw))
+    assert not torch.equal(raw[f"L{N}_pre"], raw[N])
+    assert FeatureExtractor(qwen, load_config(), "semseg", [0, N], []).keys == [0, N]  # 默认不加（CLI 按配置加）
+
+
 def test_post_proj_check_raises_when_layer0_differs(qwen, monkeypatch):
     from src.data.train_loaders import load_ade20k
 

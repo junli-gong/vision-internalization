@@ -2,6 +2,8 @@
 
 - 一次前向：adapter.hidden_states(inputs, layers)（torch.no_grad；模型本身是 bf16），每层取图像位置的 [n, D]，按
   src/e2/grid.py 排成 [h, w, D]。同一次前向的结果喂给这个样本上的全部探针；特征不落盘（简报 §4 第 8 条）。
+- L{N}_pre（DEV-0024，D53-3 的 I1；pre_norm_last=True 时）：最后一个 decoder 层的原始输出（最终归一化之前），同一次前向里向适配器
+  多要一个层键 base.PRE_NORM_LAST；特征键是 config.pre_norm_key(N) 这个字符串，排在整数层之后，探针与标准化统计量各自一组。
 - 参考线：
   - post_proj：就是第 0 层（D21-3）。不另算一组特征；每次进程第一次前向时核对 adapter.vision_features(inputs) 与第 0 层逐位相同，
     不相同就报错（与 D21-3 矛盾，G2 的解读要先查清）。
@@ -22,8 +24,9 @@ from typing import Any, Callable, Mapping, Sequence
 import torch
 from PIL import Image
 
+from src.adapters.base import PRE_NORM_LAST
 from src.data.records import Sample
-from src.e2.config import PRE_PROJ, E2Config
+from src.e2.config import PRE_PROJ, E2Config, pre_norm_key
 from src.e2.grid import grid_to_chw, single_image, tokens_to_grid
 
 FeatureKey = int | str
@@ -142,7 +145,7 @@ class FeatureExtractor:
     """一个任务的特征提取：样本 → ModelInputs（按任务的顺序与指令）→ 一次前向 → {特征键: [h, w, D]}。"""
 
     def __init__(self, adapter: Any, cfg: E2Config, task: str, layers: Sequence[int], references: Sequence[str],
-                 counters: ForwardCounters | None = None) -> None:
+                 counters: ForwardCounters | None = None, *, pre_norm_last: bool = False) -> None:
         self.adapter = adapter
         self.cfg = cfg
         self.task = task
@@ -156,7 +159,10 @@ class FeatureExtractor:
             raise NotImplementedError(
                 f"{type(adapter).__name__} 没有 pre_projection_features(inputs)：pre_proj 参考线（视觉塔在投影 / 合并之前的输出）"
                 "需要适配器提供这个接口（DEV-0023 完成总结），本任务不改适配器")
-        self.keys: list[FeatureKey] = ([PRE_PROJ] if self.use_pre_proj else []) + self.layers
+        # L{N}_pre：最后一个 decoder 层的原始输出（最终归一化之前），向适配器要层键 PRE_NORM_LAST
+        self.pre_norm: str | None = pre_norm_key(int(adapter.num_layers())) if pre_norm_last else None
+        self.keys: list[FeatureKey] = (([PRE_PROJ] if self.use_pre_proj else []) + self.layers
+                                       + ([self.pre_norm] if self.pre_norm else []))
         self.counters = counters or ForwardCounters()
         # post_proj 核对：进程里第一次前向时做一次（尽早失败）；调用方可以再要求一次（runner 在评测集第一条上再核一次，
         # 这一条的记录与是否续跑无关，写进 metrics.json）
@@ -198,7 +204,7 @@ class FeatureExtractor:
         _sync(dev)
         t0 = time.perf_counter()
         with torch.no_grad():
-            hs = self.adapter.hidden_states(inputs, self.layers)
+            hs = self.adapter.hidden_states(inputs, self.layers + ([PRE_NORM_LAST] if self.pre_norm else []))
             pre = self.adapter.pre_projection_features(inputs) if self.use_pre_proj else None
         _sync(dev)
         dt = time.perf_counter() - t0
@@ -207,6 +213,10 @@ class FeatureExtractor:
             x = hs.image[l]
             self._check_tensor(x, f"第 {l} 层", n=len(info.span), dim=self.adapter.hidden_size())
             out[l] = tokens_to_grid(x, info.grid_hw)
+        if self.pre_norm:
+            x = hs.image[PRE_NORM_LAST]
+            self._check_tensor(x, self.pre_norm, n=len(info.span), dim=self.adapter.hidden_size())
+            out[self.pre_norm] = tokens_to_grid(x, info.grid_hw)
         if pre is not None:
             x, hw = pre
             hw = (int(hw[0]), int(hw[1]))

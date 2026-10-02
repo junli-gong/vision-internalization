@@ -14,6 +14,15 @@ MANIFEST.json（load_input 自动识别）。
   对 E1 的 NYU test、法向包的 RGB 对 E1 的 NYU test）的汉明距离分布，与随机不同键图对的距离分布，一起写进报告。
 - 输出：dedupe_report.json、dedupe_report.md、train_exclusions.json（被剔除的训练样本，按源目录内的相对路径；
   src/data/train_loaders.py 默认读 <训练数据根>/dedupe/train_exclusions.json，自动排除）。
+- 剔除清单的格式（EXCLUSIONS_SCHEMA = 2，DEV-0024；D53-3 的小问题 A、B）：
+  {schema, created_utc, max_hamming, rule,
+   train_sets: 参与比较的训练集名单，
+   eval_sets: 参与比较的评测集名单（含内置的两个），
+   inputs: 各输入清单的摘要 [{what, host, root, created_utc, git_commit, sha256（输入是文件时为文件的 sha256，数据根为 null）,
+            sets_sha256（集合内容的 sha256，与读文件还是读数据根无关）, sets: {集合: 张数}}]，
+   sets: {训练集: [被剔除的样本]}}——每个参与比较的训练集都有键（没有被剔除的样本时是空列表），所以"缺键"就是"没比较过"。
+  旧格式（schema 1，没有 eval_sets / train_sets / inputs）照样能读（load_exclusions、exclusions_meta 里 legacy = True）；
+  训练加载器在 require_dedupe 时照样要求训练集有键，E2 用真模型时拒绝旧格式（src/e2/data.check_dedupe_coverage）。
 """
 
 from __future__ import annotations
@@ -34,6 +43,8 @@ from src.runlog import git_info
 EXPORT_KIND = "visint-image-hashes"
 EXPORT_SCHEMA = 1
 REPORT_SCHEMA = 1
+EXCLUSIONS_SCHEMA = 2  # 剔除清单（格式见模块说明）；1 是旧格式（DEV-0022），照样能读
+EXCLUSIONS_SCHEMAS_READABLE = (1, 2)
 EXCLUSIONS_REL = "dedupe/train_exclusions.json"  # 相对训练数据根
 TRAIN_SETS = ("refcoco_train/train", "nyu_depth_train/train", "ade20k/train", "nyu_normals/train")
 REPORT_THRESHOLDS = (0, 2, 4, 6, 8, 10, 12)
@@ -145,19 +156,36 @@ def export_root(root: str | Path) -> dict[str, Any]:
 
 
 def load_input(path: str | Path) -> dict[str, Any]:
-    """导出的 JSON、单个 MANIFEST.json 或数据根目录 → 导出格式。"""
+    """导出的 JSON、单个 MANIFEST.json 或数据根目录 → 导出格式。另加 input_source = {path, sha256}（只在内存里，给剔除清单的输入
+    摘要用；输入是文件时 sha256 是文件本身的，数据根为 None）。"""
     p = Path(path)
     if p.is_dir():
-        return export_root(p)
-    doc = json.loads(p.read_text())
+        return {**export_root(p), "input_source": {"path": str(p), "sha256": None}}
+    raw = p.read_bytes()
+    src = {"path": str(p), "sha256": hashlib.sha256(raw).hexdigest()}
+    doc = json.loads(raw)
     if doc.get("kind") == EXPORT_KIND:
         if doc.get("schema") != EXPORT_SCHEMA:
             raise ValueError(f"{p}：导出清单的 schema {doc.get('schema')} ≠ {EXPORT_SCHEMA}")
-        return doc
+        return {**doc, "input_source": src}
     if "files" in doc and "source" in doc:
         s, f = export_manifest(p)
-        return {"kind": EXPORT_KIND, "schema": EXPORT_SCHEMA, "created_utc": utc_now(), "host": platform.node(), "root": str(p.parent.parent.resolve()), "sets": s, "facts": {doc["source"]: f}}
+        return {"kind": EXPORT_KIND, "schema": EXPORT_SCHEMA, "created_utc": utc_now(), "host": platform.node(), "root": str(p.parent.parent.resolve()), "sets": s, "facts": {doc["source"]: f}, "input_source": src}
     raise ValueError(f"{p}：既不是导出的哈希清单，也不是 MANIFEST.json")
+
+
+def sets_sha256(sets: Mapping[str, Mapping[str, Any]]) -> str:
+    """集合内容（集合名 → [键, 感知哈希, 路径] 列表）的 sha256，规范 JSON；与读导出文件还是读数据根无关。"""
+    canon = {n: [list(it) for it in s["items"]] for n, s in sorted(sets.items())}
+    return hashlib.sha256(json.dumps(canon, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def input_summary(what: str, doc: Mapping[str, Any]) -> dict[str, Any]:
+    """一份输入清单的摘要（剔除清单与报告的 inputs）：来源、主机、sha256、集合与张数。"""
+    sets = doc.get("sets", {})
+    return {"what": what, "host": doc.get("host"), "root": doc.get("root"), "created_utc": doc.get("created_utc"),
+            "git_commit": (doc.get("git") or {}).get("commit"), "sha256": (doc.get("input_source") or {}).get("sha256"),
+            "sets_sha256": sets_sha256(sets), "sets": {n: len(s["items"]) for n, s in sorted(sets.items())}}
 
 
 def merge_inputs(docs: Sequence[dict[str, Any]], *, with_builtin: bool = True) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
@@ -341,20 +369,26 @@ def build_report(inputs: Sequence[tuple[str, dict[str, Any]]], *, max_hamming: i
     cmp = compare(sets, max_hamming=max_hamming)
     cal = calibrate(sets, max_hamming=max_hamming)
     created = utc_now()
+    summaries = [input_summary(w, d) for w, d in inputs]
     report = {
         "schema": REPORT_SCHEMA,
         "created_utc": created,
         "git": git_info(REPO_ROOT),
         "max_hamming": max_hamming,
         "thresholds": list(REPORT_THRESHOLDS),
-        "inputs": [{"what": w, "host": d.get("host"), "root": d.get("root"), "created_utc": d.get("created_utc"), "git": d.get("git")} for w, d in inputs],
+        "inputs": summaries,
+        "train_sets": cmp["train_sets"],
+        "eval_sets": cmp["eval_sets"],
         "sets": {n: {"role": s["role"], "source": s["source"], "n_items": len(s["items"]), "n_with_phash": sum(1 for it in s["items"] if it[1])} for n, s in sets.items()},
         "d11": d11_facts(facts),
         "pairs": cmp["pairs"],
         "calibration": cal,
         "exclusions_summary": {t: len(v) for t, v in cmp["exclusions"].items()},
     }
-    excl = {"schema": REPORT_SCHEMA, "created_utc": created, "max_hamming": max_hamming, "rule": "训练样本与任一评测集同键，或感知哈希汉明距离 ≤ max_hamming，即剔除", "sets": cmp["exclusions"]}
+    excl = {"schema": EXCLUSIONS_SCHEMA, "created_utc": created, "max_hamming": max_hamming,
+            "rule": "训练样本与任一评测集同键，或感知哈希汉明距离 ≤ max_hamming，即剔除；eval_sets 是参与比较的全部评测集，"
+                    "sets 里每个参与比较的训练集都有键（没有被剔除的样本时是空列表），缺键就是没比较过",
+            "train_sets": cmp["train_sets"], "eval_sets": cmp["eval_sets"], "inputs": summaries, "sets": cmp["exclusions"]}
     return report, excl
 
 
@@ -388,7 +422,10 @@ def render_md(report: Mapping[str, Any]) -> str:
     r = c["distinct_random_pairs"]
     if r.get("n"):
         L.append(f"- 随机不同键图对：n={r['n']}，最小 {r['min']}，1% 分位 {r['p01']}，各档比例 {r['frac_le']}")
-    L += ["", "## 训练剔除清单", ""] + [f"- {k}：{v} 条" for k, v in report["exclusions_summary"].items()] + ["", "训练加载器（src/data/train_loaders.py）默认读 `<训练数据根>/dedupe/train_exclusions.json`，自动排除这些样本。", ""]
+    L += ["", "## 训练剔除清单", ""] + [f"- {k}：{v} 条" for k, v in report["exclusions_summary"].items()]
+    L += [f"- 参与比较的评测集（剔除清单的 eval_sets，{len(report.get('eval_sets') or [])} 个）：{report.get('eval_sets')}"]
+    L += ["", "训练加载器（src/data/train_loaders.py）默认读 `<训练数据根>/dedupe/train_exclusions.json`，自动排除这些样本；"
+          "训练集在清单里没有键就报错（没比较过）。", ""]
     return "\n".join(L)
 
 
@@ -402,10 +439,40 @@ def write_outputs(report: Mapping[str, Any], excl: Mapping[str, Any], out_dir: s
     return paths
 
 
-def load_exclusions(path: str | Path) -> dict[str, dict[str, dict[str, Any]]]:
-    """训练剔除清单 → {训练集: {相对路径: 记录}}。"""
+def read_exclusions_doc(path: str | Path) -> dict[str, Any]:
+    """读剔除清单并核对格式（模块说明）：schema 1（旧格式）或 2；schema 2 必须有 max_hamming、train_sets、eval_sets、inputs，
+    且 train_sets 与 sets 的键一一对应。"""
     doc = json.loads(Path(path).read_text())
-    if doc.get("schema") != REPORT_SCHEMA:
-        raise ValueError(f"{path}：剔除清单的 schema {doc.get('schema')} ≠ {REPORT_SCHEMA}")
+    schema = doc.get("schema")
+    if schema not in EXCLUSIONS_SCHEMAS_READABLE:
+        raise ValueError(f"{path}：剔除清单的 schema {schema} 不在 {EXCLUSIONS_SCHEMAS_READABLE} 里")
+    if not isinstance(doc.get("sets"), dict):
+        raise ValueError(f"{path}：剔除清单没有 sets")
+    if schema >= 2:
+        missing = [k for k in ("max_hamming", "train_sets", "eval_sets", "inputs") if k not in doc]
+        if missing:
+            raise ValueError(f"{path}：schema {schema} 的剔除清单缺少 {missing}")
+        if not all(isinstance(x, str) for x in doc["eval_sets"]) or not all(isinstance(x, str) for x in doc["train_sets"]):
+            raise ValueError(f"{path}：train_sets / eval_sets 必须是集合名的列表")
+        if set(doc["train_sets"]) != set(doc["sets"]):
+            raise ValueError(f"{path}：train_sets {sorted(doc['train_sets'])} 与 sets 的键 {sorted(doc['sets'])} 不一致")
+    return doc
+
+
+def load_exclusions(path: str | Path) -> dict[str, dict[str, dict[str, Any]]]:
+    """训练剔除清单 → {训练集: {相对路径: 记录}}。两种格式都能读（read_exclusions_doc）。"""
+    doc = read_exclusions_doc(path)
     return {t: {r["path"]: r for r in rows} for t, rows in doc["sets"].items()}
+
+
+def exclusions_meta(path: str | Path) -> dict[str, Any]:
+    """剔除清单的元数据（不含逐条记录）：schema、legacy（旧格式，没有 eval_sets）、max_hamming、train_sets（旧格式取 sets 的键）、
+    eval_sets（旧格式为 None）、inputs（旧格式为 None）、created_utc、文件的 sha256。"""
+    p = Path(path)
+    doc = read_exclusions_doc(p)
+    legacy = doc["schema"] < 2
+    return {"schema": doc["schema"], "legacy": legacy, "max_hamming": doc.get("max_hamming"),
+            "train_sets": sorted(doc["sets"]) if legacy else list(doc["train_sets"]),
+            "eval_sets": None if legacy else list(doc["eval_sets"]), "inputs": None if legacy else doc["inputs"],
+            "created_utc": doc.get("created_utc"), "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
 

@@ -14,8 +14,11 @@
 开发机彩排（小型随机模型、CPU、tests/fixtures/e2 与 tests/fixtures/e1 的小数据）：上面任一条加 --tiny，可省 --data-root。
 
 --task：depth semseg normals refseg 中的一个或多个，或 all。--layers 不给时取配置（configs/e2_probes.json 的 layers：9B 每隔一层，
-其余全部层）。--reference post_proj 就是第 0 层（D21-3），只核对、不另训；pre_proj 需要适配器的 pre_projection_features（现有适配器
-没有，会报错）。--stop-after-steps N：本次只跑 N 步训练就写检查点退出（分段运行；下次加 --resume 接着跑）。
+其余全部层）；配置的 layers.pre_norm_last 为真时另加特征键 L{N}_pre（最后一层归一化之前，单列；D53-3）。--reference post_proj 就是
+第 0 层（D21-3），只核对、不另训；pre_proj 需要适配器的 pre_projection_features（现有适配器没有，会报错）。
+--stop-after-steps N：本次只跑 N 步训练就写检查点退出（分段运行；下次加 --resume 接着跑）。
+去重（硬约束 7；DEV-0024）：训练池的剔除清单必须有这个训练集的键、且 eval_sets 含这个任务的评测集，否则开跑前报错；旧格式的
+清单（没有 eval_sets）只在 --tiny 时照读。
 退出码：0 = 跑完或按 --stop-after-steps 停下；2 = 出错（报错先写进 <out>/<模型>/errors/，再退出；argparse 用法错误也是 2）。
 """
 
@@ -141,7 +144,8 @@ def make_spec(a, cfg, entry, ad, task: str) -> RunSpec:
                    adapter_model_key=str(getattr(ad, "model_key", entry.key)), tiny=a.tiny,
                    policy={"type": type(policy).__name__, **policy.as_dict()}, model_dtype=a.dtype, task=task,
                    layer_spec=layer_spec, layers=tuple(layers), references=tuple(a.reference),
-                   num_layers=int(ad.num_layers()), hidden_size=int(ad.hidden_size()), eval_limit=a.eval_limit)
+                   num_layers=int(ad.num_layers()), hidden_size=int(ad.hidden_size()), eval_limit=a.eval_limit,
+                   pre_norm_last=cfg.pre_norm_last)
 
 
 def _headline(m) -> str:

@@ -11,6 +11,10 @@
   - 其中最后一个层号 num_layers() 按 HF `output_hidden_states` 元组的惯例，取经过最终归一化（final norm）
     之后的值。三个家族的 HF 实现都是这个惯例，所以层号与 HF 元组下标一一对应；
   - 有效范围 [0, num_layers()]，越界报错。
+  - **可选的层键 PRE_NORM_LAST = "pre_norm_last"（DEV-0024，E2 审查 I1）**：最后一个 decoder 层的原始输出，即最终归一化
+    之前的值；norm(它) 就是层号 num_layers() 的读数。只有 hidden_states 接受它（与整数层号混在同一个 layers 序列里，
+    HiddenStates.image / query 用同一个键返回）；其余接受层号的接口（sequence_hidden_states、training_forward 的
+    HiddenRequest）照旧只收整数。解析规则见 resolve_layer_keys。
 - `generate` 与 `generate_batch` 的 `enable_thinking` 与 `max_new_tokens` 是必填关键字参数，没有默认值（D1：每次调用都
   显式设置）。子类若给它们加默认值，定义类时就报 TypeError（见 `ModelAdapter.__init_subclass__`）。
 - token 区间一律是半开区间 [start, end)，下标相对于单条输入序列。
@@ -20,8 +24,9 @@
   写法（OPTION_SPELLING_TEMPLATES）里 logit 的最大值，在选项集合上做 softmax。结果是 OptionScores，规则写在它的说明里。
 - E3 的训练侧接口（DEV-0020，D21-2）：training_forward、restricted_logits、chunked_lm_loss、generate_restricted、train_mode /
   eval_mode、set_gradient_checkpointing、class_name_spans（第一部分，实现在 src/adapters/training.py）；token_table、restore_tokens、
-  lora_target_modules、inject_lora、merge_lora、save_trained、load_trained（第二部分，实现在 src/adapters/checkpoint.py）。
-  这里只写接口说明；基类的实现一律报 NotImplementedError（不是抽象方法：只做推理的替身不必实现它们），三个家族都实现。
+  lora_target_modules、inject_lora、merge_lora、save_trained、load_trained、trainable_token_rows（第二部分，实现在
+  src/adapters/checkpoint.py）。这里只写接口说明；基类的实现一律报 NotImplementedError（不是抽象方法：只做推理的替身不必实现
+  它们），三个家族都实现。
 """
 
 from __future__ import annotations
@@ -31,7 +36,8 @@ import inspect
 import math
 import time
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping, Sequence
+from contextlib import contextmanager
+from typing import Any, Callable, Iterator, Literal, Mapping, Sequence
 
 from src.constants import MAX_NEW_GRID_TOKENS
 from src.parsing import BoxParse, OneBoxParse, one_box
@@ -41,6 +47,10 @@ PositionMode = Literal["grid2d", "seq1d"]
 
 ORDERS: tuple[str, ...] = ("instruction_first", "image_first")
 POSITION_MODES: tuple[str, ...] = ("grid2d", "seq1d")
+
+# hidden_states 的可选层键（层号约定见模块说明）：最后一个 decoder 层的原始输出，最终归一化之前
+PRE_NORM_LAST = "pre_norm_last"
+LayerKey = int | str  # 整数层号，或 PRE_NORM_LAST
 
 
 @dataclass(frozen=True)
@@ -266,18 +276,64 @@ class HiddenStates:
 
     image[layer] 形状 [n_image_tokens, hidden_size]，按 ModelInputs.images 的顺序拼接所有图的视觉 token。
     query[layer] 形状 [n_query_tokens, hidden_size]；输入里没有查询 token 时 query 为 None。
-    layers 是调用方传入的层号，原样保留顺序。
+    layers 是调用方传入的层键（整数层号，或 PRE_NORM_LAST），原样保留顺序；image / query 的键与它相同。
     """
 
-    layers: tuple[int, ...]
-    image: Mapping[int, Any]
-    query: Mapping[int, Any] | None = None
+    layers: tuple[LayerKey, ...]
+    image: Mapping[LayerKey, Any]
+    query: Mapping[LayerKey, Any] | None = None
 
     def __post_init__(self) -> None:
         if set(self.image) != set(self.layers):
-            raise ValueError(f"image 的层号 {sorted(self.image)} 与 layers {list(self.layers)} 不一致")
+            raise ValueError(f"image 的层号 {sorted(self.image, key=str)} 与 layers {list(self.layers)} 不一致")
         if self.query is not None and set(self.query) != set(self.layers):
-            raise ValueError(f"query 的层号 {sorted(self.query)} 与 layers {list(self.layers)} 不一致")
+            raise ValueError(f"query 的层号 {sorted(self.query, key=str)} 与 layers {list(self.layers)} 不一致")
+
+
+def resolve_layer_keys(layers: Sequence[LayerKey], check_ints: Callable[[Sequence[Any]], list[int]]
+                       ) -> tuple[tuple[LayerKey, ...], list[int], bool]:
+    """hidden_states 的 layers → (层键，原样顺序、整数已规范化；其中的整数层号；是否要 PRE_NORM_LAST)。
+
+    整数部分（以及 PRE_NORM_LAST 以外的任何项）原样交给家族的 check_ints（_check_layers：类型、越界、重复、为空），
+    所以只给整数时行为与以前完全相同；PRE_NORM_LAST 至多一次；只给 PRE_NORM_LAST 也可以（不再调 check_ints）。
+    """
+    if isinstance(layers, (str, bytes)):
+        check_ints(layers)  # 家族的报错（TypeError："layers 必须是整数序列"）
+        raise TypeError("layers 必须是层键的序列")
+    items = list(layers)
+    is_pre = [isinstance(x, str) and x == PRE_NORM_LAST for x in items]
+    if sum(is_pre) > 1:
+        raise ValueError(f"layers 里 {PRE_NORM_LAST!r} 出现了 {sum(is_pre)} 次")
+    rest = [x for x, p in zip(items, is_pre) if not p]
+    ints = check_ints(rest) if (rest or not any(is_pre)) else []
+    it = iter(ints)
+    keys = tuple(PRE_NORM_LAST if p else next(it) for p in is_pre)
+    return keys, list(ints), any(is_pre)
+
+
+@contextmanager
+def capture_output(module: Any) -> Iterator[dict[str, Any]]:
+    """在 module 上挂一个前向钩子，把它（最后一次）前向的输出放进返回的字典的 "out"（输出是元组时取第一项）；退出时摘掉钩子。
+    不 detach：沿用调用方的梯度模式。hidden_states 取 PRE_NORM_LAST 用（挂在最后一个 decoder 层上）。"""
+    box: dict[str, Any] = {}
+
+    def hook(_m: Any, _args: Any, out: Any) -> None:
+        box["out"] = out[0] if isinstance(out, tuple) else out
+        box["n_calls"] = box.get("n_calls", 0) + 1
+
+    handle = module.register_forward_hook(hook)
+    try:
+        yield box
+    finally:
+        handle.remove()
+
+
+def captured_output(box: Mapping[str, Any], *, what: str) -> Any:
+    """capture_output 抓到的输出；这次前向里模块必须恰好被调用一次，否则 PRE_NORM_LAST 无定义，报错。"""
+    n = int(box.get("n_calls", 0))
+    if n != 1:
+        raise RuntimeError(f"{what}：最后一个 decoder 层在这次前向里被调用了 {n} 次（应为 1 次），{PRE_NORM_LAST} 无定义")
+    return box["out"]
 
 
 def check_grid_token_names(names: Sequence[str], n_existing: int = 0) -> None:
@@ -444,13 +500,16 @@ class ModelAdapter(abc.ABC):
 
     @abc.abstractmethod
     def hidden_states(
-        self, inputs: ModelInputs, layers: Sequence[int], *, query_embeds: Any | None = None
+        self, inputs: ModelInputs, layers: Sequence[LayerKey], *, query_embeds: Any | None = None
     ) -> HiddenStates:
         """返回指定层在图像 token 位置和查询 token 位置的隐藏状态。
 
         layers 由调用方给出（来自探针结果或可学习逐层加权的配置），适配器不设默认层。
         层号按本模块开头的层号约定：层号 0 是视觉特征并入之后的嵌入输出，层号 i 是第 i 个 decoder 层的
         输出（最后一个取最终归一化之后的值），有效范围 [0, num_layers()]，越界报错。
+        layers 里还可以有一项 PRE_NORM_LAST（DEV-0024）：最后一个 decoder 层的原始输出（最终归一化之前），与整数层号同一次前向，
+        在最后一个 decoder 层上挂前向钩子取得；norm(它) = 层号 num_layers() 的读数（tests/test_adapter_pre_norm_last.py 钉住）。
+        层键的解析用 resolve_layer_keys；HiddenStates 的键与传入的层键相同。
 
         query_embeds（D10 的接口扩展，DEV-0003）：形状 [n_query, hidden_size]。非 None 时，前向前把查询位置的
         输入嵌入替换成它，E3a 的可学习查询 token 从这里进；inputs 里必须有查询 token，个数一致。
@@ -576,3 +635,10 @@ class ModelAdapter(abc.ABC):
     def load_trained(self, directory: Any, *, merge: bool = True) -> Any:
         """从检查点恢复：base（固定 revision）→ restore_tokens → 挂 LoRA（merge=True 时在内存里合并）→ 核对 manifest。"""
         raise NotImplementedError(f"{type(self).__name__} 没有实现 load_trained")
+
+    def trainable_token_rows(self, names_or_ids: Sequence[str | int]) -> list[Any]:
+        """新增 token 行的训练开关（DEV-0021，D45-3；规则见 checkpoint.TRAINABLE_ROWS_RULE）：让这些 grid token（名字或 id）在
+        输入嵌入（不共享时另有 lm_head）里的行求梯度，其余行由梯度掩码钩子冻结；返回要交给优化器的参数（共享权重时只返回一个），
+        这些参数必须放进 weight_decay = 0 的参数组。必须在 inject_lora 之后、合并之前调用；再调一次就换成新的行集合。
+        save_trained 核对冻结行没有被改动。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 trainable_token_rows")

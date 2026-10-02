@@ -3,7 +3,8 @@
 共同行为：
 - 训练划分（refcoco_train、nyu_depth_train、ade20k/train、nyu_normals/train）一律读去重报告的训练剔除清单
   （默认 <root>/dedupe/train_exclusions.json，src/data/train_dedupe），自动排除其中的样本，逐条写进
-  stats["dedupe_excluded"]。清单不存在时报错（硬约束 7：没做去重不训练）；require_dedupe=False 只给开发机小样本与测试用。
+  stats["dedupe_excluded"]。清单不存在时报错（硬约束 7：没做去重不训练）；清单在、但没有这个训练集的键（没比较过）也报错
+  （DEV-0024）；require_dedupe=False 只给开发机小样本与测试用。
 - 评测划分（ade20k/val、nyu_normals/test）不读剔除清单。
 - strict=True（默认）时图像或 GT 文件缺失直接报错；strict=False 时计入 stats["n_missing"] 并跳过（--limit 小样本用）。
 - 稠密 GT 不在加载时读进内存：gt 里放文件路径，用 read_depth_m / read_normals / read_ade_label 解码：
@@ -38,7 +39,13 @@ def _train_exclusions(root: Path, set_name: str, exclusions: str | Path | None, 
         if require_dedupe:
             raise FileNotFoundError(f"{set_name}：没有训练剔除清单 {path}（先跑 scripts/data/dedupe_report.py，--out <root>/dedupe）；硬约束 7：没做去重不训练")
         return {}, None
-    return load_exclusions(path).get(set_name, {}), str(path)
+    excl = load_exclusions(path)
+    if set_name not in excl:
+        if require_dedupe:
+            raise ValueError(f"{set_name}：训练剔除清单 {path} 里没有这个训练集的键（有 {sorted(excl)}），即这个训练集没有和评测集"
+                             "比较过；把它的哈希清单一起给 scripts/data/dedupe_report.py 重新比较；硬约束 7：没做去重不训练")
+        return {}, str(path)
+    return excl[set_name], str(path)
 
 
 def _finish(samples: list[Sample], rel_of: Callable[[Sample], str], *, set_name: str, excl: dict[str, dict[str, Any]], excl_path: str | None, n_missing: int, extra: dict[str, Any] | None = None) -> LoadResult:
@@ -137,14 +144,22 @@ def read_depth_m(path: str | Path, scale: float = nyu_land.SPEC["depth_scale"]) 
 
 
 def load_nyu_depth_train(root: str | Path, *, exclusions: str | Path | None = "auto", require_dedupe: bool = True, strict: bool = True) -> LoadResult:
+    """D11-2 复查（DEV-0024，D53-3 的小问题 C）：每一条的基础场景名（nyu_land.base_scene(scene)，必须与清单里的 base_scene 相同）
+    都不能在官方 test 场景集合 nyu_land.TEST_SCENES 里；不满足就报错（落地时已按场景过滤，这里不静默跳过）。"""
     root = Path(root)
     src = root / nyu_land.SOURCE
     files = read_manifest(src)["files"]
     excl, excl_path = _train_exclusions(root, f"{nyu_land.SOURCE}/train", exclusions, require_dedupe)
     H, W = nyu_land.SPEC["hw"]
+    test_scenes = frozenset(nyu_land.TEST_SCENES)
     out, n_missing = [], 0
     for line in (src / "pairs_train.jsonl").read_text().splitlines():
         p = json.loads(line)
+        base = nyu_land.base_scene(p["scene"])
+        if base != p["base_scene"]:
+            raise ValueError(f"nyu pair {p['id']}：清单的 base_scene {p['base_scene']!r} 与按场景名算出的 {base!r} 不同")
+        if base in test_scenes:
+            raise ValueError(f"nyu pair {p['id']}：基础场景 {base!r} 属于官方 test 场景（D11-2），不能进训练集；落地的场景过滤没生效")
         if not _have(src, (p["rgb"], p["depth"]), files, strict, f"nyu pair {p['id']}"):
             n_missing += 1
             continue

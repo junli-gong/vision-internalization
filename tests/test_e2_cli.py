@@ -51,12 +51,25 @@ def test_tiny_all_tasks_and_resume_is_byte_identical(model, tmp_path):
         assert set(wa) == set(wb) and all(torch.equal(wa[n][k], wb[n][k]) for n in wa for k in wa[n])
         m = json.loads((la / "metrics.json").read_text())
         tc = resolve_task(cfg, task, tiny=True)
-        assert m["complete"] and len(m["probes"]) == 2 * len(m["feature_keys"]) == 2 * len(m["layers"])
+        N = len(m["layers"]) - 1
+        # 特征键：L0..L{N} 是逐层曲线，L{N}_pre（最后一层归一化之前，配置默认加上；DEV-0024 I1）单列
+        assert m["complete"] and len(m["probes"]) == 2 * len(m["feature_keys"]) == 2 * (len(m["layers"]) + 1)
         assert m["layers"] == list(range(len(m["layers"])))  # --layers 默认 all（小模型 4 层 → 0..4）
+        assert m["curve_keys"] == [f"L{l}" for l in m["layers"]] and m["single_keys"] == [f"L{N}_pre"] == [m["pre_norm_last"]]
+        assert m["probes"][f"L{N}_pre/linear"]["on_curve"] is False and m["probes"]["L0/linear"]["on_curve"] is True
         assert m["post_proj_check"]["equal"] is True
+        assert m["positions"]["n_samples"] == m["n_eval"] and m["positions"]["unit"] == ("sample" if task == "refseg" else "pixel")
         for name, pr in m["probes"].items():
             h = m["headline"][0]["metric"]
             assert pr["eval"][h] is not None and pr["eval"][f"{h}_ci"]["low"] <= pr["eval"][h] <= pr["eval"][f"{h}_ci"]["high"]
+            # 按光栅位置分开的标题指标（DEV-0024 I2）：两种划分、各区域都有，标题指标的键都在
+            bp = pr["eval_by_position"]
+            assert {s: list(v) for s, v in bp.items()} == {"half": ["top", "bottom"], "raster_quartile": ["q1", "q2", "q3", "q4"]}
+            assert all(set(x["metric"] for x in m["headline"]) <= set(r) for v in bp.values() for r in v.values())
+            if task != "refseg":  # 像素划分：每个区域都有像素
+                assert all(r[h] is not None for v in bp.values() for r in v.values())
+            else:  # 按质心：每条样本恰好落在一个区域里
+                assert sum(r["n"] for r in bp["half"].values()) == m["n_eval"] - m["positions"]["n_unassigned"]
         curves = [json.loads(l) for l in (la / "curves.jsonl").read_text().splitlines()]
         assert len(curves) == len(curve_steps(tc["steps"], tc["eval_every"])) * len(m["probes"])
         acc = json.loads((la / "accounting.json").read_text())
@@ -69,7 +82,11 @@ def test_tiny_all_tasks_and_resume_is_byte_identical(model, tmp_path):
         cy = yaml.safe_load((la / "config.yaml").read_text())
         assert cy["input"]["order"] == ("instruction_first" if task == "refseg" else "image_first")
         assert cy["data"]["train_exclusions_sha256"] and "dedupe_file" not in cy["data"]["train_pool"]
-        assert "| L0 |" in (la / "README.md").read_text()
+        dd = cy["data"]["dedupe"]  # 剔除清单的阈值与比较过的评测集（DEV-0024 B）
+        assert dd["max_hamming"] == 8 and dd["legacy"] is False and set(dd["required_eval_sets"]) <= set(dd["eval_sets"])
+        assert cy["layers"]["pre_norm_last"] == f"L{N}_pre"
+        readme = (la / "README.md").read_text()
+        assert "| L0 |" in readme and f"| L{N}_pre |" in readme and "## 按光栅位置分开" in readme and "| 探针 | 全图 | 上半 | 下半 |" in readme
     # 已完成的再 --resume：直接返回，不新增运行记录
     run(*base, "--out", str(b), "--resume")
     assert len(list((b / model / "depth" / "logs").glob("run_*.json"))) == 2

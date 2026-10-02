@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -224,3 +225,79 @@ def test_cli_arg_errors():
         mod.parse_args(["--out", "/tmp/x"])
     with pytest.raises(SystemExit):
         mod.parse_args(["--train-root", "/tmp/a", "--out", "/tmp/x"])
+
+
+# ---------------------------------------------------------------------------
+# DEV-0024（D53-3 的小问题 A、B）：剔除清单的新格式；缺训练集的键就报错；旧格式照样能读
+# ---------------------------------------------------------------------------
+
+
+def test_exclusions_format_records_eval_sets_inputs_and_threshold(tmp_path):
+    tr, ev = _roots(tmp_path)
+    mod = _cli()
+    eval_json = tmp_path / "eval_hashes_b200.json"
+    assert mod.main(["--export-hashes", str(ev), "--out", str(eval_json)]) == 0
+    out = tr / "dedupe"
+    assert mod.main(["--train-root", str(tr), "--eval-manifest", str(eval_json), "--out", str(out), "--max-hamming", "7"]) == 0
+    doc = json.loads((out / "train_exclusions.json").read_text())
+    assert doc["schema"] == td.EXCLUSIONS_SCHEMA == 2 and doc["max_hamming"] == 7
+    # 训练根里的三个训练集都比较过，都有键
+    assert sorted(doc["train_sets"]) == sorted(doc["sets"]) == ["nyu_depth_train/train", "nyu_normals/train", "refcoco_train/train"]
+    assert set(doc["eval_sets"]) == {"coco_val2017/e1sub500", "cvbench/test", "nyuv2/dev_train", "nyuv2/test", "nyu_normals/test",
+                                     td.PROBE_SET, td.COCO_VAL2017_SET}
+    tr_in, ev_in = doc["inputs"]
+    assert tr_in["what"] == f"train-root {tr}" and tr_in["sha256"] is None  # 数据根：没有文件 sha256
+    assert ev_in["sha256"] == hashlib.sha256(eval_json.read_bytes()).hexdigest()
+    assert ev_in["sets"] == {"coco_val2017/e1sub500": 1, "cvbench/test": 2, "nyuv2/dev_train": 1, "nyuv2/test": 1}
+    assert ev_in["host"] and len(ev_in["sets_sha256"]) == 64
+    # 同一份评测数据，读导出文件与读数据根：集合内容的 sha256 相同
+    assert td.input_summary("x", td.load_input(ev))["sets_sha256"] == ev_in["sets_sha256"]
+    meta = td.exclusions_meta(out / "train_exclusions.json")
+    assert meta["legacy"] is False and meta["eval_sets"] == doc["eval_sets"] and meta["max_hamming"] == 7
+    rep = json.loads((out / "dedupe_report.json").read_text())
+    assert rep["eval_sets"] == doc["eval_sets"] and rep["inputs"] == doc["inputs"]
+    assert "参与比较的评测集" in (out / "dedupe_report.md").read_text()
+
+
+def test_loader_refuses_a_train_set_that_was_not_compared(tmp_path):
+    """小问题 A：清单在、但缺这个训练集的键（没比较过）时报错，不再静默放行；require_dedupe=False 时照旧放行。"""
+    root = tmp_path / "root"
+    src = root / "ade20k"
+    img = src / "images/training/ADE_train_00000001.jpg"
+    lab = src / "annotations/training/ADE_train_00000001.png"
+    img.parent.mkdir(parents=True)
+    lab.parent.mkdir(parents=True)
+    Image.fromarray(np.zeros((6, 8, 3), np.uint8)).save(img, format="PNG")
+    Image.fromarray(np.ones((6, 8), np.uint8)).save(lab, format="PNG")
+    make_source(root, "ade20k", {"images/training/ADE_train_00000001.jpg": {"kind": "image", "image_key": "ade20k:1", "phash": H0, "split": "train"},
+                                 "annotations/training/ADE_train_00000001.png": {"kind": "label", "split": "train"}})
+    (src / "train.jsonl").write_text(json.dumps({"stem": "ADE_train_00000001", "split": "train", "image": "images/training/ADE_train_00000001.jpg",
+                                                 "label": "annotations/training/ADE_train_00000001.png", "width": 8, "height": 6}) + "\n")
+    (root / "dedupe").mkdir()
+    doc = {"schema": 2, "created_utc": "t", "max_hamming": 8, "rule": "t", "train_sets": ["refcoco_train/train"], "eval_sets": ["ade20k/val"],
+           "inputs": [], "sets": {"refcoco_train/train": []}}
+    (root / td.EXCLUSIONS_REL).write_text(json.dumps(doc))
+    with pytest.raises(ValueError, match="没有和评测集比较过"):
+        tl.load_ade20k(root, "train")
+    assert len(tl.load_ade20k(root, "train", require_dedupe=False)) == 1
+    doc["train_sets"].append("ade20k/train")
+    doc["sets"]["ade20k/train"] = []  # 比较过、一张都没剔除：空列表
+    (root / td.EXCLUSIONS_REL).write_text(json.dumps(doc))
+    res = tl.load_ade20k(root, "train")
+    assert len(res) == 1 and res.stats["n_dedupe_excluded"] == 0
+
+
+def test_legacy_exclusions_still_readable_and_schema_checks(tmp_path):
+    p = tmp_path / "old.json"
+    p.write_text(json.dumps({"schema": 1, "created_utc": "t", "max_hamming": 8, "rule": "r",
+                             "sets": {"ade20k/train": [{"path": "a.jpg", "key": "k", "reasons": []}]}}))
+    assert td.load_exclusions(p) == {"ade20k/train": {"a.jpg": {"path": "a.jpg", "key": "k", "reasons": []}}}
+    meta = td.exclusions_meta(p)
+    assert meta["legacy"] is True and meta["eval_sets"] is None and meta["train_sets"] == ["ade20k/train"] and meta["max_hamming"] == 8
+    new = {"schema": 2, "max_hamming": 8, "train_sets": ["ade20k/train"], "eval_sets": ["ade20k/val"], "inputs": [], "sets": {"ade20k/train": []}}
+    for broken, msg in (({k: v for k, v in new.items() if k != "eval_sets"}, "缺少"),
+                        ({**new, "train_sets": ["ade20k/train", "refcoco_train/train"]}, "不一致"),
+                        ({**new, "schema": 3}, "schema")):
+        p.write_text(json.dumps(broken))
+        with pytest.raises(ValueError, match=msg):
+            td.read_exclusions_doc(p)

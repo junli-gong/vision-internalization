@@ -14,6 +14,9 @@
 输出到 --out 目录：dedupe_report.json、dedupe_report.md、train_exclusions.json。训练加载器（src/data/train_loaders.py）
 默认读 <训练数据根>/dedupe/train_exclusions.json，自动排除其中的样本；所以 --out 请用 <训练数据根>/dedupe。
 D20 的探针用图与 COCO val2017 全部 5,000 个 id 作为内置评测集自动加入。
+train_exclusions.json 是 schema 2（DEV-0024；格式见 src/data/train_dedupe.py 的模块说明）：记 max_hamming、train_sets、
+eval_sets（参与比较的评测集）与 inputs（各输入清单的 sha256、主机、集合与张数）；参与比较的训练集都有键（没剔除的为空列表）。
+训练加载器遇到缺键的训练集报错；E2 开跑前断言当前任务的评测集在 eval_sets 里。所以要训练的集合都要一次给进来比较。
 
 退出码：0 成功；1 输入有问题。
 """

@@ -12,7 +12,17 @@ import numpy as np
 import pytest
 
 from src.e2.config import TASKS, curve_steps, expand_layers, load_config, parse_layer_spec, resolve_task
-from src.e2.data import E2Paths, batch_indices, group_key, load_eval_set, load_nyu_test, load_train_pool, split_pool
+from src.e2.data import (
+    E2Paths,
+    batch_indices,
+    check_dedupe_coverage,
+    eval_dedupe_sets,
+    group_key,
+    load_eval_set,
+    load_nyu_test,
+    load_train_pool,
+    split_pool,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "run_e2.py"
@@ -62,6 +72,107 @@ def test_exclusions_are_applied(paths):
     assert "ade20k/train/ADE_train_00000006" not in {s.id for s in ade.records}
     nn = load_train_pool("normals", paths)
     assert [s.fields["idx"] for s in nn.records] == [4, 5, 6, 7]
+
+
+# ---------------------------------------------------------------------------
+# DEV-0024：去重清单的覆盖（小问题 A、B）与 NYU 深度训练集的场景复查（小问题 C）
+# ---------------------------------------------------------------------------
+
+
+def _copy_root(tmp_path, edit_excl=None):
+    root = tmp_path / "root"
+    shutil.copytree(E2Paths.fixtures().train_root, root)
+    p = root / "dedupe" / "train_exclusions.json"
+    if edit_excl is not None:
+        doc = json.loads(p.read_text())
+        p.write_text(json.dumps(edit_excl(doc)))
+    base = E2Paths.fixtures()
+    return E2Paths(train_root=root, eval_root=base.eval_root, dev_subsets=base.dev_subsets)
+
+
+def test_fixture_exclusions_cover_every_task_and_train_set(paths):
+    from src.data.train_dedupe import TRAIN_SETS, exclusions_meta
+
+    meta = exclusions_meta(paths.train_root / "dedupe" / "train_exclusions.json")
+    assert meta["legacy"] is False and meta["max_hamming"] == 8 and sorted(meta["train_sets"]) == sorted(TRAIN_SETS)
+    assert {t: eval_dedupe_sets(t) for t in TASKS} == {"depth": ("nyuv2/test",), "semseg": ("ade20k/val",),
+                                                       "normals": ("nyu_normals/test",), "refseg": ("refcoco/eval",)}
+    for t in TASKS:  # 四个训练集都有键，四个任务的评测集都比较过
+        cov = check_dedupe_coverage(t, load_train_pool(t, paths).stats["dedupe_file"], real_model=True)
+        assert cov["required_eval_sets"] == list(eval_dedupe_sets(t)) and cov["max_hamming"] == 8 and cov["legacy"] is False
+
+
+@pytest.mark.parametrize("task", TASKS)
+def test_train_pool_refuses_a_missing_train_set_key(task, tmp_path):
+    from src.e2.data import load_train_pool as ltp
+
+    set_name = {"depth": "nyu_depth_train/train", "semseg": "ade20k/train", "normals": "nyu_normals/train",
+                "refseg": "refcoco_train/train"}[task]
+
+    def drop(doc):
+        doc["sets"].pop(set_name)
+        doc["train_sets"].remove(set_name)
+        return doc
+
+    with pytest.raises(ValueError, match="没有和评测集比较过"):
+        ltp(task, _copy_root(tmp_path, drop))
+
+
+def test_dedupe_coverage_checks(tmp_path):
+    p = _copy_root(tmp_path, lambda d: {**d, "eval_sets": [s for s in d["eval_sets"] if s != "ade20k/val"]})
+    pool = load_train_pool("semseg", p)
+    with pytest.raises(ValueError, match="ade20k/val"):
+        check_dedupe_coverage("semseg", pool.stats["dedupe_file"], real_model=False)
+    assert check_dedupe_coverage("depth", pool.stats["dedupe_file"], real_model=True)["eval_sets"]  # 别的任务不受影响
+    legacy = _copy_root(tmp_path / "old", lambda d: {"schema": 1, "created_utc": "t", "max_hamming": 8, "rule": "r", "sets": d["sets"]})
+    f = load_train_pool("depth", legacy).stats["dedupe_file"]
+    with pytest.raises(ValueError, match="旧格式"):
+        check_dedupe_coverage("depth", f, real_model=True)
+    assert check_dedupe_coverage("depth", f, real_model=False)["legacy"] is True  # --tiny 照读
+    with pytest.raises(ValueError, match="硬约束 7"):
+        check_dedupe_coverage("depth", None, real_model=True)
+    assert check_dedupe_coverage("depth", None, real_model=False)["file_sha256"] is None
+
+
+def test_task_run_refuses_legacy_exclusions_for_real_models(tmp_path):
+    """真模型（spec.tiny = False）的 TaskRun.load_data 开跑前就拒绝旧格式的剔除清单。"""
+    import torch
+
+    from src.adapters.factory import make_adapter
+    from src.e2.runner import RunSpec, TaskRun
+
+    legacy = _copy_root(tmp_path, lambda d: {"schema": 1, "created_utc": "t", "max_hamming": 8, "rule": "r", "sets": d["sets"]})
+    cfg = load_config()
+    tc = resolve_task(cfg, "depth", tiny=True)
+    ad = make_adapter("internvl3.5-2b-hf", device="cpu", dtype=torch.float32, tiny=True)
+    for tiny in (False, True):
+        spec = RunSpec("internvl3.5-2b-hf", "internvl3.5", "r", "0" * 40, "tiny", tiny, {}, "fp32", "depth", "all", (0,), (),
+                       ad.num_layers(), ad.hidden_size())
+        run = TaskRun(ad, cfg, spec, tc, legacy)
+        if tiny:
+            run.load_data()
+            assert run.dedupe["legacy"] is True
+        else:
+            with pytest.raises(ValueError, match="旧格式"):
+                run.load_data()
+
+
+def test_nyu_depth_train_rechecks_official_test_scenes(tmp_path):
+    """小问题 C：load_nyu_depth_train 复查 D11-2，基础场景属于官方 test 场景、或清单的 base_scene 与场景名对不上，都报错。"""
+    from src.data.land.nyu_depth_train import TEST_SCENES
+
+    p = _copy_root(tmp_path)
+    pairs = p.train_root / "nyu_depth_train" / "pairs_train.jsonl"
+    rows = [json.loads(l) for l in pairs.read_text().splitlines()]
+    assert not {r["base_scene"] for r in rows} & set(TEST_SCENES)
+    assert "kitchen_0002" in TEST_SCENES
+    bad = [dict(rows[0], scene="kitchen_0002a", base_scene="kitchen_0002")] + rows[1:]
+    pairs.write_text("".join(json.dumps(r) + "\n" for r in bad))
+    with pytest.raises(ValueError, match="官方 test 场景"):
+        load_train_pool("depth", p)
+    pairs.write_text("".join(json.dumps(r) + "\n" for r in [dict(rows[0], base_scene="office_0003")] + rows[1:]))
+    with pytest.raises(ValueError, match="base_scene"):
+        load_train_pool("depth", p)
 
 
 # ---------------------------------------------------------------------------

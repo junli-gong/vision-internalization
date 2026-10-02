@@ -9,6 +9,12 @@
 5. 曲线：完成第 eval_every·k 步（以及最后一步）后，在验证子集上评一次全部探针（无 CI），连同这段时间的平均训练损失、当前学习率
    写进 curves.jsonl。
 6. 评测：训练完成后在评测集上评一次全部探针，带 bootstrap CI → metrics.json、eval_samples.npz（逐样本统计）、README.md。
+   另按光栅位置（上半 / 下半、token 光栅下标的四分位；src/e2/positions.py）各报一遍标题指标（点估计，metrics.json 的
+   probes.<探针>.eval_by_position 与 README 的表；DEV-0024，D53-3 的 I2），标题指标不变。
+   特征键：整数层 L0 … L{N} 是逐层曲线；参考线 pre_proj 与 L{N}_pre（最后一层归一化之前，D53-3 的 I1）单列（metrics.json 的
+   curve_keys / single_keys）。
+开跑前（load_data）：训练池用的去重剔除清单必须比较过这个任务的评测集（src/e2/data.check_dedupe_coverage；旧格式的清单真模型
+不跑），清单的 max_hamming 与 eval_sets 记进 config.yaml 的 data.dedupe。
 
 输出（叶目录 <out>/<模型>/<任务>/）：
 - config.yaml：运行身份（模型与 revision、图像口径、任务、输入顺序与指令、层与参考线、探针、训练参数、种子、配置 sha256、
@@ -43,8 +49,18 @@ import yaml
 
 from src.data.land.nyuv2 import npz_bytes
 from src.data.records import LoadResult, Sample
+from src.e2 import positions as POS
 from src.e2.config import PROBE_KINDS, E2Config, curve_steps, layer_label
-from src.e2.data import E2Paths, Split, batch_indices, ids_digest, load_eval_set, load_train_pool, split_pool
+from src.e2.data import (
+    E2Paths,
+    Split,
+    batch_indices,
+    check_dedupe_coverage,
+    ids_digest,
+    load_eval_set,
+    load_train_pool,
+    split_pool,
+)
 from src.e2.features import (
     ChannelStats,
     FeatureExtractor,
@@ -54,7 +70,7 @@ from src.e2.features import (
     compute_stats,
 )
 from src.e2.probes import ProbeBank
-from src.e2.tasks import E2Task, make_task, upsample
+from src.e2.tasks import E2Task, PositionAccumulator, make_task, upsample
 from src.runlog import write_run_metadata
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -85,6 +101,7 @@ class RunSpec:
     num_layers: int
     hidden_size: int
     eval_limit: int | None = None
+    pre_norm_last: bool = False  # 加特征键 L{N}_pre（最后一层归一化之前；configs/e2_probes.json 的 layers.pre_norm_last）
 
 
 def leaf_dir(out: str | Path, model_key: str, task: str) -> Path:
@@ -157,7 +174,8 @@ class TaskRun:
         self.task: E2Task = make_task(self.tc)
         self.device = adapter.device
         self.counters = ForwardCounters()
-        self.extractor = FeatureExtractor(adapter, cfg, spec.task, spec.layers, spec.references, self.counters)
+        self.extractor = FeatureExtractor(adapter, cfg, spec.task, spec.layers, spec.references, self.counters,
+                                          pre_norm_last=spec.pre_norm_last)
         self.bank: ProbeBank | None = None
         self.norm: Normalizer | None = None
         self.stats: dict[FeatureKey, ChannelStats] | None = None
@@ -165,6 +183,7 @@ class TaskRun:
         self.pool: LoadResult | None = None
         self.split: Split | None = None
         self.eval_set: LoadResult | None = None
+        self.dedupe: dict[str, Any] | None = None
 
     # ----- 数据 -----
     @staticmethod
@@ -175,6 +194,8 @@ class TaskRun:
 
     def load_data(self) -> None:
         self.pool = load_train_pool(self.spec.task, self.paths)
+        # 开跑前：剔除清单比较过这个任务的评测集（旧格式的清单真模型不跑；DEV-0024）
+        self.dedupe = check_dedupe_coverage(self.spec.task, self.pool.stats.get("dedupe_file"), real_model=not self.spec.tiny)
         if self.spec.task == "refseg":
             self.pool = self._drop_empty_expressions(self.pool)
         self.split = split_pool(self.spec.task, self.pool.records, self.tc["holdout"],
@@ -252,17 +273,28 @@ class TaskRun:
         return sums, used
 
     # ----- 评一遍 -----
-    def collect(self, samples: Sequence[Sample], phase: str) -> dict[str, list[Any]]:
-        """全部探针在 samples 上的逐样本统计（task.sample_stats），按探针名。"""
+    def collect(self, samples: Sequence[Sample], phase: str, *,
+                positions: PositionAccumulator | None = None) -> dict[str, list[Any]]:
+        """全部探针在 samples 上的逐样本统计（task.sample_stats），按探针名。给了 positions 时另按光栅位置分开累计
+        （task.position_stats；区域按 LLM 层的 token 网格划分，src/e2/positions.py）。"""
         self.bank.eval()
         out: dict[str, list[Any]] = {n: [] for n in self.bank.names}
         with torch.no_grad():
             for i, s in enumerate(samples):
                 feats = self.features(s, phase)
                 tgt = self.task.target(s, self.device)
+                grid = tuple(int(v) for v in feats[self.extractor.layers[0]].shape[1:])
+                if positions is not None:
+                    positions.add_sample(tgt)
                 for chunk in self._chunks(feats, tgt.hw):
                     up = upsample(self.bank.predict(chunk, feats), tgt.hw, self.tc["upsample"])
-                    for n, st in zip(chunk, self.task.sample_stats(up, tgt)):
+                    if positions is None:
+                        whole = self.task.sample_stats(up, tgt)
+                    else:
+                        whole, pos = self.task.eval_stats(up, tgt, grid)
+                        for n, ps in zip(chunk, pos):
+                            positions.add(n, ps)
+                    for n, st in zip(chunk, whole):
                         out[n].append(st)
                     del up
                 if phase == "eval" and (i + 1 == len(samples) or (i + 1) % 200 == 0):
@@ -288,8 +320,9 @@ def run_config(run: TaskRun, cfg: E2Config) -> dict[str, Any]:
         "input": {"order": tc["order"],
                   "instruction": cfg.refseg_template if spec.task == "refseg" else cfg.dense_prompt},
         "layers": {"spec": spec.layer_spec, "list": list(spec.layers), "num_layers": spec.num_layers,
-                   "hidden_size": spec.hidden_size,
-                   "convention": "0 = 视觉特征并入之后的嵌入输出；i = 第 i 个 decoder 层输出；num_layers = 最终归一化之后（D19）"},
+                   "hidden_size": spec.hidden_size, "pre_norm_last": run.extractor.pre_norm,
+                   "convention": "0 = 视觉特征并入之后的嵌入输出；i = 第 i 个 decoder 层输出；num_layers = 最终归一化之后（D19）；"
+                                 "L{N}_pre = 最后一个 decoder 层的原始输出（最终归一化之前，单列；D53-3）"},
         "references": list(spec.references),
         "feature_keys": [layer_label(k) for k in run.extractor.keys],
         "training": {k: tc[k] for k in ("steps", "batch_size", "eval_every", "ckpt_every", "probe_chunk",
@@ -300,6 +333,7 @@ def run_config(run: TaskRun, cfg: E2Config) -> dict[str, Any]:
         "data": {
             "train_pool": _scalars(pool.stats),
             "train_exclusions_sha256": _file_sha256(pool.stats.get("dedupe_file")),
+            "dedupe": {k: run.dedupe[k] for k in ("schema", "legacy", "max_hamming", "eval_sets", "required_eval_sets")},
             "holdout": {k: v for k, v in split.info.items() if k not in ("val_ids", "stats_ids")},
             "train_ids_sha256": ids_digest([s.id for s in split.train]),
             "val_ids": list(split.info["val_ids"]),
@@ -318,7 +352,45 @@ def run_config(run: TaskRun, cfg: E2Config) -> dict[str, Any]:
 
 def _probe_meta(bank: ProbeBank) -> dict[str, dict[str, Any]]:
     counts = bank.param_counts()
-    return {n: {"feature": layer_label(e.key), "kind": e.kind, "n_params": counts[n]} for n, e in bank.entries.items()}
+    return {n: {"feature": layer_label(e.key), "kind": e.kind, "n_params": counts[n], "on_curve": isinstance(e.key, int)}
+            for n, e in bank.entries.items()}
+
+
+def _readme_probe_table(run: TaskRun, metrics: Mapping[str, Any], keys: Sequence[FeatureKey]) -> list[str]:
+    hl = run.task.headline
+    head = "| 特征 | " + " | ".join(f"{k} {lab} {d}" for k in PROBE_KINDS for lab, d in hl) + " |"
+    lines = [head, "|---|" + "---|" * (len(PROBE_KINDS) * len(hl))]
+    for key in keys:
+        cells = []
+        for kind in PROBE_KINDS:
+            m = metrics["probes"][f"{layer_label(key)}/{kind}"]["eval"]
+            for lab, _ in hl:
+                ci = m.get(f"{lab}_ci")
+                cells.append(f"{_fmt(m.get(lab))} [{_fmt(ci['low'])}, {_fmt(ci['high'])}]" if ci else _fmt(m.get(lab)))
+        lines.append(f"| {layer_label(key)} | " + " | ".join(cells) + " |")
+    return lines
+
+
+def _readme_position_tables(run: TaskRun, metrics: Mapping[str, Any]) -> list[str]:
+    regs = [(s, r) for s, rs in POS.SPLITS.items() for r in rs]
+    pos = metrics["positions"]
+    lines = ["", "## 按光栅位置分开（评测集，点估计，无 CI；D53-3 的 I2）", "",
+             f"- 划分：{POS.DEFINITION}",
+             f"- 评测样本 {pos['n_samples']} 条" + (f"，其中 {pos['n_unassigned']} 条 GT 掩码为空、不进任何区域" if pos["n_unassigned"] else ""),
+             "- 标题指标不变（上面的表）；括号里是区域内参与的样本数（像素划分：区域里有评测像素的样本）", ""]
+    for lab, d in run.task.headline:
+        lines += [f"### {lab} {d}", "", "| 探针 | 全图 | " + " | ".join(POS.REGION_TITLES[r] for _, r in regs) + " |",
+                  "|---|---|" + "---|" * len(regs)]
+        for name in run.bank.names:
+            p = metrics["probes"][name]
+            cells = [_fmt(p["eval"].get(lab))]
+            for s, r in regs:
+                m = p["eval_by_position"][s][r]
+                n = m.get("n_used", m.get("n"))
+                cells.append(f"{_fmt(m.get(lab))} ({n})")
+            lines.append(f"| {name} | " + " | ".join(cells) + " |")
+        lines.append("")
+    return lines
 
 
 def readme_text(run: TaskRun, cfg_doc: Mapping[str, Any], metrics: Mapping[str, Any], curves: Sequence[Mapping[str, Any]]) -> str:
@@ -328,7 +400,8 @@ def readme_text(run: TaskRun, cfg_doc: Mapping[str, Any], metrics: Mapping[str, 
              f"- 模型：{spec.repo}@{spec.revision}（{spec.family}；适配器 {spec.adapter_model_key}；{spec.model_dtype}；冻结）",
              f"- 图像口径：{cfg_doc['image_policy']}（E1 冻结口径，D28-3）",
              f"- 输入：{cfg_doc['input']['order']}；指令 `{cfg_doc['input']['instruction']}`",
-             f"- 层：{spec.layer_spec} → {list(spec.layers)}（num_layers = {spec.num_layers}；最后一层是最终归一化之后的值，D19）",
+             f"- 层：{spec.layer_spec} → {list(spec.layers)}（num_layers = {spec.num_layers}；最后一层是最终归一化之后的值，D19）"
+             + (f"；另有 {run.extractor.pre_norm} = 最后一个 decoder 层的原始输出（最终归一化之前），单列" if run.extractor.pre_norm else ""),
              f"- 参考线：{list(spec.references) or '无'}" + ("；post_proj 就是第 0 层（D21-3），不是第二条证据" if "post_proj" in spec.references else ""),
              f"- 探针：linear = 1×1 卷积；conv = 3×3 → {tr['probes']['conv']['hidden']}、GELU、3×3；双线性上采样到 GT 分辨率",
              f"- 训练：{tr['steps']} 步 × 批 {tr['batch_size']}，AdamW lr {tr['optim']['lr']}，warmup {tr['optim']['warmup_steps']} + 余弦，"
@@ -341,17 +414,14 @@ def readme_text(run: TaskRun, cfg_doc: Mapping[str, Any], metrics: Mapping[str, 
         lines.append(f"- post_proj 核对（评测集第一条 {pc['sample']}）：vision_features 与第 0 层逐位相同 = {pc['equal']}")
     lines.append("")
     hl = task.headline
-    lines += ["## 逐层探针（评测集，95% CI）", ""]
-    head = "| 特征 | " + " | ".join(f"{k} {lab} {d}" for k in PROBE_KINDS for lab, d in hl) + " |"
-    lines += [head, "|---|" + "---|" * (len(PROBE_KINDS) * len(hl))]
-    for key in run.extractor.keys:
-        cells = []
-        for kind in PROBE_KINDS:
-            m = metrics["probes"][f"{layer_label(key)}/{kind}"]["eval"]
-            for lab, _ in hl:
-                ci = m.get(f"{lab}_ci")
-                cells.append(f"{_fmt(m.get(lab))} [{_fmt(ci['low'])}, {_fmt(ci['high'])}]" if ci else _fmt(m.get(lab)))
-        lines.append(f"| {layer_label(key)} | " + " | ".join(cells) + " |")
+    curve = [k for k in run.extractor.keys if isinstance(k, int)]
+    single = [k for k in run.extractor.keys if not isinstance(k, int)]
+    lines += [f"## 逐层探针（评测集，95% CI；逐层曲线，L{spec.num_layers} 是最终归一化之后）", ""]
+    lines += _readme_probe_table(run, metrics, curve)
+    if single:
+        lines += ["", "## 单列（不与上面的逐层曲线连成一条线：参考线、最后一层归一化之前）", ""]
+        lines += _readme_probe_table(run, metrics, single)
+    lines += _readme_position_tables(run, metrics)
     first, d = hl[0]
     steps = sorted({c["step"] for c in curves})
     lines += ["", f"## 训练曲线（验证子集上的 {first} {d}；括号里是这段的平均训练损失）", ""]
@@ -563,20 +633,28 @@ def run_task(adapter: Any, cfg: E2Config, spec: RunSpec, task_cfg: Mapping[str, 
             _atomic_torch_save({"identity_sha256": ident_sha, "probes": run.bank.module_state(),
                                 "stats": {k: v.state() for k, v in run.stats.items()}}, ckpt_dir / FINAL_PROBES)
 
-        # 评测（post_proj 在评测集第一条上再核一次：这一条的记录与是否续跑无关）
+        # 评测（post_proj 在评测集第一条上再核一次：这一条的记录与是否续跑无关）；另按光栅位置分开累计（I2）
         run.extractor.request_post_proj_check()
-        estats = timed("eval", lambda: run.collect(run.eval_set.records, "eval"))
+        pos_acc = PositionAccumulator(run.task, run.bank.names)
+        estats = timed("eval", lambda: run.collect(run.eval_set.records, "eval", positions=pos_acc))
         vstats = timed("val_final", lambda: run.collect(run.split.val, "val_final"))
         n_res = int(task_cfg["bootstrap_resamples"])
         probes_doc = {}
         meta = _probe_meta(run.bank)
+        by_pos = pos_acc.result()
         for n in run.bank.names:
             probes_doc[n] = {**meta[n], "eval": run.task.aggregate(estats[n], n_resamples=n_res, ci=True),
+                             "eval_by_position": by_pos[n],
                              "val_final": run.task.aggregate(vstats[n], n_resamples=0, ci=False)}
         metrics = {"experiment": "E2", "task": spec.task, "model": spec.model_key, "family": spec.family,
                    "revision": spec.revision, "feature_keys": [layer_label(k) for k in run.extractor.keys],
-                   "layers": list(spec.layers), "references": list(spec.references),
+                   "curve_keys": [layer_label(k) for k in run.extractor.keys if isinstance(k, int)],
+                   "single_keys": [layer_label(k) for k in run.extractor.keys if not isinstance(k, int)],
+                   "layers": list(spec.layers), "references": list(spec.references), "pre_norm_last": run.extractor.pre_norm,
                    "headline": [{"metric": m, "better": d} for m, d in run.task.headline],
+                   "positions": {"definition": POS.DEFINITION, "splits": {s: list(r) for s, r in POS.SPLITS.items()},
+                                 "unit": run.task.position_unit, "ci": None, "n_samples": pos_acc.n_samples,
+                                 "n_unassigned": pos_acc.n_unassigned},
                    "n_eval": len(run.eval_set), "n_val": len(run.split.val), "n_train": len(run.split.train),
                    "n_train_skipped": run.n_skipped, "post_proj_check": run.extractor.post_proj_check("eval"),
                    "probes": probes_doc, "complete": True}

@@ -6,7 +6,8 @@
 - ade20k：train 6 张、val 3 张，48×64 的 JPEG + mode L 标注（0 与若干类别）；
 - nyu_normals：train 5 张（idx 3–7）、test 2 张（idx 1、2），480×640 的 RGB PNG + 法向 PNG（四周无效）；
 - refcoco_train：refcoco（unc）train 4 张 24×32 的图、5 个 ref、10 句；
-- dedupe/train_exclusions.json：剔除 ade20k 的一张训练图与 nyu_normals 的 idx 3（与真实数据里"E1 开发子集按评测集剔除"同形）。
+- dedupe/train_exclusions.json：剔除 ade20k 的一张训练图与 nyu_normals 的 idx 3（与真实数据里"E1 开发子集按评测集剔除"同形）；
+  新格式（DEV-0024）：四个训练集都有键，记 eval_sets 与 max_hamming。
 数值全部由固定种子生成；重跑逐字节相同（PNG / JPEG 的编码参数固定）。
 """
 
@@ -108,7 +109,8 @@ def normal_map(rng: np.random.Generator) -> np.ndarray:
 def build_nyu_depth_train(rng) -> None:
     s = Src("nyu_depth_train")
     rows = []
-    for scene, base in [("bedroom_0001a", "bedroom_0001"), ("bedroom_0001b", "bedroom_0001"), ("kitchen_0002a", "kitchen_0002"),
+    # 基础场景都不在官方 test 场景（nyu_depth_train.TEST_SCENES）里：load_nyu_depth_train 复查 D11-2（DEV-0024）
+    for scene, base in [("bedroom_0001a", "bedroom_0001"), ("bedroom_0001b", "bedroom_0001"), ("kitchen_0003a", "kitchen_0003"),
                         ("office_0003", "office_0003"), ("living_room_0004", "living_room_0004")]:
         for fr in ("00001", "00002"):
             rgb, dep = f"sync/{scene}/rgb_{fr}.jpg", f"sync/{scene}/sync_depth_{fr}.png"
@@ -186,14 +188,23 @@ def build_refcoco_train(rng) -> None:
 
 
 def build_exclusions() -> None:
+    """新格式（train_dedupe.EXCLUSIONS_SCHEMA = 2）：四个训练集都有键（没剔除的是空列表），eval_sets 含 E2 四个任务的评测集
+    （src/e2/data.eval_dedupe_sets，tests 核对）与两个内置评测集。"""
     d = ROOT / "dedupe"
     d.mkdir(parents=True, exist_ok=True)
-    doc = {"schema": 1, "created_utc": "fixture", "max_hamming": 8,
+    train_sets = ["ade20k/train", "nyu_depth_train/train", "nyu_normals/train", "refcoco_train/train"]
+    eval_sets = ["ade20k/val", "coco_val2017_full/val2017", "nyu_normals/test", "nyuv2/test", "probe/D20", "refcoco/eval"]
+    doc = {"schema": 2, "created_utc": "fixture", "max_hamming": 8,
            "rule": "fixture：演示加载器按清单剔除（真实清单由 scripts/data/dedupe_report.py 生成）",
+           "train_sets": train_sets, "eval_sets": eval_sets,
+           "inputs": [{"what": "fixture", "host": None, "root": None, "created_utc": "fixture", "git_commit": None, "sha256": None,
+                       "sets_sha256": None, "sets": {}}],
            "sets": {"ade20k/train": [{"path": "images/training/ADE_train_00000006.jpg", "key": "ade20k:ADE_train_00000006",
                                        "reasons": ["fixture：演示剔除"]}],
+                    "nyu_depth_train/train": [],
                     "nyu_normals/train": [{"path": "train/img/0003.png", "key": "nyuv2:3",
-                                           "reasons": ["fixture：E1 开发子集按评测集剔除（D49-4 同形）"]}]}}
+                                           "reasons": ["fixture：E1 开发子集按评测集剔除（D49-4 同形）"]}],
+                    "refcoco_train/train": []}}
     (d / "train_exclusions.json").write_text(json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
 
 

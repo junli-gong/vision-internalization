@@ -43,15 +43,22 @@ grid token：它们是均值初始化，logits 全部相同，只会得到平局
 另报 top2_gap = 该位置参照 logits 的前两名之差。gap ≥ top2_gap，对方的 token 恰是第二名时两者相同；对方的 token 连第二名都
 不是时只有 gap 会暴露，所以判据用 gap。
 
-判据（输出的 criteria 与 pass；提议值，由管理员在 RUN 实测后冻结，D42-4）：每种思考开关分别判，
-- GPU（不是 CPU fp32）：一致率（restricted：两种解码的 token_agreement、教师强制 agreement；merge：生成的 token_agreement、
-  教师强制 argmax_agreement）≥ MIN_AGREEMENT，不一致位置的 gap 全部 < MAX_GAP；
-- CPU fp32（--tiny）：必须逐个相同（exact_rows = token_agreement = agreement = 1，没有不一致的位置）；
-- merge 的随机 LoRA 另有前提（两种设备都要求）：effect_vs_base 里生成与 base 逐行相同的比例 ≤ EFFECT_MAX_EXACT_ROWS，
-  教师强制 argmax 与 base 相同的比例 ≤ EFFECT_MAX_ARGMAX_AGREEMENT。
+判据 v1（D50-3 冻结，依据 RUN-0021 实测；目的是查出实现错误，数值噪声另记为噪声底；版本号 CRITERIA_VERSION 写进输出的
+criteria_version 与 criteria.version）：每种思考开关分别判，
+- GPU / bf16：
+  - restricted：教师强制 argmax 一致率 teacher_forcing.agreement ≥ RESTRICTED_MIN_TF_AGREEMENT（两种开关）；关思考时受限解码与
+    generate_batch 的 exact_rows ≥ RESTRICTED_MIN_EXACT_ROWS_OFF；不一致处的 logit 差最大值 < RESTRICTED_MAX_GAP（教师强制的不一致处
+    与两种解码的第一个分歧处都算；分歧算不出 gap 也判不过）。开思考时的 exact_rows、token_agreement 只报不判（自由生成在近似平局处
+    分岔，之后逐位不同）。
+  - merge：教师强制 argmax 一致率 ≥ MERGE_MIN_TF_AGREEMENT；不一致处 logit 差的中位数 ≤ MERGE_MAX_MEDIAN_GAP（教师强制的不一致处）；
+    生成的逐位一致率、exact_rows、gap 与教师强制 gap 的最大值只报不判。
+  - 前提（随机 LoRA 才有）：只在开思考时判，effect_vs_base.generate.exact_rows ≤ EFFECT_MAX_EXACT_ROWS；关思考时只报不判
+    （输出被限制在几个 token 上，基本不变）；教师强制 argmax 与 base 的一致率只报不判。
+- CPU fp32（--tiny）：两项检查都必须逐个相同（exact_rows = token_agreement = agreement = 1，没有不一致的位置）；前提同上。
+已有的输出可以用 rejudge_document 按当前判据重判（tests 用 RUN-0021 的 4 份 JSON 钉住：4/4 通过）。
 
 输出 JSON 的字段见 build_document（format、argv、written_utc、code、versions、gpu、model、checkpoint、data、generation、
-batch_protocol、allowed、criteria、checks、pass、timing_s、error）。
+batch_protocol、allowed、criteria_version、criteria、checks、failures、pass、timing_s、error）。
 退出码：0 = 跑完且全部判据通过；1 = 跑完但有判据不过（JSON 照写）；2 = 出错（已有的结果与报错先写进 --out）。
 argparse 用法错误也是 2。
 """
@@ -102,10 +109,16 @@ LORA_RANK = 32  # 简报 §8.4 的默认 rank
 LORA_ALPHA = 64  # env_report §7 的 LoRA 行：LoraConfig(r=32, lora_alpha=64)
 LORA_REL_SCALE = 0.05  # 随机 LoRA：每个目标模块 ‖scaling·B·A‖_F / ‖W‖_F（依据见 randomize_lora）
 LORA_SEED = 0
-MIN_AGREEMENT = 0.995  # 提议值（D42-4）
-MAX_GAP = 0.125  # 提议值（D42-4）：不一致位置的 logit 差上限 = 2^-3，即 bf16 在 [16, 32) 里的一个 ulp
-EFFECT_MAX_EXACT_ROWS = 0.5  # 随机 LoRA 的前提：与 base 逐行相同的生成至多一半
-EFFECT_MAX_ARGMAX_AGREEMENT = 0.99  # 随机 LoRA 的前提：教师强制 argmax 与 base 相同的位置至多 99%
+# 判据 v1（D50-3 冻结；规则见模块说明）
+CRITERIA_VERSION = "v1"
+CRITERIA_SOURCE = "D50-3（依据 RUN-0021 实测冻结，2026-10-02）"
+RESTRICTED_MIN_TF_AGREEMENT = 0.999  # restricted：教师强制 argmax 一致率（两种开关）
+RESTRICTED_MIN_EXACT_ROWS_OFF = 0.95  # restricted：关思考时受限解码与 generate_batch 逐行相同的比例
+RESTRICTED_MAX_GAP = 2.0  # restricted：不一致处 logit 差的最大值上限（超过就逐条查看）
+MERGE_MIN_TF_AGREEMENT = 0.98  # merge：教师强制 argmax 一致率
+MERGE_MAX_MEDIAN_GAP = 0.5  # merge：不一致处 logit 差的中位数上限
+EFFECT_MAX_EXACT_ROWS = 0.5  # 随机 LoRA 的前提（只在开思考时判）：与 base 逐行相同的生成至多一半
+PREMISE_MODES = ("thinking_on",)  # 前提只在这些思考开关下判
 MAX_LISTED = 500  # JSON 里逐项列出的不一致位置 / 分歧行的上限（统计量用全部）
 TF_CHUNK = 256  # 全词表 logits 比较的分块
 
@@ -268,7 +281,7 @@ def randomize_lora(ad: Any, *, rel_scale: float, seed: int) -> dict[str, Any]:
     - 尺度按每个模块自身的 ‖W‖ 定，与家族、尺寸、dtype 无关（代码与模型无关）。
     - 默认 0.05 = 每个目标线性层的权重沿一个 rank-32 的随机方向改 5%。量级与 LoRA 微调后常见的 ‖ΔW‖/‖W‖（1e-2 量级）同阶、
       偏大一点，仍是"小尺度"；远大于 bf16 的相对舍入（2^-9 ≈ 0.002），合并进 bf16 权重时增量不会被舍掉。
-    - "与 base 明显不同"由 effect_vs_base 实测、判据里作前提（EFFECT_MAX_*）。开发机的小模型（4 层、hidden 64）上标定过：
+    - "与 base 明显不同"由 effect_vs_base 实测、判据里作前提（EFFECT_MAX_EXACT_ROWS）。开发机的小模型（4 层、hidden 64）上标定过：
       0.02 时 Qwen 的教师强制 argmax 与 base 相同 99.2% / 100%（不够）；0.05 时三个家族 98.7%、29%、57–83%，生成逐行都与 base
       不同（Qwen 开思考 1/3 相同）。真模型上的偏离以 RUN 实测为准（effect_vs_base）；不够或过大时用 --lora-rel-scale 调，
       不改代码。"""
@@ -307,7 +320,7 @@ def randomize_lora(ad: Any, *, rel_scale: float, seed: int) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def gap_summary(gaps: Sequence[float | None], threshold: float = MAX_GAP) -> dict[str, Any]:
+def gap_summary(gaps: Sequence[float | None], threshold: float = RESTRICTED_MAX_GAP) -> dict[str, Any]:
     v = np.asarray([g for g in gaps if g is not None], dtype=float)
     if not v.size:
         return {"n": 0, "median": None, "max": None, "frac_lt_threshold": None, "threshold": threshold}
@@ -491,44 +504,76 @@ def _release_memory() -> None:
 
 
 def criteria_block(exact: bool) -> dict[str, Any]:
+    """判据 v1（D50-3；规则见模块说明）。exact（CPU fp32）时两项检查都要求逐个相同，前提照 v1。"""
     return {
-        "status": "提议值（D42-4）：RUN 实测后由管理员冻结",
+        "version": CRITERIA_VERSION,
+        "status": f"冻结：{CRITERIA_SOURCE}",
         "exact": exact,
-        "exact_reason": "CPU fp32：必须逐个相同" if exact else "GPU / bf16：一致率（D21-2）",
+        "exact_reason": "CPU fp32：两项检查都必须逐个相同" if exact else "GPU / bf16：判据 v1（查实现错误；数值噪声另记为噪声底）",
         "per_thinking_mode": True,
-        "min_agreement": 1.0 if exact else MIN_AGREEMENT,
-        "max_gap": None if exact else MAX_GAP,
         "gap_definition": "不一致位置上两种实现所选两个 token 在参照 logits 上之差（见脚本说明）；top2_gap 只报告不判",
-        "restricted": ["decode_vs_generate_batch.token_agreement ≥ min_agreement",
-                       "teacher_forcing.agreement ≥ min_agreement",
-                       "decode_vs_generate_batch.gap.max < max_gap 且 teacher_forcing.gap.max < max_gap"
-                       + "（exact 时：exact_rows = 1 且没有不一致的位置）"],
-        "merge": ["generate.token_agreement ≥ min_agreement", "teacher_forcing.argmax_agreement ≥ min_agreement",
-                  "generate.gap.max < max_gap 且 teacher_forcing.gap.max < max_gap（exact 时：exact_rows = 1 且没有不一致的位置）",
-                  f"随机 LoRA 的前提：effect_vs_base.generate.exact_rows ≤ {EFFECT_MAX_EXACT_ROWS}，"
-                  f"effect_vs_base.teacher_forcing.argmax_agreement ≤ {EFFECT_MAX_ARGMAX_AGREEMENT}"],
-        "effect_max_exact_rows": EFFECT_MAX_EXACT_ROWS,
-        "effect_max_argmax_agreement": EFFECT_MAX_ARGMAX_AGREEMENT,
+        "restricted": {
+            "min_tf_agreement": RESTRICTED_MIN_TF_AGREEMENT,
+            "min_exact_rows_thinking_off": RESTRICTED_MIN_EXACT_ROWS_OFF,
+            "max_gap": RESTRICTED_MAX_GAP,
+            "rules": [f"teacher_forcing.agreement ≥ {RESTRICTED_MIN_TF_AGREEMENT}（两种开关）",
+                      f"thinking_off：decode_vs_generate_batch.exact_rows ≥ {RESTRICTED_MIN_EXACT_ROWS_OFF}",
+                      f"teacher_forcing.gap.max < {RESTRICTED_MAX_GAP} 且 decode_vs_generate_batch.gap.max < {RESTRICTED_MAX_GAP}"
+                      "（两种开关；分歧算不出 gap 也判不过）"],
+            "report_only": ["decode_vs_generate_batch.token_agreement", "thinking_on 的 decode_vs_generate_batch.exact_rows",
+                            "top2_gap"],
+        },
+        "merge": {
+            "min_tf_agreement": MERGE_MIN_TF_AGREEMENT,
+            "max_median_gap": MERGE_MAX_MEDIAN_GAP,
+            "rules": [f"teacher_forcing.argmax_agreement ≥ {MERGE_MIN_TF_AGREEMENT}（两种开关）",
+                      f"teacher_forcing.gap.median ≤ {MERGE_MAX_MEDIAN_GAP}（两种开关）"],
+            "report_only": ["generate.*（逐位一致率 token_agreement、exact_rows、gap）", "teacher_forcing.gap.max", "top2_gap"],
+        },
+        "premise": {
+            "max_exact_rows_vs_base": EFFECT_MAX_EXACT_ROWS,
+            "judged_modes": list(PREMISE_MODES),
+            "rules": [f"随机 LoRA：{'、'.join(PREMISE_MODES)} 时 effect_vs_base.generate.exact_rows ≤ {EFFECT_MAX_EXACT_ROWS}"],
+            "report_only": ["thinking_off 的 effect_vs_base", "effect_vs_base.teacher_forcing.argmax_agreement"],
+        },
+        "exact_rules": ["CPU fp32：生成 exact_rows = token_agreement = 1，教师强制没有不一致的位置（restricted 与 merge 都是）"],
     }
 
 
-def _judge_pair(where: str, gen: dict[str, Any], tf: dict[str, Any], tf_key: str, crit: dict[str, Any]) -> list[str]:
+def _judge_exact(where: str, gen: dict[str, Any], tf: dict[str, Any], tf_key: str) -> list[str]:
     bad = []
+    if gen["exact_rows"] != 1.0 or gen["token_agreement"] != 1.0:
+        bad.append(f"{where}：生成不逐个相同（exact_rows {gen['exact_rows']}，token_agreement {gen['token_agreement']}）")
+    if tf[tf_key] != 1.0 or tf["n_disagreements"]:
+        bad.append(f"{where}：教师强制有 {tf['n_disagreements']} 个位置不同")
+    return bad
+
+
+def _judge_restricted(where: str, mode: str, gen: dict[str, Any], tf: dict[str, Any], crit: dict[str, Any]) -> list[str]:
     if crit["exact"]:
-        if gen["exact_rows"] != 1.0 or gen["token_agreement"] != 1.0:
-            bad.append(f"{where}：生成不逐个相同（exact_rows {gen['exact_rows']}，token_agreement {gen['token_agreement']}）")
-        if tf[tf_key] != 1.0 or tf["n_disagreements"]:
-            bad.append(f"{where}：教师强制有 {tf['n_disagreements']} 个位置不同")
-        return bad
-    if gen["token_agreement"] < crit["min_agreement"]:
-        bad.append(f"{where}：生成的 token_agreement {gen['token_agreement']:.4f} < {crit['min_agreement']}")
-    if tf[tf_key] < crit["min_agreement"]:
-        bad.append(f"{where}：教师强制的 {tf_key} {tf[tf_key]:.4f} < {crit['min_agreement']}")
+        return _judge_exact(where, gen, tf, "agreement")
+    c, bad = crit["restricted"], []
+    if tf["agreement"] < c["min_tf_agreement"]:
+        bad.append(f"{where}：教师强制的 agreement {tf['agreement']:.5f} < {c['min_tf_agreement']}")
+    if mode == MODE_KEYS[False] and gen["exact_rows"] < c["min_exact_rows_thinking_off"]:
+        bad.append(f"{where}：关思考时受限解码与 generate_batch 的 exact_rows {gen['exact_rows']:.4f} < {c['min_exact_rows_thinking_off']}")
     if gen["n_divergence_without_gap"]:
         bad.append(f"{where}：{gen['n_divergence_without_gap']} 行的分歧算不出 logit 差")
-    for name, s in (("生成分歧处", gen["gap"]), ("教师强制不一致处", tf["gap"])):
-        if s["n"] and s["max"] >= crit["max_gap"]:
-            bad.append(f"{where}：{name}的 logit 差最大 {s['max']:.4f} ≥ {crit['max_gap']}")
+    for name, s in (("解码分歧处", gen["gap"]), ("教师强制不一致处", tf["gap"])):
+        if s["n"] and s["max"] >= c["max_gap"]:
+            bad.append(f"{where}：{name}的 logit 差最大 {s['max']:.4f} ≥ {c['max_gap']}（逐条查看）")
+    return bad
+
+
+def _judge_merge(where: str, gen: dict[str, Any], tf: dict[str, Any], crit: dict[str, Any]) -> list[str]:
+    if crit["exact"]:
+        return _judge_exact(where, gen, tf, "argmax_agreement")
+    c, bad = crit["merge"], []
+    if tf["argmax_agreement"] < c["min_tf_agreement"]:
+        bad.append(f"{where}：教师强制的 argmax_agreement {tf['argmax_agreement']:.5f} < {c['min_tf_agreement']}")
+    s = tf["gap"]
+    if s["n"] and s["median"] > c["max_median_gap"]:
+        bad.append(f"{where}：教师强制不一致处 logit 差的中位数 {s['median']:.4f} > {c['max_median_gap']}")
     return bad
 
 
@@ -536,20 +581,32 @@ def judge(checks: dict[str, Any], crit: dict[str, Any]) -> dict[str, list[str]]:
     out = {}
     if "restricted" in checks:
         out["restricted"] = [m for k, r in checks["restricted"]["by_thinking"].items()
-                             for m in _judge_pair(f"restricted/{k}", r["decode_vs_generate_batch"], r["teacher_forcing"],
-                                                  "agreement", crit)]
+                             for m in _judge_restricted(f"restricted/{k}", k, r["decode_vs_generate_batch"],
+                                                        r["teacher_forcing"], crit)]
     if "merge" in checks:
         m = checks["merge"]
         bad = [x for k, r in m["by_thinking"].items()
-               for x in _judge_pair(f"merge/{k}", r["generate"], r["teacher_forcing"], "argmax_agreement", crit)]
+               for x in _judge_merge(f"merge/{k}", r["generate"], r["teacher_forcing"], crit)]
+        p = crit["premise"]
         for k, e in (m.get("effect_vs_base") or {}).items():
-            if e["generate"]["exact_rows"] > EFFECT_MAX_EXACT_ROWS:
-                bad.append(f"merge/{k}：随机 LoRA 太弱，{e['generate']['exact_rows']:.3f} 的行与 base 相同（> {EFFECT_MAX_EXACT_ROWS}）")
-            if e["teacher_forcing"]["argmax_agreement"] > EFFECT_MAX_ARGMAX_AGREEMENT:
-                bad.append(f"merge/{k}：随机 LoRA 太弱，教师强制 argmax 与 base 相同的比例 "
-                           f"{e['teacher_forcing']['argmax_agreement']:.4f} > {EFFECT_MAX_ARGMAX_AGREEMENT}")
+            if k in p["judged_modes"] and e["generate"]["exact_rows"] > p["max_exact_rows_vs_base"]:
+                bad.append(f"merge/{k}：随机 LoRA 太弱，{e['generate']['exact_rows']:.3f} 的行与 base 相同"
+                           f"（> {p['max_exact_rows_vs_base']}）")
         out["merge"] = bad
     return out
+
+
+def rejudge_document(doc: dict[str, Any]) -> dict[str, Any]:
+    """已有的输出（例如 RUN-0021 按提议值判的 JSON）按当前判据重判：exact 取原文档的设置（CPU fp32 与否），checks 原样用。
+    返回 {criteria_version, criteria, failures, pass}，不改 doc。"""
+    if doc.get("format") != FORMAT:
+        raise ValueError(f"不是本仪器的输出（format {doc.get('format')!r} ≠ {FORMAT!r}）")
+    if doc.get("error"):
+        raise ValueError("这份输出是出错时写的（error 非空），没有可判的读数")
+    crit = criteria_block(bool((doc.get("criteria") or {}).get("exact", False)))
+    failures = judge(doc["checks"], crit)
+    return {"criteria_version": CRITERIA_VERSION, "criteria": crit, "failures": failures,
+            "pass": all(not bad for bad in failures.values())}
 
 
 # ---------------------------------------------------------------------------
@@ -572,8 +629,8 @@ def build_document(a, argv) -> dict[str, Any]:
             "model": None, "checkpoint": None, "data": None,
             "generation": {"max_new_tokens": a.max_new_tokens, "thinking_modes": list(THINKING), "decoding": "greedy",
                            "merge_generation": "全词表（不受限）", "restricted_generation": "allowed 集合"},
-            "batch_protocol": None, "allowed": None, "criteria": None, "checks": {}, "failures": {}, "pass": None,
-            "timing_s": {}, "error": None}
+            "batch_protocol": None, "allowed": None, "criteria_version": CRITERIA_VERSION, "criteria": None, "checks": {},
+            "failures": {}, "pass": None, "timing_s": {}, "error": None}
 
 
 def write_json(path: Path, doc: dict[str, Any]) -> None:

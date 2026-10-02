@@ -24,7 +24,10 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from src.data import loaders as L
+from src.data import train_dedupe as TD
 from src.data import train_loaders as TL
+from src.data.land import ade20k as ade_land
+from src.data.land import nyu_normals as nn_land
 from src.data.land.manifest import read_manifest
 from src.data.records import LoadResult, Sample
 from src.data.subsets import DEV_SUBSETS_PATH, hash_rank, sort_ids
@@ -118,6 +121,54 @@ def load_eval_set(task: str, paths: E2Paths, *, eval_subset: str | None = None) 
 
 
 # ---------------------------------------------------------------------------
+# 去重覆盖：当前任务的评测集必须在剔除清单的 eval_sets 里（DEV-0024；D53-3 的小问题 B）
+# ---------------------------------------------------------------------------
+
+
+def eval_dedupe_sets(task: str) -> tuple[str, ...]:
+    """这个任务的评测集在去重报告里的集合名（命名规则只在 src/data/train_dedupe.set_name_for 一处）：
+    depth = nyuv2 落地里 split = test 的 654 张；semseg = ade20k/val；normals = nyu_normals/test；
+    refseg = E1 的 refcoco 落地（整个源是一个评测集，含 val）。"""
+    if task == "depth":
+        return (TD.set_name_for(NYU_TEST_SOURCE, "rgb", {}, {"rgb": "test"}),)
+    if task == "semseg":
+        return (TD.set_name_for(ade_land.SOURCE, "", {"split": "val"}),)
+    if task == "normals":
+        return (TD.set_name_for(nn_land.SOURCE, "", {"split": "test"}),)
+    if task == "refseg":
+        return (TD.set_name_for(REFSEG_DATASET, "", {}),)
+    raise ValueError(f"未知任务 {task!r}，可用：{TASKS}")
+
+
+def check_dedupe_coverage(task: str, dedupe_file: str | Path | None, *, real_model: bool) -> dict[str, Any]:
+    """开跑前的断言：训练池用的剔除清单比较过这个任务的评测集。返回写进 config.yaml 的摘要
+    {file_sha256, schema, legacy, max_hamming, eval_sets, required_eval_sets}。
+
+    - 没有清单（require_dedupe=False 的测试路径）：真模型报错，--tiny 记 None；
+    - 旧格式（没有 eval_sets）：真模型报错（无法核实比较过哪些评测集），--tiny 照读、记 legacy；
+    - 新格式：required_eval_sets 有不在 eval_sets 里的就报错。"""
+    need = list(eval_dedupe_sets(task))
+    if dedupe_file is None:
+        if real_model:
+            raise ValueError(f"{task}：训练池没有用去重剔除清单，真模型不跑（硬约束 7）")
+        return {"file_sha256": None, "schema": None, "legacy": None, "max_hamming": None, "eval_sets": None,
+                "required_eval_sets": need}
+    meta = TD.exclusions_meta(dedupe_file)
+    out = {"file_sha256": meta["sha256"], "schema": meta["schema"], "legacy": meta["legacy"],
+           "max_hamming": meta["max_hamming"], "eval_sets": meta["eval_sets"], "required_eval_sets": need}
+    if meta["legacy"]:
+        if real_model:
+            raise ValueError(f"{task}：剔除清单 {dedupe_file} 是旧格式（schema {meta['schema']}，没有 eval_sets），无法核实它比较过"
+                             f"评测集 {need}；用当前的 scripts/data/dedupe_report.py 重新生成")
+        return out
+    missing = [s for s in need if s not in meta["eval_sets"]]
+    if missing:
+        raise ValueError(f"{task}：评测集 {missing} 不在剔除清单 {dedupe_file} 的 eval_sets 里（{meta['eval_sets']}），"
+                         "即训练集没有和它比较过；把它的哈希清单一起给 scripts/data/dedupe_report.py 重新比较")
+    return out
+
+
+# ---------------------------------------------------------------------------
 # 留出、标准化样本、训练顺序
 # ---------------------------------------------------------------------------
 
@@ -201,6 +252,8 @@ __all__ = [
     "E2_SALT",
     "Split",
     "batch_indices",
+    "check_dedupe_coverage",
+    "eval_dedupe_sets",
     "group_key",
     "ids_digest",
     "load_eval_set",

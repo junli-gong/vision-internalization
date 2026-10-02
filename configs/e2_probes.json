@@ -17,7 +17,9 @@
   "default": "all",
   "per_model": {"qwen3.5-9b": "every 2"},
   "always_include_last": true,
-  "basis": "简报 §8.3：小模型取全部层，9B 每隔一层。every k = range(0, num_layers()+1, k)，再补上最后一层（最终归一化之后的值，D19 的层号约定），否则层数为奇数的模型会漏掉它"
+  "basis": "简报 §8.3：小模型取全部层，9B 每隔一层。every k = range(0, num_layers()+1, k)，再补上最后一层（最终归一化之后的值，D19 的层号约定），否则层数为奇数的模型会漏掉它",
+  "pre_norm_last": true,
+  "pre_norm_last_basis": "D53-3（E2 审查 I1）：另加特征键 L{N}_pre = 最后一个 decoder 层的原始输出（最终归一化之前；适配器的层键 base.PRE_NORM_LAST），默认加进层集合。L{N} 是第 N 层 + 最终 RMSNorm，逐 token 的 1/RMS 缩放是按通道标准化抵消不了的，与前面各点不是同一种量；L{N}_pre 与 L0..L{N-1} 同一种量。曲线上单列，不与 L0..L{N} 连成一条线"
  },
  "references": {
   "post_proj": "就是第 0 层（D21-3：vision_features 与第 0 层在图像位置上逐位相同）。给了 --reference post_proj 只是确保第 0 层在层集合里，运行时核对一次两者逐位相同，不另训一组探针；G2 解读时不能算作第二条证据",

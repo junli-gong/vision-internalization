@@ -20,6 +20,7 @@ import torch
 from src.e2.config import E2Config, curve_steps
 from src.e2.data import E2Paths
 from src.e2.runner import RunSpec, TaskRun
+from src.e2.tasks import PositionAccumulator
 
 N_STATS_SAMPLES = 2
 
@@ -54,7 +55,7 @@ def estimate_task(adapter: Any, cfg: E2Config, spec: RunSpec, task_cfg: Mapping[
     sub = ev[:eval_samples]
     _sync(dev)
     t0 = time.perf_counter()
-    run.collect(sub, "estimate")
+    run.collect(sub, "estimate", positions=PositionAccumulator(run.task, run.bank.names))  # 与正式评测同一条路径（含按位置分开）
     _sync(dev)
     t_eval = (time.perf_counter() - t0) / max(1, len(sub))
     steps, n_val = int(task_cfg["steps"]), len(run.split.val)
