@@ -231,7 +231,8 @@ def test_refer_pins_defined_once_and_consistent():
         assert refcoco_train.SPEC[key] is refcoco.SPEC[key]
     for n in NAMES:
         assert refcoco.SPEC["refer_zip_pins"][n]["size"] == refcoco.SPEC["datasets"][n]["zip_bytes"]
-        assert refcoco.SPEC["refer_zip_sha256"][n] is None or len(refcoco.SPEC["refer_zip_sha256"][n]) == 64
+        assert re.fullmatch(r"[0-9a-f]{64}", refcoco.SPEC["refer_zip_sha256"][n])  # D57 起三个都钉住了
+    assert len(set(refcoco.SPEC["refer_zip_sha256"].values())) == 3
     assert list(refcoco.SPEC["refer_zip_pins"]) == list(NAMES) == list(refcoco.SPEC["datasets"])
     # 与 P0 的中央目录清单一致（zip_list_*.txt 里的成员数，含 refcocog 的目录条目）
     p0 = REPO / "experiments/P0/0001_env_probe/raw/p6/A"
@@ -246,6 +247,7 @@ def test_refcoco_train_reads_refer_zips_through_shared_code(server, tmp_path, mo
 
     spec = refcoco_train_upstream(server, tmp_path)
     spec.pop("_images")
+    spec["refer_zip_sha256"] = dict.fromkeys(NAMES)  # 这里走"没钉住：只记 note"的路径（钉住的路径见 test_data_train_land）
     refer_dir = tmp_path / "refer"
     refer_dir.mkdir()
     for n in NAMES:
@@ -262,6 +264,41 @@ def test_refcoco_train_reads_refer_zips_through_shared_code(server, tmp_path, mo
     assert man["script"]["path"] == refcoco_train.SCRIPT == "scripts/data/land_train.py"
     refer_up = [u for u in man["upstream"] if u.get("dataset")]
     assert [u["zip_sha256"] for u in refer_up] == [sha(server.files[f"/refer/{n}.zip"]) for n in NAMES]
+    assert not [x for x in man["verification"] if "整个文件" in x["what"]]
+    assert sum("还没钉住" in s for s in man["notes"]) == 3
+
+
+@pytest.mark.parametrize("which", ["e1", "train"])
+def test_real_full_sha256_pin_rejects_other_zip(which, server, tmp_path):
+    """真实钉住的完整 sha256（D57）：尾部与成员都换成 fixture 的、能过，只有整个文件的 sha256 用 SPEC 里的真实值 →
+    fixture zip 必然不符，拒绝落地（E1 与训练源都一样）。"""
+    real = refcoco.SPEC["refer_zip_sha256"]
+    assert all(isinstance(real[n], str) for n in NAMES)
+    if which == "e1":
+        spec, zips, _ = build_refer(server, tmp_path)
+        refer_dir = local_copies(tmp_path, zips)
+        land, src_name = refcoco.land, "refcoco"
+    else:
+        from tests.test_data_train_land import refcoco_train_upstream
+
+        spec = refcoco_train_upstream(server, tmp_path)
+        spec.pop("_images")
+        refer_dir = tmp_path / "refer"
+        refer_dir.mkdir()
+        for n in NAMES:
+            (refer_dir / f"{n}.zip").write_bytes(server.files[f"/refer/{n}.zip"])
+        land, src_name = refcoco_train.land, "refcoco_train"
+    spec["refer_zip_sha256"] = real
+    ctx = make_ctx(tmp_path / "land", options={"refer_zip_dir": refer_dir})
+    with pytest.raises(zipfile.BadZipFile, match=f"refcoco.zip：整个文件的 sha256 [0-9a-f]{{64}} ≠ 钉住的 {real['refcoco']}"):
+        land(ctx, spec)
+    src = ctx.root / src_name
+    assert not (src / "MANIFEST.json").exists() and not list(src.glob("*.json")) and not (src / "images").exists()
+    assert not list(ctx.tmpdir.rglob("*.p")) and not list(ctx.tmpdir.rglob("*instances.json"))  # 成员都还没取
+    # 完整性工具同样拒绝
+    tool = _load("scripts/data/refer_zip_sha256.py")
+    tool_spec = {"refer_zip_pins": spec["refer_zip_pins"], "refer_zip_sha256": real}
+    assert tool.main([str(refer_dir)], spec=tool_spec) == 1
 
 
 # ---------------------------------------------------------------------------

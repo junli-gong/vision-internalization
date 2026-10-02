@@ -280,7 +280,7 @@ def _refs_and_instances(name: str, train: set[int], ev: dict[str, set[int]]):
 
 
 def refcoco_train_upstream(server: FakeServer, tmp_path: Path) -> dict:
-    datasets, refer_pins, inst_pins, expect_train = {}, {}, {}, {}
+    datasets, refer_pins, inst_pins, expect_train, refer_full = {}, {}, {}, {}, {}
     dims = {}
     for name in refcoco_train.DATASETS:
         ds = dict(refcoco.SPEC["datasets"][name])
@@ -294,6 +294,7 @@ def refcoco_train_upstream(server: FakeServer, tmp_path: Path) -> dict:
         ds.update(zip_url=server.url(f"/refer/{name}.zip"), refs_sha256=sha(pk))
         datasets[name] = ds
         refer_pins[name] = pins_of(z, tmp_path)
+        refer_full[name] = sha(z)
         inst_pins[name] = (len(ij), f"{zlib.crc32(ij) & 0xFFFFFFFF:08x}")
         tr = [r for r in refs if r["split"] == "train"]
         expect_train[name] = (len(tr), sum(len(r["sentences"]) for r in tr), len({r["image_id"] for r in tr}))
@@ -305,6 +306,7 @@ def refcoco_train_upstream(server: FakeServer, tmp_path: Path) -> dict:
         "refcoco_spec": {"datasets": datasets},
         "refer_zip_pins": refer_pins,
         "instances_pins": inst_pins,
+        "refer_zip_sha256": refer_full,  # 整个 zip 的 sha256 也换成 fixture 的（SPEC 里是真实 zip 的钉住值，D57）
         "expect_train": expect_train,
         "expect_d11_1": {**{k: d[k] for k in ("n_train_union", "n_eval_union", "n_removed", "n_kept", "kept_digest", "removed_digest")}, "cross": {"refcocog train ∩ refcoco eval": 1, "refcoco train ∩ refcocog eval": 1}},
         "coco_zip_url": server.url("/zips/train2014.zip"),
@@ -392,6 +394,10 @@ def test_refcoco_train_local_zips_and_limit(server, tmp_path):
     ok_all(man)
     assert sorted(k for k, v in man["files"].items() if v.get("kind") == "image") == [f"images/COCO_train2014_{i:012d}.jpg" for i in (1, 3)]
     assert all(u["access"] == "local" for u in man["upstream"])
+    v = {x["what"]: x for x in man["verification"]}  # 整个文件的 sha256 钉住了：逐个比对且相符
+    for n in refcoco_train.DATASETS:
+        rec = v[f"refer {n}.zip：整个文件的 sha256 = SPEC 钉住的值"]
+        assert rec["ok"] and rec["got"] == spec["refer_zip_sha256"][n]
     res = tl.load_refcoco_train(ctx.root, "refcocog", require_dedupe=False, strict=False)
     assert res.stats["n_missing"] == 2 and {s.fields["image_id"] for s in res.records} == {3}
 
