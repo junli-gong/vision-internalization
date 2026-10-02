@@ -38,6 +38,7 @@
 
 | DEV | 发出 | 合入 commit | 内容 | 状态 |
 |---|---|---|---|---|
+| 0026 | 2026-10-03 | — | E1 的 RefCOCO 落地支持本地 refer zip（A800 连不上 web.archive.org）+ download_many 在磁盘红线处取消 + Manifest 的 script 参数 + refer zip 的完整性工具（D55；模式 B，worktree agent） | 已派发 |
 | 0025 | 2026-10-02 | — | E3b 像素 token 通道的训练框架，第一部分：67 个网格 token 的词表与目标、指代分割与深度的样本、叠加反馈修正对、C3 稀疏文本对照、LoRA 训练循环、检查点与续跑、记账（模式 B，worktree agent） | 已派发 |
 | 0024 | 2026-10-02 | 38dddae | E2 开跑前的加固（独立审查的发现：去重清单缺键报错、记录评测集、场景过滤复查、网格顺序的确定性测试、L_N_pre、按位置分开的指标）+ 训练接口核对的 v1 判据 + base 的 trainable_token_rows 桩（D53；模式 B，worktree agent） | 已合入（无返工；1920 passed + 11 skipped；D54） |
 | 0023 | 2026-10-02 | 5957901 | E2 探针框架：冻结模型，在线训练逐层线性探针与两层卷积探针（深度、语义分割、法向、指令在前的指代分割），视觉编码器参考线（投影后 = 第 0 层，投影前可选）（模式 B，worktree agent） | 已合入（无返工；1861 passed + 11 skipped；D52） |
