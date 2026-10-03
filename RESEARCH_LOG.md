@@ -40,7 +40,8 @@
 
 | DEV | 发出 | 合入 commit | 内容 | 状态 |
 |---|---|---|---|---|
-| 0028 | 2026-10-03 | — | E5 v2.1：凸起先验基线（val 选 A）、b 类起伏与真值仿射、三条基线配对 CI 的门槛、思维链改为预算强制收尾加 33 符号网格、LISA 对当前 mask 的 IoU、导出的平台检查、允许清单合一、rotation3d 提速（D59-4/5；模式 B，worktree agent） | 已派发 |
+| 0029 | 2026-10-03 | — | 收尾：E5 改用 thinking_end 四分类、check_training_interfaces 用公开停止 token、文档与 E2 pre_proj 说明、E3 偶发测试固定线程、三个落地源用 Manifest(script=)（模式 B，worktree agent） | 已派发 |
+| 0028 | 2026-10-03 | 8e76cbb | E5 v2.1：凸起先验基线（val 选 A）、b 类起伏与真值仿射、三条基线配对 CI 的门槛、思维链改为预算强制收尾加 33 符号网格、LISA 对当前 mask 的 IoU、导出的平台检查、允许清单合一、rotation3d 提速（D59-4/5；模式 B，worktree agent） | 已合入（无返工；D61） |
 | 0027 | 2026-10-03 | d951632 | 适配器：预算强制收尾（generate_batch_budgeted）、pre_projection_features、format_boxes、公开的停止 token 接口；E1 思考子集改口径、删 think8192、验收按组设 δ（D59-1/3/8；模式 B，worktree agent） | 已合入（无返工；D60） |
 | 0026 | 2026-10-03 | 7fd2385 | E1 的 RefCOCO 落地支持本地 refer zip（A800 连不上 web.archive.org）+ download_many 在磁盘红线处取消 + Manifest 的 script 参数 + refer zip 的完整性工具（D55；模式 B，worktree agent） | 已合入（返工 1 轮：测试跟着完整 sha256 的钉住值改；1992 passed + 11 skipped；D57） |
 | 0025 | 2026-10-02 | 03354c9 | E3b 像素 token 通道的训练框架，第一部分：67 个网格 token 的词表与目标、指代分割与深度的样本、叠加反馈修正对、C3 稀疏文本对照、LoRA 训练循环、检查点与续跑、记账（模式 B，worktree agent） | 已合入（无返工；1976 passed + 11 skipped；D56） |
@@ -735,4 +736,5 @@
     关思考时，自由作答也会先写一段推理（例如逐个数物体）再给字母；字母读数要求第一个 token 就是答案。CV-Bench 上两者差约 29 个点。这正是 free 诊断要量的"格式与能力"之差（D36-6），G1 报告里按 8 个模型一起报。
   - 与预注册 §7 的对照留到全部模型回来后一起做。
 - **DEV-0027 合入**（D60）：预算强制收尾、投影前特征、原生框格式、公开停止 token；E1 思考子集的新配置 sha256 `f3353de0…` 已补进 E1 预注册 §5。
+- **DEV-0028 合入**（D61）：E5 v2.1。凸起先验 A 在 val 上选为 a 2 档、b 1 档；test 上复算项目负责人的表，平面与真值仿射两列逐个相同。b 判定条件统计哪几档，交项目负责人在批 E5 预注册时定。
 
