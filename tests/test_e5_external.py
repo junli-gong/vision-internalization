@@ -79,6 +79,12 @@ def test_external_run_scores_only(tmp_path):
     assert recs[1]["score"]["iou_full"] == samples[1].meta["baseline_iou"]["copy"]["full"]
     assert recs[2]["failure"] == "external_failure" and recs[3]["failure"] == "external_missing"
     assert all(r["score"]["relief"] is None for r in recs)
+    # D59-5：另报对"当前 mask"（a 为旋转前的 mask = copy）的 IoU：只会分割当前图像的预测在这里是 1
+    assert recs[1]["score"]["iou_current_full"] == 1.0 and recs[1]["score"]["iou_current_grid"] == 1.0
+    assert recs[0]["score"]["iou_current_full"] == samples[0].meta["baseline_iou"]["copy"]["full"]  # 完美预测 vs 当前 = copy vs 目标
+    assert recs[2]["score"]["iou_current_full"] == 0.0
+    cur = m["overall"]["mask_iou_current_full"]
+    assert cur["n"] == 4 and cur["strict"] == pytest.approx((samples[0].meta["baseline_iou"]["copy"]["full"] + 1.0 + 0 + 0) / 4)
     assert m["parse"]["n_failed"] == 2 and m["gate"]["judgment"]["status"] == "not_applicable"
     cfg = (leaf / "config.yaml").read_text()
     assert "marker_sha256" in cfg and (leaf / "compute.json").exists()
@@ -104,11 +110,8 @@ def test_export_inputs(tmp_path):
 
 _REF = re.compile(r"(src\.e5\.external|from src\.e5 import[^\n]*\bexternal\b|src/e5/external|" + re.escape(EXT.EXTERNAL_MARKER)
                   + r"|EXTERNAL_MARKER)")
-# 外部系统那一侧（DEV-0019）：这些脚本在外部系统自己的环境里运行，产出外部预测目录（写标记文件），不读我们的训练数据，
-# 也不 import src/（tests/test_e5_lisa_infer.py 静态核对）。它们不是外部预测的"读者"，所以不进 ALLOWED_READERS。
-EXTERNAL_SIDE_WRITERS: dict[str, str] = {
-    "scripts/external/lisa_e5_infer.py": "LISA-7B-v1 推理：外部系统那一侧，只写外部预测目录，不读我们的训练数据（DEV-0019）",
-}
+# 外部系统那一侧的脚本清单只在 src/e5/external.py 定义（D40-6，DEV-0028），这里引用它
+EXTERNAL_SIDE_WRITERS = EXT.EXTERNAL_SIDE_WRITERS
 
 
 def test_static_only_allowed_files_reference_external_predictions():

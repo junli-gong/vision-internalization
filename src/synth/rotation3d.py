@@ -37,6 +37,8 @@
   copy = 输入视角的起伏；instr_affine、gt_affine_upper = 输入深度图连同 mask 一起做同一个仿射（最近邻）后的起伏；
   copy_flat = 常数档。基线起伏代码 > 0 的格子与该基线的网格逐位相同。meta["relief"] 记半径、档宽、目标的格数 / 平均深度 /
   标准差 / 截断格数，以及各基线的起伏误差（relief.relief_score）。
+- 凸起先验基线 copy_convex（DEV-0028，D59-4）：不存进样本，由 relief.derived_baselines 从 copy 的网格现算（于是 a 的摘要与
+  任务版本 4 都不变）。
 
 跨机器逐位复现（D24 的标准：a 在任何平台上逐位相同）：见 render3d.py、warp2d.py 的说明；元数据只写整数、
 2 的幂网格上的量化值与整数计数之比。
@@ -83,16 +85,14 @@ from src.synth.sample import (
 from src.synth.seeding import coin, pick, randint, uniform
 from src.synth.shapes import max_equivalent_rotation
 from src.synth.solids import rotation_period_about, sample_solid_identity
-from src.grid.codec import RELIEF_NUM_LEVELS
 from src.synth.relief import (
-    FLAT_LEVEL,
     RELIEF_TARGET_KEY,
     baseline_relief_key,
     flat_codes,
     relief_grid,
-    relief_score,
+    relief_meta,
 )
-from src.synth.warp2d import affine_warp_values, mask_moments, moment_matched_affine
+from src.synth.warp2d import Moments, affine_warp_values, mask_moments, moment_matched_affine
 
 AXIS_PHRASES = {
     "horizontal": "the horizontal axis (the image's left-right direction)",
@@ -117,6 +117,7 @@ TEMPLATES = (
     "Give the mask of the {obj} after the rotation.",
 )
 BASELINE_ROLES = {"copy": "trivial", "copy_flat": "trivial", "instr_affine": "trivial", "gt_affine_upper": "reference_upper_bound"}
+RELIEF_DEFINITION = "src/synth/relief.py（D28-13）"  # meta["relief"]["definition"]（进摘要，不改）
 
 
 def rotation_matrix(axis: str, signed_deg: int) -> Mat3:
@@ -132,8 +133,7 @@ def instruction_affine(axis: str, signed_deg: int, height: int, width: int) -> t
     return m, (cx - m[0][0] * cx, cy - m[1][1] * cy)
 
 
-def _nondegenerate(mask: np.ndarray) -> bool:
-    m = mask_moments(mask)
+def _nondegenerate(m: Moments) -> bool:
     return m.sxx > 0.0 and m.syy > 0.0 and m.sxx * m.syy - m.sxy * m.sxy > 0.0
 
 
@@ -168,7 +168,8 @@ def _attempt(ctx: GenContext, ident, lo: int, hi_incl: int):
     m0, m1 = before.mask(0), after.mask(0)
     if not m0.any() or not m1.any() or np.array_equal(m0, m1):
         return None
-    if not (_nondegenerate(m0) and _nondegenerate(m1)):  # 矩匹配要求协方差正定（实体的轮廓实际上总满足）
+    mom0, mom1 = mask_moments(m0), mask_moments(m1)
+    if not (_nondegenerate(mom0) and _nondegenerate(mom1)):  # 矩匹配要求协方差正定（实体的轮廓实际上总满足）
         return None
     return {
         "scene": scene,
@@ -180,6 +181,7 @@ def _attempt(ctx: GenContext, ident, lo: int, hi_incl: int):
         "after": after,
         "m0": m0,
         "m1": m1,
+        "moments": (mom0, mom1),
     }
 
 
@@ -209,49 +211,37 @@ def generate(ctx: GenContext) -> Sample:
     n = ctx.grid_size
     before, after = res["before"], res["after"]
     a_instr, t_instr = instruction_affine(axis, sign * theta, h, w)
-    fit = moment_matched_affine(m0, m1)
     # 二维仿射基线的起伏：把输入视角的深度图连同 mask 一起做同一个仿射（最近邻取样），再按目标的规则算起伏
+    fit = moment_matched_affine(m0, m1, moments=res["moments"], values=before.depth_units)
     m_instr, d_instr = affine_warp_values(m0, before.depth_units, a_instr, t_instr)
-    m_fit, d_fit = affine_warp_values(m0, before.depth_units, fit.a, fit.t)
+    m_fit, d_fit = fit.mask, fit.values
     target = make_prediction(m1, n)
     copy = make_prediction(m0, n)
+    p_instr, p_fit = make_prediction(m_instr, n), make_prediction(m_fit, n)
     baselines = {
         "copy": copy,
         "copy_flat": copy,
-        "instr_affine": make_prediction(m_instr, n),
-        "gt_affine_upper": make_prediction(m_fit, n),
+        "instr_affine": p_instr,
+        "gt_affine_upper": p_fit,
     }
-    rel_target = relief_grid(after.depth_units, m1, n, obj.radius)
-    rel_copy = relief_grid(before.depth_units, m0, n, obj.radius)
+    # 网格已由 make_prediction 算好，传进去省掉重算（DEV-0028 提速，结果逐位不变）
+    rel_target = relief_grid(after.depth_units, m1, n, obj.radius, target.grid)
+    rel_copy = relief_grid(before.depth_units, m0, n, obj.radius, copy.grid)
     rel_base = {
         "copy": rel_copy,
         "copy_flat": None,
-        "instr_affine": relief_grid(d_instr, m_instr, n, obj.radius),
-        "gt_affine_upper": relief_grid(d_fit, m_fit, n, obj.radius),
+        "instr_affine": relief_grid(d_instr, m_instr, n, obj.radius, p_instr.grid),
+        "gt_affine_upper": relief_grid(d_fit, m_fit, n, obj.radius, p_fit.grid),
     }
     base_codes = {k: (flat_codes(copy.grid) if v is None else v.codes) for k, v in rel_base.items()}
     extras = {
         "depth": after.depth_m(),
-        "depth_grid": depth_grid(after.depth_units, m1, n),
+        "depth_grid": depth_grid(after.depth_units, m1, n, target.grid),
         "input_depth": before.depth_m(),
         RELIEF_TARGET_KEY: rel_target.codes,
         **{baseline_relief_key(k): v for k, v in base_codes.items()},
     }
-    t_score = relief_score(rel_target.codes, rel_target.codes)
-    relief_meta = {
-        "definition": "src/synth/relief.py（D28-13）",
-        "num_levels": RELIEF_NUM_LEVELS,
-        "radius_m": obj.radius,
-        "level_width_m": 2.0 * obj.radius / RELIEF_NUM_LEVELS,
-        "flat_level": FLAT_LEVEL,
-        "target": {"n_cells": rel_target.n_cells, "mean_depth_m": rel_target.mean_depth_m(),
-                   "std_levels": t_score.target_std_levels, "n_clipped": rel_target.n_clipped},
-        "input": {"n_cells": rel_copy.n_cells, "mean_depth_m": rel_copy.mean_depth_m(), "n_clipped": rel_copy.n_clipped},
-        "baseline_error": {},
-    }
-    for name in sorted(base_codes):
-        sc = relief_score(base_codes[name], rel_target.codes)
-        relief_meta["baseline_error"][name] = {"error": sc.error, "n_eval_cells": sc.n_eval_cells, "reason": sc.reason}
+    meta_relief = relief_meta(RELIEF_DEFINITION, obj.radius, rel_target, rel_copy, base_codes)
     meta = ctx.base_meta()
     meta.update(
         {
@@ -277,7 +267,7 @@ def generate(ctx: GenContext) -> Sample:
             "gt_affine_upper": {"rotation_deg": fit.rotation_deg, "reflect": fit.reflect},
             "baseline_roles": dict(BASELINE_ROLES),
             "baseline_iou": baseline_iou_meta(baselines, target.mask, target.grid),
-            "relief": relief_meta,
+            "relief": meta_relief,
             "attempts": attempt,
         }
     )

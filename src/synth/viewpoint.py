@@ -29,8 +29,17 @@
 - target_mask：新视角下目标的可见 mask（= 新视角物体 ID 图里的目标）；object_masks：新视角下全部物体的可见 mask。
 - 平凡基线："copy"（旧视角里目标的可见 mask）；"translate"（把它按场景质心——全部物体中心的平均——投影的位移平移，
   位移四舍五入到整像素）。环绕时场景质心接近环绕中心，这个位移很小，translate 接近 copy。
+  "copy_flat"（任务版本 5）：mask 同 copy，起伏取常数档（relief.FLAT_LEVEL），"预测一个平面"。
+- 参考上界（用了真值，不参与先决条件里"最强的非真值基线"，任务版本 5）："gt_affine_upper"：warp2d.moment_matched_affine 从真值
+  按矩匹配拟合的二维仿射作用在旧视角的 mask 上（与 a 同一个函数、同一组搜索常数）。meta["baseline_roles"] 标明各基线的角色。
 - extras："id_map"（新视角的物体 ID 图，uint8：0 没有表面、k + 1 物体 k、FLOOR_ID 地板）、"input_id_map"（旧视角）、
   "depth"、"input_depth"（float32 米，0 = 没有表面）、"depth_grid"（新视角里目标的 N×N 深度网格）。
+- 起伏（任务版本 5，DEV-0028，D59-4；定义与 a 相同，见 src/synth/relief.py）：extras["relief_grid"] 是新视角里目标（可见部分）的
+  N×N 起伏代码（33 个取值；平均深度取目标的可见前景格，半径取目标的外接半径），extras["baseline_relief_<基线名>"] 是各基线的
+  起伏代码：copy = 旧视角里目标的起伏；translate = 旧视角的深度图连同 mask 一起整像素平移（warp2d.shift_values）后的起伏；
+  gt_affine_upper = 旧视角的深度图连同 mask 一起做同一个仿射（最近邻）后的起伏；copy_flat = 常数档。
+  meta["relief"] 的结构与 a 相同（relief.relief_meta）。凸起先验基线 copy_convex 不存进样本，评分时由
+  relief.derived_baselines 现算。
 
 跨机器逐位复现（D24 的标准：b 在任何平台上逐位相同）：见 render3d.py、warp2d.py 的说明。
 """
@@ -94,7 +103,8 @@ from src.synth.sample import (
 )
 from src.synth.seeding import coin, pick, randint, uniform
 from src.synth.solids import REST_MATRICES, describe_solid, sample_solid_identity, unit_mesh
-from src.synth.warp2d import shift_mask
+from src.synth.relief import RELIEF_TARGET_KEY, baseline_relief_key, flat_codes, relief_grid, relief_meta
+from src.synth.warp2d import Moments, mask_moments, moment_matched_affine, shift_mask, shift_values
 
 TEMPLATES = (
     "{move} Where is the {target} in the new view?",
@@ -102,7 +112,12 @@ TEMPLATES = (
     "{move} Which pixels does the {target} cover in the new view?",
     "{move} Give the mask of the {target} as seen from the new camera position.",
 )
-BASELINE_ROLES = {"copy": "trivial", "translate": "trivial"}
+BASELINE_ROLES = {"copy": "trivial", "translate": "trivial", "copy_flat": "trivial", "gt_affine_upper": "reference_upper_bound"}
+RELIEF_DEFINITION = "src/synth/relief.py（D28-13；b 自任务版本 5，D59-4）"
+
+
+def _nondegenerate(m: Moments) -> bool:
+    return m.sxx > 0.0 and m.syy > 0.0 and m.sxx * m.syy - m.sxy * m.sxy > 0.0
 
 
 def move_sentence(move: str, amount) -> str:
@@ -313,12 +328,15 @@ def _attempt(ctx: GenContext, move: str):
             continue
         if np.array_equal(m0, m1):
             continue
+        mom = (mask_moments(m0), mask_moments(m1))
+        if not (_nondegenerate(mom[0]) and _nondegenerate(mom[1])):  # 真值仿射的矩匹配要求协方差正定（≥ 100 格的 mask 总满足）
+            continue
         stats = (k, n0, n1, a0, a1)
         break
     if stats is None:
         return None
     return {"scene": scene, "cam1": cam1, "f0": f0, "f1": f1, "stats": stats, "amount": amount, "value": value,
-            "min_px": min_px}
+            "min_px": min_px, "moments": mom}
 
 
 def generate(ctx: GenContext) -> Sample:
@@ -341,11 +359,29 @@ def generate(ctx: GenContext) -> Sample:
     instruction = TEMPLATES[template_id].format(move=move_text, target=desc)
 
     m0, m1 = f0.mask(t), f1.mask(t)
+    n = ctx.grid_size
+    radius = scene.objects[t].radius
     dx, dy = centroid_shift_px(scene, scene.camera, cam1)
-    target = make_prediction(m1, ctx.grid_size)
+    target = make_prediction(m1, n)
+    copy = make_prediction(m0, n)
+    m_tr = shift_mask(m0, dx, dy)
+    translate = make_prediction(m_tr, n)
+    fit = moment_matched_affine(m0, m1, moments=res["moments"], values=f0.depth_units)
+    m_fit, d_fit = fit.mask, fit.values
+    p_fit = make_prediction(m_fit, n)
     baselines = {
-        "copy": make_prediction(m0, ctx.grid_size),
-        "translate": make_prediction(shift_mask(m0, dx, dy), ctx.grid_size),
+        "copy": copy,
+        "translate": translate,
+        "copy_flat": copy,
+        "gt_affine_upper": p_fit,
+    }
+    rel_target = relief_grid(f1.depth_units, m1, n, radius, target.grid)
+    rel_copy = relief_grid(f0.depth_units, m0, n, radius, copy.grid)
+    base_codes = {
+        "copy": rel_copy.codes,
+        "translate": relief_grid(shift_values(f0.depth_units, dx, dy), m_tr, n, radius, translate.grid).codes,
+        "copy_flat": flat_codes(copy.grid),
+        "gt_affine_upper": relief_grid(d_fit, m_fit, n, radius, p_fit.grid).codes,
     }
     object_masks = np.stack([f1.mask(k) for k in range(len(scene.objects))])
     extras = {
@@ -353,7 +389,9 @@ def generate(ctx: GenContext) -> Sample:
         "input_id_map": f0.id_map,
         "depth": f1.depth_m(),
         "input_depth": f0.depth_m(),
-        "depth_grid": depth_grid(f1.depth_units, m1, ctx.grid_size),
+        "depth_grid": depth_grid(f1.depth_units, m1, n, target.grid),
+        RELIEF_TARGET_KEY: rel_target.codes,
+        **{baseline_relief_key(k): v for k, v in base_codes.items()},
     }
     if move == "orbit":
         difficulty = difficulty_meta("orbit_deg", res["value"], ctx.bin, VIEW_ORBIT_BINS, upper_closed_last=True)
@@ -379,6 +417,8 @@ def generate(ctx: GenContext) -> Sample:
             "visible_fraction": [n0 / a0, n1 / a1],
             "min_visible_px": res["min_px"],
             "translate_shift_px": [dx, dy],
+            "gt_affine_upper": {"rotation_deg": fit.rotation_deg, "reflect": fit.reflect},
+            "relief": relief_meta(RELIEF_DEFINITION, radius, rel_target, rel_copy, base_codes),
             "depth_range_m": depth_range_m(f1.depth_units),
             "input_depth_range_m": depth_range_m(f0.depth_units),
             "baseline_roles": dict(BASELINE_ROLES),

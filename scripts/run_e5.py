@@ -7,12 +7,14 @@
         [--subset eval|dev] [--n-per-bin 100] [--batch-size 16] [--resume]
     # 平凡基线（不加载模型；--model 不给时跑该任务的全部基线与参照线）
     python scripts/run_e5.py --system baseline --task all --out experiments/E5/0019_e5_zeroshot
-    # 外部预测（只评分；目录格式见 src/e5/external.py）
+    # 外部预测（只评分；目录格式见 src/e5/external.py；另报对"当前 mask"的 IoU，D59-5）
     python scripts/run_e5.py --system external --model lisa-7b-v1 --external-dir <外部预测目录> --task all --out <dir>
     # 导出评测集的输入给外部系统（图像 PNG + inputs.jsonl）
     python scripts/run_e5.py --export-inputs <目录> --task all [--subset eval] [--n-per-bin 100]
 开发机彩排：--tiny（小型随机模型、CPU、fp32；max_new_tokens 默认截到 TINY_MAX_NEW_TOKENS，--limit 取前几条）。
-d（physics）的数据只在规范平台上生成（D24）：非规范平台上只允许 --tiny。
+d（physics）的数据只在规范平台上生成（D24）：非规范平台上只允许 --tiny；--export-inputs 同样检查（D40-7）。
+思维链（cot）走适配器的 generate_batch_budgeted（预算强制收尾，D59-5；DEV-0027 实现）；--tiny 的 --max-new-tokens 同时截两段预算。
+平凡基线不给 --model 时跑该任务的全部基线：生成器给出的，加上 a、b 的派生基线 copy_convex（凸起先验，D59-4）。
 退出码：0 = 跑完；2 = 出错（报错写进 <out>/errors/）。
 """
 
@@ -32,8 +34,10 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.e5 import external as EXT  # noqa: E402
 from src.e5.prompts import PROMPTS_PATH, load_prompt_config  # noqa: E402
 from src.e5.protocol import E5_TASKS, MODEL_SYSTEMS, SUBSETS, SYSTEMS, default_n_per_bin  # noqa: E402
+from src.e5 import scoring as SC  # noqa: E402
 from src.e5.runner import (  # noqa: E402
     RunSpec,
+    check_platform,
     make_sample,
     run_baseline_task,
     run_external_task,
@@ -107,11 +111,15 @@ def _headline(m) -> str:
     parts = [f"iou_grid={h['mask_iou_grid']['strict']}"]
     if "relief_error" in h:
         parts.append(f"relief={h['relief_error']['strict']}")
+    if "mask_iou_current_grid" in h:
+        parts.append(f"iou_current_grid={h['mask_iou_current_grid']['strict']}")
     g = m.get("gate") or {}
     return " ".join(parts) + f" parse_fail={m['parse']['failure_rate']} imagining={g.get('imagining')}"
 
 
 def cmd_export(a) -> int:
+    for t in a.task:  # 先全部核对平台，再导出（D24、D40-7：d 只在规范平台上导出，与运行同一个检查）
+        check_platform(t, a.tiny)
     for t in a.task:
         spec = RunSpec(system="baseline", model_key="-", task=t, subset=a.subset, n_per_bin=a.n_per_bin, n_resamples=0,
                        limit=a.limit)
@@ -155,8 +163,8 @@ def cmd_offline(a, argv) -> int:
     for system in a.system:
         for t in a.task:
             if system == "baseline":
-                names = [a.model] if a.model else sorted(make_sample(spec_items(RunSpec(
-                    system="baseline", model_key="-", task=t, subset=a.subset, n_per_bin=1, n_resamples=0))[0]).baselines)
+                names = [a.model] if a.model else SC.baseline_names(make_sample(spec_items(RunSpec(
+                    system="baseline", model_key="-", task=t, subset=a.subset, n_per_bin=1, n_resamples=0))[0]))
                 for name in names:
                     spec = RunSpec(system="baseline", model_key=name, task=t, subset=a.subset, n_per_bin=a.n_per_bin,
                                    n_resamples=a.n_resamples, tiny=a.tiny, limit=a.limit)

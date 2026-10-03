@@ -2,7 +2,8 @@
 
 输出 <out>/<系统>/<模型>/<任务>[__dev]/：
 - predictions.jsonl：每条样本一行（id、档、分列维度、是否计入标题、提示原文、raw_text、text、解析失败原因、预测的网格 / 起伏 /
-  多边形、逐条得分；模型系统另有停止原因、生成 token 数、视觉 token 数与像素数）。不含墙钟，续跑后逐字节可复现。
+  多边形、逐条得分；模型系统另有停止原因、生成 token 数、视觉 token 数与像素数；预算强制收尾的系统（思维链，DEV-0028）另有
+  forced_close、思考 / 作答 / 补入的 token 数与 answer_text）。不含墙钟，续跑后逐字节可复现。
 - metrics.json：只由 predictions.jsonl 与生成器重新生成的样本算出（scoring.aggregate + 两级门槛 scoring.gate；门槛里的基线
   用同一个评分函数现算），续跑后再算一遍逐字节相同。
 - compute.json：src/accounting.py；模型系统的墙钟来自 logs/timing.jsonl；基线与外部预测记 0（外部系统的算力不在这里）。
@@ -47,6 +48,7 @@ from src.e5.protocol import (
 from src.runlog import write_run_metadata
 from src.synth import generate
 from src.synth.constants import SYNTH_GENERATOR_VERSION, TASK_GENERATOR_VERSIONS
+from src.synth.relief import CONVEX_BASELINE, CONVEX_SOURCE_BASELINE, RELIEF_TASKS, convex_amplitude
 from src.synth.sample import Sample
 from src.synth.seeding import canonical_task
 
@@ -126,12 +128,40 @@ def max_new_tokens(spec: RunSpec, prompts: PromptConfig) -> int:
     return n if spec.max_new_tokens_override is None else int(spec.max_new_tokens_override)
 
 
+def budgets(spec: RunSpec, prompts: PromptConfig) -> tuple[int, int]:
+    """预算强制收尾的 (thinking_budget, answer_budget)；--tiny 的 max_new_tokens_override 同时截两段（只用于彩排）。"""
+    th, an = prompts.budgets(spec.system)
+    o = spec.max_new_tokens_override
+    return (th, an) if o is None else (min(th, int(o)), min(an, int(o)))
+
+
+def generation_config(spec: RunSpec, prompts: PromptConfig) -> dict[str, Any]:
+    """运行身份里的生成参数：plain 记 max_new_tokens；budgeted 记两段预算（D59-5）。"""
+    g: dict[str, Any] = {"enable_thinking": prompts.enable_thinking(spec.system), "mode": prompts.generation(spec.system)}
+    if g["mode"] == "plain":
+        g["max_new_tokens"] = max_new_tokens(spec, prompts)
+    else:
+        g["thinking_budget"], g["answer_budget"] = budgets(spec, prompts)
+        g["allowed_token_ids"] = None
+    g.update(max_new_tokens_override=spec.max_new_tokens_override, decoding=prompts.decoding(), order=prompts.order)
+    return g
+
+
+def convex_prior_config(task: str) -> dict[str, Any] | None:
+    """凸起先验基线（D59-4）的冻结参数，记进运行身份；没有起伏的任务为 None。"""
+    t = canonical_task(task)
+    if t not in RELIEF_TASKS:
+        return None
+    return {"baseline": CONVEX_BASELINE, "source_baseline": CONVEX_SOURCE_BASELINE, "amplitude": convex_amplitude(t),
+            "definition": "src/synth/relief.py convex_prior_codes（D59-4，DEV-0028）"}
+
+
 def run_config(spec: RunSpec, items: Sequence[EvalItem], prompts: PromptConfig | None) -> dict[str, Any]:
     t = canonical_task(spec.task)
     ids = [it.id for it in items]
     cfg: dict[str, Any] = {
         "experiment": "E5",
-        "framework": "src/e5（DEV-0018）",
+        "framework": "src/e5（DEV-0018；DEV-0028）",
         "system": spec.system,
         "task": t,
         "task_letter": TASK_LETTER[t],
@@ -144,18 +174,18 @@ def run_config(spec: RunSpec, items: Sequence[EvalItem], prompts: PromptConfig |
                  "platform": {"machine": platform.machine(), "system": platform.system()}},
         "n_resamples": spec.n_resamples,
         "tiny": spec.tiny,
+        "gate": {"rule": "D59-4：配对 bootstrap 95% CI，判定条件同时胜过 " + "、".join(SC.JUDGMENT_BASELINES),
+                 "convex_prior": convex_prior_config(t)},
     }
     if spec.system in MODEL_SYSTEMS:
         assert prompts is not None
         cfg["model"] = {"key": spec.model_key, "family": spec.family, "repo": spec.repo, "revision": spec.revision,
                         "adapter_model_key": spec.adapter_model_key}
         cfg["image_policy"] = dict(spec.policy or {})
-        cfg["generation"] = {"enable_thinking": prompts.enable_thinking(spec.system),
-                             "max_new_tokens": max_new_tokens(spec, prompts),
-                             "max_new_tokens_override": spec.max_new_tokens_override,
-                             "decoding": prompts.decoding(), "order": prompts.order}
+        cfg["generation"] = generation_config(spec, prompts)
+        path = "generate_batch" if prompts.generation(spec.system) == "plain" else "generate_batch_budgeted"
         cfg["batching"] = {"batch_size": spec.batch_size, "padding": prompts.data["batching"]["padding"],
-                           "order": prompts.data["batching"]["order"], "path": "generate_batch"}
+                           "order": prompts.data["batching"]["order"], "path": path}
         cfg["prompt"] = {"config": os.path.relpath(prompts.path, REPO_ROOT) if Path(prompts.path).is_relative_to(REPO_ROOT)
                          else prompts.path, "config_sha256": prompts.sha256,
                          "format": prompts.format_of(spec.system, t), "template": prompts.template(spec.system, t)}
@@ -193,10 +223,15 @@ def _prepare(leaf: Path, cfg: Mapping[str, Any], resume: bool) -> None:
     (leaf / "logs").mkdir(exist_ok=True)
 
 
-def _check_platform(spec: RunSpec) -> None:
-    if needs_canonical_platform(spec.task) and not on_canonical_platform() and not spec.tiny:
-        raise RuntimeError(f"{spec.task}：d 的数据只在规范平台上生成（D24）；本机 {platform.machine()} {platform.system()} "
+def check_platform(task: str, tiny: bool) -> None:
+    """d 的数据只在规范平台上生成（D24）：非规范平台上只允许 --tiny 彩排。运行与导出输入（run_e5.py --export-inputs）共用。"""
+    if needs_canonical_platform(task) and not on_canonical_platform() and not tiny:
+        raise RuntimeError(f"{task}：d 的数据只在规范平台上生成（D24）；本机 {platform.machine()} {platform.system()} "
                            "只允许 --tiny 彩排")
+
+
+def _check_platform(spec: RunSpec) -> None:
+    check_platform(spec.task, spec.tiny)
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +243,24 @@ def _fmt(v: Any) -> str:
     return "null" if v is None else (f"{v:.4f}" if isinstance(v, float) else str(v))
 
 
+def _ci_text(ci: Mapping[str, Any] | None) -> str:
+    return f"[{_fmt(ci['low'])}, {_fmt(ci['high'])}]" if ci else "—"
+
+
+def _block_lines(blk: Mapping[str, Any]) -> list[str]:
+    out = []
+    for key, label in (("relief_error", "起伏误差（越低越好）"), ("mask_iou_grid", "mask IoU（网格）"),
+                       ("mask_iou_full", "mask IoU（全分辨率）"),
+                       ("mask_iou_current_grid", "对当前 mask 的 IoU（网格，D59-5）"),
+                       ("mask_iou_current_full", "对当前 mask 的 IoU（全分辨率，D59-5）")):
+        b = blk.get(key)
+        if b is None:
+            continue
+        out.append(f"- {label}：严格 {_fmt(b['strict'])}（95% CI {_ci_text(b.get('strict_ci'))}），有效率 {_fmt(b['valid_rate'])}，"
+                   f"条件 {_fmt(b['conditional'])}（中位数 {_fmt(b['conditional_median'])}），n = {b['n']}")
+    return out
+
+
 def readme_text(spec: RunSpec, cfg: Mapping[str, Any], m: Mapping[str, Any]) -> str:
     lines = [f"# E5 · {spec.system} · {spec.model_key} · {m['task']}（{TASK_LETTER[m['task']]}）· {spec.subset}", "",
              f"- 样本：{cfg['data']['split']} 划分，每档 {spec.n_per_bin} 条，n = {m['n']}（id 指纹 "
@@ -215,31 +268,43 @@ def readme_text(spec: RunSpec, cfg: Mapping[str, Any], m: Mapping[str, Any]) -> 
              f"- 标题口径：{m['headline_scope']}"]
     if "generation" in cfg:
         g = cfg["generation"]
-        lines.append(f"- 生成：enable_thinking={g['enable_thinking']}，max_new_tokens={g['max_new_tokens']}，greedy，"
-                     f"generate_batch，批大小 {cfg['batching']['batch_size']}")
+        if g["mode"] == "plain":
+            lines.append(f"- 生成：enable_thinking={g['enable_thinking']}，max_new_tokens={g['max_new_tokens']}，greedy，"
+                         f"generate_batch，批大小 {cfg['batching']['batch_size']}")
+        else:
+            lines.append(f"- 生成：预算强制收尾（D59-5），enable_thinking={g['enable_thinking']}，thinking_budget={g['thinking_budget']}，"
+                         f"answer_budget={g['answer_budget']}，greedy，generate_batch_budgeted，批大小 {cfg['batching']['batch_size']}；"
+                         "解析只看作答段")
         lines.append(f"- 提示配置 sha256：{cfg['prompt']['config_sha256']}；格式 {cfg['prompt']['format']}")
+    cp = (cfg.get("gate") or {}).get("convex_prior")
+    if cp:
+        lines.append(f"- 凸起先验基线 {cp['baseline']}：A = {cp['amplitude']} 档（val 上选定后冻结，{cp['definition']}）")
     lines += ["", "## 标题（严格 / 有效率 / 条件读数）", ""]
-    for key, label in (("relief_error", "起伏误差（越低越好）"), ("mask_iou_grid", "mask IoU（网格）"),
-                       ("mask_iou_full", "mask IoU（全分辨率）")):
-        b = m["headline"].get(key)
-        if b is None:
-            continue
-        ci = b.get("strict_ci")
-        ci_s = f"[{_fmt(ci['low'])}, {_fmt(ci['high'])}]" if ci else "—"
-        lines.append(f"- {label}：严格 {_fmt(b['strict'])}（95% CI {ci_s}），有效率 {_fmt(b['valid_rate'])}，"
-                     f"条件 {_fmt(b['conditional'])}（中位数 {_fmt(b['conditional_median'])}），n = {b['n']}")
+    lines += _block_lines(m["headline"])
+    bud = m.get("budget")
+    if bud:
+        lines += ["", "## 预算强制收尾：自然收尾与强制收尾分开（D59-5）", "",
+                  f"- 自然收尾 {bud['n_natural']} 条，强制收尾 {bud['n_forced']} 条（强制率 {_fmt(bud['forced_rate'])}）"]
+        for name, label in (("natural", "自然收尾"), ("forced", "强制收尾")):
+            sub = bud[name]
+            lines.append(f"- {label}（标题口径 {sub['n_headline']} 条）：")
+            lines += ["  " + x for x in _block_lines(sub["headline"])]
     g = m.get("gate") or {}
     pre, jud = g.get("prerequisite"), g.get("judgment")
-    lines += ["", "## 两级门槛（D28-13）", ""]
+    lines += ["", "## 两级门槛（D59-4：逐样本配对 bootstrap 95% CI）", ""]
     if pre:
-        lines.append(f"- 先决条件（{g['iou_key']}）：系统 {_fmt(pre['system'])} vs 最强非真值基线 {pre['strongest']} "
-                     f"{_fmt(pre['strongest_value'])} → {'通过' if pre['pass'] else '不通过'}")
+        lines.append(f"- 先决条件（{g['iou_key']}）：系统 {_fmt(pre['system'])}（中位数 {_fmt(pre['system_median'])}）vs 最强非真值基线 "
+                     f"{pre['strongest']} {_fmt(pre['value'])}（中位数 {_fmt(pre['median'])}）；差 {_fmt(pre['diff'])}，"
+                     f"CI {_ci_text(pre['diff_ci'])}，逐样本差的中位数 {_fmt(pre['diff_median'])} → pass={pre['pass']}")
     if jud:
-        lines.append(f"- 判定条件：{jud['status']}" + (f"，系统 {_fmt(jud.get('system'))}，"
-                     f"gt_affine_upper {_fmt((jud.get('gt_affine_upper') or {}).get('value'))}，"
-                     f"copy_flat {_fmt((jud.get('copy_flat') or {}).get('value'))} → pass={jud.get('pass')}，"
-                     f"pass_vs_flat={jud.get('pass_vs_flat')}" if jud["status"] == "evaluated" else ""))
+        lines.append(f"- 判定条件：{jud['status']}" + (f"，系统起伏误差 {_fmt(jud.get('system'))}（中位数 "
+                     f"{_fmt(jud.get('system_median'))}），n = {jud.get('n')} → pass={jud.get('pass')}" if jud["status"] == "evaluated" else ""))
+        for name, c in (jud.get("baselines") or {}).items():
+            lines.append(f"  - vs {name}：基线 {_fmt(c['value'])}（中位数 {_fmt(c['median'])}）；差 {_fmt(c['diff'])}，"
+                         f"CI {_ci_text(c['diff_ci'])}，逐样本差的中位数 {_fmt(c['diff_median'])}，系统更低的比例 "
+                         f"{_fmt(c['system_better_rate'])} → 胜过={c['beats']}")
     lines.append(f"- imagining：{g.get('imagining')}")
+    lines.append("- 注：D28-13 照字面的判法（只比真值仿射、按点估计判）与 DEV-0018 的 pass_vs_flat 已作废（D59-4），不再输出。")
     p = m["parse"]
     lines += ["", "## 解析", "", f"- 解析失败率：{_fmt(p['failure_rate'])}（{p['n_failed']}/{p['n']}）；分原因：{p['failures']}"]
     if "truncation" in m:
@@ -301,22 +366,40 @@ def _run_log_finish(path: Path, log: dict, t0: float, **extra: Any) -> None:
     path.write_text(json.dumps(log, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def model_record(sample: Sample, prompt: str, res: Any, pred: SC.Pred, *, relief_expected: bool) -> dict[str, Any]:
+BUDGET_FIELDS = ("forced_close", "n_thinking_tokens", "n_answer_tokens", "n_inserted_tokens", "answer_text")
+
+
+def check_budget_fields(res: Any) -> None:
+    """generate_batch_budgeted 的结果必须带 DEV-0027 固定的五个新字段（解析之前就查，缺了直接报错）。"""
+    missing = [f for f in BUDGET_FIELDS if not hasattr(res, f)]
+    if missing:
+        raise RuntimeError(f"generate_batch_budgeted 的结果缺字段 {missing}（签名见 DEV-0027）")
+
+
+def model_record(sample: Sample, prompt: str, res: Any, pred: SC.Pred, *, relief_expected: bool,
+                 budgeted: bool = False) -> dict[str, Any]:
     if res.stopped is None or res.n_image_pixels is None:
         raise RuntimeError("适配器没有填 stopped / n_image_pixels（D29：三个适配器一律填写）")
     rec = SC.sample_fields(sample)
     rec.update({"prompt": prompt, "raw_text": res.raw_text, "text": res.text, "stopped": res.stopped,
                 "truncated": res.stopped is False, "thinking_unclosed": res.thinking_unclosed,
                 "n_generated_tokens": res.n_generated_tokens, "n_prompt_tokens": res.n_prompt_tokens,
-                "n_visual_tokens": res.n_visual_tokens, "n_image_pixels": res.n_image_pixels,
-                "valid": pred.valid, "failure": pred.failure, "pred": SC.pred_record(pred, store_rle=pred.polygons is not None),
+                "n_visual_tokens": res.n_visual_tokens, "n_image_pixels": res.n_image_pixels})
+    if budgeted:
+        check_budget_fields(res)
+        rec.update({f: getattr(res, f) for f in BUDGET_FIELDS})
+        rec["forced_close"] = bool(rec["forced_close"])
+        # 预算强制收尾：思考段由适配器闭合，"截断"只指作答段写满 answer_budget；思考段未闭合不会出现
+        rec["thinking_unclosed"] = False
+    rec.update({"valid": pred.valid, "failure": pred.failure, "pred": SC.pred_record(pred, store_rle=pred.polygons is not None),
                 "score": SC.score(sample, pred, relief_expected=relief_expected)})
     return rec
 
 
 def run_model_task(adapter: Any, spec: RunSpec, prompts: PromptConfig, out_dir: str | Path, *, resume: bool = False,
                    argv: Sequence[str] = (), log: Callable[[str], None] | None = None, warmup: bool = True) -> dict[str, Any]:
-    """零样本或思维链：逐批 generate_batch → 解析 → 评分 → 落盘。"""
+    """零样本或思维链：逐批生成 → 解析 → 评分 → 落盘。零样本走 generate_batch；思维链走 generate_batch_budgeted
+    （预算强制收尾，D59-5；签名由 DEV-0027 固定），解析只看作答段 answer_text。"""
     log = log or (lambda m: print(m, file=sys.stderr, flush=True))
     if spec.system not in MODEL_SYSTEMS:
         raise ValueError(f"{spec.system} 不是模型系统")
@@ -334,11 +417,25 @@ def run_model_task(adapter: Any, spec: RunSpec, prompts: PromptConfig, out_dir: 
     if [r["id"] for r in done] != ids[: len(done)]:
         raise RuntimeError(f"{pred_path} 里已完成的 id 不是样本顺序的前缀，不能续跑")
     remaining = items[len(done):]
+    budgeted = prompts.generation(spec.system) == "budgeted"
+    if budgeted and not callable(getattr(adapter, "generate_batch_budgeted", None)):
+        raise RuntimeError(f"{spec.system} 用预算强制收尾（D59-5），适配器 {type(adapter).__name__} 没有 generate_batch_budgeted"
+                           "（接口由 DEV-0027 实现）")
     run_path, run_log = _run_log_start(leaf, argv, len(done), len(remaining), spec.batch_size)
     enable_thinking = prompts.enable_thinking(spec.system)
-    max_new = max_new_tokens(spec, prompts)
     kind = prompts.kind_of(spec.system, t)
     relief_expected = kind == "relief_grid"
+    if budgeted:
+        thinking_budget, answer_budget = budgets(spec, prompts)
+
+        def generate_rows(inputs):
+            return adapter.generate_batch_budgeted(inputs, thinking_budget=thinking_budget, answer_budget=answer_budget,
+                                                   allowed_token_ids=None)
+    else:
+        max_new = max_new_tokens(spec, prompts)
+
+        def generate_rows(inputs):
+            return adapter.generate_batch(inputs, enable_thinking=enable_thinking, max_new_tokens=max_new, **prompts.decoding())
     t_all = time.perf_counter()
     if remaining and warmup:
         s0 = make_sample(remaining[0])
@@ -352,14 +449,16 @@ def run_model_task(adapter: Any, spec: RunSpec, prompts: PromptConfig, out_dir: 
         inputs = [adapter.build_inputs([] if s.image is None else [Image.fromarray(s.image)], txt, prompts.order)
                   for s, txt in zip(batch, texts)]
         build_s = time.perf_counter() - t0
-        results = adapter.generate_batch(inputs, enable_thinking=enable_thinking, max_new_tokens=max_new, **prompts.decoding())
+        results = generate_rows(inputs)
         if len(results) != len(batch):
             raise RuntimeError("generate_batch 返回的行数与输入不同")
         lines, tlines = [], []
         for s, txt, res in zip(batch, texts, results):
             h, w = s.target_mask.shape
-            pred = SC.parse_answer(kind, res, h, w)
-            rec = model_record(s, txt, res, pred, relief_expected=relief_expected)
+            if budgeted:
+                check_budget_fields(res)
+            pred = SC.parse_answer(kind, SC.budget_view(res) if budgeted else res, h, w)
+            rec = model_record(s, txt, res, pred, relief_expected=relief_expected, budgeted=budgeted)
             lines.append(_jsonl_line(rec))
             tlines.append(_jsonl_line({"id": rec["id"], "run": run_log["run"], "batch_index": n_batches, "batch_rows": len(batch),
                                        "wall_time_s": res.wall_time_s, "batch_wall_time_s": res.batch_wall_time_s,
@@ -403,8 +502,8 @@ def run_baseline_task(spec: RunSpec, out_dir: str | Path, *, resume: bool = Fals
         out = []
         for it in items:
             s = make_sample(it)
-            if spec.model_key not in s.baselines:
-                raise KeyError(f"{it.task} 没有基线 {spec.model_key!r}；有 {sorted(s.baselines)}")
+            if spec.model_key not in SC.baseline_names(s):
+                raise KeyError(f"{it.task} 没有基线 {spec.model_key!r}；有 {SC.baseline_names(s)}")
             p = SC.baseline_pred(s, spec.model_key)
             out.append({**SC.sample_fields(s), "role": SC.baseline_roles(s)[spec.model_key], "valid": True, "failure": None,
                         "pred": SC.pred_record(p, store_rle=False),
@@ -438,13 +537,14 @@ def run_external_task(spec: RunSpec, out_dir: str | Path, *, resume: bool = Fals
                 p = SC.from_mask(v)
             out.append({**SC.sample_fields(s), "valid": p.valid, "failure": p.failure,
                         "external_failure": None if p.valid else v,
-                        "pred": SC.pred_record(p, store_rle=True), "score": SC.score(s, p, relief_expected=False)})
+                        "pred": SC.pred_record(p, store_rle=True),
+                        "score": SC.score(s, p, relief_expected=False, current=True)})  # 另算对当前 mask 的 IoU（D59-5）
         return out
 
     return _run_offline(spec, out_dir, make, resume=resume, argv=argv)
 
 
 __all__ = [
-    "COMPUTE", "CONFIG", "METRICS", "PREDICTIONS", "README", "RunSpec", "TIMING", "finalize", "leaf_dir", "make_sample",
+    "COMPUTE", "CONFIG", "METRICS", "PREDICTIONS", "README", "RunSpec", "TIMING", "check_platform", "finalize", "leaf_dir", "make_sample",
     "read_jsonl_tolerant", "run_baseline_task", "run_config", "run_external_task", "run_model_task", "spec_items",
 ]

@@ -4,6 +4,7 @@
 - 仿射连同深度一起取样：mask 与 affine_warp 逐位相同，值是最近邻的源像素。
 - 生成器的 a 样本：版本 4；起伏代码与网格一致；元数据里的基线误差与独立复算相同。
 - 复算项目负责人 D28-13 的表（同样设置：test 划分、每档 60 条、32×32），并钉住"照字面的判定条件可以被平面满足"这一发现。
+DEV-0028 的凸起先验、b 的起伏与提速的等价性见 tests/test_synth_convex_relief.py。
 """
 
 from fractions import Fraction
@@ -214,7 +215,7 @@ def _units(depth_m: np.ndarray) -> np.ndarray:
 
 
 def test_rotation3d_samples_carry_consistent_relief():
-    assert TASK_GENERATOR_VERSIONS["rotation3d"] == 4 and TASK_GENERATOR_VERSIONS["viewpoint"] == 4
+    assert TASK_GENERATOR_VERSIONS["rotation3d"] == 4 and TASK_GENERATOR_VERSIONS["viewpoint"] == 5  # DEV-0028：只有 b 加一
     for i in range(12):
         s = generate("rotation3d", "val", 40 + i)
         r = s.meta["scene"]["objects"][0]["radius"]

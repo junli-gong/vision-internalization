@@ -510,12 +510,20 @@ def sample_solid_identity(rng: np.random.Generator, split: str, holdout_family: 
     rotatable_only：去掉任意旋转都不变的变体（球），a 用。
     """
     pool = solid_identity_pool(split, holdout_family)
-    keys = [k for k in pool if not (rotatable_only and is_isotropic(*k))]
-    fams = [f for f in SOLID_FAMILIES if any(k[0] == f for k in keys)]
+    fams, vs_of = _identity_choices(split, holdout_family, bool(rotatable_only))
     if not fams:
         raise ValueError(f"划分 {split} 里没有可用的实体身份")
     f = fams[int(rng.integers(len(fams)))]
-    vs = [k[1] for k in keys if k[0] == f]
+    vs = vs_of[f]
     v = vs[int(rng.integers(len(vs)))]
     apps = pool[(f, v)]
     return f, v, apps[int(rng.integers(len(apps)))]
+
+
+@functools.lru_cache(maxsize=None)
+def _identity_choices(split: str, holdout_family: str | None, rotatable_only: bool) -> tuple[tuple[str, ...], dict[str, tuple[int, ...]]]:
+    """sample_solid_identity 的候选表（可用族、每族可用变体，顺序与逐次现算相同）；只依赖参数，缓存（DEV-0028 提速，结果不变）。"""
+    pool = solid_identity_pool(split, holdout_family)
+    keys = [k for k in pool if not (rotatable_only and is_isotropic(*k))]
+    fams = tuple(f for f in SOLID_FAMILIES if any(k[0] == f for k in keys))
+    return fams, {f: tuple(k[1] for k in keys if k[0] == f) for f in fams}

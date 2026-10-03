@@ -49,6 +49,9 @@ TASK_BINS = {
 }
 # 留出族的取值范围：3D 任务用实体族，其余用 2D 形状族
 _HOLDOUT_FAMILIES = {"rotation3d": SOLID_FAMILIES, "viewpoint": SOLID_FAMILIES}
+# "当前 mask"（D59-5：输入图里目标在变换之前的 mask；DEV-0028）在样本里已经是某个平凡基线的 mask，不另存（不改摘要）：
+# a 旋转前的 mask、b 旧视角里的可见 mask、d 第 0 步的 mask 都是 "copy"；c 是目标的可见部分 "visible"。e 没有图像，没有当前 mask。
+CURRENT_MASK_BASELINE = {"rotation3d": "copy", "viewpoint": "copy", "occlusion": "visible", "physics": "copy"}
 
 
 def num_bins(task: str) -> int:
@@ -119,3 +122,9 @@ class SynthDataset:
     def __iter__(self) -> Iterator[Sample]:
         for i in range(self.size):
             yield self[i]
+
+
+def current_mask(sample: Sample):
+    """样本的"当前 mask"（Prediction：全分辨率 mask 与网格；定义见 CURRENT_MASK_BASELINE）；e 没有图像，返回 None。"""
+    name = CURRENT_MASK_BASELINE.get(canonical_task(sample.task))
+    return None if name is None else sample.baselines[name]

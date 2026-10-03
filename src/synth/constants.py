@@ -26,8 +26,10 @@ from __future__ import annotations
 # 180 个摘要，所以改为按任务记版本（任务书 DEV-0010 的后备方案）。
 # 4 = DEV-0018（D28-13）：a 加"目标相对深度（起伏）网格"与基线的起伏（src/synth/relief.py），b 放大物体。只改 a、b；
 # c、d、e 的输出不变，仍记 2。
-TASK_GENERATOR_VERSIONS = {"occlusion": 2, "physics": 2, "imagery": 2, "rotation3d": 4, "viewpoint": 4}
-SYNTH_GENERATOR_VERSION = 4
+# 5 = DEV-0028（D59-4）：b 加起伏网格（与 a 同一定义）、copy_flat 与真值仿射参照线 gt_affine_upper。只改 b；a 的输出不变
+# （a 新增的凸起先验基线 copy_convex 不存进样本、评分时现算，所以 a 仍记 4），c、d、e 仍记 2。
+TASK_GENERATOR_VERSIONS = {"occlusion": 2, "physics": 2, "imagery": 2, "rotation3d": 4, "viewpoint": 5}
+SYNTH_GENERATOR_VERSION = 5
 if SYNTH_GENERATOR_VERSION != max(TASK_GENERATOR_VERSIONS.values()):  # pragma: no cover - 常量写错
     raise ImportError("SYNTH_GENERATOR_VERSION 必须等于各任务版本的最大值")
 
