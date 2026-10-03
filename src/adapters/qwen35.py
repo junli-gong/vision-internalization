@@ -37,6 +37,9 @@
 - 生成（DEV-0011）：generate 与 generate_batch 走同一条路径（src/adapters/batching.py；generate 是一行的批）。批量时左填充，
   M-RoPE 位置由 HF 按 attention_mask 跳过填充计算；生成前逐行核对"非填充 token 的三维位置 = 本适配器自己按规则构造的位置"
   （_check_batch_positions），不一致就报错。
+- DEV-0027：generate_batch_budgeted（预算强制收尾，公共实现在 src/adapters/budget.py；本家族的思考段开头 <think> 在助手头里，
+  强制收尾补 `</think>` + THINK_SEPARATOR）；pre_projection_features（merger 之前的 patch 网格，重排成行主序）；format_boxes
+  （parse_boxes 的逆）；end_of_turn_token_id / stop_token_ids。
 
 处理器的用法：本适配器只用处理器的三个部件——tokenizer、image_processor、chat_template——自己完成图像占位符的
 展开与 mm_token_type_ids，做法与 `ProcessorMixin.__call__` 相同。原因：开发机没有 torchvision，
@@ -58,6 +61,7 @@ from PIL import Image
 from transformers import LogitsProcessor
 
 from src.adapters import batching, registry
+from src.adapters.budget import BudgetSupport
 from src.adapters.image_policy import QWEN_PIXELS_PER_TOKEN, FixedSize, PixelBudget
 from src.adapters.checkpoint import CheckpointSupport, TokenRestoreError, base_fingerprint
 from src.adapters.training import TrainingSupport, cumsum_positions, scatter_rows
@@ -77,7 +81,9 @@ from src.adapters.base import (
     Span,
     capture_output,
     captured_output,
+    check_box_labels,
     check_grid_token_names,
+    native_box_ints,
     resolve_layer_keys,
 )
 from src.executors.geometry import norm1000_to_abs
@@ -95,8 +101,12 @@ IMAGE_PAD = "<|image_pad|>"
 VIDEO_PAD = "<|video_pad|>"
 VISION_START = "<|vision_start|>"
 VISION_END = "<|vision_end|>"
-# 停止 token（任务书：取 tokenizer 里的 <|im_end|> 与 <|endoftext|>）
+# 停止 token（任务书：取 tokenizer 里的 <|im_end|> 与 <|endoftext|>）。第一个是回合结束 token（end_of_turn_token_id）
 STOP_TOKENS: tuple[str, ...] = (IM_END, END_OF_TEXT)
+# 预算强制收尾（DEV-0027）：思考结束标记 </think> 后面紧跟的固定分隔。依据：聊天模板关思考时的助手头是 `<think>\n\n</think>\n\n`
+# （model_notes §5.2），把历史里的思考段渲染成 `<think>\n…\n</think>\n\n` + 回答；RUN-0005 的开思考输出在 </think> 之后都是 "\n\n"。
+# 思考段开头 <think> 在提示里（助手头），不在输出里。tests/test_adapter_budget.py 对照模板核对。
+THINK_SEPARATOR = "\n\n"
 # 指令里不许出现的结构性 token：出现就会打乱区间或模板结构
 _STRUCTURAL_TOKENS: tuple[str, ...] = (IM_START, IM_END, END_OF_TEXT, IMAGE_PAD, VIDEO_PAD, VISION_START, VISION_END)
 
@@ -470,7 +480,7 @@ class ReservedRowTokens:
         self._model.config.get_text_config().vocab_size = needed
 
 
-class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, ModelAdapter):
+class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, BudgetSupport, ModelAdapter):
     """Qwen3.5（0.8B/2B/4B/9B）适配器。ModelInputs 是单条样本；generate_batch 左填充拼批（DEV-0011）。vLLM 另开任务。
 
     设备与图像口径在构造时给定，dtype 在 load 时给定。图像口径二选一：`image_size=(H, W)`（固定尺寸，= FixedSize）或
@@ -1033,6 +1043,34 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Model
         with self.gdn_scope():
             return self._image_features(inputs)
 
+    def pre_projection_features(self, inputs: ModelInputs) -> tuple[torch.Tensor, tuple[int, int]]:
+        """patch merger 之前的视觉塔输出（D59-8，E2 的 pre_proj 参考线）：([gh·gw, D_v], (gh, gw))，gh × gw 是 patch 网格
+        （= LLM 网格的 merge 倍，每个 patch 16 px），行主序。只接受单图。
+
+        取的位置：`model.visual` 的 last_hidden_state（Qwen3_5VisionModel.forward 在 merger 之前的 hidden_states），调用方式与
+        get_image_features 相同（pixel_values 转成视觉塔的 dtype）。视觉塔里的 patch 顺序是 merge×merge 窗口序（每 merge² 个连续
+        patch 是同一个窗口）；重排成行主序用模型自己的元数据：视觉 RoPE 的 (行, 列)（vision_patch_row_major_order）。
+        merger（LayerNorm → 每 merge² 个拼接 → MLP）作用在窗口序上，对本结果按 vision_patch_row_major_order 逆排再过 merger 就是
+        vision_features（测试逐位核对）。"""
+        where = "pre_projection_features"
+        self._check_entry(inputs, None, where=where)
+        if len(inputs.images) != 1:
+            raise ValueError(f"{where} 只接受单图，收到 {len(inputs.images)} 张")
+        t = inputs.tensors
+        grid = t["image_grid_thw"]
+        visual = self._model.model.visual
+        order = vision_patch_row_major_order(grid, int(visual.spatial_merge_size))
+        with self.gdn_scope():
+            out = visual(t["pixel_values"].type(visual.dtype), grid_thw=grid, return_dict=True)
+        x = out.last_hidden_state
+        _, gh, gw = (int(v) for v in grid[0].tolist())
+        if tuple(x.shape[:1]) != (gh * gw,) or x.dim() != 2:
+            raise RuntimeError(f"视觉塔输出形状 {tuple(x.shape)}，期望 [{gh * gw}, D_v]")
+        merge = int(visual.spatial_merge_size)
+        if (gh // merge, gw // merge) != inputs.images[0].grid_hw:
+            raise RuntimeError(f"patch 网格 {gh}×{gw} 与 LLM 网格 {inputs.images[0].grid_hw} 不是 {merge} 倍的关系")
+        return x.index_select(0, order.to(x.device)), (gh, gw)
+
     # ------------------------------------------------------------------
     # 生成
     # ------------------------------------------------------------------
@@ -1290,6 +1328,25 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Model
         不需要加载模型；parse_one_box 由基类在它之上给出。"""
         return parse_boxes(text, width=width, height=height)  # 模块级函数（方法体里的名字按全局作用域查找）
 
+    def format_boxes(self, boxes: Sequence[Sequence[float]], *, width: float, height: float,
+                     labels: Sequence[str | None] | None = None) -> str:
+        """parse_boxes 的逆（DEV-0027），格式见模块级的 format_boxes。不需要加载模型。"""
+        return format_boxes(boxes, width=width, height=height, labels=labels)
+
+    # ------------------------------------------------------------------
+    # 停止 token（DEV-0027：公开接口，替代私有的 _stop_ids()）
+    # ------------------------------------------------------------------
+
+    def end_of_turn_token_id(self) -> int:
+        """回合结束 token：<|im_end|>（STOP_TOKENS 的第一个）。"""
+        self._require_loaded()
+        return self._ids[IM_END]
+
+    def stop_token_ids(self) -> tuple[int, ...]:
+        """全部停止 token：<|im_end|>、<|endoftext|>（STOP_TOKENS 的顺序）。"""
+        self._require_loaded()
+        return tuple(self._ids[s] for s in STOP_TOKENS)
+
     # ------------------------------------------------------------------
     # GDN 实现（DEV-0003-a1）
     # ------------------------------------------------------------------
@@ -1335,6 +1392,10 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Model
 
     def _stop_ids(self) -> list[int]:
         return [self._ids[s] for s in STOP_TOKENS]
+
+    def _think_markers(self) -> tuple[str | None, str, str]:
+        """预算强制收尾（src/adapters/budget.py）：(输出里的思考段开头（Qwen 在提示里，None）, 结束标记, 结束标记后的固定分隔)。"""
+        return None, THINK_END, THINK_SEPARATOR
 
     def _forward_scope(self) -> contextlib.AbstractContextManager[None]:
         return self.gdn_scope()
@@ -1634,6 +1695,61 @@ def parse_one_box(text: str, *, width: float, height: float) -> OneBoxParse:
     return one_box(parse_boxes(text, width=width, height=height))
 
 
+# 原生框的文本格式（format_boxes；DEV-0027）：Qwen3-VL cookbook 的写法，也是 RUN-0005 关思考时的实测输出，如
+# '```json\n[\n\t{"bbox_2d": [14, 114, 492, 983], "label": "cat on the left"}\n]\n```'（tab 缩进，一行一个对象）。
+JSON_FENCE_OPEN = "```json\n"
+JSON_FENCE_CLOSE = "\n```"
+QWEN_BOX_INDENT = "\t"
+
+
+def json_box_text(objs: Sequence[str], *, indent: str) -> str:
+    """JSON 框对象（已序列化）→ 代码块文本：`[` 换行、每行 indent + 一个对象（对象之间 ",\\n"）、`]`；零个对象写 `[]`。
+    Gemma 用同一个函数（两个空格缩进）。"""
+    body = "[\n" + ",\n".join(indent + o for o in objs) + "\n]" if objs else "[]"
+    return JSON_FENCE_OPEN + body + JSON_FENCE_CLOSE
+
+
+def json_box_object(key: str, quad: Sequence[int], label: str | None) -> str:
+    """一个 JSON 框对象：{"<key>": [a, b, c, d], "label": "<label>"}（label 为 None 时不写 label；字符串按 JSON 转义）。"""
+    import json
+
+    s = "{" + json.dumps(key) + ": [" + ", ".join(str(int(v)) for v in quad) + "]"
+    if label is not None:
+        s += ', "label": ' + json.dumps(label, ensure_ascii=False)
+    return s + "}"
+
+
+def format_boxes(boxes: Sequence[Sequence[float]], *, width: float, height: float,
+                 labels: Sequence[str | None] | None = None) -> str:
+    """parse_boxes 的逆（DEV-0027）：绝对像素 xyxy → Qwen 的原生框文本（E1 定位提示 "Report bbox coordinates in JSON format." 要求
+    的输出格式）：```json 代码块，`[{"bbox_2d": [x1, y1, x2, y2], "label": …}, …]`，0–1000 的整数，x 在前（换算与取整见
+    base.native_box_ints）。零个框写 `[]`（parse_boxes 判为成功、零个框）。"""
+    quads = native_box_ints(boxes, width=width, height=height)
+    labs = check_box_labels(labels, len(quads))
+    return json_box_text([json_box_object(BOX_KEY, q, lab) for q, lab in zip(quads, labs)], indent=QWEN_BOX_INDENT)
+
+
+def vision_patch_row_major_order(grid_thw: torch.Tensor, spatial_merge_size: int) -> torch.Tensor:
+    """视觉塔里 patch 的序列顺序 → 行主序（pre_projection_features 用）：返回 order，使 x_row_major = x_seq[order]。
+
+    用模型自己的元数据：Qwen3_5VisionModel 的视觉 RoPE 位置 get_vision_position_ids(grid_thw, merge)（modeling_qwen3_5 里的那个
+    函数）给出每个序列位置的 (行, 列)；行主序的键 = 行 · gw + 列，必须恰好是 0 … gh·gw − 1 的一个排列，否则报错。只接受单图、T = 1。"""
+    grid = torch.as_tensor(grid_thw).reshape(-1, 3)
+    if grid.shape[0] != 1 or int(grid[0, 0]) != 1:
+        raise ValueError(f"只接受单图（T = 1），收到 grid_thw={grid.tolist()}")
+    gh, gw = int(grid[0, 1]), int(grid[0, 2])
+    get_pos = getattr(_modeling_module(), "get_vision_position_ids", None)
+    if get_pos is None:
+        raise RuntimeError(f"{QWEN35_MODELING} 里没有 get_vision_position_ids（transformers 版本变了？）")
+    pos = get_pos(grid.cpu(), int(spatial_merge_size))
+    if tuple(pos.shape) != (gh * gw, 2):
+        raise RuntimeError(f"视觉 RoPE 位置形状 {tuple(pos.shape)}，期望 ({gh * gw}, 2)")
+    key = pos[:, 0].long() * gw + pos[:, 1].long()
+    if not torch.equal(torch.sort(key).values, torch.arange(gh * gw)):
+        raise RuntimeError("视觉 RoPE 的 (行, 列) 不是 patch 网格的一个排列")
+    return torch.argsort(key)
+
+
 # ---------------------------------------------------------------------------
 # 小型随机 Qwen3.5：CPU 测试与冒烟脚本 --tiny 的彩排（不下载权重）
 # ---------------------------------------------------------------------------
@@ -1752,7 +1868,11 @@ __all__ = [
     "QWEN35_MODELING",
     "Qwen35Adapter",
     "ReservedRowTokens",
+    "THINK_SEPARATOR",
     "build_tiny_model",
+    "format_boxes",
+    "json_box_object",
+    "json_box_text",
     "kernel_implementation",
     "load_pinned_components",
     "make_tiny_adapter",
@@ -1763,4 +1883,5 @@ __all__ = [
     "reference_processor",
     "tiny_config",
     "torch_gdn",
+    "vision_patch_row_major_order",
 ]

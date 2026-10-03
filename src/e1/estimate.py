@@ -8,9 +8,9 @@
   外推用冻结的批大小（batch_protocol.batch_size）的实测；它没测或不可行时退回推荐批大小，用的是哪个写在 extrapolated_with。
 - 选择题与点对任务：eval 是受限字母读数（1 个 token，按字母集合分批，与 runner 同一个 batch_plan）；free 子集（自由作答诊断，
   关思考、上限 1024）在少量开发样本上按自由作答另测一遍，外推 free。
-- 开思考（think、think8192，可选 --estimate-think）：用 min(推荐批大小, 样本数)、预算 4096，在少量开发样本上测一遍（批比正式运行小，
-  吞吐偏保守）；8192 的子集按
-  "每条耗时 × 8192/4096"估上界（写写不完的条数越多越接近；这是假设，写在输出里）。
+- 开思考（think，可选 --estimate-think）：与正式运行同一个生成方式——预算强制收尾（D59-1：generate_batch_budgeted，思考与作答的
+  预算取配置的 generation.think_budget），用 min(推荐批大小, 样本数) 在少量开发样本上测一遍（批比正式运行小，吞吐偏保守），
+  另记各结束方式的条数。think8192 子集与它的上界估计由 D59-1 取消。
 - 附加对照（extra）只在 --policy 与该子集的口径一致时外推（qwen:1024、internvl:native），否则记 null。
 开发子集的输出长度未必代表评测集（例如检测的开发图换成了 RefCOCO 的图），外推只是估计，实际用量超过估算 20% 就停（D28-10）。
 """
@@ -26,8 +26,8 @@ from src.e1.runner import batch_keys, batch_plan, generate_rows, load_images
 from src.e1.tasks import DataPaths, TASK_SUBSETS, select
 
 MEM_HEADROOM = 0.9
-THINK_8192_FACTOR_NOTE = "think8192 = 每条耗时（预算 4096 实测）× 8192/4096 的上界估计，未实测"
-SUBSET_TOTALS: tuple[str, ...] = ("eval", "think", "think8192", "extra", FREE_SUBSET)
+THINK_BUDGET_NOTE = "think = 预算强制收尾（D59-1）的实测外推；开发样本的思考长度未必代表评测集"
+SUBSET_TOTALS: tuple[str, ...] = ("eval", "think", "extra", FREE_SUBSET)
 
 
 def _cuda(adapter: Any):
@@ -46,15 +46,19 @@ def measure(adapter: Any, task: str, family: str, samples: Sequence[Any], prompt
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(dev)
     kind = prompts.readout(task, subset)
+    think_budget = prompts.think_budget() if prompts.uses_think_budget(subset) else None
     rendered = [prompts.render(task, family, s) for s in samples]
     table = None
     if kind == "letter" and rendered:
         table = build_letter_table(adapter.tokenizer, {lt for r in rendered for lt in r.extras["letters"]},
                                    prompts.letter_spellings())
-    n_rows = n_tok = n_trunc = 0
+    n_rows = n_tok = n_trunc = n_ins = 0
+    ends: dict[str, int] = {}
     gen_wall = build_wall = 0.0
     out: dict[str, Any] = {"batch_size": batch_size, "subset": subset, "readout": kind, "enable_thinking": enable_thinking,
                            "max_new_tokens": max_new_tokens}
+    if think_budget is not None:
+        out["think_budget"] = {"thinking_budget": think_budget[0], "answer_budget": think_budget[1]}
     try:
         for a, b in batch_plan(batch_keys(kind, rendered), batch_size):
             t0 = time.perf_counter()
@@ -63,11 +67,16 @@ def measure(adapter: Any, task: str, family: str, samples: Sequence[Any], prompt
             build_wall += time.perf_counter() - t0
             allowed = table.allowed_ids(rendered[a].extras["letters"]) if table is not None else None
             res = generate_rows(adapter, inputs, batch_size=batch_size, enable_thinking=enable_thinking,
-                                max_new_tokens=max_new_tokens, decoding=prompts.decoding(), allowed_token_ids=allowed)
+                                max_new_tokens=max_new_tokens, decoding=prompts.decoding(), allowed_token_ids=allowed,
+                                think_budget=think_budget)
             gen_wall += res[0].batch_wall_time_s if res[0].batch_wall_time_s is not None else sum(r.wall_time_s for r in res)
             n_rows += len(res)
             n_tok += sum(r.n_generated_tokens for r in res)
             n_trunc += sum(1 for r in res if r.stopped is False and kind != "letter")
+            if think_budget is not None:
+                n_ins += sum(r.n_inserted_tokens for r in res)
+                for r in res:
+                    ends[r.thinking_end] = ends.get(r.thinking_end, 0) + 1
     except Exception as e:  # noqa: BLE001
         if torch is not None and isinstance(e, torch.cuda.OutOfMemoryError):
             torch.cuda.empty_cache()
@@ -79,6 +88,8 @@ def measure(adapter: Any, task: str, family: str, samples: Sequence[Any], prompt
                tokens_per_s=n_tok / gen_wall if gen_wall > 0 else None,
                mean_generated_tokens=n_tok / n_rows if n_rows else None,
                truncation_rate=n_trunc / n_rows if n_rows else None)
+    if think_budget is not None:
+        out.update(inserted_tokens=n_ins, thinking_end_counts=dict(sorted(ends.items())))
     if torch is not None:
         peak = int(torch.cuda.max_memory_allocated(dev))
         total = int(torch.cuda.get_device_properties(dev).total_memory)
@@ -148,10 +159,8 @@ def estimate_task(adapter: Any, task: str, family: str, prompts: PromptConfig, p
         out["think_measurement"] = think_row
     t_sps = think_row.get("samples_per_s") if think_row and think_row.get("ok") else None
     gh["think"] = _hours(n["think"], t_sps) if policy_tag == "default" else None
-    ratio = prompts.max_new_tokens(task, family, "think8192") / prompts.max_new_tokens(task, family, "think")
-    gh["think8192"] = None if gh["think"] is None or n["think"] == 0 else _hours(n["think8192"], t_sps) * ratio
     out["gpu_hours"] = gh
-    out["notes"] = [THINK_8192_FACTOR_NOTE] if think else ["思考子集未测（加 --estimate-think）"]
+    out["notes"] = [THINK_BUDGET_NOTE] if think else ["思考子集未测（加 --estimate-think）"]
     return out
 
 
@@ -161,8 +170,8 @@ def summary_markdown(model_key: str, policy_tag: str, rows: Sequence[Mapping[str
 
     lines = [f"# 吞吐与算力估算 · {model_key} · 口径 {policy_tag}", "", f"- {dict(header)}", "",
              "| 任务 | 读法 | 开发样本 | max_new_tokens | 推荐批大小 | 外推用的批大小 | 样本/秒 | n(eval) | GPU 小时(eval) | n(think) | "
-             "GPU 小时(think) | n(think8192) | GPU 小时(8192, 上界) | n(extra) | GPU 小时(extra) | n(free) | GPU 小时(free) |",
-             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+             "GPU 小时(think，预算强制收尾) | n(extra) | GPU 小时(extra) | n(free) | GPU 小时(free) |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     tot: dict[str, float | None] = {k: None for k in SUBSET_TOTALS}
     for r in rows:
         g, n = r["gpu_hours"], r["n"]
@@ -172,12 +181,12 @@ def summary_markdown(model_key: str, policy_tag: str, rows: Sequence[Mapping[str
         ex = r.get("extrapolated_with") or {}
         lines.append(f"| {r['task']} | {r.get('readout', '—')} | {r['n_dev_used']} | {r['max_new_tokens']} | {f(r['best_batch_size'])} | "
                      f"{f(ex.get('batch_size'))} | {f(r['samples_per_s'])} | {n.get('eval')} | {f(g.get('eval'))} | {n.get('think')} | "
-                     f"{f(g.get('think'))} | {n.get('think8192')} | {f(g.get('think8192'))} | {n.get('extra', '—')} | "
+                     f"{f(g.get('think'))} | {n.get('extra', '—')} | "
                      f"{f(g.get('extra'))} | {n.get(FREE_SUBSET, '—')} | {f(g.get(FREE_SUBSET))} |")
-    lines.append(f"| 合计 | | | | | | | | {f(tot['eval'])} | | {f(tot['think'])} | | {f(tot['think8192'])} | | "
+    lines.append(f"| 合计 | | | | | | | | {f(tot['eval'])} | | {f(tot['think'])} | | "
                  f"{f(tot['extra'])} | | {f(tot[FREE_SUBSET])} |")
     lines += ["", "逐批大小的明细（样本/秒、token/秒、峰值显存、截断率）见 estimate.json。"]
     return "\n".join(lines) + "\n"
 
 
-__all__ = ["MEM_HEADROOM", "SUBSET_TOTALS", "best_batch", "estimate_task", "measure", "summary_markdown"]
+__all__ = ["MEM_HEADROOM", "SUBSET_TOTALS", "THINK_BUDGET_NOTE", "best_batch", "estimate_task", "measure", "summary_markdown"]

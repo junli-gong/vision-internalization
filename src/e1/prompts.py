@@ -14,6 +14,12 @@ src/e1/tasks.select 在 countbenchqa 模式下把问句放进 fields[COUNTBENCHQ
   src/e1/letters.py）；自由作答的诊断用 free 子集（think:<任务> 的 id，关思考）。
 - report_columns、refusal_by_person：三列（严格读数、有效率、条件读数）与按人物 / 非人物分列的拒答诊断（src/e1/scoring）。
 - batch_protocol：冻结的批配置（批大小、左填充、样本顺序、按字母集合分批）；acceptance：批处理验收 v3（src/e1/acceptance）。
+
+DEV-0027（D59）：
+- 思考子集（think）改用预算强制收尾：generation.think_budget 给出 thinking_budget（4096）与 answer_budget（1024），生成走
+  adapter.generate_batch_budgeted（D59-1）；删掉 think8192 子集与 think_max_new_tokens（不再做 8192 的敏感性检查）。
+- 验收 v3 的 δ 按组设置（每组的 delta，取值见配置的 acceptance.delta_rule；D59-3）。
+- eval、dev、free、extra 的提示渲染、生成参数与解析不变（与 sha256 5de1aec7… 的配置逐字节相同，tests/test_e1_d59.py 核对）。
 """
 
 from __future__ import annotations
@@ -59,8 +65,9 @@ PROVENANCES: tuple[str, ...] = (
     "unified_benchmark_wording",  # 统一提示，措辞取自别的 benchmark（非原生）
 )
 NATIVE_PROVENANCES = frozenset({"official_doc", "predecessor_cookbook", "benchmark"})
-SUBSET_KINDS: tuple[str, ...] = ("eval", "dev", "think", "think8192", "extra", "free")
-THINK_SUBSETS: tuple[str, ...] = ("think", "think8192")
+SUBSET_KINDS: tuple[str, ...] = ("eval", "dev", "think", "extra", "free")  # D59-1：删掉 think8192
+THINK_SUBSETS: tuple[str, ...] = ("think",)
+THINK_METHOD = "generate_batch_budgeted"  # 思考子集的生成方式（D59-1：预算强制收尾）
 FREE_SUBSET = "free"  # 选择题与点对任务的自由作答诊断（D36-6）：think:<任务> 的 id，关思考，上限取任务条目的 max_new_tokens
 READOUTS: tuple[str, ...] = ("text", "letter")  # text = 自由生成后解析；letter = 受限字母读数（letter_readout）
 PADDING_SIDES: tuple[str, ...] = ("left",)  # src/adapters/batching 只实现了左填充
@@ -68,6 +75,7 @@ BATCH_ORDERS: tuple[str, ...] = ("selection",)  # 样本顺序 = src/e1/tasks.se
 LETTER_BATCHES: tuple[str, ...] = ("same_letters",)  # 受限字母读数：字母集合一变就另起一批
 ACCEPTANCE_VERSION = 3
 ACCEPTANCE_METRICS: tuple[str, ...] = ("accuracy_pooled", "cIoU", "gIoU", "F1@0.5")
+ACCEPTANCE_METRIC_CLASSES: tuple[str, ...] = ("accuracy", "iou")
 REQUIRED_FAMILY_FIELDS: tuple[str, ...] = (
     "template",
     "native",
@@ -112,9 +120,12 @@ def validate(cfg: Mapping[str, Any]) -> None:
         bad.append(f"generation.enable_thinking 必须对 {SUBSET_KINDS} 各给一个 bool")
     elif any(et[s] for s in SUBSET_KINDS if s not in THINK_SUBSETS) or not all(et[s] for s in THINK_SUBSETS):
         bad.append("只有思考子集开思考（简报 §6.3）")
-    tm = gen.get("think_max_new_tokens", {})
-    if set(tm) != set(THINK_SUBSETS) or any(isinstance(v, bool) or not isinstance(v, int) or v < 1 for v in tm.values()):
-        bad.append(f"generation.think_max_new_tokens 必须对 {THINK_SUBSETS} 各给一个正整数")
+    if "think_max_new_tokens" in gen:
+        bad.append("generation.think_max_new_tokens 已由 D59-1 取消（思考子集用 think_budget 的预算强制收尾）")
+    tb = gen.get("think_budget", {})
+    if (not _posint(tb.get("thinking_budget")) or not _posint(tb.get("answer_budget")) or tb.get("method") != THINK_METHOD
+            or not str(tb.get("basis", "")).strip()):
+        bad.append(f"generation.think_budget 必须给正整数的 thinking_budget、answer_budget，method = {THINK_METHOD}，以及 basis")
     if not isinstance(gen.get("free_note"), str):
         bad.append("generation.free_note 必须说明 free 子集")
     bad += _validate_protocol(cfg)
@@ -231,10 +242,10 @@ def _validate_protocol(cfg: Mapping[str, Any]) -> list[str]:
     bb = ac.get("composition_b", {}).get("batch_size")
     if not _posint(bb) or bb == bp.get("batch_size"):
         bad.append("acceptance.composition_b.batch_size 必须是正整数，且与 batch_protocol.batch_size 不同")
-    delta = ac.get("delta", {})
-    if set(delta) != {"accuracy", "iou"} or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 < v < 1
-                                                for v in delta.values()):
-        bad.append("acceptance.delta 必须给 accuracy 与 iou 两个 (0, 1) 之间的数")
+    if "delta" in ac:
+        bad.append("acceptance.delta（按 metric_class 取）已由 D59-3 改为按组设置：每组给 delta")
+    if not str(ac.get("delta_rule", "")).strip():
+        bad.append("acceptance.delta_rule 必须说明每组 δ 的取法与依据")
     groups = ac.get("groups", [])
     covered = [t for g in groups for t in g.get("tasks", [])]
     if sorted(covered) != sorted(TASKS):
@@ -242,8 +253,11 @@ def _validate_protocol(cfg: Mapping[str, Any]) -> list[str]:
     if len({g.get("name") for g in groups}) != len(groups):
         bad.append("acceptance.groups 的组名不能重复")
     for g in groups:
-        if g.get("metric") not in ACCEPTANCE_METRICS or g.get("metric_class") not in delta:
-            bad.append(f"acceptance 组 {g.get('name')!r}：metric ∈ {ACCEPTANCE_METRICS}，metric_class ∈ delta 的键")
+        if g.get("metric") not in ACCEPTANCE_METRICS or g.get("metric_class") not in ACCEPTANCE_METRIC_CLASSES:
+            bad.append(f"acceptance 组 {g.get('name')!r}：metric ∈ {ACCEPTANCE_METRICS}，metric_class ∈ {ACCEPTANCE_METRIC_CLASSES}")
+        d = g.get("delta")
+        if isinstance(d, bool) or not isinstance(d, (int, float)) or not 0 < d < 1:
+            bad.append(f"acceptance 组 {g.get('name')!r}：delta 必须是 (0, 1) 之间的数（D59-3）")
         if not (g.get("take") == "all" or _posint(g.get("take"))):
             bad.append(f"acceptance 组 {g.get('name')!r}：take 必须是 all 或正整数")
         if g.get("n_min") is not None and not _posint(g.get("n_min")):
@@ -294,14 +308,23 @@ class PromptConfig:
         return "letter" if task in lr["tasks"] and subset_kind(subset) in lr["subsets"] else "text"
 
     def max_new_tokens(self, task: str, family: str, subset: str) -> int:
-        """实际生成用的上限：受限字母读数取 letter_readout.max_new_tokens（1）；思考子集取思考预算（think 4096、
-        think8192 8192）；其余（含 free 子集）取该任务该家族条目的 max_new_tokens。"""
+        """模型生成的 token 数上限：受限字母读数取 letter_readout.max_new_tokens（1）；思考子集是预算强制收尾（D59-1），上限 =
+        thinking_budget + answer_budget（补的 token 不计入）；其余（含 free 子集）取该任务该家族条目的 max_new_tokens。"""
         kind = subset_kind(subset)
         if self.readout(task, kind) == "letter":
             return int(self.data["letter_readout"]["max_new_tokens"])
         if kind in THINK_SUBSETS:
-            return int(self.data["generation"]["think_max_new_tokens"][kind])
+            return sum(self.think_budget())
         return int(self.entry(task, family)["max_new_tokens"])
+
+    def think_budget(self) -> tuple[int, int]:
+        """思考子集的预算强制收尾（D59-1）：(thinking_budget, answer_budget)。"""
+        tb = self.data["generation"]["think_budget"]
+        return int(tb["thinking_budget"]), int(tb["answer_budget"])
+
+    def uses_think_budget(self, subset: str) -> bool:
+        """这个子集是否走 generate_batch_budgeted（只有思考子集）。"""
+        return subset_kind(subset) in THINK_SUBSETS
 
     def parser(self, task: str, family: str, subset: str | None = None) -> str:
         """解析函数名。给了 subset 且是受限字母读数时为 letter_token，否则取条目的 parse。"""
@@ -359,7 +382,7 @@ class PromptConfig:
 
 
 def subset_kind(subset: str) -> str:
-    """命令行的 --subset（eval、dev、think、think8192、extra）→ 配置里的子集类别。"""
+    """命令行的 --subset（eval、dev、think、extra、free）→ 配置里的子集类别。"""
     if subset not in SUBSET_KINDS:
         raise ValueError(f"subset 必须是 {SUBSET_KINDS} 之一，收到 {subset!r}")
     return subset
@@ -466,6 +489,7 @@ def countbenchqa_instruction(template: str, question_part: str, question: str) -
 
 __all__ = [
     "ACCEPTANCE_METRICS",
+    "ACCEPTANCE_METRIC_CLASSES",
     "ACCEPTANCE_VERSION",
     "COUNTBENCHQA_FIELD",
     "COUNTBENCHQA_RULES",
@@ -486,6 +510,7 @@ __all__ = [
     "Rendered",
     "SUBSET_KINDS",
     "TASKS",
+    "THINK_METHOD",
     "THINK_SUBSETS",
     "count_object",
     "countbenchqa_instruction",

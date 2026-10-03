@@ -27,6 +27,9 @@
   lora_target_modules、inject_lora、merge_lora、save_trained、load_trained、trainable_token_rows（第二部分，实现在
   src/adapters/checkpoint.py）。这里只写接口说明；基类的实现一律报 NotImplementedError（不是抽象方法：只做推理的替身不必实现
   它们），三个家族都实现。
+- DEV-0027 的接口（同样不是抽象方法，三个家族都实现）：generate_batch_budgeted（预算强制收尾的思考生成，公共实现在
+  src/adapters/budget.py）、pre_projection_features（E2 的 pre_proj 参考线）、format_boxes（parse_boxes 的逆）、
+  end_of_turn_token_id / stop_token_ids（公开的停止 token，替代私有的 _stop_ids()）。
 """
 
 from __future__ import annotations
@@ -47,6 +50,9 @@ PositionMode = Literal["grid2d", "seq1d"]
 
 ORDERS: tuple[str, ...] = ("instruction_first", "image_first")
 POSITION_MODES: tuple[str, ...] = ("grid2d", "seq1d")
+
+# 预算强制收尾的思考生成（DEV-0027）：思考段怎样结束（GenerationResult.thinking_end；规则见 src/adapters/budget.py）
+THINKING_ENDS: tuple[str, ...] = ("natural", "forced", "not_opened", "unclosed")
 
 # hidden_states 的可选层键（层号约定见模块说明）：最后一个 decoder 层的原始输出，最终归一化之前
 PRE_NORM_LAST = "pre_norm_last"
@@ -131,6 +137,22 @@ class GenerationResult:
     batch_size：这一行所在批的行数（generate 为 1）。
     batch_wall_time_s：整批 model.generate 的墙钟。wall_time_s 是按行均摊的份额 = batch_wall_time_s / batch_size
         （等分；理由：左填充下每一行在整批的每个解码步里都占一个槽位，直到最长的一行结束）。generate 时两者相等。
+
+    DEV-0027 新增的字段：预算强制收尾的思考生成（generate_batch_budgeted，D59-1、D59-5；规则见 src/adapters/budget.py）。
+    thinking_end 为 None 表示不是这种生成，其余新字段必须保持默认值；不为 None 时：
+    thinking_end：思考段怎样结束，取 THINKING_ENDS 之一——natural（模型自己写出思考结束标记）、forced（思考写满预算，适配器补上
+        结束标记与固定分隔）、not_opened（思考段开头在输出里的家族（Gemma、InternVL），第一个 token 不是思考段开头：直接作答，
+        全部 token 都是作答段）、unclosed（思考段里写出停止 token，没有收尾就结束了；没有作答段）。
+    forced_close：thinking_end == "forced"（任务书固定的字段名）。natural_close 是只读属性。
+    token_ids / n_generated_tokens：只含模型生成的 token（思考段 + 作答段），补的 token 不计入（单独记）。
+    n_thinking_tokens：思考段里模型生成的 token 数（含思考段开头与结束标记，凡是模型写出的）；n_answer_tokens：作答段的 token 数
+        （含末尾的停止 token）。二者之和 = n_generated_tokens。
+    n_inserted_tokens、inserted_token_ids：补的 token（只有 forced 才有）；inserted_at：它们插在 token_ids 的哪个下标之前
+        （= n_thinking_tokens）。完整序列 = token_ids[:inserted_at] + inserted_token_ids + token_ids[inserted_at:]。
+    raw_text：完整序列的解码（含补的 token）；inserted_span：补的那段文字在 raw_text 里的字符区间 [start, end)，用来辨认补上的标记。
+        forced 时 raw_text = 思考段的解码 + 补的 token 的解码 + 作答段的解码（分段解码，所以区间是精确的）。
+    text：完整序列按本家族的剥离规则（split_answer）得到的回答，与 generate 的口径相同；answer_text：作答段（收尾之后，forced 时
+        在补的 token 之后）的解码，去掉末尾的停止 token 与首尾换行（与 text 同样的清理）。unclosed 时为空串。
     """
 
     text: str
@@ -145,8 +167,61 @@ class GenerationResult:
     n_image_pixels: int | None = None
     batch_size: int = 1
     batch_wall_time_s: float | None = None
+    thinking_end: str | None = None
+    forced_close: bool = False
+    n_thinking_tokens: int | None = None
+    n_answer_tokens: int | None = None
+    n_inserted_tokens: int = 0
+    inserted_token_ids: tuple[int, ...] = ()
+    inserted_at: int | None = None
+    inserted_span: tuple[int, int] | None = None
+    answer_text: str | None = None
+
+    @property
+    def natural_close(self) -> bool:
+        """模型自己写出了思考结束标记（预算强制收尾的生成；其他生成恒为 False）。"""
+        return self.thinking_end == "natural"
+
+    def _check_budget_fields(self) -> None:
+        defaults = {"forced_close": False, "n_thinking_tokens": None, "n_answer_tokens": None, "n_inserted_tokens": 0,
+                    "inserted_token_ids": (), "inserted_at": None, "inserted_span": None, "answer_text": None}
+        if self.thinking_end is None:
+            bad = [k for k, v in defaults.items() if getattr(self, k) != v]
+            if bad:
+                raise ValueError(f"thinking_end 为 None（不是预算强制收尾的生成），这些字段却不是默认值：{bad}")
+            return
+        if self.thinking_end not in THINKING_ENDS:
+            raise ValueError(f"thinking_end 必须是 {THINKING_ENDS} 之一，收到 {self.thinking_end!r}")
+        if self.forced_close != (self.thinking_end == "forced"):
+            raise ValueError(f"forced_close={self.forced_close} 与 thinking_end={self.thinking_end!r} 不符")
+        for name in ("n_thinking_tokens", "n_answer_tokens", "n_inserted_tokens"):
+            v = getattr(self, name)
+            if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+                raise ValueError(f"{name} 必须是非负整数，收到 {v!r}")
+        if self.n_thinking_tokens + self.n_answer_tokens != self.n_generated_tokens:
+            raise ValueError(f"n_thinking_tokens + n_answer_tokens = {self.n_thinking_tokens} + {self.n_answer_tokens} "
+                             f"≠ n_generated_tokens = {self.n_generated_tokens}")
+        if self.n_inserted_tokens != len(self.inserted_token_ids):
+            raise ValueError(f"n_inserted_tokens={self.n_inserted_tokens} 与补的 token {self.inserted_token_ids} 不符")
+        if not isinstance(self.answer_text, str):
+            raise TypeError(f"answer_text 必须是 str，收到 {self.answer_text!r}")
+        if self.forced_close:
+            if not self.inserted_token_ids or self.inserted_at != self.n_thinking_tokens or self.inserted_span is None:
+                raise ValueError("forced：必须有补的 token，inserted_at = n_thinking_tokens，并给出 inserted_span")
+            s, e = self.inserted_span
+            if self.raw_text is None or not 0 <= s < e <= len(self.raw_text):
+                raise ValueError(f"inserted_span={self.inserted_span} 不在 raw_text 之内")
+        elif self.inserted_token_ids or self.inserted_at is not None or self.inserted_span is not None:
+            raise ValueError(f"thinking_end={self.thinking_end!r} 不应有补的 token")
+        if self.thinking_end == "not_opened" and self.n_thinking_tokens != 0:
+            raise ValueError("not_opened：没有思考段，n_thinking_tokens 必须为 0")
+        if self.thinking_end == "unclosed" and (self.n_answer_tokens != 0 or self.answer_text != ""):
+            raise ValueError("unclosed：没有作答段，n_answer_tokens 必须为 0、answer_text 必须为空串")
+        if self.thinking_end in ("natural", "forced") and self.n_thinking_tokens < 1:
+            raise ValueError(f"{self.thinking_end}：思考段至少有 1 个 token")
 
     def __post_init__(self) -> None:
+        self._check_budget_fields()
         if self.n_generated_tokens != len(self.token_ids):
             raise ValueError(
                 f"n_generated_tokens={self.n_generated_tokens} 与 len(token_ids)={len(self.token_ids)} 不一致"
@@ -336,6 +411,52 @@ def captured_output(box: Mapping[str, Any], *, what: str) -> Any:
     return box["out"]
 
 
+# format_boxes（DEV-0027）：换算到 0–1000 之后允许的越界量（单位：0–1000 的刻度）。越界不超过它的坐标裁到 [0, 1000]（浮点误差、
+# 标注框贴边时 x + w 略大于 W）；超过就报错，不猜。
+NATIVE_BOX_TOLERANCE = 0.5
+
+
+def native_box_ints(boxes: Sequence[Sequence[float]], *, width: float, height: float) -> list[tuple[int, int, int, int]]:
+    """format_boxes 的公共一步：绝对像素 xyxy → x 在前的 0–1000 整数四元组（x_norm = x / W · 1000，Python round 取整，与 InternVL
+    文档的归一化公式相同）。每个框必须是 4 个有限数、x2 ≥ x1、y2 ≥ y1；换算后落在 [−tol, 1000 + tol]（tol = NATIVE_BOX_TOLERANCE）
+    之外就报错，之内的裁到 [0, 1000]。取整是单调的，所以 x2 ≥ x1 保持。"""
+    import numpy as np
+
+    from src.executors.geometry import abs_to_norm1000
+
+    if not (width > 0 and height > 0):
+        raise ValueError(f"原图宽高必须为正：W={width}, H={height}")
+    if isinstance(boxes, (str, bytes)):
+        raise TypeError("boxes 必须是框的序列")
+    out = []
+    for k, b in enumerate(boxes):
+        arr = np.asarray(b, dtype=np.float64)
+        if arr.shape != (4,) or not np.all(np.isfinite(arr)):
+            raise ValueError(f"第 {k} 个框必须是 4 个有限数 [x1, y1, x2, y2]，收到 {b!r}")
+        if arr[2] < arr[0] or arr[3] < arr[1]:
+            raise ValueError(f"第 {k} 个框颠倒：{b!r}")
+        norm = abs_to_norm1000(arr, width=width, height=height)
+        if np.any(norm < -NATIVE_BOX_TOLERANCE) or np.any(norm > 1000.0 + NATIVE_BOX_TOLERANCE):
+            raise ValueError(f"第 {k} 个框 {b!r} 超出原图 {width}×{height}（换算到 0–1000 是 {norm.tolist()}）")
+        out.append(tuple(min(1000, max(0, int(round(float(v))))) for v in norm))
+    return out
+
+
+def check_box_labels(labels: Sequence[str | None] | None, n: int) -> list[str | None]:
+    """format_boxes 的 labels：None（都没有标签）或与框等长的序列，每项是字符串或 None。"""
+    if labels is None:
+        return [None] * n
+    if isinstance(labels, (str, bytes)):
+        raise TypeError("labels 必须是与 boxes 等长的序列，不能是单个字符串")
+    labels = list(labels)
+    if len(labels) != n:
+        raise ValueError(f"labels 有 {len(labels)} 项，boxes 有 {n} 个")
+    bad = [x for x in labels if x is not None and not isinstance(x, str)]
+    if bad:
+        raise TypeError(f"label 必须是字符串或 None：{bad!r}")
+    return labels
+
+
 def check_grid_token_names(names: Sequence[str], n_existing: int = 0) -> None:
     """add_grid_tokens 实现里调用：名字不重复、非空，总数不超过 MAX_NEW_GRID_TOKENS（简报 §4 第 4 条）。
 
@@ -364,6 +485,7 @@ _REQUIRED_KWONLY: dict[str, tuple[str, ...]] = {
     "generate_batch": ("enable_thinking", "max_new_tokens"),  # DEV-0011：规则与 generate 相同
     "option_logits": ("enable_thinking",),  # DEV-0016：思考开关每次显式给出（D1）
     "parse_boxes": ("width", "height"),  # 原图宽高必须由调用方显式给出（DEV-0006）
+    "format_boxes": ("width", "height"),  # 同上（DEV-0027）
 }
 # 子类必须保持为"无默认值"的参数（层号只能由调用方给出）
 _REQUIRED_NO_DEFAULT: dict[str, tuple[str, ...]] = {
@@ -563,6 +685,40 @@ class ModelAdapter(abc.ABC):
         """只要一个框（如 RefCOCO 的 REC），建在 parse_boxes 之上（规则见 src.parsing.one_box）：
         parse_boxes 失败 → 原样给出失败原因（没有框就是 no_box）；成功但零个框 → no_box；多于一个框 → multiple_boxes。"""
         return one_box(self.parse_boxes(text, width=width, height=height))
+
+    # ------------------------------------------------------------------
+    # DEV-0027 的接口：预算强制收尾、投影前的视觉特征、原生框的格式化、公开的停止 token。不是抽象方法（只做推理的替身与旧的
+    # 测试替身不必实现）；三个家族都实现。
+    # ------------------------------------------------------------------
+
+    def generate_batch_budgeted(self, inputs_list: Sequence[ModelInputs], *, thinking_budget: int, answer_budget: int,
+                                allowed_token_ids: Sequence[int] | None = None) -> list[GenerationResult]:
+        """预算强制收尾的思考生成（D59-1、D59-5；实现与逐条规则见 src/adapters/budget.py）。开思考、greedy，逐行：
+        思考段在自然收尾（本家族的思考结束标记）或写满 thinking_budget 个 token 时结束；写满还没收尾的行由适配器补上本家族的
+        思考结束标记与紧跟的固定分隔（不计入模型生成，单独记）；作答段在收尾之后最多 answer_budget 个 token，到停止 token 结束。
+        allowed_token_ids 只作用于作答段（None = 全词表）。提示、左填充与位置编码与 generate_batch(enable_thinking=True) 相同。
+        结果的新字段见 GenerationResult。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 generate_batch_budgeted")
+
+    def pre_projection_features(self, inputs: ModelInputs) -> tuple[Any, tuple[int, int]]:
+        """投影 / 合并之前的视觉塔输出（D59-8，E2 的 pre_proj 参考线）：(张量 [h·w, D_v], (h, w))，只接受单图，行主序，去掉填充，
+        张量在适配器的设备上。可以在 no_grad 下调用（不强制）。各家族取的位置写在实现里。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 pre_projection_features")
+
+    def format_boxes(self, boxes: Sequence[Sequence[float]], *, width: float, height: float,
+                     labels: Sequence[str | None] | None = None) -> str:
+        """parse_boxes 的逆（DEV-0027，D56-5：C3 对照用本家族原生的框格式）：绝对像素 xyxy 的框 → 本家族原生框格式的文本，与 E1
+        定位提示要求的输出格式相同。坐标按原图宽高换算到 0–1000 并取整（原生格式是整数），所以往返在本家族的坐标精度内
+        （每个坐标差不超过半个单位，即 W/2000、H/2000 像素）。labels 可选，与 boxes 等长。不需要加载模型。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 format_boxes")
+
+    def end_of_turn_token_id(self) -> int:
+        """本家族的回合结束 token（Qwen、InternVL 是 <|im_end|>，Gemma 是 <turn|>）：E3b 目标序列的最后一个 token。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 end_of_turn_token_id")
+
+    def stop_token_ids(self) -> tuple[int, ...]:
+        """generate / generate_batch 的全部停止 token（第一个就是 end_of_turn_token_id）。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 stop_token_ids")
 
     # ------------------------------------------------------------------
     # E3 的训练侧接口（DEV-0020，D21-2）。实现与规则的细节：第一部分在 src/adapters/training.py，第二部分在

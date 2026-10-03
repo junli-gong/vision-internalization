@@ -205,9 +205,22 @@ def test_post_proj_check_raises_when_layer0_differs(qwen, monkeypatch):
 
 
 def test_pre_proj_requires_adapter_interface(qwen):
-    assert not hasattr(qwen, "pre_projection_features")
+    """没有 pre_projection_features 的适配器给 pre_proj 直接报错；DEV-0027 起三个家族的适配器都有（这里核对 Qwen 小模型的
+    raw() 里有 pre_proj 一项：patch 网格是 LLM 网格的 2 倍，维度是视觉塔的宽度）。"""
+
+    class NoPreProj:
+        pass
+
     with pytest.raises(NotImplementedError, match="pre_projection_features"):
-        FeatureExtractor(qwen, load_config(), "depth", [0], ["pre_proj"])
+        FeatureExtractor(NoPreProj(), load_config(), "depth", [0], ["pre_proj"])
+    from src.data.train_loaders import load_ade20k
+
+    ex = FeatureExtractor(qwen, load_config(), "semseg", [0], ["pre_proj"])
+    s = load_ade20k(E2Paths.fixtures().train_root, "val").records[0]
+    raw, inputs = ex.raw(s, phase="t")
+    h, w = inputs.images[0].grid_hw
+    d_v = qwen.model.model.visual.config.hidden_size
+    assert tuple(raw[PRE_PROJ].shape) == (2 * h, 2 * w, d_v) and tuple(raw[0].shape) == (h, w, qwen.hidden_size())
 
 
 def test_pre_proj_reference_with_different_dim_and_grid_end_to_end(qwen, monkeypatch, tmp_path):

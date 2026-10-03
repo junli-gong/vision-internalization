@@ -73,13 +73,16 @@ def test_batch_protocol_and_acceptance_config_pins():
     bp, ac = CFG.batch_protocol(), CFG.acceptance()
     assert (bp["batch_size"], bp["padding_side"], bp["order"], bp["letter_batches"]) == (64, "left", "selection", "same_letters")
     assert ac["version"] == P.ACCEPTANCE_VERSION == 3 and ac["composition_b"]["batch_size"] == 48
-    assert ac["delta"] == {"accuracy": 0.02, "iou": 0.02}
+    assert "delta" not in ac and "D59-3" in ac["delta_rule"]
     g = {x["name"]: x for x in ac["groups"]}
     assert list(g) == ["short_text", "letter", "polygon", "grid", "detection"]
     assert g["short_text"]["tasks"] == ["refexp_box", "count"] and g["letter"]["tasks"] == list(CHOICE_TASKS)
     assert [(g[k]["n_min"], g[k]["take"]) for k in g] == [(300, "all"), (300, "all"), (500, 500), (500, 500), (None, 500)]
     assert [g[k]["metric"] for k in g] == ["accuracy_pooled", "accuracy_pooled", "cIoU", "gIoU", "F1@0.5"]
     assert [g[k]["metric_class"] for k in g] == ["accuracy", "accuracy", "iou", "iou", "accuracy"]
+    # D59-3：δ 按组设置，多边形与检测 0.03，其余 0.02
+    assert [g[k]["delta"] for k in g] == [0.02, 0.02, 0.03, 0.02, 0.03]
+    assert [A.group_delta(g[k]) for k in g] == [0.02, 0.02, 0.03, 0.02, 0.03]
 
 
 def test_acceptance_group_sizes_in_rules_match_dev_configs():
@@ -101,7 +104,8 @@ def test_acceptance_group_sizes_in_rules_match_dev_configs():
     (("letter_readout", "max_new_tokens"), 2, "max_new_tokens 必须是 1"),
     (("letter_readout", "spellings"), ["{letter}", "{letter}"], "spellings"),
     (("letter_readout", "subsets"), ["eval", "think"], "letter_readout.subsets"),
-    (("acceptance", "delta"), {"accuracy": 0.02}, "acceptance.delta"),
+    (("acceptance", "delta"), {"accuracy": 0.02, "iou": 0.02}, "acceptance.delta"),
+    (("acceptance", "delta_rule"), " ", "acceptance.delta_rule"),
     (("countbenchqa_questions", "provenance_note"), " ", "provenance_note"),
 ])
 def test_validate_rejects_bad_protocol_sections(path, value, frag):

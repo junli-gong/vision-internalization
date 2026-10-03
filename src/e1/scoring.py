@@ -34,6 +34,7 @@ from typing import Any, Callable, Iterable, Mapping, NamedTuple, Sequence
 import numpy as np
 
 from src.adapters import gemma4, internvl35, qwen35
+from src.adapters.base import THINKING_ENDS
 from src.constants import BOX_ACC_IOU_THRESHOLD, DETECTION_OPERATING_IOU, GRID_SIZE_E1
 from src.data.records import Sample
 from src.e1.tasks import CHOICE_TASKS, groups_of
@@ -574,6 +575,41 @@ def refusal_by_person(task: str, samples: Sequence[Sample], records: Sequence[Ma
     return out
 
 
+def thinking_end_breakdown(task: str, samples: Sequence[Sample], records: Sequence[Mapping[str, Any]], *, has_gt: bool,
+                           headline: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """思考子集（预算强制收尾，D59-1）：按思考段的结束方式（THINKING_ENDS：natural 自然收尾、forced 强制收尾、not_opened 没写思考段、
+    unclosed 思考段里就停了）分开报。counts 是各自的条数（全部类别都列，没有的记 0）；by_kind 每类：条数、解析失败率、截断条数、
+    思考段与作答段的 token 数分布，以及严格读数（非检测：每个标题指标在这一类上的 metric_of；检测：这一类全部图合在一起的
+    F1@0.5，跨数据集合并，与按数据集的标题不同口径，写明）。记录里没有 thinking_end（不是预算强制收尾的运行）时返回 None。"""
+    have = [r.get("thinking_end") is not None for r in records]
+    if not any(have):
+        return None
+    if not all(have):
+        raise ValueError("一次运行里有的记录有 thinking_end、有的没有")
+    counts = Counter(r["thinking_end"] for r in records)
+    bad = sorted(set(counts) - set(THINKING_ENDS))
+    if bad:
+        raise ValueError(f"未知的 thinking_end {bad}")
+    out: dict[str, Any] = {"counts": {k: counts.get(k, 0) for k in THINKING_ENDS}, "by_kind": {}}
+    for kind in THINKING_ENDS:
+        idx = [i for i, r in enumerate(records) if r["thinking_end"] == kind]
+        if not idx:
+            continue
+        rs = [records[i] for i in idx]
+        tally = ParseTally(failure_enum(r["failure"]) for r in rs)
+        e: dict[str, Any] = {"n": len(rs), "parse_failure_rate": tally.failure_rate, "parse": tally.to_dict(),
+                             "n_truncated": sum(1 for r in rs if r["truncated"]),
+                             "thinking_tokens": distribution(r["n_thinking_tokens"] for r in rs),
+                             "answer_tokens": distribution(r["n_answer_tokens"] for r in rs)}
+        if has_gt and task == "ovd":
+            e["F1@0.5_pooled"] = f1_from_counts(ovd_per_image_counts([samples[i] for i in idx], rs))
+            e["note"] = "这一类全部图合在一起的 F1@0.5（跨数据集合并），与按数据集的标题指标不同口径"
+        elif has_gt:
+            e["strict"] = [{"name": h["name"], "scope": h["scope"], **metric_of(h["name"], rs)} for h in headline]
+        out["by_kind"][kind] = e
+    return out
+
+
 def aggregate(task: str, samples: Sequence[Sample], records: Sequence[Mapping[str, Any]], *, has_gt: bool,
               map_ci_resamples: int = 0, enable_thinking: bool | None = None) -> dict[str, Any]:
     """predictions.jsonl 的记录（与 samples 同序）→ metrics.json 的内容（不含运行标识，调用方补）。
@@ -643,9 +679,11 @@ def aggregate(task: str, samples: Sequence[Sample], records: Sequence[Mapping[st
         n_fab = sum(r["score"]["n_fabricated"] for r in records)
         m["fabricated"] = {"n_pred_boxes": n_pred, "n_fabricated": n_fab, "rate": _rate(n_fab, n_pred),
                            "n_unlabeled": sum(r["score"]["n_unlabeled"] for r in records)}
+        _add_thinking_end(m, task, samples, records, has_gt=has_gt)
         return m
 
     if not has_gt:
+        _add_thinking_end(m, task, samples, records, has_gt=has_gt)
         return m
     name, values, stat = per_sample_metric(task, records)
     if task == "refexp_poly":
@@ -701,7 +739,16 @@ def aggregate(task: str, samples: Sequence[Sample], records: Sequence[Mapping[st
             0.5 * ((acc["ADE20K"] + acc["COCO"]) / 2 + acc["Omni3D"]) if len(acc) == 3 else None)
         m["cvbench_official_combined_note"] = ("CV-Bench README：1/2 · ((acc_2D_ade + acc_2D_coco)/2 + acc_3D_omni)；"
                                                "三个来源有缺时为 null")
+    _add_thinking_end(m, task, samples, records, has_gt=has_gt)
     return m
+
+
+def _add_thinking_end(m: dict[str, Any], task: str, samples: Sequence[Sample], records: Sequence[Mapping[str, Any]], *,
+                      has_gt: bool) -> None:
+    """思考子集才有 thinking_end 一节（其余子集的 metrics.json 不变）。"""
+    te = thinking_end_breakdown(task, samples, records, has_gt=has_gt, headline=m["headline"])
+    if te is not None:
+        m["thinking_end"] = te
 
 
 __all__ = [
@@ -736,6 +783,7 @@ __all__ = [
     "score_generation",
     "score_letter",
     "think_marker_when_off",
+    "thinking_end_breakdown",
     "three_columns",
     "validity",
 ]

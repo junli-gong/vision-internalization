@@ -3,6 +3,11 @@
 流程：加载器选样本（src/e1/tasks.select）→ 按提示配置组装输入（build_inputs，图在前）→ generate（batch = 1）或 generate_batch
 → 解析 → 评分（src/e1/scoring）。每批写完才落盘：先写 logs/timing.jsonl，再写 predictions.jsonl（flush + fsync）。
 
+思考子集（think；D59-1，DEV-0027）：生成走 adapter.generate_batch_budgeted（预算强制收尾：思考 thinking_budget、作答 answer_budget，
+取自配置的 generation.think_budget）；解析照旧读 text。predictions.jsonl 另记思考段的结束方式（thinking_end：natural、forced、
+not_opened、unclosed）、各段 token 数、补的 token 与 answer_text；metrics.json 按结束方式分开报（scoring.aggregate 的 thinking_end）；
+compute.json 的 prompt_tokens 含补的 token（它们是送进模型的输入，不是模型生成的）。其余子集的记录与指标与原来逐字节相同。
+
 读答案的两种方式（prompts.readout；DEV-0017 §1）：
 - text：自由生成后按任务条目的 parse 解析（原来的路径）；
 - letter：受限字母读数（选择题与点对任务的 eval、dev）：只生成 1 个 token，allowed_token_ids = 本题选项字母的全部写法
@@ -44,7 +49,7 @@ from src.accounting import Compute, merge, write_compute_json
 from src.constants import BOOTSTRAP_SEED
 from src.data.records import Sample
 from src.e1.letters import LetterTable, build_letter_table
-from src.e1.prompts import COUNTBENCHQA_FIELD, DEFAULT_COUNT_QUESTIONS, PromptConfig, Rendered
+from src.e1.prompts import COUNTBENCHQA_FIELD, DEFAULT_COUNT_QUESTIONS, THINK_METHOD, PromptConfig, Rendered
 from src.e1.scoring import aggregate, score_generation, score_letter
 from src.e1.tasks import DataPaths, Selection
 from src.runlog import write_run_metadata
@@ -187,9 +192,7 @@ def run_config(spec: RunSpec, sel: Selection, prompts: PromptConfig, paths: Data
         "image_policy": {"tag": spec.policy_tag, **dict(spec.policy)},
         "task": spec.task,
         "subset": spec.subset,
-        "generation": {"enable_thinking": prompts.enable_thinking(spec.subset),
-                       "max_new_tokens": prompts.max_new_tokens(spec.task, spec.family, spec.subset),
-                       "decoding": prompts.decoding(), "order": prompts.order, "readout": ro},
+        "generation": generation_record(prompts, spec, ro),
         "prompt": {"config": os.path.relpath(prompts.path, REPO_ROOT) if Path(prompts.path).is_relative_to(REPO_ROOT)
                    else prompts.path, "config_sha256": prompts.sha256,
                    "entry": {k: e[k] for k in ("template", "native", "provenance", "source_url", "parse",
@@ -204,6 +207,18 @@ def run_config(spec: RunSpec, sel: Selection, prompts: PromptConfig, paths: Data
         "batch_size": spec.batch_size,
         "batch_protocol": batch_protocol_record(prompts, spec.batch_size),
     }
+
+
+def generation_record(prompts: PromptConfig, spec: RunSpec, readout: Mapping[str, Any]) -> dict[str, Any]:
+    """config.yaml 的 generation 一节。思考子集另加 think_budget（D59-1）；其余子集与原来逐字节相同（键与值都不变）。"""
+    gen = {"enable_thinking": prompts.enable_thinking(spec.subset),
+           "max_new_tokens": prompts.max_new_tokens(spec.task, spec.family, spec.subset),
+           "decoding": prompts.decoding(), "order": prompts.order, "readout": dict(readout)}
+    if prompts.uses_think_budget(spec.subset):
+        tb, ab = prompts.think_budget()
+        gen["think_budget"] = {"thinking_budget": tb, "answer_budget": ab, "method": THINK_METHOD,
+                               "max_new_tokens_note": "max_new_tokens = thinking_budget + answer_budget（模型生成的 token 数上限，补的 token 不计入）"}
+    return gen
 
 
 def _identity(cfg: Mapping[str, Any]) -> dict[str, Any]:
@@ -268,6 +283,27 @@ def _three_column_lines(metrics: Mapping[str, Any]) -> list[str]:
     return lines
 
 
+def _thinking_end_lines(te: Mapping[str, Any] | None) -> list[str]:
+    """思考子集：按思考段的结束方式分开的条数与读数（scoring.thinking_end_breakdown）。其余子集为空。"""
+    if not te:
+        return []
+    names = {"natural": "自然收尾", "forced": "强制收尾", "not_opened": "没写思考段（直接作答）", "unclosed": "思考段里就停了"}
+    lines = ["## 思考段的结束方式（预算强制收尾，D59-1）", "",
+             "| 结束方式 | 条数 | 解析失败率 | 截断 | 思考 token 中位数 | 严格读数 |", "|---|---|---|---|---|---|"]
+    for k, n in te["counts"].items():
+        e = te["by_kind"].get(k)
+        if e is None:
+            lines.append(f"| {names.get(k, k)} | 0 | — | — | — | — |")
+            continue
+        if "strict" in e:
+            val = "；".join(f"{x['name']} {_fmt(x['value'])}" for x in e["strict"]) or "—"
+        else:
+            val = f"F1@0.5（合并）{_fmt((e.get('F1@0.5_pooled') or {}).get('value'))}" if "F1@0.5_pooled" in e else "—"
+        med = (e["thinking_tokens"] or {}).get("p50")
+        lines.append(f"| {names.get(k, k)} | {n} | {_fmt(e['parse_failure_rate'])} | {e['n_truncated']} | {_fmt(med)} | {val} |")
+    return lines + [""]
+
+
 def readme_text(spec: RunSpec, cfg: Mapping[str, Any], metrics: Mapping[str, Any]) -> str:
     gen, bp = cfg["generation"], cfg["batch_protocol"]
     lines = [f"# E1 · {spec.model_key} · {spec.task} · {spec.subset}", "",
@@ -282,12 +318,17 @@ def readme_text(spec: RunSpec, cfg: Mapping[str, Any], metrics: Mapping[str, Any
     if metrics.get("count_questions"):
         cq = metrics["count_questions"]
         lines.append(f"- 计数问句：{cq['source']}" + (f"。{cq['note']}" if cq["note"] else ""))
+    if gen.get("think_budget"):
+        tb = gen["think_budget"]
+        lines.append(f"- 预算强制收尾（D59-1）：思考 {tb['thinking_budget']} token，作答 {tb['answer_budget']} token"
+                     f"（{tb['method']}，规则见 src/adapters/budget.py）")
     lines += ["", "## 标题指标（严格读数）", ""]
     if not metrics["headline"]:
         lines.append("（没有 GT 或空集合，不算指标）")
     for h in metrics["headline"]:
         lines.append(f"- {h['name']}（{h['scope']}）：{_fmt(h['value'])}，95% CI {_ci_s(h.get('ci'))}，n = {h['n']}")
     lines += [""] + _three_column_lines(metrics)
+    lines += _thinking_end_lines(metrics.get("thinking_end"))
     p = metrics["parse"]
     lines += ["## 解析与截断", "",
               f"- 解析失败率：{_fmt(p['failure_rate'])}（{p['n_failed']}/{p['n']}）；分原因：{p['failures']}",
@@ -321,7 +362,9 @@ def finalize(leaf: Path, spec: RunSpec, sel: Selection, cfg: Mapping[str, Any], 
     comp = []
     for r in recs:
         wall = float(timing.get(r["id"], {}).get("wall_time_s", 0.0))
-        comp.append(Compute.call(generated_tokens=r["n_generated_tokens"], prompt_tokens=r["n_prompt_tokens"],
+        # 预算强制收尾补的 token 是送进模型的输入（与提示 token 同类），记进 prompt_tokens；其余子集的记录没有这个键（加 0）
+        comp.append(Compute.call(generated_tokens=r["n_generated_tokens"],
+                                 prompt_tokens=r["n_prompt_tokens"] + int(r.get("n_inserted_tokens", 0)),
                                  visual_tokens=r["n_visual_tokens"], image_pixels=r["n_image_pixels"], call_time_s=wall,
                                  new_round=True).as_sample(wall_time_s=wall))
     write_compute_json(leaf / COMPUTE, merge(comp))
@@ -339,13 +382,39 @@ def _common_record(s: Sample, rendered: Any, image_size: tuple[int, int], res: A
             "truncated": res.stopped is False and readout != "letter",
             "thinking_unclosed": res.thinking_unclosed,
             "n_generated_tokens": res.n_generated_tokens, "n_prompt_tokens": res.n_prompt_tokens,
-            "n_visual_tokens": res.n_visual_tokens, "n_image_pixels": res.n_image_pixels}
+            "n_visual_tokens": res.n_visual_tokens, "n_image_pixels": res.n_image_pixels,
+            **budget_fields(res)}
+
+
+def budget_fields(res: Any) -> dict[str, Any]:
+    """预算强制收尾的记录字段（D59-1；只有 generate_batch_budgeted 的结果有，其余子集返回空字典，记录与原来逐字节相同）。
+    inserted_text 是补的那段文字（raw_text[inserted_span] 恰是它）。"""
+    if getattr(res, "thinking_end", None) is None:
+        return {}
+    span = res.inserted_span
+    return {"thinking_end": res.thinking_end, "forced_close": res.forced_close,
+            "n_thinking_tokens": res.n_thinking_tokens, "n_answer_tokens": res.n_answer_tokens,
+            "n_inserted_tokens": res.n_inserted_tokens, "inserted_token_ids": list(res.inserted_token_ids),
+            "inserted_at": res.inserted_at, "inserted_span": None if span is None else list(span),
+            "inserted_text": None if span is None else res.raw_text[span[0]:span[1]], "answer_text": res.answer_text}
 
 
 def generate_rows(adapter: Any, inputs: Sequence[Any], *, batch_size: int, enable_thinking: bool, max_new_tokens: int,
-                  decoding: Mapping[str, Any], allowed_token_ids: Sequence[int] | None = None) -> list[Any]:
+                  decoding: Mapping[str, Any], allowed_token_ids: Sequence[int] | None = None,
+                  think_budget: tuple[int, int] | None = None) -> list[Any]:
     """batch_size = 1 走 generate（逐条 greedy 的路径）；否则 generate_batch（即使这一批只有一行）。
-    allowed_token_ids 只在受限字母读数时给（整批相同）。"""
+    allowed_token_ids 只在受限字母读数时给（整批相同）。
+    think_budget = (thinking_budget, answer_budget) 时（思考子集，D59-1）一律走 generate_batch_budgeted（batch_size = 1 时是一行的批）：
+    它固定 greedy、开思考，所以 decoding 必须是 greedy、enable_thinking 必须为 True，max_new_tokens 必须是两个预算之和。"""
+    if think_budget is not None:
+        tb, ab = think_budget
+        if not enable_thinking or decoding.get("do_sample") is not False or max_new_tokens != tb + ab:
+            raise ValueError(f"预算强制收尾要求开思考、greedy、max_new_tokens = {tb} + {ab}；收到 enable_thinking={enable_thinking}、"
+                             f"do_sample={decoding.get('do_sample')!r}、max_new_tokens={max_new_tokens}")
+        if batch_size == 1 and len(inputs) != 1:
+            raise ValueError("batch_size = 1 时每批只能有一条")
+        return adapter.generate_batch_budgeted(list(inputs), thinking_budget=tb, answer_budget=ab,
+                                               allowed_token_ids=None if allowed_token_ids is None else list(allowed_token_ids))
     kw = dict(decoding)
     if allowed_token_ids is not None:
         kw["allowed_token_ids"] = list(allowed_token_ids)
@@ -420,6 +489,7 @@ def run_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: PromptConfig,
     enable_thinking = prompts.enable_thinking(spec.subset)
     max_new = prompts.max_new_tokens(spec.task, spec.family, spec.subset)
     decoding = prompts.decoding()
+    think_budget = prompts.think_budget() if prompts.uses_think_budget(spec.subset) else None
     parser = ro["parse"]
     t_all = time.perf_counter()
     if remaining and warmup:
@@ -433,7 +503,8 @@ def run_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: PromptConfig,
         build_s = time.perf_counter() - t0
         allowed = table.allowed_ids(rendered[0].extras["letters"]) if table is not None else None
         results = generate_rows(adapter, inputs, batch_size=spec.batch_size, enable_thinking=enable_thinking,
-                                max_new_tokens=max_new, decoding=decoding, allowed_token_ids=allowed)
+                                max_new_tokens=max_new, decoding=decoding, allowed_token_ids=allowed,
+                                think_budget=think_budget)
         if len(results) != len(batch):
             raise RuntimeError("generate_batch 返回的行数与输入不同")
         lines, tlines = [], []
@@ -471,8 +542,10 @@ __all__ = [
     "batch_keys",
     "batch_plan",
     "batch_protocol_record",
+    "budget_fields",
     "finalize",
     "generate_rows",
+    "generation_record",
     "ids_digest",
     "leaf_dir",
     "load_images",
