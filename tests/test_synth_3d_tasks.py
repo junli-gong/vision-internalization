@@ -396,8 +396,14 @@ def test_holdout_family_for_3d_tasks():
         generate("occlusion", "train", 0, holdout_family="torus")
 
 
+# DEV-0028：rotation3d 提速后的下限提到 30 条/秒（开发机空闲时实测约 60，提速前约 30，在较慢的 CPU 上跌破过 20）；
+# viewpoint 任务版本 5 多了真值仿射的矩匹配搜索，同时光栅化提速，同一负载下与版本 4 持平（空闲时约 32–34），下限仍是 20。
+# 这是 CPU 时间，但机器上并行跑别的测试时仍会降到约 0.6 倍：偶发失败时单独重跑确认。
+SPEED_FLOOR = {"rotation3d": 30, "viewpoint": 20}
+
+
 @pytest.mark.parametrize("task", ["rotation3d", "viewpoint"])
-def test_speed_at_least_20_per_second_single_core(task):
+def test_speed_floor_single_core(task):
     generate(task, "train", 0)
     t = time.process_time()
     n = 40
@@ -405,7 +411,7 @@ def test_speed_at_least_20_per_second_single_core(task):
         generate(task, "train", 3000 + i)
     rate = n / (time.process_time() - t)
     print(f"{task}: {rate:.1f} samples/s (CPU time, single process)")
-    assert rate >= 20
+    assert rate >= SPEED_FLOOR[task]
 
 
 # ---------------------------------------------------------------------------

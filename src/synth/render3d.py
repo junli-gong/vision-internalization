@@ -22,6 +22,8 @@
   ⟺ p + δ 严格在三角形内，δ = (−ε, −ε²)，ε → 0+（先向左、再向上的无穷小扰动）。对边 a→b（三角形内部在 E > 0 一侧），
   E(p) = (b_x − a_x)(p_y − a_y) − (b_y − a_y)(p_x − a_x)；E(p) = 0 时，这条边"拥有"p ⟺ b_y > a_y，或 b_y = a_y 且 b_x < a_x。
   于是共用一条边的两个三角形把边上的像素中心分给恰好一方，不重不漏；轴对齐矩形的结果与 raster.py、box_to_mask 相同。
+  实现（DEV-0028 提速）：每个三角形的每一行，用整数 floor 除法直接解出满足三条边不等式的列区间，只枚举被覆盖的像素；
+  与在包围盒里逐个像素判定的旧做法选出同一个集合、同一个顺序（tests/test_synth_convex_relief.py 对照旧版本）。
 - 背面剔除：投影后的有向面积 A2 = (u1−u0)(v2−v0) − (v1−v0)(u2−u0)（整数，精确）< 0 为正面（法向朝相机）。
   闭合网格的任一被覆盖点上正面数 = 背面数，所以量化后剔除不会留洞。
 - 深度：1/Z 在屏幕上是仿射的：1/Z(p) = (E₁₂/Z₀ + E₂₀/Z₁ + E₀₁/Z₂) / A2，E 是精确整数；按固定顺序的浮点运算求值，
@@ -399,29 +401,38 @@ def rasterize_triangles(
     j_hi = np.minimum((xmax - HALF) // UNITS, w - 1)
     i_lo = np.maximum((ymin - HALF) // UNITS + 1, 0)
     i_hi = np.minimum((ymax - HALF) // UNITS, h - 1)
-    nj = np.maximum(j_hi - j_lo + 1, 0)
     ni = np.maximum(i_hi - i_lo + 1, 0)
-    cnt = ni * nj
+    n_rows = int(ni.sum())
+    if n_rows == 0 or not np.any(j_hi >= j_lo):
+        return empty, empty, empty, np.zeros((2, 0), dtype=np.int64)
+    # 逐行求被覆盖的列区间（DEV-0028 提速；与在包围盒里逐个像素判 E ≥ bias 选出的集合、顺序都相同）：
+    # 行 r 上 E(col) = A·(col·U + H) + B·py + C 是 col 的整数线性函数，E ≥ bias ⟺
+    # A > 0：col ≥ ⌈(bias − A·H − B·py − C) / (A·U)⌉；A < 0：col ≤ ⌊同一个比⌋；A = 0：右边 ≤ 0 时整行，否则整行都不在。
+    # 全用整数的 floor 除法，没有舍入。三条边取交，再与包围盒的列范围取交。
+    tr = np.repeat(np.arange(n_tri, dtype=np.int64), ni)
+    r_start = np.cumsum(ni) - ni
+    rr = i_lo[tr] + (np.arange(n_rows, dtype=np.int64) - r_start[tr])
+    py_r = rr * UNITS + HALF
+    lo, hi = j_lo[tr].copy(), j_hi[tr].copy()
+    for a_, b_, c_, bias in coef:
+        at = a_[tr]
+        rhs = (bias[tr] - b_[tr] * py_r - c_[tr]) - at * HALF
+        au = at * UNITS
+        pos, neg = au > 0, au < 0
+        lo = np.where(pos, np.maximum(lo, -((-rhs) // np.where(pos, au, 1))), lo)
+        hi = np.where(neg, np.minimum(hi, rhs // np.where(neg, au, -1)), hi)
+        hi = np.where((au == 0) & (rhs > 0), lo - 1, hi)
+    cnt = np.maximum(hi - lo + 1, 0)
     total = int(cnt.sum())
     if total == 0:
         return empty, empty, empty, np.zeros((2, 0), dtype=np.int64)
-    t_idx = np.repeat(np.arange(n_tri, dtype=np.int64), cnt)
-    start = np.cumsum(cnt) - cnt
-    k = np.arange(total, dtype=np.int64) - start[t_idx]
-    njt = nj[t_idx]
-    row = i_lo[t_idx] + k // njt
-    col = j_lo[t_idx] + k % njt
-    px = col * UNITS + HALF
-    py = row * UNITS + HALF
-    es = []
-    inside = np.ones(total, dtype=bool)
-    for a_, b_, c_, bias in coef:
-        e = a_[t_idx] * px + b_[t_idx] * py + c_[t_idx]
-        inside &= e >= bias[t_idx]
-        es.append(e)
-    sel = np.nonzero(inside)[0]
-    t_sel, r_sel, c_sel = t_idx[sel], row[sel], col[sel]
-    e0, e1, e2 = (e[sel].astype(np.float64) for e in es)  # 被覆盖时 0 ≤ E ≤ A2 < 2^53：转换精确
+    row_of = np.repeat(np.arange(n_rows, dtype=np.int64), cnt)
+    c_start = np.cumsum(cnt) - cnt
+    t_sel, r_sel = tr[row_of], rr[row_of]
+    c_sel = lo[row_of] + (np.arange(total, dtype=np.int64) - c_start[row_of])
+    px, py = c_sel * UNITS + HALF, r_sel * UNITS + HALF
+    es = [a_[t_sel] * px + b_[t_sel] * py + c_[t_sel] for a_, b_, c_, _bias in coef]
+    e0, e1, e2 = (e.astype(np.float64) for e in es)  # 被覆盖时 0 ≤ E ≤ A2 < 2^53：转换精确
     iz = inv_z[tris[t_sel]]
     num = (e0 * iz[:, 0] + e1 * iz[:, 1]) + e2 * iz[:, 2]
     z = a2[t_sel].astype(np.float64) / num
@@ -474,21 +485,24 @@ def render_posed(
     for p in verts:
         if not vertices_ok(p, h, w):
             raise ValueError("有顶点的深度或投影坐标超出量程；先用 vertices_ok 拒绝这个场景")
-    id_map = np.zeros((h, w), dtype=np.uint8)
-    depth = np.zeros((h, w), dtype=np.int64)
+    bg = np.asarray(scene.background, dtype=np.uint8)
     rgb = None
-    if want_rgb:
-        rgb = np.empty((h, w, 3), dtype=np.uint8)
-        rgb[:] = np.asarray(scene.background, dtype=np.uint8)
-    if scene.floor is not None:
+    if scene.floor is None:
+        id_map = np.zeros((h, w), dtype=np.uint8)
+        depth = np.zeros((h, w), dtype=np.int64)
+        if want_rgb:
+            rgb = np.empty((h, w, 3), dtype=np.uint8)
+            rgb[:] = bg
+    else:
         fp = floor_vertices(scene.floor, camera)
         if not vertices_ok(fp, h, w):
             raise ValueError("地板顶点的深度或投影坐标超出量程；先用 floor_vertices + vertices_ok 拒绝这个场景")
         fmask, frow, fcolor = floor_layer(scene.floor, camera, h, w)
-        id_map[fmask] = FLOOR_ID
-        depth[fmask] = np.broadcast_to(frow[:, None], (h, w))[fmask]
-        if rgb is not None:
-            rgb[fmask] = fcolor
+        # 地板层用 np.where 一次写成（DEV-0028 提速；与先填背景、再按 mask 赋值逐位相同，b 的钉住摘要核对）
+        id_map = np.where(fmask, np.uint8(FLOOR_ID), np.uint8(0))
+        depth = np.where(fmask, frow[:, None], np.int64(0))
+        if want_rgb:  # 两色调色板按 mask 取色（0 = 背景、1 = 地板）
+            rgb = np.take(np.stack([bg, np.asarray(fcolor, dtype=np.uint8)]), fmask.view(np.uint8), axis=0)
 
     # 全部物体的正面三角形，按 (obj_id, 面序号) 编优先级
     us, vs, izs, tris, owner, colors = [], [], [], [], [], []
@@ -552,10 +566,10 @@ def render_scene(
 # ---------------------------------------------------------------------------
 
 
-def depth_grid(depth_units: np.ndarray, mask: np.ndarray, n: int) -> np.ndarray:
+def depth_grid(depth_units: np.ndarray, mask: np.ndarray, n: int, grid: np.ndarray | None = None) -> np.ndarray:
     """(n, n) float32 米：mask 的网格（mask_to_grid）为 1 的格子里，mask 像素深度的平均（整数单位精确求和，
-    四舍五入取偶到整数单位）；其余格子为 0。"""
-    _g, units = cell_depth_units(depth_units, mask, n)  # 整数规则只在 relief.cell_depth_units 定义一处
+    四舍五入取偶到整数单位）；其余格子为 0。grid：可选的 mask_to_grid(mask, n)（省掉重算）。"""
+    _g, units = cell_depth_units(depth_units, mask, n, grid)  # 整数规则只在 relief.cell_depth_units 定义一处
     return (units.astype(np.float64) * DEPTH_QUANTUM_M).astype(np.float32)
 
 

@@ -126,7 +126,8 @@ def env(tmp_path_factory, run_e5):
     """导出开发集的输入（a–e，各 6 条）+ 假的 LISA 源码目录与两个 HF 快照目录。"""
     root = tmp_path_factory.mktemp("lisa_env")
     inputs = root / "inputs"
-    assert run_e5.main(["--export-inputs", str(inputs), "--task", "all", *SUBSET_ARGS]) == 0
+    # --tiny：d 的数据只在规范平台上导出（D40-7，DEV-0028），开发机上的彩排要显式说明
+    assert run_e5.main(["--export-inputs", str(inputs), "--task", "all", *SUBSET_ARGS, "--tiny"]) == 0
     lisa = root / "LISA"
     lisa.mkdir()
     snaps = {}

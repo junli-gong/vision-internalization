@@ -1,4 +1,5 @@
-"""a 出平面三维旋转的"目标相对深度（起伏）网格"与起伏误差（DEV-0018，D28-13）。无学习组件。
+"""a 出平面三维旋转、b 视角变化的"目标相对深度（起伏）网格"、起伏误差与凸起先验基线（DEV-0018，D28-13；DEV-0028，D59-4）。
+无学习组件。
 
 定义（唯一定义在这里；编码与解析在 src/grid/codec.py：RELIEF_NUM_LEVELS、RELIEF_SYMBOLS、parse_relief_grid_text）
 - 格子深度：mask 的 N×N 网格（mask_to_grid）为 1 的格子里，mask 像素深度的平均（DEPTH_QUANTUM_M 的整数单位精确求和，
@@ -14,8 +15,23 @@
   误差恰为 1（只差在常数档取整）。mask 的对错由 mask IoU 另计，这里不罚漏掉或多出的格子。
   没有定义时返回 None（空集合报 null）：目标没有前景、目标起伏的标准差为 0（全部前景格同一档）、或两者没有公共前景格。
 
-确定性（D24：a 在任何平台上逐位相同）：深度、平均、档全是整数运算；误差 = sqrt(整数之比)，在 decimal（dmath.CTX）里开方，
-再量化到 RELIEF_ERROR_QUANTUM（2 的幂）。不用 np.mean、平台超越函数或浮点求和。
+- 凸起先验（convex_prior_codes，D59-4；项目负责人定义的"不需要想象"的基线：离 mask 边界越远的格子越近，一个幅度参数）：
+  对一张 0/1 网格 g（N×N），前景格 c 的
+  * 边界距离 d(c) = c 的格心到最近的背景格格心的欧氏距离（格为单位；网格之外的格子都算背景，所以贴着网格边的前景格
+    d = 1）。d ≥ 1，贴着背景的前景格 d = 1。d² 是精确整数（boundary_distance_sq）。
+  * 归一化 f(c) = (d(c) − 1) / (d_max − 1) ∈ [0, 1]（d_max = 前景格里 d 的最大值；d_max = 1 时 f ≡ 0），单调递增：
+    贴边的格 f = 0，最里面的格 f = 1。d 取定点：F = ⌊√(d²) · 2^16⌋ − 2^16（整数开方，精确），f = F / F_max。
+  * 档 = FLAT_LEVEL − round(A · f(c))（任务书与项目负责人的字面定义"平均档减去 A × f(d)"；平均档 = 起伏 0 所在的档
+    FLAT_LEVEL，即"平面" copy_flat 的档）；round 为四舍五入取偶，结果截到 [0, L − 1]。贴边的格子取平面档，越往里越近，
+    最里面的格子比平面近 A 档。A = 0 时与 copy_flat 逐位相同。不减去 f 的平均：照字面（DEV-0028 在 val 上也看过减去平均的
+    版本，误差更大，见完成总结）。全程整数：round(A · F / F_max)。
+  * 唯一的参数 A（档数，整数）按任务在 val 划分上网格搜索选定后冻结在 CONVEX_PRIOR_AMPLITUDE（选法见 src/e5/convex_select.py）。
+  * 基线 copy_convex：mask 与网格取原样复制（copy），起伏 = 对 copy 的网格做凸起先验。它是 copy 网格与冻结常数 A 的纯函数，
+    由 derived_baselines 在评分时现算，不存进样本（于是不进样本摘要：a 的摘要与任务版本都不变）。
+
+确定性（D24：a、b 在任何平台上逐位相同）：深度、平均、档全是整数运算；误差 = sqrt(整数之比)，在 decimal（dmath.CTX）里开方，
+再量化到 RELIEF_ERROR_QUANTUM（2 的幂）。不用 np.mean、平台超越函数或浮点求和。凸起先验只用整数（开方用 np.sqrt 取初值，
+再用整数平方核对、修正到精确的整数平方根）。
 """
 
 from __future__ import annotations
@@ -45,20 +61,40 @@ def radius_depth_units(radius_m: float) -> int:
     return int(r)
 
 
-def cell_depth_units(depth_units: np.ndarray, mask: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
+def cell_depth_units(depth_units: np.ndarray, mask: np.ndarray, n: int,
+                     grid: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     """(网格 (n, n) uint8 = mask_to_grid(mask, n)，格子深度 (n, n) int64)：网格为 1 的格子里 mask 像素深度的平均
-    （整数单位精确求和，四舍五入取偶到整数单位）；其余格子为 0。"""
+    （整数单位精确求和，四舍五入取偶到整数单位）；其余格子为 0。
+
+    grid：调用方已算好的 mask_to_grid(mask, n)（省掉重算；DEV-0028 提速）。求和只在覆盖 mask 包围盒的那几行、几列格子上做：
+    其余格子没有前景像素，和与计数都是 0，结果逐位相同。
+    """
     m = np.asarray(mask, dtype=bool)
-    g = mask_to_grid(m, n)
+    g = mask_to_grid(m, n) if grid is None else np.asarray(grid, dtype=np.uint8)
     h, w = m.shape
+    if g.shape != (n, n):
+        raise ValueError(f"grid 的形状 {g.shape} 不是 ({n}, {n})")
+    out = np.zeros((n, n), dtype=np.int64)
+    rows = np.nonzero(m.any(axis=1))[0]
+    if rows.size == 0:
+        return g, out
+    cols = np.nonzero(m.any(axis=0))[0]
     re_, ce_ = cell_edges(h, n), cell_edges(w, n)
-    du = np.where(m, np.asarray(depth_units, dtype=np.int64), 0)
-    s = np.add.reduceat(np.add.reduceat(du, re_[:-1], axis=0), ce_[:-1], axis=1)
-    c = np.add.reduceat(np.add.reduceat(m.astype(np.int64), re_[:-1], axis=0), ce_[:-1], axis=1)
+    # 包围盒所在的格子范围 [k0, k1]：edges[k] ≤ 首行 < edges[k + 1]
+    k0, k1 = int(np.searchsorted(re_, rows[0], "right")) - 1, int(np.searchsorted(re_, rows[-1], "right")) - 1
+    l0, l1 = int(np.searchsorted(ce_, cols[0], "right")) - 1, int(np.searchsorted(ce_, cols[-1], "right")) - 1
+    ri, ci = re_[k0 : k1 + 1] - re_[k0], ce_[l0 : l1 + 1] - ce_[l0]
+    win = (slice(int(re_[k0]), int(re_[k1 + 1])), slice(int(ce_[l0]), int(ce_[l1 + 1])))
+    mw = m[win]
+    du = np.where(mw, np.asarray(depth_units)[win].astype(np.int64), 0)
+    s = np.add.reduceat(np.add.reduceat(du, ri, axis=0), ci, axis=1)
+    c = np.add.reduceat(np.add.reduceat(mw.astype(np.int64), ri, axis=0), ci, axis=1)
     cs = np.maximum(c, 1)
     q, r = np.divmod(s, cs)
     up = (2 * r > cs) | ((2 * r == cs) & (q % 2 == 1))
-    return g, np.where(g == 1, q + up.astype(np.int64), 0)
+    gw = g[k0 : k1 + 1, l0 : l1 + 1]
+    out[k0 : k1 + 1, l0 : l1 + 1] = np.where(gw == 1, q + up.astype(np.int64), 0)
+    return g, out
 
 
 @dataclass(frozen=True)
@@ -78,9 +114,10 @@ class ReliefGrid:
         return quantize_dec(v, DEPTH_QUANTUM_M * 2.0**-20)
 
 
-def relief_grid(depth_units: np.ndarray, mask: np.ndarray, n: int, radius_m: float) -> ReliefGrid:
-    """mask 与深度图（DEPTH_QUANTUM_M 的整数单位）→ 起伏网格。定义见模块说明。"""
-    g, u = cell_depth_units(depth_units, mask, n)
+def relief_grid(depth_units: np.ndarray, mask: np.ndarray, n: int, radius_m: float,
+                grid: np.ndarray | None = None) -> ReliefGrid:
+    """mask 与深度图（DEPTH_QUANTUM_M 的整数单位）→ 起伏网格。定义见模块说明。grid：可选的 mask_to_grid(mask, n)。"""
+    g, u = cell_depth_units(depth_units, mask, n, grid)
     fg = g == 1
     k = int(np.count_nonzero(fg))
     big_r = radius_depth_units(radius_m)
@@ -148,8 +185,11 @@ def relief_error(pred_codes: np.ndarray, target_codes: np.ndarray) -> float | No
 
 
 # ---------------------------------------------------------------------------
-# a 的样本里的名字（rotation3d 写，E5 评分读；只在这里定义）
+# a、b 的样本里的名字（rotation3d、viewpoint 写，E5 评分读；只在这里定义）
 # ---------------------------------------------------------------------------
+
+# 样本带起伏（extras[RELIEF_TARGET_KEY] 与各基线的起伏代码）的任务：a 自任务版本 4（DEV-0018），b 自任务版本 5（DEV-0028）
+RELIEF_TASKS = ("rotation3d", "viewpoint")
 
 RELIEF_TARGET_KEY = "relief_grid"  # Sample.extras 里目标的起伏代码 (N, N) uint8
 RELIEF_BASELINE_PREFIX = "baseline_relief_"  # Sample.extras 里各基线的起伏代码：RELIEF_BASELINE_PREFIX + 基线名
@@ -166,3 +206,139 @@ def flat_codes(grid: np.ndarray) -> np.ndarray:
     """0/1 网格 → 起伏代码：前景格一律取档 FLAT_LEVEL（代码 FLAT_LEVEL + 1），背景 0。"""
     g = np.asarray(grid)
     return np.where(g > 0, FLAT_LEVEL + 1, 0).astype(np.uint8)
+
+
+def relief_meta(definition: str, radius_m: float, target: ReliefGrid, input_: ReliefGrid,
+                base_codes: dict[str, np.ndarray]) -> dict:
+    """样本元数据 meta["relief"]：定义出处、档数、半径、档宽、平面档、目标与输入视角的格数 / 平均深度 / 标准差 / 截断格数，
+    以及各基线的起伏误差（relief_score）。a、b 共用（a 的取值与 DEV-0018 逐位相同）。"""
+    t_score = relief_score(target.codes, target.codes)
+    meta = {
+        "definition": definition,
+        "num_levels": RELIEF_NUM_LEVELS,
+        "radius_m": radius_m,
+        "level_width_m": 2.0 * radius_m / RELIEF_NUM_LEVELS,
+        "flat_level": FLAT_LEVEL,
+        "target": {"n_cells": target.n_cells, "mean_depth_m": target.mean_depth_m(),
+                   "std_levels": t_score.target_std_levels, "n_clipped": target.n_clipped},
+        "input": {"n_cells": input_.n_cells, "mean_depth_m": input_.mean_depth_m(), "n_clipped": input_.n_clipped},
+        "baseline_error": {},
+    }
+    for name in sorted(base_codes):
+        sc = relief_score(base_codes[name], target.codes)
+        meta["baseline_error"][name] = {"error": sc.error, "n_eval_cells": sc.n_eval_cells, "reason": sc.reason}
+    return meta
+
+
+# ---------------------------------------------------------------------------
+# 凸起先验（D59-4；定义见模块说明）
+# ---------------------------------------------------------------------------
+
+CONVEX_BASELINE = "copy_convex"
+CONVEX_SOURCE_BASELINE = "copy"  # 凸起先验的 mask 取这个基线（原样复制）
+CONVEX_FIXED_POINT_BITS = 16  # d 的定点精度：F = ⌊d · 2^16⌋ − 2^16
+# 幅度 A（档数，整数），按任务在 val 划分上选定后冻结（DEV-0028；选法见 src/e5/convex_select.py）。只在这里定义；
+# E5 的运行配置（config.yaml）与 README 都记下它。改它不改变任何样本（不进摘要），但会改变 copy_convex 基线与门槛：
+# 改动要先有新的 D 条目。
+# 选定记录（val 划分、序号规则同 E5 评测集、每档 200 条，标题口径上 copy_convex 起伏误差的严格均值；
+# `python -m src.e5.convex_select select`；tests/test_synth_convex_relief.py 在同一个 val 集合上复算 a 的 A = 1、2、3）：
+#   a（30° 以上三档，600 条）：A = 0 1.0025 | 1 0.9548 | 2 0.9390 | 3 0.9642 | 4 1.0118 | 5 1.0865 | 6 1.1822 → 选 2
+#   b（环绕移动，419 条）：    A = 0 1.1458 | 1 1.1371 | 2 1.1388 | 3 1.1558 | 4 1.1818 | 5 1.2214 | 6 1.2763 → 选 1
+CONVEX_PRIOR_AMPLITUDE: dict[str, int] = {"rotation3d": 2, "viewpoint": 1}
+CONVEX_AMPLITUDE_SEARCH = tuple(range(0, 13))  # 网格搜索的取值（档）：0–12
+# 派生基线（不存进样本、评分时现算）的角色；与样本 meta["baseline_roles"] 同一口径
+DERIVED_BASELINE_ROLES = {CONVEX_BASELINE: "trivial"}
+
+
+def boundary_distance_sq(grid: np.ndarray) -> np.ndarray:
+    """(N, N) int64：前景格的格心到最近的背景格格心的欧氏距离的平方（网格之外的格子都算背景）；背景格为 0。精确整数。"""
+    g = np.asarray(grid) > 0
+    if g.ndim != 2:
+        raise ValueError(f"网格必须是二维，收到形状 {g.shape}")
+    n0, n1 = g.shape
+    out = np.zeros((n0, n1), dtype=np.int64)
+    fi, fj = np.nonzero(g)
+    if fi.size == 0:
+        return out
+    fi, fj = fi.astype(np.int64), fj.astype(np.int64)
+    # 网格之外最近的格子：沿行或列直走出去（斜着出去更远）
+    d2 = np.minimum(np.minimum(fi + 1, n0 - fi), np.minimum(fj + 1, n1 - fj)) ** 2
+    bi, bj = np.nonzero(~g)
+    if bi.size:
+        bi, bj = bi.astype(np.int64), bj.astype(np.int64)
+        inner = ((fi[:, None] - bi[None, :]) ** 2 + (fj[:, None] - bj[None, :]) ** 2).min(axis=1)
+        d2 = np.minimum(d2, inner)
+    out[fi, fj] = d2
+    return out
+
+
+def _isqrt(x: np.ndarray) -> np.ndarray:
+    """非负 int64 数组的整数平方根 ⌊√x⌋（精确）：np.sqrt 取初值（x < 2^52 时误差 < 1），再用整数平方核对、修正。"""
+    x = np.asarray(x, dtype=np.int64)
+    if x.size and (int(x.min()) < 0 or int(x.max()) >= 1 << 52):
+        raise ValueError("_isqrt 只接受 [0, 2^52) 的整数")
+    r = np.floor(np.sqrt(x.astype(np.float64))).astype(np.int64)
+    r = np.where(r * r > x, r - 1, r)
+    return np.where((r + 1) * (r + 1) <= x, r + 1, r)
+
+
+def _div_round_half_even(num: np.ndarray, den: int) -> np.ndarray:
+    """整数 num / den（den > 0）四舍五入取偶到整数（与 cell_depth_units 同一规则）。"""
+    q, r = np.divmod(np.asarray(num, dtype=np.int64), int(den))
+    up = (2 * r > den) | ((2 * r == den) & (q % 2 == 1))
+    return q + up.astype(np.int64)
+
+
+def convex_prior_codes(grid: np.ndarray, amplitude: int) -> np.ndarray:
+    """0/1 网格 → 凸起先验的起伏代码（uint8，0 背景，k + 1 = 档 k）。定义见模块说明；amplitude = A（非负整数档数）。"""
+    if isinstance(amplitude, bool) or int(amplitude) != amplitude or amplitude < 0:
+        raise ValueError(f"凸起先验的幅度必须是非负整数，收到 {amplitude!r}")
+    a = int(amplitude)
+    g = np.asarray(grid) > 0
+    codes = np.zeros(g.shape, dtype=np.uint8)
+    k = int(np.count_nonzero(g))
+    if k == 0:
+        return codes
+    d2 = boundary_distance_sq(g)[g]
+    one = 1 << CONVEX_FIXED_POINT_BITS
+    f = _isqrt(d2 << (2 * CONVEX_FIXED_POINT_BITS)) - one  # ⌊d · 2^16⌋ − 2^16 ≥ 0
+    f_max = int(f.max())
+    if f_max == 0 or a == 0:
+        lev = np.full(k, FLAT_LEVEL, dtype=np.int64)
+    else:
+        lev = FLAT_LEVEL - _div_round_half_even(a * f, f_max)
+    codes[g] = (np.clip(lev, 0, RELIEF_NUM_LEVELS - 1) + 1).astype(np.uint8)
+    return codes
+
+
+def convex_amplitude(task: str) -> int:
+    """该任务冻结的凸起先验幅度 A。"""
+    from src.synth.seeding import canonical_task
+
+    t = canonical_task(task)
+    if t not in CONVEX_PRIOR_AMPLITUDE:
+        raise KeyError(f"{t} 没有起伏，没有凸起先验")
+    return CONVEX_PRIOR_AMPLITUDE[t]
+
+
+def derived_baseline_names(task: str) -> tuple[str, ...]:
+    """该任务的派生基线名（不算起伏代码）。"""
+    from src.synth.seeding import canonical_task
+
+    return (CONVEX_BASELINE,) if canonical_task(task) in RELIEF_TASKS else ()
+
+
+def derived_baselines(sample, amplitude: int | None = None) -> dict:
+    """样本的派生基线（不存进样本、由已存的基线与冻结常数现算）：名字 → (Prediction, 起伏代码)。
+
+    带起伏的任务（RELIEF_TASKS）有 copy_convex：mask 与网格取 copy，起伏 = convex_prior_codes(copy 的网格, A)；
+    A 默认取该任务冻结的 CONVEX_PRIOR_AMPLITUDE（amplitude 只给选 A 的网格搜索用）。其他任务没有派生基线。
+    """
+    from src.synth.seeding import canonical_task
+
+    t = canonical_task(sample.task)
+    if t not in RELIEF_TASKS:
+        return {}
+    src = sample.baselines[CONVEX_SOURCE_BASELINE]
+    a = convex_amplitude(t) if amplitude is None else amplitude
+    return {CONVEX_BASELINE: (src, convex_prior_codes(src.grid, a))}

@@ -75,10 +75,18 @@ def test_prompt_config_loads_and_formats():
     c = P.load_prompt_config()
     assert len(c.sha256) == 64 and c.order == "image_first" and c.batch_size() == 64
     assert c.enable_thinking("zeroshot") is False and c.enable_thinking("cot") is True
-    assert c.max_new_tokens("cot") == 4096  # E1 的思考预算（configs/e1_prompts.json think_max_new_tokens.think）
-    assert c.kind_of("zeroshot", "a") == "relief_grid"
-    assert {c.kind_of("zeroshot", t) for t in E5_TASKS[1:]} == {"binary_grid"}
-    assert {c.kind_of("cot", t) for t in E5_TASKS} == {"polygon"}
+    # D59-5：思维链是预算强制收尾，思考 4096（E1 的思考预算）+ 作答 1024；零样本照旧 generate_batch
+    assert c.generation("zeroshot") == "plain" and c.max_new_tokens("zeroshot") == 2048
+    assert c.generation("cot") == "budgeted" and c.budgets("cot") == (4096, 1024)
+    with pytest.raises(KeyError):
+        c.max_new_tokens("cot")
+    with pytest.raises(KeyError):
+        c.budgets("zeroshot")
+    # a、b 用 33 符号的起伏网格（b 自 DEV-0028）；思维链的 a、b 也是（D59-4）
+    assert {c.kind_of("zeroshot", t) for t in ("a", "b")} == {"relief_grid"}
+    assert {c.kind_of("zeroshot", t) for t in ("c", "d", "e")} == {"binary_grid"}
+    assert {c.kind_of("cot", t) for t in ("a", "b")} == {"relief_grid"}
+    assert {c.kind_of("cot", t) for t in ("c", "d", "e")} == {"polygon"}
     assert c.format_of("zeroshot", "e") == "binary_canvas" and c.format_of("cot", "e") == "polygon_canvas"
 
 
@@ -89,7 +97,7 @@ def test_binary_template_is_the_e1_grid16_wording_scaled_to_32():
           "is mostly covered by the object, otherwise 0. Output only the grid.")
     tail = e1.split("binary grid. ", 1)[1].replace("16", "{n}").replace("the object", "the {target} as described above")
     c = P.load_prompt_config()
-    assert c.template("zeroshot", "b").endswith(tail)
+    assert c.template("zeroshot", "c").endswith(tail) and c.template("zeroshot", "d").endswith(tail)  # b 自 DEV-0028 用起伏网格
     assert c.template("zeroshot", "e").endswith(tail.replace("image", "canvas"))
 
 
@@ -103,17 +111,51 @@ def test_relief_template_matches_the_codec_and_relief_definition():
     assert "written 0 or V" in t and RELIEF_LEVEL_SYMBOLS[0] == "0" and RELIEF_LEVEL_SYMBOLS[-1] == "V"
 
 
+# 零样本 a 的模板（DEV-0018 定稿，DEV-0028 未改）：开头一句 + 符号表说明 + "Output only the grid."
+A_HEAD = ("{instruction} Answer with a {n}x{n} grid over the image that shows both where the {target} is after the rotation "
+          "and how far each part of it is from the camera. ")
+
+
+def _symbol_table() -> str:
+    t = P.load_prompt_config().template("zeroshot", "rotation3d")
+    assert t.startswith(A_HEAD) and t.endswith(" Output only the grid.")
+    return t[len(A_HEAD): -len(" Output only the grid.")]
+
+
+def test_all_relief_templates_share_the_zero_shot_symbol_table():
+    """D59-4、DEV-0028：b 的零样本、a 与 b 的思维链都输出同一种 33 符号网格，符号表说明逐字取自零样本 a 的模板。"""
+    c = P.load_prompt_config()
+    table = _symbol_table()
+    assert table.startswith("Split the image into {n} rows") and table.endswith("is written 0 or V.")
+    b0 = c.template("zeroshot", "viewpoint")
+    assert b0 == A_HEAD.replace("after the rotation", "in the new view").replace(
+        "from the camera.", "from the camera at its new position.") + table + " Output only the grid."
+    ca, cb = c.template("cot", "rotation3d"), c.template("cot", "viewpoint")
+    for t, where, cam in ((ca, "after the rotation", "the camera"), (cb, "in the new view", "the camera at its new position")):
+        assert t.startswith("{instruction} First reason step by step in words about where the {target} ")
+        assert f"Then answer with a {{n}}x{{n}} grid over the image that shows both where the {{target}} is {where} and how far " \
+               f"each part of it is from {cam}. " + table + " Give the final answer as exactly one such grid." in t
+        assert t.endswith(table + " Give the final answer as exactly one such grid.")
+    # c、d、e 的思维链仍是多边形，措辞不变
+    assert c.template("cot", "occlusion").startswith("{instruction} First reason step by step in words about where the {target} "
+                                                     "ends up. Then outline the {target} as described above with a polygon.")
+
+
 def test_render():
     c = P.load_prompt_config()
     s = generate("imagery", "val", 0)
     txt = c.render("zeroshot", "imagery", s.instruction + "  ", s.meta["target_description"])
     assert txt.startswith(s.instruction) and "32x32 binary grid over the canvas" in txt and txt == txt.strip()
     assert "{" not in txt
-    cot = c.render("cot", "rotation3d", "Rotate it.", "red cube")
-    assert "relative to the image size and range from 0 to 1000" in cot and "red cube" in cot
+    cot = c.render("cot", "occlusion", "Complete it.", "red square")
+    assert "relative to the image size and range from 0 to 1000" in cot and "red square" in cot
+    cot_a = c.render("cot", "rotation3d", "Rotate it.", "red cube")
+    assert "32x32 grid over the image" in cot_a and "red cube" in cot_a and "{" not in cot_a
 
 
-E5_PROMPTS_SHA256 = "d84b6efc141c1bc281e6ea3adb5226602395ae1337e133bf5d0d34f7ed47402b"  # DEV-0018 定稿；DEV-0019 搬家不变；D43 批大小 16 → 64（管理员常量级修改）
+# DEV-0018 定稿 d84b6efc…；DEV-0019 搬家不变；D43 批大小 16 → 64（管理员常量级修改）；
+# DEV-0028（D59-4、D59-5）：schema 2，b 与思维链的 a、b 用起伏网格，思维链预算强制收尾
+E5_PROMPTS_SHA256 = "7833f9d657dd28bd8283c39af857858e912540a14e1aba3ff44ea49f2c9a1ea3"
 
 
 def test_prompt_config_lives_in_configs_unchanged(tmp_path):
@@ -146,3 +188,16 @@ def test_validate_rejects_bad_configs():
     bad["decoding"]["do_sample"] = True
     with pytest.raises(P.PromptConfigError):
         P.validate(bad)
+    # schema 2（DEV-0028）：生成方式与预算
+    for mutate in (lambda d: d["systems"]["cot"].update(generation="free"),
+                   lambda d: d["systems"]["cot"].pop("answer_budget"),
+                   lambda d: d["systems"]["cot"].update(enable_thinking=False),
+                   lambda d: d["systems"]["cot"].update(max_new_tokens=4096),
+                   lambda d: d["systems"]["zeroshot"].update(thinking_budget=10),
+                   lambda d: d["systems"]["zeroshot"].pop("max_new_tokens"),
+                   lambda d: d["systems"]["zeroshot"]["format_of_task"].update(occlusion="relief_image"),  # 起伏只给 a、b
+                   lambda d: d.update(schema_version=1)):
+        bad = copy.deepcopy(raw)
+        mutate(bad)
+        with pytest.raises(P.PromptConfigError):
+            P.validate(bad)

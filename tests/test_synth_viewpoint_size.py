@@ -100,7 +100,7 @@ def _summary(v) -> str:
 
 def test_report_cells_and_baseline_iou_after_enlarging():
     n = 25
-    lines = ["", "b viewpoint（任务版本 4）：目标格数（32×32，新视角）与两种平凡基线的网格 IoU，val 划分每档 25 条"]
+    lines = ["", "b viewpoint（任务版本 5）：目标格数（32×32，新视角）与两种平凡基线的网格 IoU，val 划分每档 25 条"]
     allc = []
     for b in range(4):
         per = {"orbit": {"cells": [], "copy": [], "translate": []}, "shift": {"cells": [], "copy": [], "translate": []}}

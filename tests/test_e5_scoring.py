@@ -1,4 +1,5 @@
-"""DEV-0018：E5 的逐条解析与评分、三列汇总、两级门槛（src/e5/scoring.py）。"""
+"""DEV-0018：E5 的逐条解析与评分、三列汇总、两级门槛（src/e5/scoring.py）。
+DEV-0028：派生基线 copy_convex、D59-4 的门槛（三条基线、配对 CI）、预算强制收尾只解析作答段、外部预测对当前 mask 的 IoU。"""
 
 import math
 from dataclasses import dataclass
@@ -10,8 +11,16 @@ from src.e5 import scoring as SC
 from src.e5.protocol import eval_items
 from src.e5.runner import make_sample
 from src.grid.codec import grid_to_text, relief_grid_to_text
+from src.synth.api import CURRENT_MASK_BASELINE, current_mask
 from src.synth.raster import rasterize
-from src.synth.relief import RELIEF_TARGET_KEY
+from src.synth.relief import (
+    CONVEX_BASELINE,
+    CONVEX_PRIOR_AMPLITUDE,
+    RELIEF_TARGET_KEY,
+    RELIEF_TASKS,
+    convex_prior_codes,
+    relief_score,
+)
 
 
 @dataclass
@@ -66,12 +75,22 @@ def test_baseline_scores_match_generator_meta(task):
             r = next(x for x in recs[name] if x["index"] == s.index)
             assert r["score"]["iou_full"] == s.meta["baseline_iou"][name]["full"]
             assert r["score"]["iou_grid"] == s.meta["baseline_iou"][name]["grid"]
-            if task == "rotation3d":
+            if task in RELIEF_TASKS:
                 assert r["score"]["relief"]["error"] == s.meta["relief"]["baseline_error"][name]["error"]
             else:
                 assert r["score"]["relief"] is None
-    if task == "rotation3d":
+    if task in RELIEF_TASKS:
         assert roles["gt_affine_upper"] == "reference_upper_bound" and roles["copy_flat"] == "trivial"
+        assert roles[CONVEX_BASELINE] == "trivial" and set(recs) == set(SC.baseline_names(samples[0]))
+        for s in samples:  # 派生基线 copy_convex：mask 同 copy，起伏 = 冻结 A 的凸起先验
+            r = next(x for x in recs[CONVEX_BASELINE] if x["index"] == s.index)
+            c = next(x for x in recs["copy"] if x["index"] == s.index)
+            assert r["score"]["iou_grid"] == c["score"]["iou_grid"]
+            want = relief_score(convex_prior_codes(s.baselines["copy"].grid, CONVEX_PRIOR_AMPLITUDE[task]),
+                                s.extras[RELIEF_TARGET_KEY]).error
+            assert r["score"]["relief"]["error"] == want
+    else:
+        assert CONVEX_BASELINE not in recs
 
 
 def test_perfect_and_failed_predictions():
@@ -115,51 +134,130 @@ def test_three_columns():
     assert m["parse"]["n_failed"] == 1 and set(m["by_bin"]) == {"1"} and set(m["by_group"]["family"]) == {"box"}
 
 
-def _base_sets(n, copy_iou, flat_rel, ga_rel, copy_rel=1.5):
+def _noisy(n, center, spread, seed):
+    """n 个围绕 center 的值（固定种子），让配对 CI 有宽度。"""
+    return list(center + spread * np.random.default_rng(seed).uniform(-1, 1, n))
+
+
+def _base_sets(n, copy_iou, flat_rel, ga_rel, convex_rel, spread=0.05):
+    ci, fl, ga, cv = (_noisy(n, copy_iou, spread, 1), _noisy(n, flat_rel, spread, 2), _noisy(n, ga_rel, spread, 3),
+                      _noisy(n, convex_rel, spread, 4))
     return {
-        "copy": [_rec(i, copy_iou, relief=copy_rel) for i in range(n)],
-        "copy_flat": [_rec(i, copy_iou, relief=flat_rel) for i in range(n)],
-        "gt_affine_upper": [_rec(i, 0.95, relief=ga_rel) for i in range(n)],
+        "copy": [_rec(i, ci[i], relief=1.5) for i in range(n)],
+        "copy_flat": [_rec(i, ci[i], relief=fl[i]) for i in range(n)],
+        "copy_convex": [_rec(i, ci[i], relief=cv[i]) for i in range(n)],
+        "gt_affine_upper": [_rec(i, 0.95, relief=ga[i]) for i in range(n)],
     }
 
 
-ROLES = {"copy": "trivial", "copy_flat": "trivial", "gt_affine_upper": "reference_upper_bound"}
+ROLES = {"copy": "trivial", "copy_flat": "trivial", "copy_convex": "trivial", "gt_affine_upper": "reference_upper_bound"}
 
 
-def test_gate_two_levels_on_rotation():
-    sys_good = [_rec(i, 0.8, relief=0.9) for i in range(6)]
-    g = SC.gate("rotation3d", sys_good, _base_sets(6, 0.7, 1.0, 1.2), ROLES, n_resamples=50)
-    assert g["prerequisite"]["pass"] and g["prerequisite"]["strongest"] == "copy"  # 参照线不算；与 copy_flat 同分取 copy
-    assert g["judgment"]["status"] == "evaluated" and g["judgment"]["pass"] and g["judgment"]["pass_vs_flat"]
-    assert g["judgment"]["flat_beats_gt_affine"] is True and g["imagining"] is True
-    # 起伏低于真值仿射、但不低于平面：照字面通过，vs_flat 不通过
-    sys_flatish = [_rec(i, 0.8, relief=1.05) for i in range(6)]
-    g = SC.gate("rotation3d", sys_flatish, _base_sets(6, 0.7, 1.0, 1.2), ROLES, n_resamples=0)
-    assert g["judgment"]["pass"] and g["judgment"]["pass_vs_flat"] is False
-    # mask 不胜过原样复制：先决条件不通过
-    g = SC.gate("rotation3d", [_rec(i, 0.7, relief=0.5) for i in range(6)], _base_sets(6, 0.7, 1.0, 1.2), ROLES, n_resamples=0)
-    assert not g["prerequisite"]["pass"] and g["imagining"] is False
-    # 全部失败：起伏按 2.0 计，不会"低于"真值仿射
-    fails = [_rec(i, 0.0, valid=False, relief=None) for i in range(6)]
-    g = SC.gate("rotation3d", fails, _base_sets(6, 0.7, 1.0, 1.9), ROLES, n_resamples=0)
-    assert g["judgment"]["system"] == 2.0 and g["judgment"]["pass"] is False
-    # 只给 mask 的系统（思维链、外部）：判定条件不适用
-    g = SC.gate("rotation3d", [_rec(i, 0.8, relief=False) for i in range(6)], _base_sets(6, 0.7, 1.0, 1.2), ROLES, n_resamples=0)
-    assert g["judgment"]["status"] == "not_applicable" and g["imagining"] is True
+def _system(n, iou, rel, spread=0.05, seed=9):
+    io, rl = _noisy(n, iou, spread, seed), _noisy(n, rel, spread, seed + 1)
+    return [_rec(i, io[i], relief=rl[i]) for i in range(n)]
+
+
+def test_gate_d59_three_baselines_with_paired_ci():
+    assert SC.JUDGMENT_BASELINES == ("copy_flat", "gt_affine_upper", "copy_convex")
+    base = _base_sets(40, 0.7, 1.0, 1.2, 0.9)
+    g = SC.gate("rotation3d", _system(40, 0.8, 0.6), base, ROLES, n_resamples=200)
+    pre, jud = g["prerequisite"], g["judgment"]
+    assert pre["strongest"] == "copy" and pre["pass"] is True and pre["diff_ci"]["low"] > 0  # 同分取名字靠前的；参照线不算
+    assert {"system", "system_median", "value", "median", "diff", "diff_ci", "diff_median", "system_better_rate"} <= set(pre)
+    assert jud["status"] == "evaluated" and jud["n"] == 40 and set(jud["baselines"]) == set(SC.JUDGMENT_BASELINES)
+    for name, c in jud["baselines"].items():
+        assert c["beats"] is True and c["diff_ci"]["high"] < 0 and c["diff"] < 0 and c["system_better_rate"] == 1.0, name
+        assert c["median"] is not None and c["diff_median"] < 0
+    assert jud["pass"] is True and g["imagining"] is True
+    assert "pass_vs_flat" not in jud and "flat_beats_gt_affine" not in jud  # 照字面的旧判法已作废（D59-4）
+    # 胜过平面与真值仿射、但与凸起先验持平：判定条件不通过
+    g = SC.gate("rotation3d", _system(40, 0.8, 0.9), base, ROLES, n_resamples=200)
+    jb = g["judgment"]["baselines"]
+    assert jb["copy_flat"]["beats"] and jb["gt_affine_upper"]["beats"] and jb["copy_convex"]["beats"] is False
+    assert g["judgment"]["pass"] is False and g["imagining"] is False
+    # 点估计更低、但配对 CI 跨过 0：不算胜过（只看点估计会判过）
+    g = SC.gate("rotation3d", _system(8, 0.8, 0.85, spread=0.6), _base_sets(8, 0.7, 1.0, 1.2, 0.9, spread=0.6), ROLES,
+                n_resamples=500)
+    c = g["judgment"]["baselines"]["copy_convex"]
+    assert c["diff"] < 0 and c["diff_ci"]["high"] >= 0 and c["beats"] is False
+    # 先决条件：均值更高、但 CI 跨过 0
+    g = SC.gate("rotation3d", _system(8, 0.72, 0.5, spread=0.3), _base_sets(8, 0.7, 1.0, 1.2, 0.9, spread=0.3), ROLES,
+                n_resamples=500)
+    assert g["prerequisite"]["diff"] > 0 and g["prerequisite"]["pass"] is False and g["imagining"] is False
+    # 不做 bootstrap（n_resamples = 0）：判不了，记 null
+    g = SC.gate("rotation3d", _system(40, 0.8, 0.6), base, ROLES, n_resamples=0)
+    assert g["prerequisite"]["pass"] is None and g["judgment"]["pass"] is None and g["imagining"] is None
+    # 全部失败：起伏按 2.0 计
+    fails = [_rec(i, 0.0, valid=False, relief=None) for i in range(40)]
+    g = SC.gate("rotation3d", fails, base, ROLES, n_resamples=200)
+    assert g["judgment"]["system"] == 2.0 and g["judgment"]["pass"] is False and g["imagining"] is False
+    # 只给 mask 的系统（外部预测）：判定条件不适用，"想象"判不了（先决条件不过时为 false）
+    mask_only = [_rec(i, r["score"]["iou_grid"], relief=False) for i, r in enumerate(_system(40, 0.8, 0.6))]
+    g = SC.gate("rotation3d", mask_only, base, ROLES, n_resamples=200)
+    assert g["judgment"]["status"] == "not_applicable" and g["prerequisite"]["pass"] is True and g["imagining"] is None
+    g = SC.gate("rotation3d", [_rec(i, 0.1, relief=False) for i in range(40)], base, ROLES, n_resamples=200)
+    assert g["prerequisite"]["pass"] is False and g["imagining"] is False
+    # 三条基线缺一条：报错，不静默跳过
+    with pytest.raises(ValueError, match="copy_convex"):
+        SC.gate("rotation3d", _system(40, 0.8, 0.6), {k: v for k, v in base.items() if k != "copy_convex"},
+                {k: v for k, v in ROLES.items() if k != "copy_convex"}, n_resamples=50)
 
 
 def test_gate_other_tasks_and_alignment():
-    recs = [_rec(i, 0.6, relief=False) for i in range(4)]
-    base = {"copy": [_rec(i, 0.5, relief=False) for i in range(4)]}
-    gb = SC.gate("viewpoint", recs, base, {"copy": "trivial"}, n_resamples=0)
-    assert gb["judgment"]["status"] == "unavailable" and gb["imagining"] is None and gb["prerequisite"]["pass"]
-    gc = SC.gate("occlusion", recs, base, {"copy": "trivial"}, n_resamples=0)
-    assert gc["judgment"]["status"] == "not_applicable" and gc["imagining"] is True
+    base = _base_sets(30, 0.7, 1.0, 1.2, 0.9)
+    gb = SC.gate("viewpoint", _system(30, 0.8, 0.6), base, ROLES, n_resamples=200)  # b 的环绕：同一套判定条件
+    assert gb["judgment"]["status"] == "evaluated" and gb["imagining"] is True
+    recs = [_rec(i, v, relief=False) for i, v in enumerate(_noisy(30, 0.6, 0.05, 5))]
+    cbase = {"visible": [_rec(i, v, relief=False) for i, v in enumerate(_noisy(30, 0.5, 0.05, 6))]}
+    gc = SC.gate("occlusion", recs, cbase, {"visible": "trivial"}, n_resamples=200)
+    assert gc["judgment"]["status"] == "not_applicable" and gc["prerequisite"]["pass"] is True and gc["imagining"] is True
     with pytest.raises(ValueError):
-        SC.gate("occlusion", recs, {"copy": base["copy"][:2]}, {"copy": "trivial"}, n_resamples=0)
-    only_head = SC.gate("occlusion", recs + [_rec(9, 1.0, relief=False, headline=False)], base, {"copy": "trivial"},
+        SC.gate("occlusion", recs, {"visible": cbase["visible"][:2]}, {"visible": "trivial"}, n_resamples=0)
+    only_head = SC.gate("occlusion", recs + [_rec(99, 1.0, relief=False, headline=False)], cbase, {"visible": "trivial"},
                         n_resamples=0)
-    assert only_head["n"] == 4  # 只用标题口径的样本
+    assert only_head["n"] == 30  # 只用标题口径的样本
+
+
+def test_budget_view_parses_only_the_answer():
+    """预算强制收尾：只解析 answer_text；作答段写满（stopped=False）判截断；思考段里的草稿网格不看。"""
+    g = np.zeros((32, 32), np.uint8)
+    g[3:9, 5:11] = 7
+
+    @dataclass
+    class _B:
+        answer_text: str
+        stopped: bool
+        thinking_unclosed: bool = True  # 即使适配器这样填，预算强制收尾也视为已闭合
+        text: str = "draft:\n" + relief_grid_to_text(np.ones((32, 32), np.uint8))
+
+    p = SC.parse_answer("relief_grid", SC.budget_view(_B(relief_grid_to_text(g), True)), 512, 512)
+    assert p.valid and np.array_equal(p.relief, g)
+    assert SC.parse_answer("relief_grid", SC.budget_view(_B(relief_grid_to_text(g), False)), 512, 512).failure == "truncated"
+    assert SC.parse_answer("relief_grid", SC.budget_view(_B("  ", True)), 512, 512).failure == "empty"
+
+
+def test_current_mask_iou_for_external_predictions():
+    for task in ("rotation3d", "viewpoint", "occlusion", "imagery"):
+        s = make_sample(eval_items(task, "dev", 1)[0])
+        cur = current_mask(s)
+        if cur is None:
+            sc = SC.score(s, SC.from_mask(s.target_mask), relief_expected=False, current=True)
+            assert sc["iou_current_full"] is None and sc["iou_current_grid"] is None
+            continue
+        sc = SC.score(s, SC.from_mask(cur.mask), relief_expected=False, current=True)  # 只会分割当前位置的系统
+        assert sc["iou_current_full"] == 1.0 and sc["iou_current_grid"] == 1.0
+        assert sc["iou_full"] == s.meta["baseline_iou"][CURRENT_MASK_BASELINE[task]]["full"]
+        bad = SC.score(s, SC.failed("external_missing"), relief_expected=False, current=True)
+        assert bad["iou_current_full"] == 0.0 and bad["iou_current_grid"] == 0.0
+        assert "iou_current_full" not in SC.score(s, SC.from_mask(cur.mask), relief_expected=False)
+    recs = [{"id": f"x/{i}", "bin": 0, "groups": {}, "headline": True, "valid": True, "failure": None,
+             "score": {"iou_grid": 0.2, "iou_full": 0.2, "iou_current_grid": 0.9, "iou_current_full": 0.8, "relief": None}}
+            for i in range(3)]
+    b = SC.blocks(recs, 0)
+    assert b["mask_iou_current_grid"]["strict"] == pytest.approx(0.9) and b["mask_iou_current_full"]["n"] == 3
+    assert "mask_iou_current_grid" not in SC.blocks([{**r, "score": {**r["score"], "iou_current_grid": None,
+                                                                         "iou_current_full": None}} for r in recs], 0)
 
 
 def test_refusal_diagnostic():

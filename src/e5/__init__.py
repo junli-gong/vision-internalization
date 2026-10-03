@@ -5,7 +5,8 @@
 - protocol：任务、评测集 / 开发集的序号规则、系统、标题口径与分列维度（约定的唯一来源）；
 - prompts：提示配置 configs/e5_prompts.json 的读取、校验、sha256 与渲染；
 - scoring：逐条解析与评分（mask IoU 两种口径、a 的起伏误差）、三列汇总、两级门槛；
-- external：外部预测目录的格式、读入与输入导出（与训练数据隔离，硬约束 1）；
+- external：外部预测目录的格式、读入与输入导出（与训练数据隔离，硬约束 1）；外部预测允许清单的唯一来源；
+- convex_select：凸起先验基线的幅度 A 在 val 上的选定，与用冻结的 A 复算项目负责人的表（D59-4，DEV-0028）；
 - runner：系统 × 模型 × 任务的运行、断点续传、metrics/compute/config/README。
 入口：scripts/run_e5.py。
 """

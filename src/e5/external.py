@@ -3,6 +3,7 @@
 硬约束 1：外部系统的输出绝不能进入我们的训练数据、标签或奖励。所以
 - 外部预测放在独立目录（"外部预测目录"），目录里必须有标记文件 EXTERNAL_MARKER；本模块只在评分时读它。
 - 只有 ALLOWED_READERS 里的文件可以 import 本模块或引用标记文件名（tests/test_e5_external.py 静态扫描 src/ 与 scripts/）；
+  外部系统那一侧的脚本（EXTERNAL_SIDE_WRITERS：只写外部预测目录，不读我们的数据）另列。两份清单只在这里定义（D40-6，DEV-0028）；
   生成器、E5 的数据与提示代码、任何训练代码都不读这个目录（同一测试在打开文件的系统调用上设桩，跑一遍评测集的生成、
   提示渲染与基线评分，核对没有任何路径落进外部预测目录）。
 
@@ -33,6 +34,12 @@ EXTERNAL_MARKER = "EXTERNAL_PREDICTIONS.json"
 EXTERNAL_FORMAT_VERSION = 1
 # 可以读外部预测目录的文件（相对仓库根）。其余代码一律不许 import 本模块、不许引用 EXTERNAL_MARKER。
 ALLOWED_READERS = ("src/e5/external.py", "src/e5/runner.py", "scripts/run_e5.py")
+# 外部系统那一侧（DEV-0019）：这些脚本在外部系统自己的环境里运行，产出外部预测目录（写标记文件），不读我们的训练数据，
+# 也不 import src/（tests/test_e5_lisa_infer.py 静态核对）。它们不是外部预测的"读者"，所以不进 ALLOWED_READERS。
+# DEV-0028（D40-6）：原来在 tests/test_e5_external.py 里另有一份，合到这里，测试引用这一份。
+EXTERNAL_SIDE_WRITERS: dict[str, str] = {
+    "scripts/external/lisa_e5_infer.py": "LISA-7B-v1 推理：外部系统那一侧，只写外部预测目录，不读我们的训练数据（DEV-0019）",
+}
 MISSING = "missing"
 
 
