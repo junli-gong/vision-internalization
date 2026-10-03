@@ -1,0 +1,95 @@
+experiment: E1
+framework: src/e1（DEV-0014；协议 v2：DEV-0017）
+model:
+  key: gemma-4-e2b-it
+  family: gemma4
+  repo: google/gemma-4-E2B-it
+  revision: 3e22461f65e89153144f8adb70e3b8c2cc9845a7
+  adapter_model_key: gemma-4-e2b-it
+  tiny: false
+image_policy:
+  tag: default
+  type: SoftTokenBudget
+  max_soft_tokens: 280
+task: refexp_box
+subset: eval
+generation:
+  enable_thinking: false
+  max_new_tokens: 256
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  readout:
+    kind: text
+    parse: one_box
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: 5de1aec711fad0140db0cf27094d66e460cf2999ffcd5456f1964bc5b9851158
+  entry:
+    template: detect {expression}
+    native: true
+    provenance: official_doc
+    source_url: https://ai.google.dev/gemma/docs/capabilities/vision/image
+    parse: one_box
+    max_new_tokens: 256
+data:
+  n_samples: 56857
+  sample_ids_sha256: 23b7590046996716ef683ac42010ad074bd650cb11bdaebc1b770b096cf7ab9c
+  has_gt: true
+  selection_stats:
+    refcoco_unc_val:
+      n_total: 10834
+      n_kept: 10634
+      excluded_by_reason:
+        开发子集: 200
+    refcoco_unc_testA:
+      n_total: 5657
+      n_kept: 5657
+      excluded_by_reason: {}
+    refcoco_unc_testB:
+      n_total: 5095
+      n_kept: 5095
+      excluded_by_reason: {}
+    refcoco+_unc_val:
+      n_total: 10758
+      n_kept: 10558
+      excluded_by_reason:
+        开发子集: 200
+    refcoco+_unc_testA:
+      n_total: 5726
+      n_kept: 5726
+      excluded_by_reason: {}
+    refcoco+_unc_testB:
+      n_total: 4889
+      n_kept: 4889
+      excluded_by_reason: {}
+    refcocog_umd_val:
+      n_total: 4896
+      n_kept: 4696
+      excluded_by_reason:
+        开发子集: 200
+    refcocog_umd_test:
+      n_total: 9602
+      n_kept: 9602
+      excluded_by_reason: {}
+    n: 56857
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: null
+map_ci_resamples: 0
+batch_size: 64
+batch_protocol:
+  protocol_version: 1
+  batch_size: 64
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: true
+  frozen_batch_size: 64

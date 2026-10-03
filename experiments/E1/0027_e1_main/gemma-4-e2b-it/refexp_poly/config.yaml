@@ -1,0 +1,106 @@
+experiment: E1
+framework: src/e1（DEV-0014；协议 v2：DEV-0017）
+model:
+  key: gemma-4-e2b-it
+  family: gemma4
+  repo: google/gemma-4-E2B-it
+  revision: 3e22461f65e89153144f8adb70e3b8c2cc9845a7
+  adapter_model_key: gemma-4-e2b-it
+  tiny: false
+image_policy:
+  tag: default
+  type: SoftTokenBudget
+  max_soft_tokens: 280
+task: refexp_poly
+subset: eval
+generation:
+  enable_thinking: false
+  max_new_tokens: 1024
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  readout:
+    kind: text
+    parse: polygon
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: 5de1aec711fad0140db0cf27094d66e460cf2999ffcd5456f1964bc5b9851158
+  entry:
+    template: 'Outline {expression} in the image with a polygon. Report the polygon
+      vertices in JSON format as a list of [x, y] points: [[x1, y1], [x2, y2], ...].
+      Coordinates are relative to the image size and range from 0 to 1000, with x
+      first. Output only one JSON block.'
+    native: false
+    provenance: unified
+    source_url: prompts/dev/0014-e1-harness.md
+    parse: polygon
+    max_new_tokens: 1024
+data:
+  n_samples: 8000
+  sample_ids_sha256: 87c8c303e8dd475e05d518d82dc5396601c79e36a3e08cb6aa6c014ad8197215
+  has_gt: true
+  selection_stats:
+    refcoco_unc_val:
+      n_total: 10834
+      n_kept: 10634
+      excluded_by_reason:
+        开发子集: 200
+      n_selected: 1000
+    refcoco_unc_testA:
+      n_total: 5657
+      n_kept: 5657
+      excluded_by_reason: {}
+      n_selected: 1000
+    refcoco_unc_testB:
+      n_total: 5095
+      n_kept: 5095
+      excluded_by_reason: {}
+      n_selected: 1000
+    refcoco+_unc_val:
+      n_total: 10758
+      n_kept: 10558
+      excluded_by_reason:
+        开发子集: 200
+      n_selected: 1000
+    refcoco+_unc_testA:
+      n_total: 5726
+      n_kept: 5726
+      excluded_by_reason: {}
+      n_selected: 1000
+    refcoco+_unc_testB:
+      n_total: 4889
+      n_kept: 4889
+      excluded_by_reason: {}
+      n_selected: 1000
+    refcocog_umd_val:
+      n_total: 4896
+      n_kept: 4696
+      excluded_by_reason:
+        开发子集: 200
+      n_selected: 1000
+    refcocog_umd_test:
+      n_total: 9602
+      n_kept: 9602
+      excluded_by_reason: {}
+      n_selected: 1000
+    n: 8000
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: null
+map_ci_resamples: 0
+batch_size: 64
+batch_protocol:
+  protocol_version: 1
+  batch_size: 64
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: true
+  frozen_batch_size: 64
