@@ -1,0 +1,111 @@
+experiment: E1
+framework: src/e1（DEV-0014；协议 v2：DEV-0017）
+model:
+  key: internvl3.5-2b-hf
+  family: internvl3.5
+  repo: OpenGVLab/InternVL3_5-2B-HF
+  revision: 3f301ffcf3dcbb47893afae6650ea3e78d96fb6d
+  adapter_model_key: internvl3.5-2b-hf
+  tiny: false
+image_policy:
+  tag: default
+  type: TilePolicy
+  crop_to_patches: false
+  max_patches: 1
+task: spatial_embspatial
+subset: eval
+generation:
+  enable_thinking: false
+  max_new_tokens: 1
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  readout:
+    kind: letter
+    parse: letter_token
+    spellings:
+    - '{letter}'
+    - ' {letter}'
+    table:
+      letters:
+      - A
+      - B
+      - C
+      - D
+      entries:
+        A:
+        - spelling: A
+          token_id: 32
+          decoded: A
+        - spelling: ' A'
+          token_id: 362
+          decoded: ' A'
+        B:
+        - spelling: B
+          token_id: 33
+          decoded: B
+        - spelling: ' B'
+          token_id: 425
+          decoded: ' B'
+        C:
+        - spelling: C
+          token_id: 34
+          decoded: C
+        - spelling: ' C'
+          token_id: 356
+          decoded: ' C'
+        D:
+        - spelling: D
+          token_id: 35
+          decoded: D
+        - spelling: ' D'
+          token_id: 422
+          decoded: ' D'
+      skipped: []
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: 5de1aec711fad0140db0cf27094d66e460cf2999ffcd5456f1964bc5b9851158
+  entry:
+    template: 'Question: {question}
+
+      Options:
+
+      {options}
+
+      Please select the correct answer from the options above.'
+    native: false
+    provenance: common_practice
+    source_url: https://github.com/open-compass/VLMEvalKit/blob/e9214c0816f67a2848296b82d5d615d709fb7325/vlmeval/dataset/image_mcq.py
+    parse: choice
+    max_new_tokens: 1024
+data:
+  n_samples: 3590
+  sample_ids_sha256: 66d68e5f859aa3a60da54c01d86d2caaf2c31b293eaa9fa6a4ce630a8743590f
+  has_gt: true
+  selection_stats:
+    population:
+      n_total: 3640
+      n_kept: 3590
+      excluded_by_reason:
+        开发子集: 50
+    n: 3590
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: null
+map_ci_resamples: 0
+batch_size: 64
+batch_protocol:
+  protocol_version: 1
+  batch_size: 64
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: true
+  frozen_batch_size: 64
