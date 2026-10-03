@@ -5,7 +5,8 @@ src/synth/relief.py 定义。
 - 预测统一成 Pred：网格 (N, N) 0/1、全分辨率 mask (H, W)、可选的起伏代码 (N, N)。来源：
   * 零样本：c–e 用 parse_grid_text(n=32)（E1 的数字网格），a、b 用 parse_relief_grid_text(n=32)（33 个符号；b 自 DEV-0028）；
     全分辨率 mask = grid_to_mask 回填到画布；
-  * 思维链（DEV-0028 起预算强制收尾，D59-5）：只解析作答段 answer_text（budget_view）。a、b 同零样本的 33 符号网格；
+  * 思维链（DEV-0028 起预算强制收尾，D59-5）：只解析作答段 answer_text（budget_view；思考段的结束方式按 thinking_end 四类，
+    DEV-0029）。a、b 同零样本的 33 符号网格；
     c–e 是 parse_polygons（0–1000 坐标的 JSON 多边形）→ 顶点四舍五入到 1/256 px → src/synth/raster.py 的整数光栅化
     （与生成器的真值同一套规则），多个多边形取并集；网格 = mask_to_grid；
   * 平凡基线：生成器给出的 mask 与网格，a、b 的起伏代码取 extras["baseline_relief_<名>"]；派生基线（copy_convex，
@@ -29,7 +30,9 @@ src/synth/relief.py 定义。
 - 条件读数（conditional）：只在有效的样本上算的均值（另给中位数，起伏误差的分布有长尾）。
 - 每列都给样本数；严格读数给 bootstrap 95% CI（按样本重采样，src.stats）。空集合一律 null。
 - 分列：标题口径（protocol.in_headline）、全部样本、每档、各分列维度（protocol.groups_of）。
-- 预算强制收尾的系统（思维链）另按"自然收尾 / 强制收尾"分开汇总，并给条数与思考、作答、补入的 token 数（budget_block）。
+- 预算强制收尾的系统（思维链）另按思考段的结束方式 thinking_end 四类（natural 自然收尾、forced 强制收尾、not_opened 没写思考段、
+  unclosed 思考段里就停了）分开汇总，给条数、解析失败、截断、思考 / 作答 / 补入的 token 数与读数（thinking_end_block；
+  口径同 E1 的 thinking_end 一节，DEV-0029）。
 
 两级门槛（D59-4；gate）。"胜过"一律用与基线逐样本配对的 bootstrap 95% CI（src.stats.paired_bootstrap_ci，差 = 系统 − 基线）判：
 - 先决条件：标题口径上，系统的网格 mask IoU（严格）胜过最强的非真值基线（角色 trivial 的基线里严格均值最高者，同分取名字
@@ -52,6 +55,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
+from src.adapters.base import THINKING_ENDS
 from src.constants import BOOTSTRAP_N_RESAMPLES
 from src.e5.protocol import E5_GRID_SIZE, groups_of, headline_scope_text, in_headline, sample_id
 from src.executors.raster import mask_to_rle
@@ -203,10 +207,17 @@ def baseline_roles(sample: Sample) -> dict[str, str]:
 
 def budget_view(result: Any) -> Any:
     """预算强制收尾的一次生成（generate_batch_budgeted 的 GenerationResult）→ 给 parse_generation 的视图：只看作答段。
+    按 thinking_end 的四类（DEV-0027 的定义见 src/adapters/budget.py；DEV-0029）：
 
-    text = answer_text（收尾之后的部分）；stopped = 作答段是否以停止 token 结束（False = 写满 answer_budget，判截断）；
-    thinking_unclosed = False（思考段由适配器补上结束标记，总是闭合）。"""
-    return _AnswerView(result.answer_text, result.stopped, False)
+    - text = answer_text：natural、forced 是收尾之后的部分，not_opened 是全部生成（没有思考段），unclosed 为空串；
+    - stopped = 适配器的 stopped：natural、forced、not_opened 指作答段是否以停止 token 结束（False = 写满 answer_budget，判截断）；
+      unclosed 是思考段里写出了停止 token，为 True；
+    - thinking_unclosed = (thinking_end == "unclosed")：思考段里就停了、没有作答段，判 thinking_unclosed（同 E1）。
+      适配器的 thinking_unclosed 是 split_answer 对完整序列的判定（作答段里又写了思考段开头也算），E5 只解析作答段，不用它。"""
+    end = getattr(result, "thinking_end", None)
+    if end not in THINKING_ENDS:
+        raise ValueError(f"预算强制收尾的结果 thinking_end 必须是 {THINKING_ENDS} 之一，收到 {end!r}")
+    return _AnswerView(result.answer_text, result.stopped, end == "unclosed")
 
 
 @dataclass(frozen=True)
@@ -358,22 +369,37 @@ def _tok_stats(v: Sequence[int]) -> dict[str, Any] | None:
     return {"mean": float(np.mean(v)), "max": int(max(v)), "p50": float(np.median(v)), "total": int(sum(v))} if v else None
 
 
-def budget_block(recs: Sequence[Mapping[str, Any]], n_resamples: int) -> dict[str, Any] | None:
-    """预算强制收尾（D59-5）：自然收尾与强制收尾分开汇总（标题口径与全部样本各一份），给条数与 token 数。没有这类记录时 None。"""
-    rb = [r for r in recs if "forced_close" in r]
-    if not rb:
+def thinking_end_block(recs: Sequence[Mapping[str, Any]], n_resamples: int) -> dict[str, Any] | None:
+    """预算强制收尾（D59-5）：按思考段的结束方式（THINKING_ENDS：natural 自然收尾、forced 强制收尾、not_opened 没写思考段（Gemma、
+    InternVL 第一个 token 不是思考开头，直接作答）、unclosed 思考段里就停了（写出停止 token，没有作答段））分开报，口径同 E1 的
+    thinking_end 一节（src/e1/scoring.thinking_end_breakdown；DEV-0029）：
+    - counts：各类条数，四类都列，没有的记 0；
+    - by_kind：每个出现的类给条数、标题口径条数、解析失败率与分原因、截断条数、思考段与作答段的 token 数，以及读数
+      （标题口径与全部样本各一份 blocks：严格 / 有效率 / 条件三列）；
+    - inserted_tokens：补入的 token 数（只有 forced 有，其余记 0）。
+    记录里没有 thinking_end（不是预算强制收尾的运行）时返回 None；有的记录有、有的没有，或取值不在四类里，报错。"""
+    have = [r.get("thinking_end") is not None for r in recs]
+    if not any(have):
         return None
-    out: dict[str, Any] = {"n": len(rb), "n_forced": sum(1 for r in rb if r["forced_close"]),
-                           "n_natural": sum(1 for r in rb if not r["forced_close"])}
-    out["forced_rate"] = out["n_forced"] / len(rb)
-    for close, name in ((False, "natural"), (True, "forced")):
-        sub = [r for r in rb if bool(r["forced_close"]) == close]
-        out[name] = {"n": len(sub), "n_headline": sum(1 for r in sub if r["headline"]),
-                     "headline": blocks([r for r in sub if r["headline"]], n_resamples),
-                     "overall": blocks(sub, n_resamples),
-                     "thinking_tokens": _tok_stats([int(r["n_thinking_tokens"]) for r in sub]),
-                     "answer_tokens": _tok_stats([int(r["n_answer_tokens"]) for r in sub])}
-    out["inserted_tokens"] = _tok_stats([int(r["n_inserted_tokens"]) for r in rb])
+    if not all(have):
+        raise ValueError("一次运行里有的记录有 thinking_end、有的没有")
+    counts = Counter(r["thinking_end"] for r in recs)
+    bad = sorted(set(counts) - set(THINKING_ENDS))
+    if bad:
+        raise ValueError(f"未知的 thinking_end {bad}（应为 {THINKING_ENDS} 之一）")
+    out: dict[str, Any] = {"n": len(recs), "counts": {k: counts.get(k, 0) for k in THINKING_ENDS}, "by_kind": {}}
+    for kind in THINKING_ENDS:
+        sub = [r for r in recs if r["thinking_end"] == kind]
+        if not sub:
+            continue
+        tally = ParseTally(failure_enum(r["failure"]) for r in sub)
+        head = [r for r in sub if r["headline"]]
+        out["by_kind"][kind] = {"n": len(sub), "n_headline": len(head), "parse_failure_rate": tally.failure_rate,
+                                "parse": tally.to_dict(), "n_truncated": sum(1 for r in sub if r["truncated"]),
+                                "thinking_tokens": _tok_stats([int(r["n_thinking_tokens"]) for r in sub]),
+                                "answer_tokens": _tok_stats([int(r["n_answer_tokens"]) for r in sub]),
+                                "headline": blocks(head, n_resamples), "overall": blocks(sub, n_resamples)}
+    out["inserted_tokens"] = _tok_stats([int(r["n_inserted_tokens"]) for r in recs])
     return out
 
 
@@ -412,9 +438,9 @@ def aggregate(task: str, recs: Sequence[Mapping[str, Any]], *, n_resamples: int 
         pix = [int(r["n_image_pixels"]) for r in gen]
         out["image_pixels"] = {"mean": float(np.mean(pix)), "min": int(min(pix)), "max": int(max(pix))}
         out["enable_thinking"] = enable_thinking
-    bb = budget_block(recs, n_resamples)
-    if bb is not None:
-        out["budget"] = bb
+    te = thinking_end_block(recs, n_resamples)
+    if te is not None:
+        out["thinking_end"] = te
     return out
 
 

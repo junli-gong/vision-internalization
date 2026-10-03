@@ -3,7 +3,8 @@
 输出 <out>/<系统>/<模型>/<任务>[__dev]/：
 - predictions.jsonl：每条样本一行（id、档、分列维度、是否计入标题、提示原文、raw_text、text、解析失败原因、预测的网格 / 起伏 /
   多边形、逐条得分；模型系统另有停止原因、生成 token 数、视觉 token 数与像素数；预算强制收尾的系统（思维链，DEV-0028）另有
-  forced_close、思考 / 作答 / 补入的 token 数与 answer_text）。不含墙钟，续跑后逐字节可复现。
+  思考段的结束方式 thinking_end（natural、forced、not_opened、unclosed，DEV-0029）、forced_close、思考 / 作答 / 补入的 token 数与
+  answer_text；metrics.json 与 README 按 thinking_end 四类分开报条数与读数）。不含墙钟，续跑后逐字节可复现。
 - metrics.json：只由 predictions.jsonl 与生成器重新生成的样本算出（scoring.aggregate + 两级门槛 scoring.gate；门槛里的基线
   用同一个评分函数现算），续跑后再算一遍逐字节相同。
 - compute.json：src/accounting.py；模型系统的墙钟来自 logs/timing.jsonl；基线与外部预测记 0（外部系统的算力不在这里）。
@@ -32,6 +33,7 @@ import yaml
 from PIL import Image
 
 from src.accounting import Compute, merge, write_compute_json
+from src.adapters.base import THINKING_ENDS
 from src.constants import BOOTSTRAP_SEED
 from src.e5 import external as EXT
 from src.e5 import scoring as SC
@@ -261,6 +263,44 @@ def _block_lines(blk: Mapping[str, Any]) -> list[str]:
     return out
 
 
+# 思考段结束方式的中文名（与 E1 README 的用词相同，src/e1/runner._thinking_end_lines）
+THINKING_END_LABELS = {"natural": "自然收尾", "forced": "强制收尾", "not_opened": "没写思考段（直接作答）",
+                       "unclosed": "思考段里就停了"}
+
+
+def _headline_reading(blk: Mapping[str, Any]) -> str:
+    """一类结束方式在标题口径上的严格读数（a、b 先列起伏误差）。"""
+    parts = [f"{label} {_fmt(blk[key]['strict'])}" for key, label in (("relief_error", "起伏误差"), ("mask_iou_grid", "网格 IoU"))
+             if key in blk]
+    return "；".join(parts) or "—"
+
+
+def _thinking_end_lines(te: Mapping[str, Any] | None) -> list[str]:
+    """预算强制收尾（思维链）：按思考段的结束方式四类分开的条数与读数（scoring.thinking_end_block）；其余系统为空。"""
+    if not te:
+        return []
+    c = te["counts"]
+    lines = ["", "## 思考段的结束方式（预算强制收尾，D59-5；四类分开报，口径同 E1）", "",
+             "- " + "，".join(f"{THINKING_END_LABELS[k]} {c[k]} 条" for k in THINKING_ENDS) + f"（共 {te['n']} 条）", "",
+             "| 结束方式 | 条数 | 标题口径条数 | 解析失败率 | 截断 | 思考 token 中位数 | 作答 token 中位数 | 标题口径严格读数 |",
+             "|---|---|---|---|---|---|---|---|"]
+    for k in THINKING_ENDS:
+        e = te["by_kind"].get(k)
+        if e is None:
+            lines.append(f"| {THINKING_END_LABELS[k]} | 0 | — | — | — | — | — | — |")
+            continue
+        lines.append(f"| {THINKING_END_LABELS[k]} | {e['n']} | {e['n_headline']} | {_fmt(e['parse_failure_rate'])} | "
+                     f"{e['n_truncated']} | {_fmt(e['thinking_tokens']['p50'])} | {_fmt(e['answer_tokens']['p50'])} | "
+                     f"{_headline_reading(e['headline'])} |")
+    lines.append("")
+    for k in THINKING_ENDS:
+        e = te["by_kind"].get(k)
+        if e is not None:
+            lines.append(f"- {THINKING_END_LABELS[k]}（标题口径 {e['n_headline']} 条）：")
+            lines += ["  " + x for x in _block_lines(e["headline"])]
+    return lines
+
+
 def readme_text(spec: RunSpec, cfg: Mapping[str, Any], m: Mapping[str, Any]) -> str:
     lines = [f"# E5 · {spec.system} · {spec.model_key} · {m['task']}（{TASK_LETTER[m['task']]}）· {spec.subset}", "",
              f"- 样本：{cfg['data']['split']} 划分，每档 {spec.n_per_bin} 条，n = {m['n']}（id 指纹 "
@@ -281,14 +321,7 @@ def readme_text(spec: RunSpec, cfg: Mapping[str, Any], m: Mapping[str, Any]) -> 
         lines.append(f"- 凸起先验基线 {cp['baseline']}：A = {cp['amplitude']} 档（val 上选定后冻结，{cp['definition']}）")
     lines += ["", "## 标题（严格 / 有效率 / 条件读数）", ""]
     lines += _block_lines(m["headline"])
-    bud = m.get("budget")
-    if bud:
-        lines += ["", "## 预算强制收尾：自然收尾与强制收尾分开（D59-5）", "",
-                  f"- 自然收尾 {bud['n_natural']} 条，强制收尾 {bud['n_forced']} 条（强制率 {_fmt(bud['forced_rate'])}）"]
-        for name, label in (("natural", "自然收尾"), ("forced", "强制收尾")):
-            sub = bud[name]
-            lines.append(f"- {label}（标题口径 {sub['n_headline']} 条）：")
-            lines += ["  " + x for x in _block_lines(sub["headline"])]
+    lines += _thinking_end_lines(m.get("thinking_end"))
     g = m.get("gate") or {}
     pre, jud = g.get("prerequisite"), g.get("judgment")
     lines += ["", "## 两级门槛（D59-4：逐样本配对 bootstrap 95% CI）", ""]
@@ -366,14 +399,19 @@ def _run_log_finish(path: Path, log: dict, t0: float, **extra: Any) -> None:
     path.write_text(json.dumps(log, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-BUDGET_FIELDS = ("forced_close", "n_thinking_tokens", "n_answer_tokens", "n_inserted_tokens", "answer_text")
+BUDGET_FIELDS = ("thinking_end", "forced_close", "n_thinking_tokens", "n_answer_tokens", "n_inserted_tokens", "answer_text")
 
 
 def check_budget_fields(res: Any) -> None:
-    """generate_batch_budgeted 的结果必须带 DEV-0027 固定的五个新字段（解析之前就查，缺了直接报错）。"""
+    """generate_batch_budgeted 的结果必须带 DEV-0027 的这几个字段（解析之前就查，缺了直接报错）；thinking_end 必须是四类之一，
+    且与 forced_close 相符。"""
     missing = [f for f in BUDGET_FIELDS if not hasattr(res, f)]
     if missing:
         raise RuntimeError(f"generate_batch_budgeted 的结果缺字段 {missing}（签名见 DEV-0027）")
+    if res.thinking_end not in THINKING_ENDS:
+        raise RuntimeError(f"thinking_end 必须是 {THINKING_ENDS} 之一，收到 {res.thinking_end!r}")
+    if bool(res.forced_close) != (res.thinking_end == "forced"):
+        raise RuntimeError(f"forced_close={res.forced_close} 与 thinking_end={res.thinking_end!r} 不符")
 
 
 def model_record(sample: Sample, prompt: str, res: Any, pred: SC.Pred, *, relief_expected: bool,
@@ -389,8 +427,10 @@ def model_record(sample: Sample, prompt: str, res: Any, pred: SC.Pred, *, relief
         check_budget_fields(res)
         rec.update({f: getattr(res, f) for f in BUDGET_FIELDS})
         rec["forced_close"] = bool(rec["forced_close"])
-        # 预算强制收尾：思考段由适配器闭合，"截断"只指作答段写满 answer_budget；思考段未闭合不会出现
-        rec["thinking_unclosed"] = False
+        # 预算强制收尾（thinking_end 四类，DEV-0029）："截断"只指作答段写满 answer_budget（unclosed 的 stopped 为 True，不算截断）；
+        # 思考段未闭合只有一种：思考段里写出停止 token（unclosed），没有作答段。记录的 thinking_unclosed 取解析视图用的同一个
+        # 标志（scoring.budget_view），不取适配器对完整序列的 split_answer 判定（E5 只解析作答段）。
+        rec["thinking_unclosed"] = SC.budget_view(res).thinking_unclosed
     rec.update({"valid": pred.valid, "failure": pred.failure, "pred": SC.pred_record(pred, store_rle=pred.polygons is not None),
                 "score": SC.score(sample, pred, relief_expected=relief_expected)})
     return rec

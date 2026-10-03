@@ -215,8 +215,7 @@ def land(ctx: LandContext, spec: dict[str, Any] | None = None) -> None:
     spec = {**SPEC, **(spec or {})}
     test_scenes = tuple(spec.get("test_scenes", TEST_SCENES))
     src_dir = ctx.source_dir(SOURCE)
-    m = ctx.manifest(SOURCE)
-    m.data["script"]["path"] = SCRIPT
+    m = ctx.manifest(SOURCE, script=SCRIPT)
     m.data["license"] = {**spec["license"], "bts_list": spec["bts"]["license"], "hf_card": spec["hf"]["card_license"]}
 
     est = int((spec["kept_bytes"] if ctx.limit is None else spec["mean_pair_bytes"] * ctx.limit) * 1.05) + 10_000_000

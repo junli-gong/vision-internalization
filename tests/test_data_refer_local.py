@@ -1,5 +1,5 @@
 """DEV-0026：E1 的 refcoco 读本地 refer zip（--refer-zip-dir）、与训练源共用的读 zip 代码、download_many 在磁盘红线处
-叫停、Manifest 的 script 参数、scripts/data/refer_zip_sha256.py。
+叫停、Manifest 的 script 参数（DEV-0029：ade20k、nyu_depth_train、nyu_normals 也改为传参）、scripts/data/refer_zip_sha256.py。
 
 上游一律是本地假服务器（tests/test_data_net.FakeServer）上的合成文件：三个 refer zip 的成员名、划分与真实的一致，内容是
 造的；COCO 评测图与 jxu124 镜像也在假服务器上。download_many 的红线测试用假网络（替换 net._open）与假磁盘统计。不联网。
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from src.data.land import manifest, net, refcoco, refcoco_train
+from src.data.land import ade20k, manifest, net, nyu_depth_train, nyu_normals, refcoco, refcoco_train
 from src.data.land.common import LocalZip, read_zip_index
 from src.data.land.manifest import DEFAULT_SCRIPT, GB, DiskRedLine, Manifest, read_manifest
 from tests.test_data_land import hf_publish, img_bytes, make_ctx, ok_all, parquet_bytes, sha
@@ -463,3 +463,37 @@ def test_manifest_script_param_keeps_format(tmp_path):
     ctx = make_ctx(tmp_path)
     assert ctx.manifest("z").data["script"]["path"] == DEFAULT_SCRIPT
     assert ctx.manifest("z", script="scripts/data/land_train.py").data["script"]["path"] == "scripts/data/land_train.py"
+
+
+@pytest.mark.parametrize("mod", [ade20k, nyu_depth_train, nyu_normals], ids=lambda m: m.SOURCE)
+def test_train_sources_pass_script_param(mod, tmp_path, monkeypatch):
+    """D57-4（DEV-0029）：ade20k、nyu_depth_train、nyu_normals 把落地入口作为 ctx.manifest 的 script 参数传入，不再事后改写
+    m.data["script"]["path"]；清单内容与原来的做法（默认 script 建清单、再改写 path）逐项相同。在预算检查处停下，不联网。"""
+    ctx = make_ctx(tmp_path)
+    real = ctx.manifest
+    calls = []
+
+    def spy(name, **kw):
+        calls.append((name, kw))
+        return real(name, **kw)
+
+    class _Stop(Exception):
+        pass
+
+    got = []
+
+    def gate(c, m, est, detail=None):
+        got.append(m)
+        raise _Stop
+
+    ctx.manifest = spy
+    monkeypatch.setattr(mod, "budget_gate", gate)
+    with pytest.raises(_Stop):
+        mod.land(ctx)
+    assert mod.SCRIPT == "scripts/data/land_train.py" and calls == [(mod.SOURCE, {"script": mod.SCRIPT})]
+    m = got[0]
+    old = real(mod.SOURCE)  # 原来的做法
+    old.data["script"]["path"] = mod.SCRIPT
+    old.data["license"] = m.data["license"]
+    assert m.data == old.data and list(m.data["script"]) == list(old.data["script"])
+    assert m.data["script"]["path"] == "scripts/data/land_train.py"

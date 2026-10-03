@@ -88,7 +88,7 @@ def inputs(ad, samples):
 
 
 def _allowed(ad) -> list[int]:
-    return sorted(set(ALLOWED_BASE + ad._stop_ids()))
+    return sorted(set(ALLOWED_BASE + list(ad.stop_token_ids())))
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +176,7 @@ def test_target_hidden_matches_sequence_hidden_states(ad, inputs):
 def test_generate_restricted_equals_generate_batch(ad, inputs, thinking):
     allowed = _allowed(ad)
     gen = ad.generate_batch(inputs, enable_thinking=thinking, max_new_tokens=12, allowed_token_ids=allowed)
-    res = ad.generate_restricted(inputs, allowed, max_new_tokens=12, stop_ids=ad._stop_ids(), enable_thinking=thinking)
+    res = ad.generate_restricted(inputs, allowed, max_new_tokens=12, stop_ids=list(ad.stop_token_ids()), enable_thinking=thinking)
     assert [r.token_ids for r in res] == [g.token_ids for g in gen]
     assert len({r.token_ids for r in res}) >= 3  # 前提：各行的输出大多不同（小模型的输出随输入变化）
     for r, g in zip(res, gen):
@@ -189,8 +189,8 @@ def test_generate_restricted_equals_generate_batch(ad, inputs, thinking):
 def test_generate_restricted_stop_and_order(ad, inputs):
     """allowed 的顺序不影响结果（内部升序，平局取 id 小者）；没有停止 token 时一律生成满 max_new_tokens。"""
     allowed = _allowed(ad)
-    a = ad.generate_restricted(inputs, allowed, max_new_tokens=5, stop_ids=ad._stop_ids(), enable_thinking=False)
-    b = ad.generate_restricted(inputs, allowed[::-1], max_new_tokens=5, stop_ids=ad._stop_ids(), enable_thinking=False)
+    a = ad.generate_restricted(inputs, allowed, max_new_tokens=5, stop_ids=list(ad.stop_token_ids()), enable_thinking=False)
+    b = ad.generate_restricted(inputs, allowed[::-1], max_new_tokens=5, stop_ids=list(ad.stop_token_ids()), enable_thinking=False)
     assert [x.token_ids for x in a] == [x.token_ids for x in b]
     c = ad.generate_restricted(inputs, ALLOWED_BASE, max_new_tokens=5, stop_ids=[], enable_thinking=False)
     assert all(x.n_generated_tokens == 5 and x.stopped is False for x in c)
@@ -200,7 +200,7 @@ def test_generate_restricted_stop_and_order(ad, inputs):
 
 @pytest.mark.parametrize("thinking", [False, True])
 def test_teacher_forcing_argmax_equals_restricted_decode(ad, inputs, thinking):
-    rep = training.restricted_consistency(ad, inputs, _allowed(ad), max_new_tokens=12, stop_ids=ad._stop_ids(),
+    rep = training.restricted_consistency(ad, inputs, _allowed(ad), max_new_tokens=12, stop_ids=list(ad.stop_token_ids()),
                                           enable_thinking=thinking)
     assert rep["decode_vs_generate_batch"]["exact_rows"] == 1.0
     assert rep["decode_vs_generate_batch"]["token_agreement"] == 1.0
@@ -234,7 +234,7 @@ def test_internvl_multi_tile_restricted_decode():
     inputs = [ad.build_inputs([_img(rng, 448, 900)], "Describe.", "instruction_first"),
               ad.build_inputs([_img(rng, 300, 300)], "What is it?", "image_first")]
     assert len({len(i.images[0].span) for i in inputs}) == 2  # 前提：两行的 tile 数不同
-    rep = training.restricted_consistency(ad, inputs, _allowed(ad), max_new_tokens=8, stop_ids=ad._stop_ids(),
+    rep = training.restricted_consistency(ad, inputs, _allowed(ad), max_new_tokens=8, stop_ids=list(ad.stop_token_ids()),
                                           enable_thinking=False)
     assert rep["decode_vs_generate_batch"]["exact_rows"] == 1.0 and rep["teacher_forcing"]["agreement"] == 1.0
 

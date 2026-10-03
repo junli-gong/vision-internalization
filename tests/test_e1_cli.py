@@ -39,6 +39,14 @@ def cli():
     return mod
 
 
+def test_docstring_frozen_batch_size_matches_config(cli):
+    """文档字符串里写的冻结批大小 = configs/e1_prompts.json 的 batch_protocol.batch_size（D43 改为 64；DEV-0029 改文档时钉住）。"""
+    from src.e1.prompts import load_prompt_config
+
+    bs = load_prompt_config().batch_protocol()["batch_size"]
+    assert f"--batch-size 默认取冻结值（{bs}，" in cli.__doc__
+
+
 def run(args, tmp: Path) -> subprocess.CompletedProcess:
     env = {**os.environ, "TMPDIR": str(tmp)}
     p = subprocess.run([sys.executable, str(SCRIPT), "--tiny", "--nyu-cache", str(tmp / "nyu"), *args],

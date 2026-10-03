@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from src.adapters.base import THINKING_ENDS
 from src.e5 import runner as RN
 from src.e5.protocol import E5_TASKS
 
@@ -80,7 +81,15 @@ def test_tiny_each_family_each_task_two_samples(model, tmp_path):
             assert "max_new_tokens_override: 48" in cfg
             assert f"path: {'generate_batch_budgeted' if system == 'cot' else 'generate_batch'}\n" in cfg
             assert f"enable_thinking: {'true' if system == 'cot' else 'false'}" in cfg
-            assert ("budget" in m) == (system == "cot")
+            # 思维链：按思考段的结束方式四类分开报（DEV-0029）；记录的 thinking_end 与 metrics 的条数一致
+            assert ("thinking_end" in m) == (system == "cot") and "budget" not in m
+            if system == "cot":
+                ends = [r["thinking_end"] for r in recs]
+                assert set(ends) <= set(THINKING_ENDS)
+                assert m["thinking_end"]["counts"] == {k: ends.count(k) for k in THINKING_ENDS}
+                assert all(r["thinking_unclosed"] is (r["thinking_end"] == "unclosed") for r in recs)
+            else:
+                assert all("thinking_end" not in r for r in recs)
 
 
 def test_tiny_resume_is_byte_identical(tmp_path):
