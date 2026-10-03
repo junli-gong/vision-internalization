@@ -15,6 +15,8 @@
 - **git stash 是所有 worktree 共用的**：主仓库和各开发 agent 的 worktree 共用一个 stash 栈，裸 `git stash` / `git stash pop` 可能弹出别的会话存的改动。
   合入时要暂存本地改动，用临时 WIP 提交；非用 stash 不可时，用 `git stash push -u -m <唯一标签>`，按 SHA `git stash apply`，再按标签找到条目删掉。
 - **重申：不要 cd 进 worktree**。核对 worktree 里的脚本，用绝对路径加 `cd /主仓库 &&` 前缀。2026-10-03 又犯了一次，主工作目录被带走。
+- **用 `pgrep -f <模式>` 等进程结束时，模式会匹配到等待循环自己**：命令行里含有同样的字符串，循环就永远不会退出，还会互相卡住。2026-10-03 清理了 6 个这样空转了一天多的循环。
+  写法：用 `pgrep -f '[p]ytest tests/'`（方括号技巧，让模式匹配不到自己），或者记下 PID 用 `while kill -0 $PID`，或者直接 `run_in_background` 跑测试本身、等它的完成通知。
 
 ## 约定与文档
 - **约定只写一处，其余 import；配置注释里的数字用测试钉住** — 网格索引语义被复述后歧义
