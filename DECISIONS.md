@@ -1420,3 +1420,33 @@
 9. **健康检查**：Qwen-0.8B 的 MMLU-Pro 字母读数 16%，离随机的 10% 很近，准确率作为预警太钝。G3 时 0.8B 以正确选项的平均概率为主要预警信号（配对 CI），准确率为次。协议 v3 不改：两项本来都报。
 10. **机器分工**：E3a 的稠密指标（完整方法对比 C1、C2）也属于配对比较，一律回 B200 评测（同 D55）。
 
+## D60 — DEV-0027（预算强制收尾、投影前特征、原生框格式、公开停止 token；E1 思考口径）合入与偏离裁定（2026-10-03）
+
+1. **合入**（d951632，无返工）。合入前验证：普通条件 2128 passed + 11 skipped + 1 偶发失败（E3 的 fp32 逐位相等测试在两套全量同时跑时失败，单独重跑 5/5 通过）；server-parity 2129 passed + 11 skipped。
+2. **预算强制收尾** `generate_batch_budgeted`（`src/adapters/budget.py`，三家族共用）：
+   - **实现**：一次预填，续用 KV cache 的 greedy 循环，整批锁步。写满的行把思考结束标记一个 token 一个 token 喂进去，位置编码与模型自己写出完全相同。
+   - **补的标记**：Qwen `</think>\n\n`，Gemma `<channel|>`，InternVL `</think>\n\n`。都与对话模板、RUN-0005 的实测输出核对过。
+   - **记账**：补的 token 单独记，E1 计入 prompt_tokens。结束方式 `thinking_end` 分四类：natural、forced、not_opened、unclosed。
+3. **`pre_projection_features`**（D59-8）：
+   - Qwen：merger 之前的 patch 网格；Gemma：pooler 之前 (3h, 3w)；InternVL：去 CLS 的 32×32。
+   - 再做合并或投影后，Qwen 与 InternVL 逐位等于 `vision_features`，Gemma 在 fp32 容差内相等。
+4. **`format_boxes`**：三家族原生框格式，与实测字符串逐字相同，往返误差 ≤ W/2000、H/2000。
+5. **E1**：
+   - 思考子集改走预算强制收尾（4,096 加 1,024），删掉 think8192；验收 δ 按组设，多边形与检测 0.03。
+   - 新配置 sha256 `f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452`，测试核对 eval、free、extra 三个子集的输入与 `5de1aec7…` 逐字节相同。
+   - **E1 预注册 §5 补上新 sha256**：思考子集用 `f3353de0…`；主评测、free 与 extra 仍以 `5de1aec7…` 运行，RUN-0027 从固定工作树跑，两份配置在这三个子集上等价。
+6. **偏离全部接受**：
+   - Gemma 与 InternVL 第一个 token 不是思考开头标记的行，按直接作答处理（not_opened）；
+   - 思考段里写出停止 token 的行记为 unclosed；
+   - 自然收尾的行不补分隔：给了 allowed 集合时，两类行的上下文差一个 token，E1 与 E5 的思维链都不用 allowed 集合，不受影响；
+   - 只补"结束标记 + 分隔"；InternVL 的分隔取 `\n\n`；思考预算对 Gemma 与 InternVL 计入开头标记；
+   - E1 解析 `text`、E5 解析 `answer_text`；
+   - `format_boxes` 多了可选的 `labels=`；
+   - 验收 δ 的配置结构改为按组；
+   - 预算参数不进子类签名检查。
+7. **遗留**，交给下一个改到这些文件的任务：
+   - `check_training_interfaces.py` 改用公开的 `stop_token_ids()`；
+   - `run_e1.py` 的文档字符串里"批大小 16"改为 64；
+   - `configs/e2_probes.json` 与 `run_e2.py` 关于 pre_proj 的说明；
+   - `configs/e1_eval_subsets.json` 里的 think8192 清单：不再使用，留着无害。
+
