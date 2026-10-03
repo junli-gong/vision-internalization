@@ -1,0 +1,68 @@
+experiment: E1
+framework: src/e1（DEV-0014；协议 v2：DEV-0017）
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  adapter_model_key: qwen3.5-9b
+  tiny: false
+image_policy:
+  tag: qwen:1024
+  type: PixelBudget
+  pixel_budget_tokens: 1024
+  min_pixels: 1048576
+  max_pixels: 1048576
+task: ovd
+subset: extra
+generation:
+  enable_thinking: false
+  max_new_tokens: 2048
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  readout:
+    kind: text
+    parse: boxes
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: 5de1aec711fad0140db0cf27094d66e460cf2999ffcd5456f1964bc5b9851158
+  entry:
+    template: 'Locate every instance that belongs to the following categories: "{categories}".
+      Report bbox coordinates in JSON format.'
+    native: true
+    provenance: predecessor_cookbook
+    source_url: https://github.com/QwenLM/Qwen3-VL/blob/0dcc180d854f4b132f8059b10bbf0b5fd5dae9ed/cookbooks/2d_grounding.ipynb
+    parse: boxes
+    max_new_tokens: 2048
+data:
+  n_samples: 100
+  sample_ids_sha256: 5278c31692ebde379674216e46bfa932d2435efff4eae999f80a8cd554e954ad
+  has_gt: true
+  selection_stats:
+    coco_val2017:
+      n_total: 500
+      n_kept: 500
+      excluded_by_reason: {}
+    subset_name: extra:coco_val2017
+    n: 100
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: null
+map_ci_resamples: 0
+batch_size: 64
+batch_protocol:
+  protocol_version: 1
+  batch_size: 64
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: true
+  frozen_batch_size: 64
