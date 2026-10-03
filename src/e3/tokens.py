@@ -7,8 +7,8 @@
 - 加进模型：GridTokens = add_vocab(adapter, vocab)，按 vocab.names 的顺序调一次 add_grid_tokens；id 由适配器的分配规则决定
   （Qwen / InternVL 复用预留行，Gemma 复用 <unusedN>，见各适配器）。token_table() 由训练器记进运行身份。检查点恢复之后用
   attach_vocab(adapter, vocab) 取回同一份布局（restore_tokens 已按表登记，id 必须与名字一一对应）。
-- 停止 token：本家族的回合结束 token = 适配器停止 token 列表（_stop_ids()）的第一个（Qwen / InternVL 是 <|im_end|>，Gemma 是
-  <turn|>）。适配器没有公开接口，这里读私有钩子，接口需求写进 DEV-0025 的完成总结。
+- 停止 token：本家族的回合结束 token = 适配器的公开接口 end_of_turn_token_id()（DEV-0027；Qwen / InternVL 是 <|im_end|>，Gemma 是
+  <turn|>，即停止 token 列表 stop_token_ids() 的第一个，与原来读的私有 _stop_ids()[0] 相同）。
 - 受限 logits 的允许集合（allowed_ids）：scope = "task"（默认）时是本任务的值 token（分割 2 个、深度 64 个）+ 行分隔 + 停止；
   scope = "all" 时是全部 67 个 grid token + 停止。训练损失与受限解码用同一个函数给出的同一个集合（升序）。
 """
@@ -91,11 +91,8 @@ def check_grid_size(n: int) -> int:
 
 
 def family_stop_id(adapter: Any) -> int:
-    """本家族的回合结束 token（目标序列的最后一个 token）：适配器停止 token 列表的第一个。"""
-    ids = list(adapter._stop_ids())
-    if not ids:
-        raise GridTokenError("适配器没有停止 token")
-    return int(ids[0])
+    """本家族的回合结束 token（目标序列的最后一个 token）：适配器的 end_of_turn_token_id()（DEV-0027 的公开接口）。"""
+    return int(adapter.end_of_turn_token_id())
 
 
 @dataclass(frozen=True)

@@ -22,7 +22,9 @@ CFG_PATH = REPO / "configs" / "e1_prompts.json"
 # 配置的 sha256：配置改了（包括按截断率调 max_new_tokens）就要更新这里，并在 max_new_tokens_adjustments 里记理由；
 # 冻结后写进 PREREGISTRATION.md 的 E1 条目。
 # DEV-0017（协议 v2：受限字母读数、三列、批配置、验收 v3、CountBench 默认人工问句）；DEV-0015 为 e9fade2b…，DEV-0014 为 974d3d73…
-E1_PROMPTS_SHA256 = "5de1aec711fad0140db0cf27094d66e460cf2999ffcd5456f1964bc5b9851158"  # D43：批大小 16/12 → 64/48（管理员常量级修改）
+# DEV-0027（D59-1 思考子集改为预算强制收尾、删 think8192；D59-3 验收 δ 按组）；之前是 5de1aec7…（D43：批大小 16/12 → 64/48，
+# RUN-0027 主评测用的那一份，存档在 tests/fixtures/e1/e1_prompts_5de1aec7.json，tests/test_e1_d59.py 核对两者的差异）
+E1_PROMPTS_SHA256 = "f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452"
 FAM = registry.FAMILIES
 
 
@@ -62,7 +64,8 @@ RUN0012_MODELS = ("qwen3.5-0.8b", "qwen3.5-2b", "qwen3.5-4b", "qwen3.5-9b", "gem
 
 
 def test_max_new_tokens_after_dev0015_adjustment(cfg):
-    """DEV-0015 §1：按 RUN-0012 开发子集的截断率调整后的生成上限（三个家族相同）；思考 4096 / 8192 不变（D28-10）。
+    """DEV-0015 §1：按 RUN-0012 开发子集的截断率调整后的生成上限（三个家族相同）；思考子集是预算强制收尾（D59-1：思考 4096、
+    作答 1024，上限是两者之和；8192 的敏感性检查已取消）。
     DEV-0017：选择题与点对任务在 eval、dev 上是受限字母读数，实际上限是 1；条目的 1024 留给 free 子集的自由作答诊断。"""
     letter = set(cfg.data["letter_readout"]["tasks"])
     for t, n in DEV0015_MAX_NEW.items():
@@ -71,7 +74,9 @@ def test_max_new_tokens_after_dev0015_adjustment(cfg):
             eff = 1 if t in letter else n
             assert cfg.max_new_tokens(t, fam, "eval") == eff and cfg.max_new_tokens(t, fam, "dev") == eff
             assert cfg.max_new_tokens(t, fam, "extra") == n and cfg.max_new_tokens(t, fam, "free") == n
-            assert cfg.max_new_tokens(t, fam, "think") == 4096 and cfg.max_new_tokens(t, fam, "think8192") == 8192
+            assert cfg.max_new_tokens(t, fam, "think") == 4096 + 1024 and cfg.think_budget() == (4096, 1024)
+            with pytest.raises(ValueError):
+                cfg.max_new_tokens(t, fam, "think8192")
 
 
 def test_max_new_tokens_adjustment_record(cfg):
@@ -121,7 +126,8 @@ def test_max_new_tokens_basis_matches_run0012_metrics(cfg):
 
 def test_thinking_only_on_think_subsets_and_greedy(cfg):
     assert {s: cfg.enable_thinking(s) for s in P.SUBSET_KINDS} == {"eval": False, "dev": False, "think": True,
-                                                                  "think8192": True, "extra": False, "free": False}
+                                                                  "extra": False, "free": False}
+    assert [s for s in P.SUBSET_KINDS if cfg.uses_think_budget(s)] == ["think"]
     dec = cfg.decoding()
     assert dec["do_sample"] is False and dec["num_beams"] == 1 and dec["repetition_penalty"] == 1.0
     assert cfg.order == "image_first"

@@ -29,6 +29,9 @@ tokenizer / config 读取并断言，不写死 token id，不写死层号（简�
 - 思考开关（D13-2、§7.2）：模板没有开关。enable_thinking=True = 在 user 轮之前加一轮 system，内容是 model card 的
   R1_SYSTEM_PROMPT（原文逐字，出处见 R1_SYSTEM_PROMPT_SOURCE）；False = 不加 system 轮。两种都用同一个 assistant 头。
   ModelInputs 只含 user 轮，system 轮由 generate 按开关加在最前面。
+- DEV-0027：generate_batch_budgeted（预算强制收尾，公共实现在 src/adapters/budget.py；思考段开头 `<think>` 在输出里，强制收尾补
+  `</think>` + THINK_SEPARATOR）；pre_projection_features（pixel shuffle 之前的 32×32 patch 网格）；format_boxes；
+  end_of_turn_token_id / stop_token_ids。
 - 思考段的剥离（D10；与 Gemma 适配器同一条规则，DEV-0005 第 1 轮审查）：思考段的开头 `<think>` 由模型自己写出（不在提示里），
   所以规则只看输出：最后一个 `<think>` 之后没有 `</think>`（写了思考段却没关上，例如 max_new_tokens 用完）才算未闭合，
   text 为空、thinking_unclosed=True；否则 text 取最后一个 `</think>` 之后的内容（模型没写思考段、直接作答时取全文），
@@ -61,6 +64,7 @@ import contextlib
 import functools
 import hashlib
 import json
+import math
 import platform
 import re
 from pathlib import Path
@@ -71,6 +75,7 @@ import torch
 from PIL import Image
 
 from src.adapters import batching, registry
+from src.adapters.budget import BudgetSupport
 from src.adapters.image_policy import TilePolicy
 from src.adapters.checkpoint import CheckpointSupport, base_fingerprint
 from src.adapters.training import TrainingSupport, cumsum_positions, scatter_rows
@@ -90,7 +95,9 @@ from src.adapters.base import (
     Span,
     capture_output,
     captured_output,
+    check_box_labels,
     check_grid_token_names,
+    native_box_ints,
     resolve_layer_keys,
 )
 
@@ -124,8 +131,12 @@ IMG_CONTEXT = "<IMG_CONTEXT>"  # 图像占位符 = config.image_token_id
 IMG_START = "<img>"
 IMG_END = "</img>"
 VIDEO = "<video>"
-# 停止 token（D13-3：InternVL 只有 <|im_end|>）
+# 停止 token（D13-3：InternVL 只有 <|im_end|>）。第一个是回合结束 token（end_of_turn_token_id）
 STOP_TOKENS: tuple[str, ...] = (IM_END,)
+# 预算强制收尾（DEV-0027）：思考结束标记 </think> 后面紧跟的固定分隔。模板没有思考段（§7.2），R1 system prompt 只说"Separate the
+# answer from the think section with a newline"；RUN-0005 的开思考输出在 </think> 之后都是 "\n\n"（与 Qwen3 的模板相同，InternVL3.5
+# 的 LLM 是 Qwen3），所以取 "\n\n"。思考段开头 <think> 在输出里（第一个生成的 token）。tests/test_adapter_budget.py 对照这些记录核对。
+THINK_SEPARATOR = "\n\n"
 # 指令里不许出现的结构性 token：出现就会打乱区间或模板结构（官方处理器会把文本里任何 <IMG_CONTEXT>/<video> 当占位符展开）
 _STRUCTURAL_TOKENS: tuple[str, ...] = (IM_START, IM_END, END_OF_TEXT, IMG_CONTEXT, IMG_START, IMG_END, VIDEO)
 
@@ -191,7 +202,7 @@ def tiles_of(info: ImageTokenInfo) -> int:
     return h // TILE_GRID_HW[0]
 
 
-class InternVL35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, ModelAdapter):
+class InternVL35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, BudgetSupport, ModelAdapter):
     """InternVL3.5-HF（2B/4B）适配器。ModelInputs 是单条样本；generate_batch 左填充拼批（DEV-0011）。vLLM 另开任务。
 
     设备与 tile 策略在构造时给定，dtype 在 load 时给定。进入任何模型算子之前，入口断言检查输入与模型的 device/dtype，
@@ -679,6 +690,37 @@ class InternVL35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, M
             return torch.empty((0, self.hidden_size()), dtype=self._dtype, device=self._device)
         return self._image_features(inputs)
 
+    def pre_projection_features(self, inputs: ModelInputs) -> tuple[torch.Tensor, tuple[int, int]]:
+        """pixel shuffle 与 multi_modal_projector 之前的视觉塔输出（D59-8，E2 的 pre_proj 参考线）：([n·n, D_v], (n, n))，单 tile
+        448 px、patch 14 px 时 n = 32，行主序（InternViT 的 patch 嵌入是 Conv2d 之后 flatten，本来就是行主序）。只接受单图、单 tile。
+
+        取的位置与 InternVLModel.get_image_features 在 pixel_shuffle 之前的那一步逐句相同：pixel_values 转成模型 dtype → vision_tower
+        → 按 config 的 vision_feature_layer 取层（−1 = last_hidden_state）→ vision_feature_select_strategy = "default" 时去掉 CLS。
+        对本结果 reshape 成 (n, n) 再做 pixel_shuffle(downsample_ratio) 与 multi_modal_projector 就是 vision_features（测试逐位核对）。"""
+        where = "pre_projection_features"
+        self._check_entry(inputs, None, where=where)
+        if len(inputs.images) != 1:
+            raise ValueError(f"{where} 只接受单图，收到 {len(inputs.images)} 张")
+        self._require_single_tile(inputs, where=where)
+        cfg = self._model.config
+        layer, strategy = cfg.vision_feature_layer, cfg.vision_feature_select_strategy
+        if not isinstance(layer, int):
+            raise RuntimeError(f"vision_feature_layer={layer!r}：只支持单个层号（与 get_image_features 的 reshape 相同）")
+        if strategy != "default":
+            raise RuntimeError(f"vision_feature_select_strategy={strategy!r}：只支持 default（去掉 CLS）")
+        inner = self._model.model
+        pv = inputs.tensors["pixel_values"].to(dtype=inner.dtype)
+        kw = {} if layer == -1 else {"output_hidden_states": True}
+        out = inner.vision_tower(pixel_values=pv, return_dict=True, **kw)
+        feats = (out.last_hidden_state if layer == -1 else out.hidden_states[layer])[:, 1:, :]
+        n = math.isqrt(int(feats.shape[1]))
+        if feats.shape[0] != 1 or n * n != feats.shape[1]:
+            raise RuntimeError(f"视觉塔输出（去掉 CLS）形状 {tuple(feats.shape)}，期望 [1, n·n, D_v]")
+        r = round(1 / float(cfg.downsample_ratio))
+        if (n // r, n // r) != inputs.images[0].grid_hw or n % r:
+            raise RuntimeError(f"patch 网格 {n}×{n} 与 LLM 网格 {inputs.images[0].grid_hw} 不是 {r} 倍的关系")
+        return feats[0], (n, n)
+
     # ------------------------------------------------------------------
     # 生成
     # ------------------------------------------------------------------
@@ -943,6 +985,25 @@ class InternVL35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, M
         不需要加载模型；parse_one_box 由基类在它之上给出。"""
         return parse_boxes(text, width=width, height=height)  # 模块级函数（方法体里的名字按全局作用域查找）
 
+    def format_boxes(self, boxes: Sequence[Sequence[float]], *, width: float, height: float,
+                     labels: Sequence[str | None] | None = None) -> str:
+        """parse_boxes 的逆（DEV-0027），格式见模块级的 format_boxes。不需要加载模型。"""
+        return format_boxes(boxes, width=width, height=height, labels=labels)
+
+    # ------------------------------------------------------------------
+    # 停止 token（DEV-0027：公开接口，替代私有的 _stop_ids()）
+    # ------------------------------------------------------------------
+
+    def end_of_turn_token_id(self) -> int:
+        """回合结束 token：<|im_end|>（STOP_TOKENS 的第一个，也是唯一的停止 token）。"""
+        self._require_loaded()
+        return self._ids[IM_END]
+
+    def stop_token_ids(self) -> tuple[int, ...]:
+        """全部停止 token：只有 <|im_end|>（D13-3）。"""
+        self._require_loaded()
+        return tuple(self._ids[s] for s in STOP_TOKENS)
+
     # ------------------------------------------------------------------
     # 训练侧钩子（DEV-0020；公共实现见 src/adapters/training.py 的 TrainingSupport）
     # ------------------------------------------------------------------
@@ -952,6 +1013,10 @@ class InternVL35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, M
 
     def _stop_ids(self) -> list[int]:
         return [self._ids[s] for s in STOP_TOKENS]
+
+    def _think_markers(self) -> tuple[str | None, str, str]:
+        """预算强制收尾（src/adapters/budget.py）：(输出里的思考段开头 <think>, 结束标记 </think>, 固定分隔 "\\n\\n")。"""
+        return THINK_START, THINK_END, THINK_SEPARATOR
 
     def _forward_scope(self) -> Any:
         return contextlib.nullcontext()
@@ -1275,6 +1340,37 @@ def parse_one_box(text: str, *, width: float, height: float) -> OneBoxParse:
     """只要一个框（如 RefCOCO 的 REC）：parse_boxes 失败就原样给出失败原因；框多于一个 → MULTIPLE_BOXES，不猜用哪个
     （规则见 src.parsing.one_box，与适配器方法 parse_one_box 相同）。"""
     return one_box(parse_boxes(text, width=width, height=height))
+
+
+# format_boxes 的分组之间的分隔（DEV-0027）：标签不同的框各写一组 <ref>…</ref><box>[[…]]</box>，组之间换行
+BOX_GROUP_SEPARATOR = "\n"
+
+
+def format_boxes(boxes: Sequence[Sequence[float]], *, width: float, height: float,
+                 labels: Sequence[str | None] | None = None) -> str:
+    """parse_boxes 的逆（DEV-0027）：绝对像素 xyxy → InternVL 的原生框文本（§7.5 文档原文 "<ref>class name</ref><box>[[x1, y1, x2,
+    y2], ...]</box>"；E1 定位提示的实测输出 `<ref>the cat on the left</ref><box>[[24, 114, 492, 984]]</box>`）：0–1000 的整数，
+    x 在前（换算与取整见 base.native_box_ints）。相邻且标签相同的框写进同一个 `<box>[[…], […]]</box>`，标签为 None 的组不写
+    `<ref>`；组之间用 BOX_GROUP_SEPARATOR。标签里不能有 `<ref>`、`</ref>`、`<box>`、`</box>`（会打乱解析）。原生格式没有"零个框"的
+    写法（parse_boxes 判 no_box），零个框报错。"""
+    quads = native_box_ints(boxes, width=width, height=height)
+    labs = check_box_labels(labels, len(quads))
+    if not quads:
+        raise ValueError("InternVL 的原生框格式没有零个框的写法（parse_boxes 会判 no_box）")
+    bad = [lab for lab in labs if lab is not None and any(tag in lab for tag in (REF_OPEN, REF_CLOSE, BOX_OPEN, BOX_CLOSE))]
+    if bad:
+        raise ValueError(f"标签里不能有 <ref>/<box> 标签：{bad!r}")
+    groups: list[tuple[str | None, list[tuple[int, int, int, int]]]] = []
+    for q, lab in zip(quads, labs):
+        if groups and groups[-1][0] == lab:
+            groups[-1][1].append(q)
+        else:
+            groups.append((lab, [q]))
+    parts = []
+    for lab, qs in groups:
+        body = BOX_OPEN + "[" + ", ".join("[" + ", ".join(str(v) for v in q) + "]" for q in qs) + "]" + BOX_CLOSE
+        parts.append(("" if lab is None else REF_OPEN + lab + REF_CLOSE) + body)
+    return BOX_GROUP_SEPARATOR.join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -1777,7 +1873,9 @@ __all__ = [
     "TILE_GRID_HW",
     "TILE_PX",
     "TOKENS_PER_TILE",
+    "THINK_SEPARATOR",
     "build_tiny_model",
+    "format_boxes",
     "load_pinned_components",
     "make_tiny_adapter",
     "parse_boxes",

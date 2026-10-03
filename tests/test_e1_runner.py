@@ -122,6 +122,31 @@ class FakeAdapter:
     def generate_batch(self, inputs_list, *, enable_thinking, max_new_tokens, allowed_token_ids=None, **kw):
         return self._rows(list(inputs_list), enable_thinking, max_new_tokens, "generate_batch", allowed_token_ids)
 
+    def generate_batch_budgeted(self, inputs_list, *, thinking_budget, answer_budget, allowed_token_ids=None):
+        """思考子集（D59-1）：在 _rows 的回答前面确定地加一段思考——按指令的哈希轮流取自然收尾、强制收尾（补 `</think>\\n\\n`）、
+        没写思考段三种；作答段的 token 数：停下的取 1 + len(text) % 7，没停下的写满 answer_budget。"""
+        base = self._rows(list(inputs_list), True, thinking_budget + answer_budget, "generate_batch_budgeted",
+                          allowed_token_ids)
+        out = []
+        for inp, r in zip(inputs_list, base):
+            h = int(hashlib.sha256(inp.instruction.encode()).hexdigest(), 16) % 3
+            kind = ("natural", "forced", "not_opened")[h]
+            n_ans = r.n_generated_tokens if r.stopped else answer_budget
+            n_think = {"natural": 3, "forced": thinking_budget, "not_opened": 0}[kind]
+            ins = (9001, 9002) if kind == "forced" else ()
+            think_txt = {"natural": "abc</think>\n\n", "forced": "abcd", "not_opened": ""}[kind]
+            ins_txt = "</think>\n\n" if ins else ""
+            raw = think_txt + ins_txt + r.raw_text
+            out.append(GenerationResult(
+                text=r.text, token_ids=tuple(range(n_think + n_ans)), n_generated_tokens=n_think + n_ans,
+                n_prompt_tokens=r.n_prompt_tokens, n_visual_tokens=r.n_visual_tokens, wall_time_s=r.wall_time_s,
+                raw_text=raw, stopped=r.stopped, n_image_pixels=r.n_image_pixels, batch_size=r.batch_size,
+                batch_wall_time_s=r.batch_wall_time_s, thinking_end=kind, forced_close=kind == "forced",
+                n_thinking_tokens=n_think, n_answer_tokens=n_ans, n_inserted_tokens=len(ins), inserted_token_ids=ins,
+                inserted_at=n_think if ins else None, inserted_span=(4, 4 + len(ins_txt)) if ins else None,
+                answer_text=r.text))
+        return out
+
 
 def spec(task, subset="eval", bs=2, limit=None):
     e = registry.get_model("qwen3.5-0.8b")
@@ -275,8 +300,10 @@ def test_estimate_task_with_fake_adapter(paths):
     sps = out["samples_per_s"]
     assert out["gpu_hours"]["eval"] == pytest.approx(n_eval / sps / 3600)
     t = out["think_measurement"]
-    assert t["enable_thinking"] is True and t["max_new_tokens"] == 4096
-    assert out["gpu_hours"]["think8192"] == pytest.approx(out["n"]["think8192"] / t["samples_per_s"] / 3600 * 2)
+    assert t["enable_thinking"] is True and t["max_new_tokens"] == 4096 + 1024  # D59-1：预算强制收尾
+    assert t["think_budget"] == {"thinking_budget": 4096, "answer_budget": 1024} and sum(t["thinking_end_counts"].values()) == 1
+    assert "think8192" not in out["gpu_hours"] and "think8192" not in out["n"]
+    assert out["gpu_hours"]["think"] == pytest.approx(out["n"]["think"] / t["samples_per_s"] / 3600)
     md = EST.summary_markdown("m", "default", [out], {"x": 1})
     assert "| count |" in md and "合计" in md
     assert EST.best_batch([{"ok": True, "mem_ok": False, "samples_per_s": 9, "batch_size": 8},

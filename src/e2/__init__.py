@@ -11,7 +11,7 @@
 - 任务：depth（NYU，SILog）、semseg（ADE20K，ADE_NUM_CLASSES 类，交叉熵）、normals（NYU 法向，余弦损失）、refseg（RefCOCO，BCE + Dice）。
 - 层：--layers all / every k，按 num_layers() 展开（层号约定见 src/adapters/base.py）；另加 L{N}_pre（最后一个 decoder 层的原始输出，
   最终归一化之前；适配器的层键 PRE_NORM_LAST；DEV-0024，D53-3 的 I1），单列。参考线：post_proj（= 第 0 层，D21-3）、
-  pre_proj（视觉塔投影 / 合并之前的输出，需要适配器提供 pre_projection_features，现有适配器没有）。
+  pre_proj（视觉塔投影 / 合并之前的输出，适配器的 pre_projection_features；DEV-0027 起三个家族都有，D59-8）。
 - 评测另按光栅位置分开报标题指标（上半 / 下半、token 光栅下标的四分位；src/e2/positions.py；D53-3 的 I2），点估计。
 - 去重：训练池的剔除清单必须比较过当前任务的评测集（src/e2/data.check_dedupe_coverage；D53-3 的 B）。
 - 训练：固定种子、步数、学习率与调度（配置里，全部模型与层共用）；每 eval_every 步在训练集留出的小验证子集上记曲线；最后在

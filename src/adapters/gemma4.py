@@ -20,6 +20,9 @@
   从模板的两次渲染差分得到，测试与冒烟逐个核对"拼出来的 ids == apply_chat_template(..., enable_thinking=X) 的分词"。
 - 思考段（固定 revision 的 tokenizer_config.json 里 response_template：open `<|channel>thought\\n`、close `<channel|>`；
   聊天模板的 strip_thinking 按 `<|channel>`…`<channel|>` 剥离）：text 取最后一个 `<channel|>` 之后的内容。
+- DEV-0027：generate_batch_budgeted（预算强制收尾，公共实现在 src/adapters/budget.py；思考段开头 `<|channel>` 在输出里，强制收尾只补
+  `<channel|>`，没有分隔）；pre_projection_features（pooler 之前的 patch 网格 (3h, 3w)）；format_boxes；end_of_turn_token_id /
+  stop_token_ids。
 - 生成（D13-3）：显式 greedy（仓库的 generation_config 是 do_sample=True, top_k=64, top_p=0.95）；
   停止 token 是 `<turn|>` 与 `<eos>`，id 从 tokenizer 查。generate 与 generate_batch 走同一条路径（src/adapters/batching.py；
   DEV-0011）：左填充用 `<pad>`，各行的图按行的顺序拼进同一个 pixel_values（每张图都按 max_soft_tokens 补到同样的 patch 数），
@@ -66,6 +69,7 @@ import torch
 from PIL import Image
 
 from src.adapters import batching, registry
+from src.adapters.budget import BudgetSupport
 from src.adapters.image_policy import SoftTokenBudget
 from src.adapters.checkpoint import CheckpointSupport, TokenRestoreError, base_fingerprint
 from src.adapters.training import TrainingSupport, cumsum_positions, scatter_rows
@@ -85,13 +89,15 @@ from src.adapters.base import (
     Span,
     capture_output,
     captured_output,
+    check_box_labels,
     check_grid_token_names,
+    native_box_ints,
     resolve_layer_keys,
 )
 
 # 与 Qwen 共用：入口断言的异常类型（调用方跨家族只需捕获一种），以及 allowed_token_ids 的 logits 限制
 # （简报 §12：限制 logits 的实现处处一致）。二者目前定义在 qwen35.py；挪到公共模块要改 base.py，不在本任务范围内。
-from src.adapters.qwen35 import AdapterDeviceError, _AllowedTokensProcessor
+from src.adapters.qwen35 import AdapterDeviceError, _AllowedTokensProcessor, json_box_object, json_box_text
 from src.executors.geometry import norm1000_to_abs
 from src.parsing import BoxParse, OneBoxParse, one_box, parse_json_boxes
 
@@ -112,8 +118,13 @@ THINK = "<|think|>"  # enable_thinking=True 时出现在插入的 system 轮里
 CHANNEL_OPEN = "<|channel>"  # 思考段开始（tokenizer 的 soc_token）
 CHANNEL_CLOSE = "<channel|>"  # 思考段结束（eoc_token）
 THOUGHT_OPEN = CHANNEL_OPEN + "thought\n"  # response_template.fields.thinking.open（固定 revision 的 tokenizer_config.json）
-# 停止 token（D13-3）
+# 停止 token（D13-3）。第一个是回合结束 token（end_of_turn_token_id）
 STOP_TOKENS: tuple[str, ...] = (TURN_CLOSE, EOS)
+# 预算强制收尾（DEV-0027）：思考结束标记 <channel|> 后面紧跟的固定分隔 = 空串。依据：固定 revision 的 tokenizer_config.json 的
+# response_template 里思考段的 close 就是 `<channel|>`，content 紧接其后；聊天模板把历史里的思考段渲染成
+# `<|channel>thought\n` + 思考 + `\n<channel|>` + 回答（中间没有分隔）；RUN-0005 的开思考输出都是 `…<channel|>回答<turn|>`。
+# 思考段开头 <|channel> 在输出里（第一个生成的 token）。tests/test_adapter_budget.py 对照模板核对。
+THINK_SEPARATOR = ""
 # attach 时逐个核对"分词成单个 token"的特殊 token
 _NAMED_TOKENS: tuple[str, ...] = (
     BOS, EOS, PAD, TURN_OPEN, TURN_CLOSE, IMAGE_TOKEN, BOI, EOI, THINK, CHANNEL_OPEN, CHANNEL_CLOSE,
@@ -231,7 +242,23 @@ def parse_one_box(text: str, *, width: float, height: float) -> OneBoxParse:
     return one_box(parse_boxes(text, width=width, height=height))
 
 
-class Gemma4Adapter(CheckpointSupport, TrainingSupport, ModelAdapter):
+# 原生框的文本格式（format_boxes；DEV-0027）：官方文档与 RUN-0002/RUN-0005 的实测输出，如
+# '```json\n[\n  {"box_2d": [107, 13, 987, 496], "label": "the cat on the left"}\n]\n```'（两个空格缩进，一行一个对象）。
+GEMMA_BOX_INDENT = "  "
+
+
+def format_boxes(boxes: Sequence[Sequence[float]], *, width: float, height: float,
+                 labels: Sequence[str | None] | None = None) -> str:
+    """parse_boxes 的逆（DEV-0027）：绝对像素 xyxy → Gemma 的原生框文本（E1 定位提示 "detect {expression}" 得到的输出格式）：
+    ```json 代码块，`[{"box_2d": [y1, x1, y2, x2], "label": …}, …]`，0–1000 的整数，**y 在前**（换算与取整见
+    base.native_box_ints）。零个框写 `[]`。代码块与对象的写法与 Qwen 共用（qwen35.json_box_text / json_box_object）。"""
+    quads = native_box_ints(boxes, width=width, height=height)
+    labs = check_box_labels(labels, len(quads))
+    objs = [json_box_object(BOX_KEY, (q[1], q[0], q[3], q[2]), lab) for q, lab in zip(quads, labs)]
+    return json_box_text(objs, indent=GEMMA_BOX_INDENT)
+
+
+class Gemma4Adapter(CheckpointSupport, TrainingSupport, BudgetSupport, ModelAdapter):
     """Gemma 4（E2B-it / E4B-it）适配器。ModelInputs 是单条样本；generate_batch 左填充拼批（DEV-0011）。vLLM 另开任务。
 
     设备在构造时给定，dtype 在 load 时给定。进入任何模型算子之前，入口断言检查输入与模型的 device/dtype，
@@ -742,6 +769,41 @@ class Gemma4Adapter(CheckpointSupport, TrainingSupport, ModelAdapter):
             return torch.empty((0, self.hidden_size()), dtype=self._dtype, device=self._device)
         return self._image_features(inputs)
 
+    def pre_projection_features(self, inputs: ModelInputs) -> tuple[torch.Tensor, tuple[int, int]]:
+        """视觉塔在 pooler 与 embed_vision 之前的输出（D59-8，E2 的 pre_proj 参考线）：([3h·3w, D_v], (3h, 3w))，patch 网格
+        （每个 patch 16 px；pooler 把每 pool × pool 个 patch 平均成一个 LLM 视觉 token），行主序，去掉填充 patch。只接受单图。
+
+        取的位置：Gemma4VisionModel.forward 里 encoder 的 last_hidden_state（在 vision_tower.encoder 上挂前向钩子，视觉塔照常前向，
+        与 get_image_features 同一条路径）。填充 patch 按 HF 的规则（image_position_ids 两维都是 −1）去掉；有效 patch 按它自己的
+        (x, y) 排成行主序（键 = y · n_x + x，必须恰好是网格的一个排列）。对本结果做 pool × pool 的平均、× sqrt(D_v)、标准化、
+        embed_vision 就是 vision_features（测试在浮点误差内核对：pooler 用 one-hot 矩阵乘求平均，求和顺序不同）。"""
+        where = "pre_projection_features"
+        self._check_entry(inputs, None, where=where)
+        if len(inputs.images) != 1:
+            raise ValueError(f"{where} 只接受单图，收到 {len(inputs.images)} 张")
+        t = inputs.tensors
+        pos = t["image_position_ids"]
+        if pos.dim() != 3 or pos.shape[0] != 1 or pos.shape[2] != 2:
+            raise RuntimeError(f"image_position_ids 形状 {tuple(pos.shape)}，期望 [1, max_patches, 2]")
+        vt = self._model.model.vision_tower
+        with capture_output(vt.encoder) as cap:
+            vt(pixel_values=t["pixel_values"], pixel_position_ids=pos)
+        hs = captured_output(cap, what=where).last_hidden_state
+        if hs.dim() != 3 or hs.shape[:2] != pos.shape[:2]:
+            raise RuntimeError(f"encoder 输出形状 {tuple(hs.shape)} 与 image_position_ids {tuple(pos.shape)} 不配")
+        p = pos[0]
+        valid = ~(p == -1).all(dim=-1)  # HF：padding_positions = (pixel_position_ids == -1).all(dim=-1)
+        xy = p[valid].long()
+        n_x, n_y = int(xy[:, 0].max()) + 1, int(xy[:, 1].max()) + 1
+        key = xy[:, 1] * n_x + xy[:, 0]
+        if not torch.equal(torch.sort(key).values.cpu(), torch.arange(n_x * n_y)):
+            raise RuntimeError(f"有效 patch 的 (x, y) 不是 {n_y}×{n_x} 网格的一个排列")
+        k = self._pool
+        if (n_y // k, n_x // k) != inputs.images[0].grid_hw or n_y % k or n_x % k:
+            raise RuntimeError(f"patch 网格 {n_y}×{n_x} 与 LLM 网格 {inputs.images[0].grid_hw} 不是 {k} 倍的关系")
+        feats = hs[0][valid]
+        return feats.index_select(0, torch.argsort(key).to(feats.device)), (n_y, n_x)
+
     # ------------------------------------------------------------------
     # 生成
     # ------------------------------------------------------------------
@@ -1009,6 +1071,25 @@ class Gemma4Adapter(CheckpointSupport, TrainingSupport, ModelAdapter):
         不需要加载模型；parse_one_box 由基类在它之上给出。"""
         return parse_boxes(text, width=width, height=height)  # 模块级函数（方法体里的名字按全局作用域查找）
 
+    def format_boxes(self, boxes: Sequence[Sequence[float]], *, width: float, height: float,
+                     labels: Sequence[str | None] | None = None) -> str:
+        """parse_boxes 的逆（DEV-0027），格式见模块级的 format_boxes。不需要加载模型。"""
+        return format_boxes(boxes, width=width, height=height, labels=labels)
+
+    # ------------------------------------------------------------------
+    # 停止 token（DEV-0027：公开接口，替代私有的 _stop_ids()）
+    # ------------------------------------------------------------------
+
+    def end_of_turn_token_id(self) -> int:
+        """回合结束 token：<turn|>（STOP_TOKENS 的第一个）。"""
+        self._require_loaded()
+        return self._ids[TURN_CLOSE]
+
+    def stop_token_ids(self) -> tuple[int, ...]:
+        """全部停止 token：<turn|>、<eos>（STOP_TOKENS 的顺序）。"""
+        self._require_loaded()
+        return tuple(self._ids[s] for s in STOP_TOKENS)
+
     # ------------------------------------------------------------------
     # 训练侧钩子（DEV-0020；公共实现见 src/adapters/training.py 的 TrainingSupport）
     # ------------------------------------------------------------------
@@ -1018,6 +1099,10 @@ class Gemma4Adapter(CheckpointSupport, TrainingSupport, ModelAdapter):
 
     def _stop_ids(self) -> list[int]:
         return [self._ids[s] for s in STOP_TOKENS]
+
+    def _think_markers(self) -> tuple[str | None, str, str]:
+        """预算强制收尾（src/adapters/budget.py）：(输出里的思考段开头 <|channel>, 结束标记 <channel|>, 固定分隔 "")。"""
+        return CHANNEL_OPEN, CHANNEL_CLOSE, THINK_SEPARATOR
 
     def _forward_scope(self) -> Any:
         return contextlib.nullcontext()
@@ -1864,9 +1949,11 @@ __all__ = [
     "MAX_SOFT_TOKENS_CHOICES",
     "PinnedComponents",
     "STOP_TOKENS",
+    "THINK_SEPARATOR",
     "box2d_to_xyxy",
     "build_tiny_model",
     "collapse_image_blocks",
+    "format_boxes",
     "grid_from_position_ids",
     "load_pinned_components",
     "make_tiny_adapter",

@@ -8,8 +8,8 @@
   - post_proj：就是第 0 层（D21-3）。不另算一组特征；每次进程第一次前向时核对 adapter.vision_features(inputs) 与第 0 层逐位相同，
     不相同就报错（与 D21-3 矛盾，G2 的解读要先查清）。
   - pre_proj：视觉塔在投影或合并之前的输出，要求适配器有 pre_projection_features(inputs) -> (张量 [n, D_v], (h, w))，行主序。
-    现有三个适配器都没有这个方法，给了 --reference pre_proj 直接报错（接口建议见 DEV-0023 完成总结）。维度与网格都可以与 LLM
-    层不同，探针按各自的输入维度构造。
+    DEV-0027 起三个家族的适配器都有（D59-8；各家族取的位置写在适配器里）；没有这个方法的适配器给了 --reference pre_proj 直接报错。
+    维度与网格都可以与 LLM 层不同（patch 网格是 LLM 网格的 merge / pool 倍），探针按各自的输入维度构造。
 - 标准化（configs/e2_probes.json 的 feature_norm）：每个特征来源一组逐通道统计量，训练前在训练集里按哈希排序取的 n_samples 条上
   一次算好（float64，Chan 的并行合并；不用 E[x²] − E[x]²，避免大激活通道上的相消误差），之后冻结：x̂ = (x − μ) / sqrt(σ² + eps)。
 - 入口断言（dev.md：开发机上不可能出差异的属性要在代码里查）：隐藏状态必须在适配器的 device 上、是浮点、形状 [n, D] 与网格一致。
@@ -158,7 +158,7 @@ class FeatureExtractor:
         if self.use_pre_proj and not callable(getattr(adapter, "pre_projection_features", None)):
             raise NotImplementedError(
                 f"{type(adapter).__name__} 没有 pre_projection_features(inputs)：pre_proj 参考线（视觉塔在投影 / 合并之前的输出）"
-                "需要适配器提供这个接口（DEV-0023 完成总结），本任务不改适配器")
+                "需要适配器提供这个接口（DEV-0027 起三个家族的适配器都有）")
         # L{N}_pre：最后一个 decoder 层的原始输出（最终归一化之前），向适配器要层键 PRE_NORM_LAST
         self.pre_norm: str | None = pre_norm_key(int(adapter.num_layers())) if pre_norm_last else None
         self.keys: list[FeatureKey] = (([PRE_PROJ] if self.use_pre_proj else []) + self.layers

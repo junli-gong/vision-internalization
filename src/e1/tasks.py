@@ -7,7 +7,8 @@
   检测没有开发子集（COCO 500 与 ODinW 都只有评测图）：用这三个开发子集用到的图（COCO train2014，去重、按 image id 升序）配
   COCO 的 80 类。GT 取落地源 coco_train2014_e1dev（这些图在 instances_train2014 里的全部标注，DEV-0017 §6）：落地了就有 GT、
   验收能按判定结果比；没落地时退回只核对格式（has_gt = False），选择统计里写明。
-- think / think8192：think:<任务> / think8192:<任务>（每任务 200 / 50 条），开思考。
+- think：think:<任务>（每任务 200 条），开思考，预算强制收尾（D59-1）。think8192 子集由 D59-1 取消（数据清单
+  configs/e1_eval_subsets.json 里的 think8192:<任务> 仍在，E1 不再选它）。
 - free：选择题与点对任务的自由作答诊断（D36-6）：样本取 think:<任务> 的 id，关思考（标题是受限字母读数，见 prompts.readout）。
 - extra：附加对照的子集（extra:refcoco_unc_val → 定位，extra:coco_val2017 → 检测），配 --policy qwen:1024 或 internvl:native。
 计数的问句来源（count_questions，DEV-0015 §4；D36-2 起默认 countbenchqa）：countbenchqa 把落地的人工问句
@@ -48,7 +49,7 @@ FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "e1"
 CHOICE_TASKS: tuple[str, ...] = ("rel_depth_nyu", "rel_depth_blink", "spatial_cvbench", "spatial_embspatial")
 # 每个任务支持哪些子集（extra 只给附加对照的两个任务，free 只给选择题与点对任务）
 TASK_SUBSETS: dict[str, tuple[str, ...]] = {
-    t: ("eval", "dev", "think", "think8192") + (("extra",) if t in ("refexp_box", "ovd") else ())
+    t: ("eval", "dev", "think") + (("extra",) if t in ("refexp_box", "ovd") else ())
     + ((FREE_SUBSET,) if t in CHOICE_TASKS else ()) for t in TASKS
 }
 EXTRA_SUBSET_OF_TASK = {"refexp_box": "extra:refcoco_unc_val", "ovd": "extra:coco_val2017"}
@@ -291,7 +292,7 @@ def _select_simple(task: str, subset: str, paths: DataPaths, count_questions: st
     res = load("dev" if subset == "dev" else "eval")
     st = {"population": _stats(res)}
     samples = res.records
-    if subset in ("think", "think8192", FREE_SUBSET):
+    if subset in ("think", FREE_SUBSET):
         name = f"think:{task}" if subset == FREE_SUBSET else f"{subset}:{task}"  # free 用 think 子集的 id（D36-6）
         st["subset_name"] = name
         samples = _pick(samples, subset_ids(name, paths.eval_subsets), unit, name)

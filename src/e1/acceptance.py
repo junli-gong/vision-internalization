@@ -344,6 +344,14 @@ def group_values(group: Mapping[str, Any], parts: Sequence[tuple[str, Sequence[S
     raise ValueError(f"未知的组统计量 {metric!r}")
 
 
+def group_delta(group: Mapping[str, Any]) -> float:
+    """一组的 δ（D59-3：按组设置，取配置里每组的 delta；取值与依据见配置的 acceptance.delta_rule）。"""
+    d = group.get("delta")
+    if isinstance(d, bool) or not isinstance(d, (int, float)) or not 0 < d < 1:
+        raise ValueError(f"验收组 {group.get('name')!r} 没有合法的 delta（D59-3 起按组设置）：{d!r}")
+    return float(d)
+
+
 def noise_floor(group: Mapping[str, Any], delta: float, parts_a: Sequence[tuple[str, Sequence[Sample], Sequence[Mapping]]],
                 parts_b: Sequence[tuple[str, Sequence[Sample], Sequence[Mapping]]]) -> dict[str, Any]:
     """(ii)：一组在 A1 与 B 之间的指标差（A1 − B）与配对 bootstrap 95% CI；CI ⊂ [−δ, +δ] 即通过。
@@ -419,7 +427,7 @@ def summary_markdown_v3(model_key: str, task_rows: Sequence[Mapping[str, Any]], 
              f"{'是' if header['frozen'] else '不是'}协议的冻结值（A {batch_protocol['batch_size']}、"
              f"B {protocol['composition_b']['batch_size']}）",
              f"- composition_b 的规则：{protocol['composition_b']['rule']}",
-             f"- δ：{protocol['delta']}；组与合并规则见下表与配置的 groups；{protocol['take_rule']}",
+             f"- δ：按组设置（{protocol['delta_rule']}）；每组的值见下表；组与合并规则见配置的 groups；{protocol['take_rule']}",
              f"- {dict(header)}", "",
              "## 判定", "",
              f"- all_pass：**{_f(o['all_pass'])}**；(i) 重跑逐位相同：{_f(o['rerun_all_identical'])}"
@@ -457,6 +465,7 @@ __all__ = [
     "file_sha256",
     "group_of",
     "group_values",
+    "group_delta",
     "noise_floor",
     "overall_v3",
     "reference_columns",

@@ -4,7 +4,8 @@
 运行（服务器；--out 是本次运行的目录 experiments/E1/<NNNN_slug>，结果写进 <out>/<模型>/<任务>…/）：
     python scripts/run_e1.py --model qwen3.5-0.8b --task refexp_box --subset eval \\
         --data-root $PROJ/data --out experiments/E1/0011_e1_main [--resume] [--limit N]
-    # 思考子集：--subset think（预算 4096）/ think8192；附加对照：--subset extra --policy qwen:1024（或 internvl:native）
+    # 思考子集：--subset think（预算强制收尾，D59-1：思考 4096、作答 1024，adapter.generate_batch_budgeted；think8192 已取消）；
+    # 附加对照：--subset extra --policy qwen:1024（或 internvl:native）
     # 选择题与点对任务的 eval、dev 是受限字母读数（1 个 token）；自由作答的诊断：--subset free（think 子集的 id，关思考）
 批配置冻结（configs/e1_prompts.json 的 batch_protocol，D36-1）：--batch-size 默认取冻结值（16）；真模型给别的值要加
 --allow-unfrozen-batch（config.yaml 记 frozen = false）。--tiny 默认 4，不受此限。
@@ -112,7 +113,7 @@ def parse_args(argv=None):
     p.add_argument("--map-ci-resamples", type=int, help=f"检测补充指标 mAP 的 bootstrap 次数（默认 {DEFAULT_MAP_CI_RESAMPLES} = "
                                                          "不算；标题 F1@0.5 的 CI 总是算）")
     p.add_argument("--estimate-n", type=int, default=64, help="--estimate：每个任务最多用多少条开发样本（默认 64）")
-    p.add_argument("--estimate-think", action="store_true", help="--estimate：另测开思考（预算 4096）的吞吐")
+    p.add_argument("--estimate-think", action="store_true", help="--estimate：另测思考子集（预算强制收尾，思考 4096 + 作答 1024，D59-1）的吞吐")
     p.add_argument("--estimate-think-n", type=int, default=8, help="--estimate-think 用的开发样本数（默认 8）")
     p.add_argument("--count-questions", choices=COUNT_QUESTION_SOURCES, default=DEFAULT_COUNT_QUESTIONS,
                    help=f"计数的问句来源（默认 {DEFAULT_COUNT_QUESTIONS}：big_vision 的人工问句，D36-2；heuristic = 从 caption 取对象）")
@@ -274,7 +275,7 @@ def cmd_acceptance(a, argv) -> int:
         tasks = [t for t in g["tasks"] if t in sels]
         if not tasks:
             continue
-        row = A.noise_floor(g, protocol["delta"][g["metric_class"]],
+        row = A.noise_floor(g, A.group_delta(g),
                             [(t, sels[t].samples, recs["A1"][t]) for t in tasks],
                             [(t, sels[t].samples, recs["B"][t]) for t in tasks])
         row["tasks_missing"] = [t for t in g["tasks"] if t not in sels]
