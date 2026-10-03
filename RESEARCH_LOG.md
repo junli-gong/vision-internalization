@@ -42,6 +42,7 @@
 
 | DEV | 发出 | 合入 commit | 内容 | 状态 |
 |---|---|---|---|---|
+| 0032 | 2026-10-03 | — | 收尾：训练后检查点的 restricted 核对用自己的网格 token（D56-5）、E3 去重补 T 文本评测集（D65-4b）、E5 配置说明改为 thinking_end 四类（D62-4）、E2 运行记录写明探针卷积的精度设置（D64-4）（模式 B，worktree agent） | 已派发 |
 | 0031 | 2026-10-03 | （见下一条 commit） | E2：双线性上采样改为可分离矩阵乘（semseg 提速，定义不变）、撤掉法向许可门（D59-6）、估算覆盖法向与 pre_proj（D63；模式 B，worktree agent） | 已合入（无返工；2245 passed + 12 skipped；D64） |
 | 0030 | 2026-10-03 | （见下一条 commit） | E3b 第二部分：评测（单轮网格、叠加反馈多轮与计算记账、匹配计算量的单轮对比、评测前合并核对、run_e1 --checkpoint 的 T 文本评测、C3 改用原生框格式）（模式 B，worktree agent） | 已合入（无返工；与 DEV-0031 一起验证 2264 passed + 16 skipped；D65） |
 | 0029 | 2026-10-03 | 6d72d5b | 收尾：E5 改用 thinking_end 四分类、check_training_interfaces 用公开停止 token、文档与 E2 pre_proj 说明、E3 偶发测试固定线程、三个落地源用 Manifest(script=)（模式 B，worktree agent） | 已合入（无返工；2157 passed + 11 skipped；D62） |
@@ -827,3 +828,4 @@
   - 空跑里噪声底的重跑与正式运行逐字节相同（CPU），仪器成立；
   - 预算判定 `scripts/mgr/e2_budget_check.py`：总计 = 估算 + 噪声底 + 1.5 小时，超过上限就停；
   - 预跑判定 `scripts/mgr/e2_prerun_check.py`：L0、中间层、最后一层，第 3000 步比第 250 步好，且最后两点相对差 < 2%。
+- **派发 DEV-0032**（收尾四项）。合入后重打 RUN-0029 的包，让 E2 的运行记录带上 cuDNN 的精度设置；包本来就还没发。
