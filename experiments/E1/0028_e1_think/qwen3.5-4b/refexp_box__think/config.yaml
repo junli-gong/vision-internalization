@@ -1,0 +1,74 @@
+experiment: E1
+framework: src/e1（DEV-0014；协议 v2：DEV-0017）
+model:
+  key: qwen3.5-4b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-4B
+  revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+  adapter_model_key: qwen3.5-4b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+task: refexp_box
+subset: think
+generation:
+  enable_thinking: true
+  max_new_tokens: 5120
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  readout:
+    kind: text
+    parse: one_box
+  think_budget:
+    thinking_budget: 4096
+    answer_budget: 1024
+    method: generate_batch_budgeted
+    max_new_tokens_note: max_new_tokens = thinking_budget + answer_budget（模型生成的 token
+      数上限，补的 token 不计入）
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+  entry:
+    template: Locate {expression} in the image. Report bbox coordinates in JSON format.
+    native: true
+    provenance: predecessor_cookbook
+    source_url: https://github.com/QwenLM/Qwen3-VL/blob/0dcc180d854f4b132f8059b10bbf0b5fd5dae9ed/cookbooks/2d_grounding.ipynb
+    parse: one_box
+    max_new_tokens: 256
+data:
+  n_samples: 200
+  sample_ids_sha256: 7779de0802f4a0e8dcf242be9fcd4e97dfc95da8ce4ad4d8b6d558f79457fbd4
+  has_gt: true
+  selection_stats:
+    refcoco_unc_val:
+      n_total: 10834
+      n_kept: 10634
+      excluded_by_reason:
+        开发子集: 200
+    subset_name: think:refexp_box
+    n: 200
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: null
+map_ci_resamples: 0
+batch_size: 64
+batch_protocol:
+  protocol_version: 1
+  batch_size: 64
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: true
+  frozen_batch_size: 64
