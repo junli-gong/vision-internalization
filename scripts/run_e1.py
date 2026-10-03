@@ -18,13 +18,23 @@
     python scripts/run_e1.py --estimate --model qwen3.5-0.8b --task all --batch-sizes 1 8 16 32 --data-root $PROJ/data \\
         --out <dir> [--estimate-think]
 开发机彩排（小型随机模型、CPU、tests/fixtures/e1 的小数据）：上面任一条加 --tiny，可省 --data-root。
+训练后模型的 T 文本评测（DEV-0030 §2；跨通道迁移）：加 --checkpoint <检查点目录> --checkpoint-label <标签>，只用于正式运行模式
+（不能配 --acceptance、--estimate、附加口径）：
+    python scripts/run_e1.py --model qwen3.5-0.8b --task all --subset eval --data-root $PROJ/data \\
+        --checkpoint <训练叶目录>/ckpt/final/model --checkpoint-label t_text/e3b/seed0 --out experiments/E3/00NN_e3b_ttext
+    # 结果写进 <out>/<标签>/<模型>/<任务>…/；先跑评测前的合并核对（src/e3/merge_check：check_training_interfaces --checkpoint 的同一套
+    # 函数，n 取 configs/e3b_train.json 的 eval.merge_check，可用 --merge-check-n 改），写进 <out>/<标签>/<模型>/merge_check.json，
+    # 不通过就不评测（退出码 1）。base 换成 factory.load_trained(merge=True)，其余协议不变（冻结口径、批配置、三列）；检查点的图像
+    # 口径必须就是 E1 冻结的口径（--tiny 时照记检查点自己的口径）。config.yaml 另记 checkpoint（manifest 的 sha256 等）；metrics.json
+    # 的 diagnostics 另记自由生成里冒出网格 token 的条数（grid_tokens_in_output）。
 
 --task：一个或多个任务名，或 all（refexp_box refexp_poly grid16 count ovd rel_depth_nyu rel_depth_blink spatial_cvbench
 spatial_embspatial）。--policy：default（E1 冻结的口径，D28-3）、qwen:1024（Qwen 约 1K token）、internvl:native（InternVL 原生
 动态 tile）；后两个只用于 --subset extra 的附加对照（也可用于 --estimate 量它们的吞吐）。
 --count-questions：计数的问句来源，countbenchqa（默认，D36-2：big_vision 的人工问句，出自 PaliGemma，Gemma 家族可能见过；
 要先落地 countbenchqa_questions）或 heuristic（从 caption 取对象）。只影响 count。
-退出码：0 = 跑完；2 = 出错（报错先写进 <out>/<模型>/errors/，再退出；argparse 用法错误也是 2）。
+退出码：0 = 跑完；1 = --checkpoint 的合并核对没有通过，拒绝评测；2 = 出错（报错先写进 <out>/<模型>/errors/，再退出；argparse 用法
+错误也是 2）。
 """
 
 from __future__ import annotations
@@ -69,6 +79,7 @@ POLICY_FAMILY = {"qwen:1024": registry.FAMILY_QWEN35, "internvl:native": registr
 TINY_INIT_STD = 0.05  # 与 validate_batching 相同：小模型重取参数，否则 greedy 输出几乎与输入无关
 DEFAULT_MAP_CI_RESAMPLES = 0  # mAP 的 CI 默认不算：每次重采样都跑 COCOeval，GPU 空等；标题 F1@0.5 的 CI 照常算
 RUN_DIR_NAME = re.compile(r"[0-9]{4}_[A-Za-z0-9][A-Za-z0-9_.-]*")
+CHECKPOINT_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*(/[A-Za-z0-9][A-Za-z0-9_.-]*)*")  # --checkpoint-label：相对路径，不含 ..
 TINY_BATCH_SIZE = 4  # --tiny 的默认批大小（fixture 每个任务只有几条；不受冻结的批配置约束）
 TINY_ALT_BATCH_SIZE = 3  # --tiny 验收的 B 遍批大小（与 4 不同，fixture 上也能换出不同的批组成）
 
@@ -117,7 +128,25 @@ def parse_args(argv=None):
     p.add_argument("--estimate-think-n", type=int, default=8, help="--estimate-think 用的开发样本数（默认 8）")
     p.add_argument("--count-questions", choices=COUNT_QUESTION_SOURCES, default=DEFAULT_COUNT_QUESTIONS,
                    help=f"计数的问句来源（默认 {DEFAULT_COUNT_QUESTIONS}：big_vision 的人工问句，D36-2；heuristic = 从 caption 取对象）")
+    p.add_argument("--checkpoint", help="训练后的检查点目录（DEV-0030 §2）：load_trained(merge=True) 替代 base，其余协议不变；"
+                                        "评测前先跑合并核对")
+    p.add_argument("--checkpoint-label", help="--checkpoint 时必给：结果放在 <out>/<标签>/<模型>/…（如 t_text/e3b/seed0）")
+    p.add_argument("--merge-check-n", type=int, help="--checkpoint 的合并核对的开发样本数（默认取 configs/e3b_train.json 的 "
+                                                     "eval.merge_check.n）")
     a = p.parse_args(argv)
+    if a.checkpoint is not None:
+        if a.acceptance or a.estimate:
+            p.error("--checkpoint 只用于正式运行模式（不能配 --acceptance / --estimate）")
+        if a.policy != "default":
+            p.error("--checkpoint 只用 E1 冻结的口径（检查点的图像口径写在 manifest 里）；附加口径不适用")
+        if not a.checkpoint_label or not CHECKPOINT_LABEL.fullmatch(a.checkpoint_label) or ".." in a.checkpoint_label:
+            p.error(f"--checkpoint 要配 --checkpoint-label（相对路径，字母、数字、_ . -，用 / 分隔），收到 {a.checkpoint_label!r}")
+        if not Path(a.checkpoint).is_dir():
+            p.error(f"--checkpoint {a.checkpoint!r} 不是目录")
+    elif a.checkpoint_label is not None or a.merge_check_n is not None:
+        p.error("--checkpoint-label、--merge-check-n 只配 --checkpoint 用")
+    if a.merge_check_n is not None and a.merge_check_n < 1:
+        p.error("--merge-check-n 必须是正整数")
     if a.alt_batch_size is not None and not a.acceptance:
         p.error("--alt-batch-size 只用于 --acceptance")
     if a.task == ["all"]:
@@ -183,11 +212,47 @@ def build_adapter(a):
     return entry, policy, ad
 
 
-def make_spec(a, entry, policy, ad, task: str, subset: str, batch_size: int) -> RunSpec:
+def build_checkpoint_adapter(a):
+    """--checkpoint（DEV-0030 §2）：构造方式核对 → 评测前的合并核对（不通过抛 MergeCheckFailed）→ load_trained(merge=True)。
+    返回 (entry, 实际的图像口径, 适配器, config.yaml 的 checkpoint, 运行记录的附加项)。"""
+    from src.adapters.checkpoint import policy_spec, read_manifest
+    from src.adapters.factory import load_trained
+    from src.e3.config import load_config
+    from src.e3.merge_check import run_merge_check, settings_from_config
+    from src.runlog import sha256_file
+
+    entry = registry.get_model(a.model)
+    ck = Path(a.checkpoint)
+    man = read_manifest(ck)
+    spec = man.get("build_spec") or {}
+    if spec.get("key") != a.model or bool(spec.get("tiny")) != a.tiny:
+        raise ValueError(f"检查点的构造方式（key {spec.get('key')!r}，tiny {spec.get('tiny')}）与 --model {a.model!r}、"
+                         f"--tiny {a.tiny} 不符")
+    mc = settings_from_config(load_config().doc, tiny=a.tiny, n=a.merge_check_n)
+    summ = run_merge_check(ck, model_key=a.model, tiny=a.tiny, n=mc["n"], checks=mc["checks"],
+                           out_json=Path(a.out) / a.checkpoint_label / entry.key / "merge_check.json", device=a.device,
+                           dtype=a.dtype, data_root=a.data_root or os.environ.get("VISINT_DATA_ROOT"), dev_subsets=a.dev_subsets)
+    ad, _ = load_trained(ck, device=a.device, dtype=DTYPES[a.dtype], merge=True)
+    if man.get("lora") is not None and ad.lora_state != "merged":
+        raise RuntimeError(f"load_trained(merge=True) 之后 LoRA 状态是 {ad.lora_state}，应为 merged")
+    policy = ad.image_policy
+    frozen = default_image_policy(entry.family)
+    if not a.tiny and policy_spec(policy) != policy_spec(frozen):
+        raise ValueError(f"检查点的图像口径 {policy_spec(policy)} 不是 E1 冻结的口径 {policy_spec(frozen)}（D28-3）：协议不变，拒绝评测")
+    info = {"manifest_sha256": sha256_file(ck / "manifest.json"), "label": a.checkpoint_label,
+            "build_spec": man.get("build_spec"), "image_policy": man.get("image_policy"), "dtype": man.get("dtype"),
+            "lora": man.get("lora"), "trainable_token_rows": man.get("trainable_token_rows"),
+            "n_grid_tokens": len(ad.grid_token_ids), "merge_check": {"criteria_version": summ["criteria_version"],
+                                                                     "n": summ["n"], "checks": summ["checks"]}}
+    return entry, policy, ad, info, {"checkpoint_dir": str(ck), "merge_check": summ}
+
+
+def make_spec(a, entry, policy, ad, task: str, subset: str, batch_size: int, checkpoint=None) -> RunSpec:
     return RunSpec(model_key=entry.key, family=entry.family, repo=entry.repo, revision=entry.revision,
                    adapter_model_key=str(getattr(ad, "model_key", entry.key)), task=task, subset=subset,
                    policy_tag=a.policy, policy={"type": type(policy).__name__, **policy.as_dict()}, batch_size=batch_size,
-                   limit=a.limit, tiny=a.tiny, map_ci_resamples=a.map_ci_resamples, count_questions=a.count_questions)
+                   limit=a.limit, tiny=a.tiny, map_ci_resamples=a.map_ci_resamples, count_questions=a.count_questions,
+                   checkpoint=checkpoint)
 
 
 def selection(task: str, subset: str, paths: DataPaths, limit: int | None, count_questions: str = DEFAULT_COUNT_QUESTIONS):
@@ -225,11 +290,16 @@ def cmd_run(a, argv) -> int:
     prompts = load_prompt_config(a.prompts)
     bs, _ = resolve_batch_sizes(a, prompts)
     paths = data_paths(a)
-    entry, policy, ad = build_adapter(a)
+    ck_info, extra, out = None, None, Path(a.out)
+    if a.checkpoint:
+        entry, policy, ad, ck_info, extra = build_checkpoint_adapter(a)
+        out = out / a.checkpoint_label
+    else:
+        entry, policy, ad = build_adapter(a)
     for task in a.task:
         sel = selection(task, a.subset, paths, a.limit, a.count_questions)
-        spec = make_spec(a, entry, policy, ad, task, a.subset, bs)
-        m = run_task(ad, spec, sel, prompts, paths, a.out, resume=a.resume, argv=argv)
+        spec = make_spec(a, entry, policy, ad, task, a.subset, bs, checkpoint=ck_info)
+        m = run_task(ad, spec, sel, prompts, paths, out, resume=a.resume, argv=argv, run_extra=extra)
         print(f"{entry.key} {task}/{a.subset} n={m['n']} parse_fail={m['parse']['failure_rate']} "
               f"trunc={m['truncation']['rate']} valid={m['valid']['rate']} {_headline(m)}")
     return 0
@@ -332,12 +402,17 @@ def cmd_estimate(a, argv) -> int:
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     a = parse_args(argv)
+    from src.e3.merge_check import MergeCheckFailed
+
     try:
         if a.acceptance:
             return cmd_acceptance(a, argv)
         if a.estimate:
             return cmd_estimate(a, argv)
         return cmd_run(a, argv)
+    except MergeCheckFailed as e:  # --checkpoint：评测前的合并核对没有通过（DEV-0030 §2）
+        print(f"拒绝评测：{e}", file=sys.stderr)
+        return 1
     except Exception as e:  # noqa: BLE001 — 证据先落盘，再以非零码退出
         err_dir = Path(a.out) / a.model / "errors"
         err_dir.mkdir(parents=True, exist_ok=True)

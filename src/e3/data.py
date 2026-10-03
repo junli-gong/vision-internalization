@@ -299,12 +299,13 @@ def _iou(a: np.ndarray, b: np.ndarray) -> float:
 
 
 class ExampleBuilder:
-    """SlotPlan → Example。grid 监督要给 tokens（网格词表的 id 布局）；text 监督要给 encode（适配器 tokenizer 的无特殊 token 编码）
-    与 family（取 E1 的多边形统一提示）。"""
+    """SlotPlan → Example。grid 监督要给 tokens（网格词表的 id 布局）；text 监督要给 encode（适配器 tokenizer 的无特殊 token 编码）、
+    family（取 E1 的多边形统一提示与本家族的定位提示）与 format_boxes（适配器的 format_boxes：C3 的框目标用本家族原生格式，
+    DEV-0030 §3）。"""
 
     def __init__(self, cfg: E3Config, pools: Mapping[str, Sequence[Sample]], *, seed: int, supervision: str, stop_id: int,
                  tokens: GridTokens | None = None, encode: Callable[[str], list[int]] | None = None,
-                 family: str | None = None) -> None:
+                 family: str | None = None, format_boxes: Callable[..., str] | None = None) -> None:
         self.cfg = cfg
         self.doc = cfg.doc
         self.pools = {t: list(v) for t, v in pools.items()}
@@ -312,14 +313,16 @@ class ExampleBuilder:
         self.supervision = supervision
         self.tokens = tokens
         self.encode = encode
+        self.format_boxes = format_boxes
         self.stop_id = int(stop_id)
         self.n = cfg.grid_n
         if supervision == "grid" and tokens is None:
             raise ValueError("网格监督要给 tokens")
         if supervision == "text":
-            if encode is None or family is None:
-                raise ValueError("文本监督（C3）要给 encode 与 family")
+            if encode is None or family is None or format_boxes is None:
+                raise ValueError("文本监督（C3）要给 encode、family 与 format_boxes")
             self.polygon_template, self.polygon_source = C3.load_polygon_template(self.doc, family, REPO_ROOT)
+            self.box_template, self.box_source = C3.load_box_template(self.doc, family, REPO_ROOT)
         self._others = self._index_others(self.pools.get("refseg", []))
 
     @staticmethod
@@ -418,8 +421,8 @@ class ExampleBuilder:
                 else:
                     instruction = self.polygon_template.format(expression=expr)
             if kind == "box":
-                text = C3.box_text(sample.gt["box"], w, h)
-                instruction = c["box_template"].format(expression=expr)
+                text = C3.box_target(self.format_boxes, sample.gt["box"], w, h, expr)
+                instruction = C3.render_e1_template(self.box_template, expr)
             info["text_kind_used"] = kind
             order = tc["order"]
         elif plan.task == "depth":

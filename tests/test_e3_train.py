@@ -77,7 +77,7 @@ def _setup(key, supervision, pools, *, rc=None, seed=0):
     tr.setup_fresh()
     b = D.ExampleBuilder(CFG, pools, seed=seed, supervision=supervision, stop_id=tr.stop_id, tokens=tr.tokens,
                          encode=lambda s: list(ad.tokenizer(s, add_special_tokens=False)["input_ids"]),
-                         family=registry.get_model(key).family)
+                         family=registry.get_model(key).family, format_boxes=ad.format_boxes)
     s = D.Schedule(pools, CFG, seed=seed, supervision=supervision, batch_size=int(rc["batch_size"]))
     return ad, tr, b, s
 

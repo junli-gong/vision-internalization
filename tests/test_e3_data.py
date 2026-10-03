@@ -199,22 +199,31 @@ def test_refseg_correction_recipe(cfg, pools, tokens):
 
 
 def test_c3_examples(cfg, pools):
+    from src.adapters import qwen35
+
     enc = lambda s: [ord(c) for c in s]  # noqa: E731 — 测试用的"分词器"
     t = D.Schedule(_recs(pools), cfg, seed=0, supervision="text", batch_size=4)
-    b = D.ExampleBuilder(cfg, _recs(pools), seed=0, supervision="text", stop_id=11, encode=enc, family="qwen3.5")
+    b = D.ExampleBuilder(cfg, _recs(pools), seed=0, supervision="text", stop_id=11, encode=enc, family="qwen3.5",
+                         format_boxes=qwen35.format_boxes)
     kinds = {}
     for k in range(80):
         p = t.plan(k)
         e = b.build(p)
         assert e.target_ids == enc(e.target_text) + [11] and e.n_supervised == len(e.target_ids) and len(e.images) == 1
         kinds.setdefault(p.task, set()).add(e.info.get("text_kind_used", p.text_kind))
+        expr = pools["refseg"].records[p.index].fields["expression"].strip() if p.task == "refseg" else None
         if e.info.get("text_kind_used") == "polygon":
-            assert e.instruction == b.polygon_template.format(expression=pools["refseg"].records[p.index].fields["expression"].strip())
+            assert e.instruction == b.polygon_template.format(expression=expr)
+        if e.info.get("text_kind_used") == "box":  # 本家族原生的框格式 + E1 的定位提示原文（DEV-0030 §3）
+            assert e.instruction == b.box_template.format(expression=expr).strip() and e.target_text.startswith("```json")
     assert kinds["refseg"] == {"box", "polygon"} and kinds["depth"] == {"pairs"}
+    with pytest.raises(ValueError, match="format_boxes"):
+        D.ExampleBuilder(cfg, _recs(pools), seed=0, supervision="text", stop_id=11, encode=enc, family="qwen3.5")
     # 只要多边形：RLE 的物体退回框
     only_poly = _cfg_with(cfg, c3__seg_kinds={"polygon": 1, "box": 0})
     t2 = D.Schedule(_recs(pools), only_poly, seed=0, supervision="text", batch_size=4)
-    b2 = D.ExampleBuilder(only_poly, _recs(pools), seed=0, supervision="text", stop_id=11, encode=enc, family="qwen3.5")
+    b2 = D.ExampleBuilder(only_poly, _recs(pools), seed=0, supervision="text", stop_id=11, encode=enc, family="qwen3.5",
+                          format_boxes=qwen35.format_boxes)
     rle_ids = {s.id for s in pools["refseg"].records if "rle" in s.gt["mask"]}
     assert rle_ids
     for k in range(0, 200, 2):
@@ -222,3 +231,43 @@ def test_c3_examples(cfg, pools):
         assert p.text_kind == "polygon"
         e = b2.build(p)
         assert e.info["text_kind_used"] == ("box" if p.sample_id in rle_ids else "polygon")
+
+
+@pytest.mark.parametrize("family", ["qwen3.5", "gemma4", "internvl3.5"])
+def test_c3_box_target_parses_back_to_gt_box(cfg, pools, family):
+    """DEV-0030 §3：C3 的框目标是本家族原生的框格式（adapter.format_boxes），用本家族的 parse_boxes 解析回来，与 GT 框在格点精度内
+    一致（每个坐标差 ≤ W/2000、H/2000）；提示是 E1 定位任务本家族的提示原文（与 E1 的渲染逐字相同）。不需要加载模型。"""
+    from src.adapters import gemma4, internvl35, qwen35
+    from src.adapters.image_policy import PixelBudget
+    from src.data.records import Sample
+    from src.e1.prompts import load_prompt_config
+
+    ad = {"qwen3.5": lambda: qwen35.Qwen35Adapter(device="cpu", image_policy=PixelBudget(64)),
+          "gemma4": lambda: gemma4.Gemma4Adapter(device="cpu", max_soft_tokens=70),
+          "internvl3.5": lambda: internvl35.InternVL35Adapter(device="cpu", crop_to_patches=False, max_patches=1)}[family]()
+    enc = lambda s: [ord(c) for c in s]  # noqa: E731
+    only_box = _cfg_with(cfg, c3__seg_kinds={"polygon": 0, "box": 1})
+    sched = D.Schedule(_recs(pools), only_box, seed=0, supervision="text", batch_size=4)
+    b = D.ExampleBuilder(only_box, _recs(pools), seed=0, supervision="text", stop_id=11, encode=enc, family=family,
+                         format_boxes=ad.format_boxes)
+    e1 = load_prompt_config()
+    n_box = 0
+    for k in range(60):
+        p = sched.plan(k)
+        if p.task != "refseg":
+            continue
+        e = b.build(p)
+        s = pools["refseg"].records[p.index]
+        h, w = e.images[0].shape[:2]
+        expr = s.fields["expression"].strip()
+        assert e.info["text_kind_used"] == "box"
+        assert e.target_text == ad.format_boxes([s.gt["box"]], width=w, height=h, labels=[expr])
+        got = ad.parse_one_box(e.target_text, width=w, height=h)
+        assert got.failure is None, (family, e.target_text)
+        for i, (g, v) in enumerate(zip(got.box, s.gt["box"])):
+            assert abs(g - v) <= (w if i % 2 == 0 else h) / 2000 + 1e-9, (family, got.box, s.gt["box"])
+        stripped = Sample(id=s.id, task=s.task, images=s.images, image_keys=s.image_keys,
+                          fields={**s.fields, "expression": expr}, gt=s.gt, source=s.source, split=s.split)
+        assert e.instruction == e1.render("refexp_box", family, stripped).text
+        n_box += 1
+    assert n_box >= 10

@@ -33,7 +33,6 @@ from src.e3.tokens import GridTokens
 from src.executors.overlay import render_overlay
 from src.executors.raster import polygons_to_mask
 from src.grid.codec import bins_to_depth, depth_to_bins, grid_to_mask, mask_to_grid
-from src.parsing.json_extract import extract_json
 from src.parsing.spatial import parse_polygons
 
 N = GRID_SIZE_E3B
@@ -206,13 +205,32 @@ def test_depth_noise_identity_determinism_and_range():
 # ---------------------------------------------------------------------------
 
 
-def test_box_text_round_trip():
-    t = C3.box_text([12.0, 30.5, 100.0, 95.9], 128, 96)
-    v = extract_json(t).value
-    assert t == "[94, 318, 781, 999]" and v == [94, 318, 781, 999]
+def test_norm1000_and_box_target_checks():
     assert C3.norm1000(64, 128) == 500 and C3.norm1000(-3, 128) == 0 and C3.norm1000(200, 128) == 1000
+    assert not hasattr(C3, "box_text")  # DEV-0025 暂行的统一框格式已删除（DEV-0030 §3）
+    seen = []
+
+    def fake_format(boxes, *, width, height, labels):
+        seen.append((boxes, width, height, labels))
+        return "ok"
+
+    assert C3.box_target(fake_format, [12, 30.5, 100, 95.9], 128, 96, "the dog") == "ok"
+    assert seen == [([[12.0, 30.5, 100.0, 95.9]], 128.0, 96.0, ["the dog"])]
     with pytest.raises(ValueError):
-        C3.box_text([5, 5, 1, 1], 10, 10)
+        C3.box_target(fake_format, [5, 5, 1, 1], 10, 10, "x")
+
+
+def test_box_template_is_e1_native_prompt():
+    from src.e3.config import REPO_ROOT
+
+    cfg = load_config()
+    e1 = json.loads((REPO_ROOT / "configs" / "e1_prompts.json").read_text())
+    for fam in ("qwen3.5", "gemma4", "internvl3.5"):
+        t, src = C3.load_box_template(cfg.doc, fam, REPO_ROOT)
+        entry = e1["tasks"]["refexp_box"]["families"][fam]
+        assert t == entry["template"] and src["native"] is True and src["task"] == "refexp_box"
+        assert C3.render_e1_template(t, "the red cup") == t.format(expression="the red cup").strip()
+    assert "box_template" not in cfg.doc["c3"]  # 不另写提示
 
 
 def test_polygon_text_matches_e1_parser():

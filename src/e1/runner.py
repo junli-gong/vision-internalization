@@ -25,6 +25,11 @@ batch_size 条；受限字母读数时字母集合一变就另起一批（genera
   id 指纹……；不含时间戳与 git 状态）与 meta.json（src/runlog.write_run_metadata：git、主机、包版本、数据清单的 sha256、时间）。
 - README.md：由 metrics.json 生成（含三列与拒答按人物分列的表）。logs/：timing.jsonl、每次调用一份 run_<k>.json。
 
+训练后的模型（DEV-0030 §2，run_e1 --checkpoint）：适配器换成 factory.load_trained(merge=True) 的结果，协议不变（冻结口径、批配置、
+三列）。RunSpec.checkpoint（manifest 的 sha256 与摘要）写进 config.yaml 的 checkpoint；适配器登记了网格 token 时，predictions 每条另记
+n_grid_tokens（生成的 token 里网格 token 的个数），metrics.json 的 diagnostics 另有 grid_tokens_in_output。base 运行两者都没有，
+输出与原来逐字节相同。
+
 断点续传（--resume）：目录里已有 predictions.jsonl 时必须给 --resume，并且 config.yaml 与本次完全相同（DEV-0017 起批大小也是
 运行身份的一部分），否则报错；末尾不完整的一行截掉；已完成的 id 必须是样本顺序的前缀。已完成的条数不在批的边界上时（上次
 中断在一批中间），截回到那一批的开头、整批重跑，所以续跑与一次跑完的批组成相同。没有 --resume 而目录非空：拒绝覆盖。
@@ -80,6 +85,9 @@ class RunSpec:
     tiny: bool
     map_ci_resamples: int
     count_questions: str = DEFAULT_COUNT_QUESTIONS  # 计数的问句来源（DEV-0015 §4；D36-2 起默认 countbenchqa）；别的任务不用
+    # 训练后的检查点（DEV-0030 §2，run_e1 --checkpoint）：manifest 的 sha256 与摘要，写进 config.yaml 的 checkpoint；base 运行为 None
+    # （config.yaml 没有这个键，与原来逐字节相同）
+    checkpoint: Mapping[str, Any] | None = None
 
 
 def policy_dirname(tag: str) -> str:
@@ -184,7 +192,7 @@ def run_config(spec: RunSpec, sel: Selection, prompts: PromptConfig, paths: Data
     ids = [s.id for s in sel.samples]
     ro = dict(readout) if readout is not None else {"kind": prompts.readout(spec.task, spec.subset),
                                                    "parse": prompts.parser(spec.task, spec.family, spec.subset)}
-    return {
+    cfg = {
         "experiment": "E1",
         "framework": "src/e1（DEV-0014；协议 v2：DEV-0017）",
         "model": {"key": spec.model_key, "family": spec.family, "repo": spec.repo, "revision": spec.revision,
@@ -207,6 +215,9 @@ def run_config(spec: RunSpec, sel: Selection, prompts: PromptConfig, paths: Data
         "batch_size": spec.batch_size,
         "batch_protocol": batch_protocol_record(prompts, spec.batch_size),
     }
+    if spec.checkpoint is not None:  # DEV-0030 §2：训练后的模型（base 运行没有这个键）
+        cfg["checkpoint"] = json.loads(json.dumps(dict(spec.checkpoint), ensure_ascii=False))
+    return cfg
 
 
 def generation_record(prompts: PromptConfig, spec: RunSpec, readout: Mapping[str, Any]) -> dict[str, Any]:
@@ -352,6 +363,9 @@ def finalize(leaf: Path, spec: RunSpec, sel: Selection, cfg: Mapping[str, Any], 
     samples = sel.samples[: len(recs)]
     body = aggregate(spec.task, samples, recs, has_gt=sel.has_gt, map_ci_resamples=spec.map_ci_resamples,
                      enable_thinking=bool(cfg["generation"]["enable_thinking"]))
+    gt_diag = grid_token_diagnostic(recs)
+    if gt_diag is not None:  # DEV-0030 §2：只有带网格 token 的检查点才有这一项（base 运行的 metrics.json 不变）
+        body["diagnostics"]["grid_tokens_in_output"] = gt_diag
     body["complete"] = len(recs) == len(ids)
     body["n_expected"] = len(ids)
     metrics = _metrics_doc(spec, cfg, body, prompts)
@@ -370,6 +384,21 @@ def finalize(leaf: Path, spec: RunSpec, sel: Selection, cfg: Mapping[str, Any], 
     write_compute_json(leaf / COMPUTE, merge(comp))
     (leaf / README).write_text(readme_text(spec, cfg, metrics), encoding="utf-8")
     return metrics
+
+
+def grid_token_ids_of(adapter: Any) -> frozenset[int]:
+    """适配器登记的网格 token（训练后的 E3b 检查点才有；base 为空）。"""
+    return frozenset(int(v) for v in (getattr(adapter, "grid_token_ids", None) or {}).values())
+
+
+def grid_token_diagnostic(recs: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """自由生成里冒出网格 token 的条数（DEV-0030 §2，DEV-0025 的建议）：记录里有 n_grid_tokens（适配器有网格 token）才算。"""
+    if not any("n_grid_tokens" in r for r in recs):
+        return None
+    hit = [r for r in recs if int(r.get("n_grid_tokens", 0)) > 0]
+    return {"n_rows": len(hit), "n": len(recs), "rate": (len(hit) / len(recs)) if recs else None,
+            "n_tokens": int(sum(int(r.get("n_grid_tokens", 0)) for r in recs)),
+            "note": "生成的 token（不含预算强制收尾补的 token）里属于检查点网格 token 的个数；n_rows 是至少有一个的条数"}
 
 
 def _common_record(s: Sample, rendered: Any, image_size: tuple[int, int], res: Any, readout: str) -> dict[str, Any]:
@@ -434,8 +463,10 @@ def batch_keys(readout: str, rendered: Sequence[Rendered]) -> list[Hashable]:
 
 def run_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: PromptConfig, paths: DataPaths, out_dir: str | Path,
              *, resume: bool = False, argv: Sequence[str] = (), log: Callable[[str], None] | None = None,
-             warmup: bool = True) -> dict[str, Any]:
-    """跑一个任务，返回 metrics（规则见模块说明）。sel 的样本已按 limit 截好。"""
+             warmup: bool = True, run_extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """跑一个任务，返回 metrics（规则见模块说明）。sel 的样本已按 limit 截好。run_extra 并进 logs/run_<k>.json（DEV-0030：
+    --checkpoint 时的合并核对摘要与检查点路径）。"""
+    grid_ids = grid_token_ids_of(adapter)
     log = log or (lambda m: print(m, file=sys.stderr, flush=True))
     if isinstance(spec.batch_size, bool) or not isinstance(spec.batch_size, int) or spec.batch_size < 1:
         raise ValueError(f"batch_size 必须是正整数，收到 {spec.batch_size!r}")
@@ -485,6 +516,8 @@ def run_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: PromptConfig,
     run_log: dict[str, Any] = {"argv": list(argv), "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                                "n_done_before": len(done), "n_remaining": len(remaining), "batch_size": spec.batch_size,
                                "trimmed_to_batch_boundary": trimmed, "finished_utc": None}
+    if run_extra:
+        run_log.update(dict(run_extra))
     run_path.write_text(json.dumps(run_log, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")  # 先占位：中断也留下记录
     enable_thinking = prompts.enable_thinking(spec.subset)
     max_new = prompts.max_new_tokens(spec.task, spec.family, spec.subset)
@@ -515,6 +548,8 @@ def run_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: PromptConfig,
                 rec.update(score_letter(spec.task, s, res, table=table, letters=r.extras["letters"]))
             else:
                 rec.update(score_generation(spec.task, parser, s, res, adapter=adapter, image_size=size, extras=r.extras))
+            if grid_ids:  # DEV-0030 §2：只有带网格 token 的检查点才记（base 的记录逐字节不变）
+                rec["n_grid_tokens"] = sum(1 for t in res.token_ids if int(t) in grid_ids)
             lines.append(_jsonl_line(rec))
             tlines.append(_jsonl_line({"id": s.id, "run": run_k, "batch_index": n_batches, "batch_rows": len(batch),
                                        "wall_time_s": res.wall_time_s, "batch_wall_time_s": res.batch_wall_time_s,
@@ -546,6 +581,8 @@ __all__ = [
     "finalize",
     "generate_rows",
     "generation_record",
+    "grid_token_diagnostic",
+    "grid_token_ids_of",
     "ids_digest",
     "leaf_dir",
     "load_images",

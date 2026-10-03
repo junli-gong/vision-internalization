@@ -454,6 +454,9 @@ def run_identity(spec: RunSpec, cfg: E3Config, run_cfg: Mapping[str, Any], train
         c3 = {k: v for k, v in d["c3"].items() if k != "basis"}
         c3["polygon_template"] = builder.polygon_template
         c3["polygon_template_source"] = builder.polygon_source
+        c3["box_template"] = builder.box_template
+        c3["box_template_source"] = builder.box_source
+        c3["box_format"] = "adapter.format_boxes（本家族原生格式，label = 指代句；DEV-0030 §3）"
     return {
         "experiment": "E3b",
         "framework": "src/e3（DEV-0025）",
@@ -592,7 +595,7 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
     builder = D.ExampleBuilder(cfg, {t: p.records for t, p in pools.items()}, seed=spec.seed, supervision=spec.supervision,
                                stop_id=trainer.stop_id, tokens=trainer.tokens,
                                encode=lambda s: list(adapter.tokenizer(s, add_special_tokens=False)["input_ids"]),
-                               family=spec.family)
+                               family=spec.family, format_boxes=adapter.format_boxes)
     schedule = D.Schedule({t: p.records for t, p in pools.items()}, cfg, seed=spec.seed, supervision=spec.supervision,
                           batch_size=int(rc["batch_size"]))
     ident = run_identity(spec, cfg, rc, trainer, pools, dedupe, builder)
