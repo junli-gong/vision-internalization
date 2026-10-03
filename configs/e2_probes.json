@@ -35,7 +35,7 @@
   "linear": {"kind": "conv1x1", "basis": "简报 §8.3：线性探针 = 1×1 卷积，D → C"},
   "conv": {"kind": "conv3x3_gelu_conv3x3", "hidden": 256, "kernel": 3, "padding": 1, "basis": "简报 §8.3：小的两层卷积探针，3×3、D → 256、GELU、3×3、→ C（任务书）"}
  },
- "upsample": {"mode": "bilinear", "align_corners": false, "basis": "探针输出在 token 网格分辨率，双线性上采样到 GT 分辨率后算损失与指标（任务书）；三个家族都把整张图缩放进视觉编码器（不裁、不补边），token 网格覆盖整张图"},
+ "upsample": {"mode": "bilinear", "align_corners": false, "impl": "separable_matmul", "basis": "探针输出在 token 网格分辨率，双线性上采样到 GT 分辨率后算损失与指标（任务书）；三个家族都把整张图缩放进视觉编码器（不裁、不补边），token 网格覆盖整张图。impl（DEV-0031；依据 D63-3 与 RUN-0026 的 B200 微基准：2 个探针 × 150 类、16×21 → 512×683，F.interpolate 的前向加反传每块 122 ms，瓶颈是反传的原子加；同一个插值写成两次矩阵乘 0.8 ms）：separable_matmul = A_h·X·A_wᵀ（src/e2/bilinear.py），插值矩阵按 PyTorch 源码构造，与 F.interpolate(bilinear, antialias=False) 是同一个插值，损失与指标的定义不变；矩阵乘强制 IEEE fp32（不用 TF32）；与 F.interpolate 的差只在舍入：float64 前向与梯度最大绝对差 ≤ 1e-12，fp32 相对差 ≤ 1e-5（tests/test_e2_bilinear.py 钉住）。interpolate = F.interpolate，保留作对照"},
  "optim": {
   "optimizer": "adamw",
   "lr": {"linear": 0.001, "conv": 0.0005},
@@ -82,7 +82,7 @@
    "train": "nyu_normals/train（Bae 2021 / GeoNet，795 张；必须有去重清单）",
    "eval": "nyu_normals/test（654 张）",
    "n_eval_expected": 654,
-   "license_gate": "N20：数据许可待项目负责人确认；真模型运行要显式给 --enable-normals（--tiny 的 fixture 是合成数据，不受此限）",
+   "license_gate": "D59-6：许可已确认（Bae 2021 / GeoNet）。仅限非商业研究、不分发，论文写明（N20 → (a)）；真模型跑法向不再需要 --enable-normals，该参数保留为无作用的兼容参数（D63-4）",
    "out_channels": 3,
    "steps": 1000,
    "batch_size": 8,
@@ -125,6 +125,6 @@
  "estimate": {
   "train_steps": 3,
   "eval_samples": 8,
-  "basis": "--estimate：每个任务先预热 1 步，再计时 train_steps 个训练步与 eval_samples 条评测（含全部探针的前向、上采样与指标），按配置的步数、曲线点数与评测集条数外推 GPU 小时"
+  "basis": "--estimate：每个任务先预热 1 步，再计时 train_steps 个训练步与 eval_samples 条评测（含全部探针的前向、上采样与指标），按配置的步数、曲线点数与评测集条数外推 GPU 小时。--task all 含法向；给了 --reference pre_proj 时，pre_proj 那组探针（探针数、步时间）与视觉塔的额外前向（前向开销）都在实测里（DEV-0031）"
  }
 }

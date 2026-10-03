@@ -7,7 +7,8 @@
 - 特征：一次 hidden_states 前向取全部选定层在图像位置的隐藏状态，按适配器的 ImageTokenInfo.grid_hw 排成 [H_t, W_t, D]
   （行主序，src/e2/grid.py），转 fp32，按通道标准化（统计量训练前定、之后冻结）。同一批特征喂给所有层的探针。
 - 探针（src/e2/probes.py）：每个（层, 种类）一个探针、一个优化器。线性 = 1×1 卷积 D → C；两层卷积 = 3×3 D → 256、GELU、3×3 → C。
-  输出在 token 网格分辨率，双线性上采样到 GT 分辨率后算损失与指标（src/e2/tasks.py）。
+  输出在 token 网格分辨率，双线性上采样到 GT 分辨率后算损失与指标（src/e2/tasks.py）；上采样是可分离矩阵乘 A_h·X·A_wᵀ，
+  与 F.interpolate 同一个插值，矩阵乘强制 IEEE fp32（src/e2/bilinear.py；DEV-0031，D63-3）。
 - 任务：depth（NYU，SILog）、semseg（ADE20K，ADE_NUM_CLASSES 类，交叉熵）、normals（NYU 法向，余弦损失）、refseg（RefCOCO，BCE + Dice）。
 - 层：--layers all / every k，按 num_layers() 展开（层号约定见 src/adapters/base.py）；另加 L{N}_pre（最后一个 decoder 层的原始输出，
   最终归一化之前；适配器的层键 PRE_NORM_LAST；DEV-0024，D53-3 的 I1），单列。参考线：post_proj（= 第 0 层，D21-3）、

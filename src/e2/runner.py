@@ -20,9 +20,11 @@
 - config.yaml：运行身份（模型与 revision、图像口径、任务、输入顺序与指令、层与参考线、探针、训练参数、种子、配置 sha256、
   训练 / 验证 / 标准化 / 评测样本的 id 指纹）；不含时间、机器路径。meta.json：git、主机、包版本、数据清单的 sha256（src/runlog）。
 - curves.jsonl、metrics.json、eval_samples.npz、README.md：只由训练与评测本身决定，不含墙钟；CPU 上续跑与一次跑完逐字节相同
-  （tests/test_e2_cli.py 钉住）。GPU 上上采样的反向用原子加，不保证逐位可复现（见 RUN-0025 一类的噪声底）。
+  （tests/test_e2_cli.py 钉住）。GPU 上不保证逐位可复现（cuDNN 卷积的反传等；见 RUN-0025 一类的噪声底）。上采样默认是可分离矩阵乘
+  （configs/e2_probes.json 的 upsample.impl；DEV-0031），反传是两次 GEMM、没有原子加；impl = interpolate 时 F.interpolate 的反传用原子加。
 - accounting.json（各次运行合计）与 logs/run_<k>.json（每次调用一份）：GPU 墙钟（分阶段）、前向次数、视觉 token 与像素数、
-  显存峰值（torch.cuda.max_memory_allocated；CPU 上为 null）。
+  显存峰值（torch.cuda.max_memory_allocated；CPU 上为 null）。run_<k>.json 的 audit 另有 upsample：本进程上采样矩阵乘的 fp32 审计
+  （src/e2/bilinear.fp32_audit：全局 TF32 打开时受保护的矩阵乘与 float64 参照的相对差，按设备）。
 - 检查点：<ckpt_dir>/state.pt（默认 <叶目录>/ckpt/，可用 --ckpt-root 放到别处；不入库）：探针、优化器、调度器、标准化统计量、
   训练损失的累计量、步数，原子写入；每 ckpt_every 步与最后一步写一次。训练完成后另写 probes_final.pt（探针权重 + 标准化统计量）；
   整个任务完成后删掉 state.pt（优化器状态只为续跑；9B 约 2 GB），--keep-optimizer-state 保留。
@@ -50,6 +52,7 @@ import yaml
 from src.data.land.nyuv2 import npz_bytes
 from src.data.records import LoadResult, Sample
 from src.e2 import positions as POS
+from src.e2.bilinear import audits as upsample_audits
 from src.e2.config import PROBE_KINDS, E2Config, curve_steps, layer_label
 from src.e2.data import (
     E2Paths,
@@ -403,7 +406,8 @@ def readme_text(run: TaskRun, cfg_doc: Mapping[str, Any], metrics: Mapping[str, 
              f"- 层：{spec.layer_spec} → {list(spec.layers)}（num_layers = {spec.num_layers}；最后一层是最终归一化之后的值，D19）"
              + (f"；另有 {run.extractor.pre_norm} = 最后一个 decoder 层的原始输出（最终归一化之前），单列" if run.extractor.pre_norm else ""),
              f"- 参考线：{list(spec.references) or '无'}" + ("；post_proj 就是第 0 层（D21-3），不是第二条证据" if "post_proj" in spec.references else ""),
-             f"- 探针：linear = 1×1 卷积；conv = 3×3 → {tr['probes']['conv']['hidden']}、GELU、3×3；双线性上采样到 GT 分辨率",
+             f"- 探针：linear = 1×1 卷积；conv = 3×3 → {tr['probes']['conv']['hidden']}、GELU、3×3；双线性上采样到 GT 分辨率"
+             f"（align_corners = {tr['upsample']['align_corners']}，实现 {tr['upsample']['impl']}）",
              f"- 训练：{tr['steps']} 步 × 批 {tr['batch_size']}，AdamW lr {tr['optim']['lr']}，warmup {tr['optim']['warmup_steps']} + 余弦，"
              f"种子 {cfg_doc['seed']}；损失 {tr['loss']['kind']}；按通道标准化（{tr['feature_norm']['n_samples']} 条训练样本上的统计量）",
              f"- 验证子集（训练集留出，只记曲线）：{metrics['n_val']} 条；评测集：{metrics['n_eval']} 条（全部，不抽样）；"
@@ -553,7 +557,8 @@ def run_task(adapter: Any, cfg: E2Config, spec: RunSpec, task_cfg: Mapping[str, 
                        phases={ph: {**d, "wall_s": round(walls.get(ph, 0.0), 3)} for ph, d in run.counters.by_phase.items()},
                        peak_mem_bytes=int(torch.cuda.max_memory_allocated(dev)) if dev.type == "cuda" else None,
                        post_proj_checks=run.extractor.post_proj_checks, n_train_skipped=run.n_skipped,
-                       steps_this_run=done_box[0], audit={"features": run.extractor.audit, "probes": run.probe_audit()})
+                       steps_this_run=done_box[0], audit={"features": run.extractor.audit, "probes": run.probe_audit(),
+                                                          "upsample": upsample_audits()})
         run_path.write_text(json.dumps(run_log, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
         (leaf / ACCOUNTING).write_text(json.dumps(accounting_doc(leaf), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
 

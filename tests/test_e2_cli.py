@@ -1,6 +1,7 @@
 """DEV-0023：scripts/run_e2.py 的 --tiny 彩排（真实的小型随机模型，CPU，tests/fixtures/e2 与 tests/fixtures/e1 的小数据；
 与服务器同一流程的子进程）：三个家族 × 四个任务 × 两种探针跑通，分段运行后续跑与一次跑完逐字节相同；中途崩溃后从检查点续跑
-也逐字节相同；--estimate；命令行的拒绝条件。"""
+也逐字节相同；--estimate；命令行的拒绝条件。DEV-0031：上采样走可分离矩阵乘（配置与运行记录里写明、fp32 审计进运行记录）；
+法向不再需要 --enable-normals（D59-6、D63-4）；估算覆盖法向与 pre_proj，表头写明层、参考线、是否含法向，每行写明上采样实现。"""
 
 from __future__ import annotations
 
@@ -81,6 +82,9 @@ def test_tiny_all_tasks_and_resume_is_byte_identical(model, tmp_path):
             assert accb["n_runs"] == 2 and accb["n_forward"] == want
         cy = yaml.safe_load((la / "config.yaml").read_text())
         assert cy["input"]["order"] == ("instruction_first" if task == "refseg" else "image_first")
+        assert cy["training"]["upsample"] == {"mode": "bilinear", "align_corners": False, "impl": "separable_matmul"}
+        up_audit = json.loads((la / "logs" / "run_001.json").read_text())["audit"]["upsample"]
+        assert up_audit["cpu"]["ok"] is True and up_audit["cpu"]["guarded_bwd_rel"] <= 1e-5  # DEV-0031 的 fp32 审计
         assert cy["data"]["train_exclusions_sha256"] and "dedupe_file" not in cy["data"]["train_pool"]
         dd = cy["data"]["dedupe"]  # 剔除清单的阈值与比较过的评测集（DEV-0024 B）
         assert dd["max_hamming"] == 8 and dd["legacy"] is False and set(dd["required_eval_sets"]) <= set(dd["eval_sets"])
@@ -133,18 +137,33 @@ def test_resume_refuses_a_different_configuration(tmp_path):
 
 
 def test_tiny_estimate_writes_table(tmp_path):
-    run("--tiny", "--estimate", "--model", "qwen3.5-0.8b", "--task", "all", "--out", str(tmp_path))
+    """--task all 含法向；--reference pre_proj 时 pre_proj 那组探针与视觉塔的额外前向都在实测里（DEV-0031）。"""
+    run("--tiny", "--estimate", "--model", "qwen3.5-0.8b", "--task", "all", "--reference", "post_proj", "pre_proj",
+        "--out", str(tmp_path))
     doc = json.loads((tmp_path / "qwen3.5-0.8b" / "estimate" / "estimate.json").read_text())
-    assert [r["task"] for r in doc["tasks"]] == list(TASKS)
+    assert [r["task"] for r in doc["tasks"]] == list(TASKS) and "normals" in TASKS
+    h = doc["header"]
+    assert h["includes_normals"] is True and h["tasks"] == list(TASKS) and h["references"] == ["post_proj", "pre_proj"]
+    assert h["layer_spec"] == "all" and h["n_layers"] == 5 and h["pre_norm_last"] == "L4_pre"
+    assert h["upsample_impls"] == ["separable_matmul"] and h["upsample_audit"]["cpu"]["ok"] is True
     for r in doc["tasks"]:
         assert r["gpu_hours"] > 0 and r["measured"]["train_step_s"] > 0 and r["forwards"]["train"] == r["steps"] * r["batch_size"]
+        assert r["upsample_impl"] == "separable_matmul"
+        # pre_proj：特征键与探针里都有（2 种探针），每次前向另有一次视觉塔前向（前向开销），外推进 forwards.vision_extra
+        assert r["feature_keys"] == ["pre_proj", "L0", "L1", "L2", "L3", "L4", "L4_pre"]
+        assert r["n_probes_pre_proj"] == 2 and r["n_probes"] == 2 * len(r["feature_keys"])
+        fw = r["forwards"]
+        assert r["measured"]["vision_extra_per_forward"] == 1.0
+        assert fw["vision_extra"] == fw["norm"] + fw["train"] + fw["val"] + fw["eval"]
     assert doc["gpu_hours_total"] == pytest.approx(sum(r["gpu_hours"] for r in doc["tasks"]))
-    assert "| depth |" in (tmp_path / "qwen3.5-0.8b" / "estimate" / "estimate.md").read_text()
+    md = (tmp_path / "qwen3.5-0.8b" / "estimate" / "estimate.md").read_text()
+    assert "| depth | separable_matmul | 14（2） |" in md and "| normals | separable_matmul |" in md
+    assert "- 层：all（5 个，另加 L4_pre）" in md and "- 参考线：post_proj、pre_proj" in md and "- 含法向：是" in md
+    assert "| 任务 | 上采样实现 |" in md
     assert not (tmp_path / "qwen3.5-0.8b" / "depth").exists()  # 估算不写正式运行的目录
 
 
 @pytest.mark.parametrize("args,msg", [
-    (["--model", "qwen3.5-0.8b", "--task", "normals", "--data-root", "x", "--out", "0001_x"], "N20"),
     (["--model", "qwen3.5-0.8b", "--task", "depth", "--data-root", "x", "--out", "bad_name"], "运行编号"),
     (["--model", "qwen3.5-0.8b", "--task", "depth", "--out", "0001_x"], "--data-root"),
     (["--tiny", "--model", "qwen3.5-0.8b", "--task", "nope", "--out", "x"], "未知任务"),
@@ -166,6 +185,36 @@ def test_cli_rejects(args, msg, monkeypatch, capsys):
     assert e.value.code == 2 and msg in capsys.readouterr().err
 
 
-def test_cli_normals_gate_message():
-    p = run("--model", "qwen3.5-0.8b", "--task", "normals", "--data-root", "x", "--out", "0001_x", check=False)
-    assert p.returncode == 2 and "--enable-normals" in p.stderr
+def _cli():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("run_e2_cli", SCRIPT)
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    return cli
+
+
+def test_cli_runs_normals_without_the_old_license_flag(monkeypatch, capsys):
+    """D59-6 / D63-4：法向的许可门撤掉。真模型的 normals 与 --task all 不加参数就能跑；--enable-normals 仍接受（兼容旧命令），
+    不改变任何东西，帮助文本注明 D59-6；配置的 license_gate 写明许可已确认。"""
+    monkeypatch.delenv("VISINT_DATA_ROOT", raising=False)
+    cli = _cli()
+    base = ["--model", "qwen3.5-0.8b", "--data-root", "x", "--out", "0001_x"]
+    assert cli.parse_args(["--task", "normals", *base]).task == ["normals"]
+    a = cli.parse_args(["--task", "all", *base])
+    assert a.task == list(TASKS) and not a.tiny and a.device == "cuda"
+    b = cli.parse_args(["--task", "all", "--enable-normals", *base])
+    assert {k: v for k, v in vars(b).items() if k != "enable_normals"} == {k: v for k, v in vars(a).items() if k != "enable_normals"}
+    assert cli.parse_args(["--estimate", "--task", "all", *base]).task == list(TASKS)
+    capsys.readouterr()
+    with pytest.raises(SystemExit):
+        cli.parse_args(["--help"])
+    help_text = capsys.readouterr().out
+    assert "--enable-normals" in help_text and "D59-6" in help_text and "无作用" in help_text and "N20" not in help_text
+    assert load_config().task("normals")["license_gate"].startswith("D59-6：许可已确认（Bae 2021 / GeoNet）")
+
+
+def test_tiny_normals_without_flag(tmp_path):
+    """--tiny 的法向不加 --enable-normals 跑通（真模型的同一条参数校验见上一条）。"""
+    p = run("--tiny", "--model", "qwen3.5-0.8b", "--task", "normals", "--layers", "every", "4", "--out", str(tmp_path))
+    assert "qwen3.5-0.8b normals" in p.stdout and (tmp_path / "qwen3.5-0.8b" / "normals" / "metrics.json").exists()

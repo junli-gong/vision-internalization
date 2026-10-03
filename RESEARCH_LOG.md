@@ -41,7 +41,7 @@
 
 | DEV | 发出 | 合入 commit | 内容 | 状态 |
 |---|---|---|---|---|
-| 0031 | 2026-10-03 | — | E2：双线性上采样改为可分离矩阵乘（semseg 提速，定义不变）、撤掉法向许可门（D59-6）、估算覆盖法向与 pre_proj（D63；模式 B，worktree agent） | 已派发 |
+| 0031 | 2026-10-03 | （见下一条 commit） | E2：双线性上采样改为可分离矩阵乘（semseg 提速，定义不变）、撤掉法向许可门（D59-6）、估算覆盖法向与 pre_proj（D63；模式 B，worktree agent） | 已合入（无返工；2245 passed + 12 skipped；D64） |
 | 0030 | 2026-10-03 | — | E3b 第二部分：评测（单轮网格、叠加反馈多轮与计算记账、匹配计算量的单轮对比、评测前合并核对、run_e1 --checkpoint 的 T 文本评测、C3 改用原生框格式）（模式 B，worktree agent） | 已派发 |
 | 0029 | 2026-10-03 | 6d72d5b | 收尾：E5 改用 thinking_end 四分类、check_training_interfaces 用公开停止 token、文档与 E2 pre_proj 说明、E3 偶发测试固定线程、三个落地源用 Manifest(script=)（模式 B，worktree agent） | 已合入（无返工；2157 passed + 11 skipped；D62） |
 | 0028 | 2026-10-03 | 8e76cbb | E5 v2.1：凸起先验基线（val 选 A）、b 类起伏与真值仿射、三条基线配对 CI 的门槛、思维链改为预算强制收尾加 33 符号网格、LISA 对当前 mask 的 IoU、导出的平台检查、允许清单合一、rotation3d 提速（D59-4/5；模式 B，worktree agent） | 已合入（无返工；D61） |

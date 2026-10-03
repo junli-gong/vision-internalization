@@ -206,12 +206,13 @@ def test_bce_dice_by_hand(tcfg):
     assert loss.item() == pytest.approx(bce + dice, rel=1e-5)
 
 
-def test_upsample_is_bilinear_align_corners_false():
+@pytest.mark.parametrize("impl", ["separable_matmul", "interpolate"])
+def test_upsample_is_bilinear_align_corners_false(impl):
     x = torch.tensor([[[[0.0, 1.0]]]])
-    up = upsample(x, (1, 4), {"mode": "bilinear", "align_corners": False})
+    up = upsample(x, (1, 4), {"mode": "bilinear", "align_corners": False, "impl": impl})
     assert up.flatten().tolist() == pytest.approx([0.0, 0.25, 0.75, 1.0])
     with pytest.raises(ValueError):
-        upsample(x, (1, 4), {"mode": "nearest", "align_corners": False})
+        upsample(x, (1, 4), {"mode": "nearest", "align_corners": False, "impl": impl})
 
 
 # ---------------------------------------------------------------------------

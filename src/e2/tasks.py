@@ -1,6 +1,9 @@
 """E2 的四个任务：GT、损失、逐样本统计与数据集级指标（带 bootstrap CI）（DEV-0023；configs/e2_probes.json 的 tasks）。
 
 一律在 GT 分辨率上：探针输出 [P, C, h, w]（P 个探针一块）先双线性上采样（align_corners=False）到 GT 的 (H, W)，再算损失或指标。
+上采样（upsample，训练与评测共用）按配置的 upsample.impl：separable_matmul = 两个插值矩阵的矩阵乘 A_h·X·A_wᵀ（src/e2/bilinear.py；
+DEV-0031，D63-3：F.interpolate 的反传用原子加，ADE 的 ADE_NUM_CLASSES 类、全分辨率下极慢），与 F.interpolate 同一个插值、只差舍入；
+interpolate = F.interpolate，保留作对照。
 指标全部复用 src/metrics（DEV-0023 补了 depth_sample_rmse、pixel_correct_total / pixel_accuracy、法向的逐图汇总）。
 
 - depth：探针输出 log 深度（米）。损失 SILog（cleinc/bts silog_loss：sqrt(mean(d²) − λ·mean(d)²)·scale），只在 GT 有效像素上
@@ -43,6 +46,8 @@ from src.constants import (
 from src.data.records import Sample
 from src.data.train_loaders import read_ade_label, read_depth_m, read_normals
 from src.e1.scoring import gt_mask
+from src.e2.bilinear import IMPLS as UPSAMPLE_IMPLS
+from src.e2.bilinear import separable_bilinear
 from src.e2.positions import SPLITS, mask_centroid, pixel_labels, point_labels
 from src.metrics.depth import (
     DELTA1_THRESHOLD,
@@ -74,11 +79,27 @@ from src.metrics.seg import (
 from src.stats import CI, bootstrap_ci, mean_statistic, miou_statistic, ratio_of_sums
 
 
+def check_upsample_spec(spec: Mapping[str, Any]) -> None:
+    """configs/e2_probes.json 的 upsample：mode 只能是 bilinear，impl 必须显式给出且在 bilinear.IMPLS 里，align_corners 是布尔。"""
+    if spec.get("mode") != "bilinear":
+        raise ValueError(f"只实现了双线性上采样，配置是 {spec.get('mode')!r}")
+    if spec.get("impl") not in UPSAMPLE_IMPLS:
+        raise ValueError(f"upsample.impl 必须是 {UPSAMPLE_IMPLS} 之一（不设默认值），配置是 {spec.get('impl')!r}")
+    if not isinstance(spec.get("align_corners"), bool):
+        raise ValueError(f"upsample.align_corners 必须是布尔，配置是 {spec.get('align_corners')!r}")
+
+
 def upsample(out: torch.Tensor, hw: tuple[int, int], spec: Mapping[str, Any]) -> torch.Tensor:
-    """[P, C, h, w] → [P, C, H, W]（configs/e2_probes.json 的 upsample：bilinear、align_corners=False）。"""
-    if spec["mode"] != "bilinear":
-        raise ValueError(f"只实现了双线性上采样，配置是 {spec['mode']!r}")
-    return F.interpolate(out, size=(int(hw[0]), int(hw[1])), mode="bilinear", align_corners=bool(spec["align_corners"]))
+    """[P, C, h, w] → [P, C, H, W]（configs/e2_probes.json 的 upsample：bilinear、align_corners=False、impl）。训练与评测共用。
+
+    - separable_matmul：bilinear.separable_bilinear（插值矩阵按 PyTorch 源码构造，矩阵乘强制 IEEE fp32；本进程在这个设备上
+      第一次调用时做一次 fp32 审计，结果见 bilinear.audits()）；
+    - interpolate：F.interpolate(mode="bilinear", antialias=False)，对照用。"""
+    check_upsample_spec(spec)
+    size = (int(hw[0]), int(hw[1]))
+    if spec["impl"] == "separable_matmul":
+        return separable_bilinear(out, size, align_corners=spec["align_corners"])
+    return F.interpolate(out, size=size, mode="bilinear", align_corners=spec["align_corners"])
 
 
 @dataclass
@@ -117,6 +138,7 @@ class E2Task:
         self.cfg = task_cfg
         self.out_channels = int(task_cfg["out_channels"])
         self.loss_cfg = dict(task_cfg["loss"])
+        check_upsample_spec(task_cfg["upsample"])  # 开跑前就查（上采样到第一步训练才调用）
 
     def target(self, s: Sample, device: Any) -> Target:  # pragma: no cover - 子类实现
         raise NotImplementedError
@@ -590,6 +612,8 @@ __all__ = [
     "SemsegTask",
     "TASK_CLASSES",
     "Target",
+    "UPSAMPLE_IMPLS",
+    "check_upsample_spec",
     "depth_train_valid",
     "make_task",
     "upsample",

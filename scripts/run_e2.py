@@ -4,13 +4,14 @@
 运行（训练数据在 A800，D47、D49；--out 是本次运行的目录 experiments/E2/<NNNN_slug>，结果写进 <out>/<模型>/<任务>/）：
     python scripts/run_e2.py --model qwen3.5-0.8b --task all --data-root $DATA [--eval-root $E1_DATA] \\
         --out experiments/E2/0030_e2_probes [--layers all | --layers every 2] [--reference post_proj pre_proj] \\
-        [--enable-normals] [--resume] [--ckpt-root DIR] [--stop-after-steps N]
+        [--resume] [--ckpt-root DIR] [--stop-after-steps N]
     # --data-root：DEV-0022 的落地根（含 dedupe/train_exclusions.json；ade20k、nyu_normals 的评测划分也在这里）
     # --eval-root：E1 的落地根（nyuv2 的官方 654、refcoco 的 val），默认与 --data-root 相同
-    # 法向（N20：数据许可待项目负责人确认）要显式加 --enable-normals；--tiny 的 fixture 是合成数据，不受此限
+    # 法向：D59-6 许可已确认（Bae 2021 / GeoNet；仅限非商业研究、不分发），--task all 含法向，不再需要 --enable-normals（D63-4）
 吞吐与算力估算（E2 预注册用；每个任务实测几步训练与几条评测，按配置外推 GPU 小时）：
-    python scripts/run_e2.py --estimate --model qwen3.5-9b --task all --data-root $DATA --out <dir> [--enable-normals]
-    # 写 <out>/<模型>/estimate/estimate.json 与 estimate.md
+    python scripts/run_e2.py --estimate --model qwen3.5-9b --task all --data-root $DATA --out <dir> [--reference post_proj pre_proj]
+    # 写 <out>/<模型>/estimate/estimate.json 与 estimate.md；表头写明层、参考线、是否含法向，每行写明上采样实现；
+    # 给了 --reference pre_proj 时，pre_proj 那组探针（探针数、步时间）与视觉塔的额外前向（前向开销）都在实测里
 开发机彩排（小型随机模型、CPU、tests/fixtures/e2 与 tests/fixtures/e1 的小数据）：上面任一条加 --tiny，可省 --data-root。
 
 --task：depth semseg normals refseg 中的一个或多个，或 all。--layers 不给时取配置（configs/e2_probes.json 的 layers：9B 每隔一层，
@@ -47,8 +48,10 @@ from src.e2.config import (  # noqa: E402
     expand_layers,
     load_config,
     parse_layer_spec,
+    pre_norm_key,
     resolve_task,
 )
+from src.e2.bilinear import audits as upsample_audits  # noqa: E402
 from src.e2.data import E2Paths  # noqa: E402
 from src.e2.estimate import estimate_task, summary_markdown  # noqa: E402
 from src.e2.runner import RunSpec, run_task  # noqa: E402
@@ -65,7 +68,8 @@ def parse_args(argv=None):
     p.add_argument("--task", nargs="+", required=True, help=f"任务名或 all：{list(TASKS)}")
     p.add_argument("--layers", nargs="+", help="all 或 every k（默认取配置的 layers）")
     p.add_argument("--reference", nargs="+", default=[], choices=REFERENCES, help="参考线：post_proj（= 第 0 层）、pre_proj")
-    p.add_argument("--enable-normals", action="store_true", help="允许跑法向（N20：许可待项目负责人确认；真模型必须显式给）")
+    p.add_argument("--enable-normals", action="store_true",
+                   help="无作用，只为兼容旧命令：D59-6 已确认法向数据的许可（Bae 2021 / GeoNet），真模型跑 normals 不再需要它（D63-4）")
     p.add_argument("--out", required=True, help="本次运行的目录（experiments/E2/<NNNN_slug>）")
     p.add_argument("--resume", action="store_true", help="续跑：从检查点接着训练")
     p.add_argument("--ckpt-root", help="检查点的根目录（默认 <叶目录>/ckpt；检查点不入库）")
@@ -97,8 +101,6 @@ def parse_args(argv=None):
             p.error(str(e))
     if len(set(a.reference)) != len(a.reference):
         p.error("--reference 有重复")
-    if "normals" in a.task and not (a.enable_normals or a.tiny):
-        p.error("法向的数据许可待项目负责人确认（N20）：要跑 normals 必须显式加 --enable-normals")
     for name in ("stop_after_steps", "eval_limit"):
         v = getattr(a, name)
         if v is not None and v < 1:
@@ -203,7 +205,10 @@ def cmd_estimate(a, argv) -> int:
     dev = torch.device(a.device)
     header = {"model": entry.key, "revision": entry.revision, "device": a.device, "dtype": a.dtype, "tiny": a.tiny,
               "gpu": torch.cuda.get_device_name(dev) if dev.type == "cuda" else None, "config_sha256": cfg.sha256,
-              "layer_spec": spec0.layer_spec, "n_layers": len(spec0.layers), "references": list(spec0.references)}
+              "layer_spec": spec0.layer_spec, "n_layers": len(spec0.layers),
+              "pre_norm_last": pre_norm_key(spec0.num_layers) if spec0.pre_norm_last else None,
+              "references": list(spec0.references), "tasks": list(a.task), "includes_normals": "normals" in a.task,
+              "upsample_impls": sorted({r["upsample_impl"] for r in rows}), "upsample_audit": upsample_audits()}
     doc = {"header": header, "tasks": rows, "gpu_hours_total": sum(r["gpu_hours"] for r in rows), "argv": list(argv),
            "written_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
     base = Path(a.out) / entry.key / "estimate"

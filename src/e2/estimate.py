@@ -8,6 +8,11 @@
 外推（秒）= n_norm × t_前向 + steps × t_步 + (曲线点数 × n_val + n_val + 评测集条数) × t_评测一条。
 bootstrap（CPU）不计入。墙钟在 CUDA 上前后同步；显存峰值取 torch.cuda.max_memory_allocated（CPU 上为 null）。
 实测用的训练与评测样本取各自列表的开头，图像尺寸未必代表全集（ADE 的图大小不一），外推只是估计。
+
+覆盖（DEV-0031）：--task all 含法向（D59-6 许可已确认，D63-4 撤掉许可门）。给了 --reference pre_proj 时，pre_proj 那组探针与
+正式运行一样在探针库里，所以已在实测里：前向开销（每次前向另调一次视觉塔的 pre_projection_features，计时在 t_前向 / t_步 /
+t_评测一条 之内；forwards.vision_extra 是外推的额外视觉塔前向次数）、探针数（n_probes 含 n_probes_pre_proj）、步时间（这组探针的
+上采样、损失与反传）。每行记下上采样实现（upsample_impl，configs/e2_probes.json 的 upsample.impl）；表头写明层、参考线、是否含法向。
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ from typing import Any, Callable, Mapping
 
 import torch
 
-from src.e2.config import E2Config, curve_steps
+from src.e2.config import PRE_PROJ, E2Config, curve_steps, layer_label
 from src.e2.data import E2Paths
 from src.e2.runner import RunSpec, TaskRun
 from src.e2.tasks import PositionAccumulator
@@ -64,26 +69,39 @@ def estimate_task(adapter: Any, cfg: E2Config, spec: RunSpec, task_cfg: Mapping[
     parts = {"norm_s": n_norm * t_fwd, "train_s": steps * t_step, "val_curves_s": (n_curve + 1) * n_val * t_eval,
              "eval_s": len(ev) * t_eval}
     total = sum(parts.values())
-    return {"task": spec.task, "n_probes": len(run.bank.names), "n_feature_keys": len(run.extractor.keys),
+    forwards = {"norm": n_norm, "train": steps * int(task_cfg["batch_size"]), "val": (n_curve + 1) * n_val, "eval": len(ev)}
+    tr = run.counters.by_phase.get("train", {})
+    extra_per_fwd = float(tr.get("n_vision_extra", 0)) / max(1, int(tr.get("n_forward", 0)))  # pre_proj：每次前向 1 次
+    return {"task": spec.task, "upsample_impl": str(task_cfg["upsample"]["impl"]),
+            "n_probes": len(run.bank.names), "n_feature_keys": len(run.extractor.keys),
+            "feature_keys": [layer_label(k) for k in run.extractor.keys], "references": list(spec.references),
+            "n_probes_pre_proj": sum(1 for e in run.bank.entries.values() if e.key == PRE_PROJ),
             "batch_size": int(task_cfg["batch_size"]), "steps": steps, "n_curve_points": n_curve, "n_val": n_val,
             "n_eval": len(ev), "n_train": len(train), "n_norm": n_norm,
             "measured": {"forward_s": t_fwd, "train_step_s": t_step, "eval_sample_s": t_eval, "train_steps": train_steps,
-                         "eval_samples": len(sub)},
+                         "eval_samples": len(sub), "vision_extra_per_forward": extra_per_fwd},
             "seconds": parts, "gpu_hours": total / 3600.0,
-            "forwards": {"norm": n_norm, "train": steps * int(task_cfg["batch_size"]), "val": (n_curve + 1) * n_val,
-                         "eval": len(ev)},
+            "forwards": {**forwards, "vision_extra": round(extra_per_fwd * sum(forwards.values()))},
             "peak_mem_bytes": int(torch.cuda.max_memory_allocated(dev)) if dev.type == "cuda" else None}
 
 
 def summary_markdown(model_key: str, rows: list[dict[str, Any]], header: Mapping[str, Any]) -> str:
-    lines = [f"# E2 估算 · {model_key}", "", f"- 设备：{header.get('gpu') or header.get('device')}；dtype {header.get('dtype')}；"
-             f"层 {header.get('layer_spec')}（{header.get('n_layers')} 个）；参考线 {header.get('references') or '无'}", "",
-             "| 任务 | 探针数 | 步 × 批 | 前向 s | 一步 s | 评测一条 s | 评测集 | GPU 小时 | 显存峰值 GB |",
-             "|---|---:|---|---:|---:|---:|---:|---:|---:|"]
+    refs = list(header.get("references") or [])
+    pre_norm = header.get("pre_norm_last")
+    layers = f"{header.get('layer_spec')}（{header.get('n_layers')} 个" + (f"，另加 {pre_norm}" if pre_norm else "") + "）"
+    lines = [f"# E2 估算 · {model_key}", "",
+             f"- 设备：{header.get('gpu') or header.get('device')}；dtype {header.get('dtype')}",
+             f"- 层：{layers}",
+             f"- 参考线：{'、'.join(refs) if refs else '无'}"
+             + ("（pre_proj 那组探针与视觉塔的额外前向都在实测里）" if PRE_PROJ in refs else ""),
+             f"- 含法向：{'是' if header.get('includes_normals') else '否'}；任务：{'、'.join(header.get('tasks') or [])}", "",
+             "| 任务 | 上采样实现 | 探针数（pre_proj） | 步 × 批 | 前向 s | 一步 s | 评测一条 s | 评测集 | GPU 小时 | 显存峰值 GB |",
+             "|---|---|---:|---|---:|---:|---:|---:|---:|---:|"]
     for r in rows:
         m = r["measured"]
         pk = r["peak_mem_bytes"]
-        lines.append(f"| {r['task']} | {r['n_probes']} | {r['steps']} × {r['batch_size']} | {m['forward_s']:.3f} | "
+        lines.append(f"| {r['task']} | {r['upsample_impl']} | {r['n_probes']}（{r['n_probes_pre_proj']}） | "
+                     f"{r['steps']} × {r['batch_size']} | {m['forward_s']:.3f} | "
                      f"{m['train_step_s']:.3f} | {m['eval_sample_s']:.3f} | {r['n_eval']} | {r['gpu_hours']:.2f} | "
                      f"{'—' if pk is None else f'{pk / 1e9:.1f}'} |")
     total = sum(r["gpu_hours"] for r in rows)
