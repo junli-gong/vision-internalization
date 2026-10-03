@@ -7,7 +7,7 @@
     # 思考子集：--subset think（预算强制收尾，D59-1：思考 4096、作答 1024，adapter.generate_batch_budgeted；think8192 已取消）；
     # 附加对照：--subset extra --policy qwen:1024（或 internvl:native）
     # 选择题与点对任务的 eval、dev 是受限字母读数（1 个 token）；自由作答的诊断：--subset free（think 子集的 id，关思考）
-批配置冻结（configs/e1_prompts.json 的 batch_protocol，D36-1）：--batch-size 默认取冻结值（16）；真模型给别的值要加
+批配置冻结（configs/e1_prompts.json 的 batch_protocol，D36-1）：--batch-size 默认取冻结值（64，D43）；真模型给别的值要加
 --allow-unfrozen-batch（config.yaml 记 frozen = false）。--tiny 默认 4，不受此限。
 批处理验收 v3（D36-1；开发子集；A1、A2 = 冻结的批配置跑两遍，B = composition_b 的批大小跑一遍；规则见配置的 acceptance）：
     python scripts/run_e1.py --acceptance --model qwen3.5-0.8b --task all --data-root $PROJ/data --out <dir> [--resume]

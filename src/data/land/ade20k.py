@@ -96,8 +96,7 @@ def label_meta(path: Path) -> dict[str, Any]:
 def land(ctx: LandContext, spec: dict[str, Any] | None = None) -> None:
     spec = {**SPEC, **(spec or {})}
     src_dir = ctx.source_dir(SOURCE)
-    m = ctx.manifest(SOURCE)
-    m.data["script"]["path"] = SCRIPT
+    m = ctx.manifest(SOURCE, script=SCRIPT)
     m.data["license"] = spec["license"]
     est = int((spec["members_bytes"] if ctx.limit is None else spec["mean_pair_bytes"] * ctx.limit) * 1.05) + 1_000_000
     budget_gate(ctx, m, est, {"n_pairs": sum(spec["expect"].values()) if ctx.limit is None else ctx.limit, "margin": "5%", "tmpdir_peak_bytes": 0})

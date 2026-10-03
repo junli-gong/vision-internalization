@@ -220,7 +220,8 @@ def test_gate_other_tasks_and_alignment():
 
 
 def test_budget_view_parses_only_the_answer():
-    """预算强制收尾：只解析 answer_text；作答段写满（stopped=False）判截断；思考段里的草稿网格不看。"""
+    """预算强制收尾：只解析 answer_text；作答段写满（stopped=False）判截断；思考段里的草稿网格不看；思考段是否闭合按
+    thinking_end 判（DEV-0029）：unclosed → thinking_unclosed，其余三类不看适配器对完整序列的 thinking_unclosed。"""
     g = np.zeros((32, 32), np.uint8)
     g[3:9, 5:11] = 7
 
@@ -228,13 +229,51 @@ def test_budget_view_parses_only_the_answer():
     class _B:
         answer_text: str
         stopped: bool
-        thinking_unclosed: bool = True  # 即使适配器这样填，预算强制收尾也视为已闭合
+        thinking_end: str = "natural"
+        thinking_unclosed: bool = True  # 适配器对完整序列的判定：E5 只解析作答段，不用它
         text: str = "draft:\n" + relief_grid_to_text(np.ones((32, 32), np.uint8))
 
-    p = SC.parse_answer("relief_grid", SC.budget_view(_B(relief_grid_to_text(g), True)), 512, 512)
-    assert p.valid and np.array_equal(p.relief, g)
-    assert SC.parse_answer("relief_grid", SC.budget_view(_B(relief_grid_to_text(g), False)), 512, 512).failure == "truncated"
-    assert SC.parse_answer("relief_grid", SC.budget_view(_B("  ", True)), 512, 512).failure == "empty"
+    for end in ("natural", "forced", "not_opened"):
+        p = SC.parse_answer("relief_grid", SC.budget_view(_B(relief_grid_to_text(g), True, end)), 512, 512)
+        assert p.valid and np.array_equal(p.relief, g)
+        assert SC.parse_answer("relief_grid", SC.budget_view(_B(relief_grid_to_text(g), False, end)), 512, 512).failure == "truncated"
+        assert SC.parse_answer("relief_grid", SC.budget_view(_B("  ", True, end)), 512, 512).failure == "empty"
+    # unclosed：思考段里写出停止 token（stopped=True），没有作答段 → thinking_unclosed（不是 empty，也不是截断）
+    assert SC.parse_answer("relief_grid", SC.budget_view(_B("", True, "unclosed")), 512, 512).failure == "thinking_unclosed"
+    assert SC.budget_view(_B("", True, "unclosed")).thinking_unclosed is True
+    assert SC.budget_view(_B("x", True, "forced")).thinking_unclosed is False
+    for bad in (None, "closed"):
+        with pytest.raises(ValueError, match="thinking_end"):
+            SC.budget_view(_B("x", True, bad))
+
+
+def test_thinking_end_block_four_kinds():
+    """按 thinking_end 四类分开汇总（口径同 E1）：四类都列条数（没有的记 0），出现的类给解析、截断、token 数与读数；不是预算强制
+    收尾的记录 → None；有的有、有的没有或取值不对 → 报错。"""
+    def rec(i, end, *, failure=None, iou=1.0, headline=True):
+        return {"id": f"x/{i}", "bin": 0, "groups": {}, "headline": headline, "valid": failure is None, "failure": failure,
+                "truncated": failure == "truncated", "thinking_end": end, "n_thinking_tokens": 0 if end == "not_opened" else 10 + i,
+                "n_answer_tokens": 0 if end == "unclosed" else 5, "n_inserted_tokens": 2 if end == "forced" else 0,
+                "score": {"iou_grid": iou, "iou_full": iou, "relief": None}}
+
+    recs = [rec(0, "forced"), rec(1, "forced", failure="truncated", iou=0.0), rec(2, "natural", headline=False),
+            rec(3, "unclosed", failure="thinking_unclosed", iou=0.0)]
+    te = SC.thinking_end_block(recs, 0)
+    assert te["n"] == 4 and te["counts"] == {"natural": 1, "forced": 2, "not_opened": 0, "unclosed": 1}
+    assert set(te["by_kind"]) == {"natural", "forced", "unclosed"}
+    f = te["by_kind"]["forced"]
+    assert (f["n"], f["n_headline"], f["n_truncated"], f["parse_failure_rate"]) == (2, 2, 1, 0.5)
+    assert f["parse"]["failures"] == {"truncated": 1} and f["thinking_tokens"]["max"] == 11
+    assert f["headline"]["mask_iou_grid"]["strict"] == 0.5 and f["overall"]["mask_iou_grid"]["valid_rate"] == 0.5
+    assert te["by_kind"]["natural"]["n_headline"] == 0 and te["by_kind"]["natural"]["headline"]["mask_iou_grid"]["strict"] is None
+    assert te["by_kind"]["unclosed"]["parse"]["failures"] == {"thinking_unclosed": 1}
+    assert te["inserted_tokens"]["total"] == 4
+    assert SC.thinking_end_block([{k: v for k, v in r.items() if k != "thinking_end"} for r in recs], 0) is None
+    with pytest.raises(ValueError, match="有的没有"):
+        SC.thinking_end_block(recs + [{k: v for k, v in recs[0].items() if k != "thinking_end"}], 0)
+    with pytest.raises(ValueError, match="未知"):
+        SC.thinking_end_block(recs + [rec(9, "closed")], 0)
+    assert SC.aggregate("occlusion", recs, n_resamples=0)["thinking_end"] == te
 
 
 def test_current_mask_iou_for_external_predictions():

@@ -82,7 +82,7 @@ def test_add_vocab_layout_and_allowed_sets(key):
     v = load_config().vocab
     tok = add_vocab(ad, v)
     ids = tok.grid_ids
-    assert len(set(ids)) == 67 and tok.stop_id not in ids and tok.stop_id == family_stop_id(ad) == ad._stop_ids()[0]
+    assert len(set(ids)) == 67 and tok.stop_id not in ids and tok.stop_id == family_stop_id(ad) == ad.stop_token_ids()[0]
     assert tok.value_ids("refseg") == (tok.id_of(v.mask[0]), tok.id_of(v.mask[1]))
     assert len(tok.value_ids("depth")) == DEPTH_NUM_BINS
     seg = tok.allowed_ids("refseg", "task")

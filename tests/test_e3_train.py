@@ -266,18 +266,31 @@ def test_save_load_merge_same_generation(key, pools, tmp_path):
 
 @pytest.mark.parametrize("key", ["qwen3.5-0.8b", "internvl3.5-2b-hf"])  # 共享 / 不共享 lm_head 各一
 def test_master_rows_equal_dense_param_fp32(key, pools):
-    res = []
-    for mode in ("fp32_master_rows", "dense_param"):
-        rc = resolve_run(CFG, supervision="grid", tiny=True)
-        rc["optim"] = copy.deepcopy(rc["optim"])
-        rc["optim"]["token_rows"]["mode"] = mode
-        rc["optim"]["max_grad_norm"] = None  # 只记范数不裁：两种模式的范数只差求和顺序
-        ad, tr, b, sched = _setup(key, "grid", pools, rc=rc)
-        examples = [b.build(p) for p in sched.step_plans(0)]
-        ad.train_mode()
-        for _ in range(3):
-            tr.optimize(examples)
-        res.append({n: p.detach().clone() for n, p in ad.model.named_parameters()})
+    """两种 token 行模式在 fp32 上逐位相同（本意不放松）。
+
+    DEV-0029：这条测试在高负载下偶发失败（D60-1：两套全量同时跑时失败，单独重跑 5/5 通过）。两种模式依次跑、互相比较，逐位
+    相同要求每次前向 / 反向的浮点求和顺序都相同；CPU 上的多线程算子按线程切块归约，负载变化时切块与合并的顺序可能变，fp32 末位
+    就会不同——这与两种模式本身无关。所以这条测试里把 torch 的 intra-op 线程数固定为 1（测完恢复）：每个算子的求和顺序固定，
+    比较的只剩两种模式本身。不改成带容差的比较：在固定的求和顺序下两种模式确实逐位相同（主副本就是 fp32 的那几行，梯度是同一份，
+    AdamW 逐元素更新），容差只会放过真正的差异。"""
+    n_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        res = []
+        for mode in ("fp32_master_rows", "dense_param"):
+            rc = resolve_run(CFG, supervision="grid", tiny=True)
+            rc["optim"] = copy.deepcopy(rc["optim"])
+            rc["optim"]["token_rows"]["mode"] = mode
+            rc["optim"]["max_grad_norm"] = None  # 只记范数不裁：两种模式的范数只差求和顺序
+            ad, tr, b, sched = _setup(key, "grid", pools, rc=rc)
+            examples = [b.build(p) for p in sched.step_plans(0)]
+            ad.train_mode()
+            for _ in range(3):
+                tr.optimize(examples)
+            res.append({n: p.detach().clone() for n, p in ad.model.named_parameters()})
+    finally:
+        torch.set_num_threads(n_threads)
+    assert torch.get_num_threads() == n_threads
     a, b_ = res
     assert set(a) == set(b_)
     for n in a:

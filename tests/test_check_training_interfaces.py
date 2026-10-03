@@ -107,7 +107,7 @@ def test_grid_allowed_tokens(cti, key):
     want = {tok("0", add_special_tokens=False)["input_ids"][0], tok("1", add_special_tokens=False)["input_ids"][0],
             tok("\n", add_special_tokens=False)["input_ids"][0]}
     assert set(al["probe"]["distinct_ids"]) == want and al["probe"]["n_tokens"] == 16 * 16 + 15
-    assert al["ids"] == sorted(want | set(ad._stop_ids())) and al["stop_ids"] == ad._stop_ids()
+    assert al["ids"] == sorted(want | set(ad.stop_token_ids())) and al["stop_ids"] == list(ad.stop_token_ids())
     assert not set(al["ids"]) & set(ad.grid_token_ids.values())  # 不用新增的 grid token
     assert [r["role"] for r in al["tokens"]][:3] == ["digit_0", "digit_1", "newline"]
     json.dumps(al)

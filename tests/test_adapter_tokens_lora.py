@@ -339,7 +339,7 @@ def test_merge_consistency(key):
     assert rep["teacher_forcing"]["argmax_agreement"] == 1.0
     assert rep["teacher_forcing"]["max_abs_hidden"] <= TF_ATOL and rep["teacher_forcing"]["max_abs_logit"] <= TF_ATOL
     assert [r.token_ids for r in rep["before"]] != [b.token_ids for b in base]  # 前提：LoRA 确实改变了输出
-    allowed = sorted(set(grid.values()) | set(ad._stop_ids()))
+    allowed = sorted(set(grid.values()) | set(ad.stop_token_ids()))
     ad2 = _make(key)  # 受限解码（grid token）同样一致
     ad2.add_grid_tokens([f"<g{i}>" for i in range(8)])
     ad2.inject_lora(r=4, lora_alpha=8, init_lora_weights=False)

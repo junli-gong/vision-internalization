@@ -233,7 +233,7 @@ def grid_allowed(ad: Any) -> dict[str, Any]:
     if set(probe_ids) != fmt:
         raise RuntimeError(f"示例网格的编码用到了 {sorted(set(probe_ids))}，不只是 0、1、换行 {sorted(fmt)}：数字或换行与相邻字符合并了，"
                            "allowed 集合要另定")
-    stops = [int(s) for s in ad._stop_ids()]
+    stops = [int(s) for s in ad.stop_token_ids()]
     for s in stops:
         rows.append({"role": "stop", "text": None, "id": s, "token": tok.convert_ids_to_tokens(s)})
     ids = sorted({r["id"] for r in rows})

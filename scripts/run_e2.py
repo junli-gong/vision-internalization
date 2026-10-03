@@ -15,7 +15,7 @@
 
 --task：depth semseg normals refseg 中的一个或多个，或 all。--layers 不给时取配置（configs/e2_probes.json 的 layers：9B 每隔一层，
 其余全部层）；配置的 layers.pre_norm_last 为真时另加特征键 L{N}_pre（最后一层归一化之前，单列；D53-3）。--reference post_proj 就是
-第 0 层（D21-3），只核对、不另训；pre_proj 需要适配器的 pre_projection_features（现有适配器没有，会报错）。
+第 0 层（D21-3），只核对、不另训；pre_proj 用适配器的 pre_projection_features（三个家族都已实现，D59-8、D60；各家族取的位置写在适配器里）。
 --stop-after-steps N：本次只跑 N 步训练就写检查点退出（分段运行；下次加 --resume 接着跑）。
 去重（硬约束 7；DEV-0024）：训练池的剔除清单必须有这个训练集的键、且 eval_sets 含这个任务的评测集，否则开跑前报错；旧格式的
 清单（没有 eval_sets）只在 --tiny 时照读。
