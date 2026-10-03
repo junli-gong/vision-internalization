@@ -64,7 +64,10 @@ def test_tiny_each_family_each_task_two_samples(model, tmp_path):
                 assert (leaf / f).exists(), (system, t, f)
             recs = [json.loads(x) for x in (leaf / "predictions.jsonl").read_text().splitlines()]
             assert [r["id"] for r in recs] == [f"{t}/val/0", f"{t}/val/1"]
-            assert all(r["n_generated_tokens"] <= 48 and r["prompt"] for r in recs)
+            # --tiny 的上限 48：零样本是单段；思维链是预算强制收尾，思考段与作答段各截到 48，合计 ≤ 96
+            # （补的思考结束标记不计入 n_generated_tokens，D60）。管理员修正（D61）：原断言只按单段写。
+            cap = 48 if system == "zeroshot" else 2 * 48
+            assert all(r["n_generated_tokens"] <= cap and r["prompt"] for r in recs)
             if t == "imagery":
                 assert all(r["n_image_pixels"] == 0 and r["n_visual_tokens"] == 0 for r in recs)  # e 没有图像
             else:
