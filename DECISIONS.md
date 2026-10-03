@@ -1481,3 +1481,17 @@
    - 对 DEV-0027 语义的假设（`stopped`、思维链的 `thinking_unclosed` 当作 False）：与 DEV-0027 的 `thinking_end` 四分类（含"思考段里写出停止 token"的 unclosed）不完全一致。DEV-0029 改为直接用 `thinking_end`。
    - 导出在非规范平台上要加 `--tiny`；b 的 A 选定不进测试，用命令复算。接受。
 
+## D62 — DEV-0029（收尾）合入与偏离裁定（2026-10-03）
+
+1. **合入**（6d72d5b，无返工）。合入前验证：普通与 server-parity 条件都是 2157 passed + 11 skipped。
+2. **内容**：
+   - **E5 思维链按 `thinking_end` 四分类分开报**：natural、forced、not_opened、unclosed。metrics 键是 `thinking_end`，与 E1 同口径；"未闭合恒为 False"的假设删除。
+   - **公开的停止 token**：`stop_token_ids()` 在全仓库替换了私有调用。
+   - **文档**：`run_e1.py` 文档改为冻结批大小 64，并有测试钉住；E2 的 pre_proj 说明改为已实现。E2 配置 sha256 `532540a7…` → `7235ec1b0689ca4fd2bf16a1ae5704d3de36429e2888c42c18303f36c539f181`，E2 尚未正式运行。
+   - **偶发测试**：E3 的 fp32 逐位相等测试固定单线程，仍要求逐位相等。
+   - **落地源**：三个训练源改用 `Manifest(script=)`。
+3. **偏离全部接受**：
+   - E5 metrics 键改名，旧结构不兼容：E5 思维链还没有正式运行；
+   - 测试文件里 4 处一行的调用替换。
+4. **遗留**：`configs/e5_prompts.json` 里思维链的说明仍写"自然与强制两类"，下一个改 E5 配置的任务顺手改为四类，因为改它会变 sha256。
+
