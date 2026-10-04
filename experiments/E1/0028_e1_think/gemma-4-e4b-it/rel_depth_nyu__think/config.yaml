@@ -1,0 +1,78 @@
+experiment: E1
+framework: src/e1（DEV-0014；协议 v2：DEV-0017）
+model:
+  key: gemma-4-e4b-it
+  family: gemma4
+  repo: google/gemma-4-E4B-it
+  revision: ee0ef6023621cff504d758262d4e04895a5af4a2
+  adapter_model_key: gemma-4-e4b-it
+  tiny: false
+image_policy:
+  tag: default
+  type: SoftTokenBudget
+  max_soft_tokens: 280
+task: rel_depth_nyu
+subset: think
+generation:
+  enable_thinking: true
+  max_new_tokens: 5120
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  readout:
+    kind: text
+    parse: choice
+  think_budget:
+    thinking_budget: 4096
+    answer_budget: 1024
+    method: generate_batch_budgeted
+    max_new_tokens_note: max_new_tokens = thinking_budget + answer_budget（模型生成的 token
+      数上限，补的 token 不计入）
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+  entry:
+    template: 'Two points are circled on the image, labeled by A and B beside each
+      circle. Which point is closer to the camera?
+
+      Select from the following choices.
+
+      (A) A is closer
+
+      (B) B is closer'
+    native: false
+    provenance: unified_benchmark_wording
+    source_url: https://huggingface.co/datasets/BLINK-Benchmark/BLINK/tree/a3666eb249237ba3d5eca8db21176cc47967e040/Relative_Depth
+    parse: choice
+    max_new_tokens: 1024
+data:
+  n_samples: 200
+  sample_ids_sha256: 07699439489a3ac74805bbcec04dd1b9868587da2be83985d21ba13182ec1151
+  has_gt: true
+  selection_stats:
+    population:
+      n_total: 3270
+      n_kept: 3270
+      excluded_by_reason: {}
+    subset_name: think:rel_depth_nyu
+    n: 200
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: null
+map_ci_resamples: 0
+batch_size: 64
+batch_protocol:
+  protocol_version: 1
+  batch_size: 64
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: true
+  frozen_batch_size: 64
