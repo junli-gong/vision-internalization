@@ -497,3 +497,38 @@ def test_judge_across_merge_rules(cti):
     assert cti.judge(checks, cpu) == {"restricted": []}
     checks["restricted"]["across_merge"] = {"by_thinking": {"thinking_off": {"teacher_forcing": low}}}
     assert cti.judge(checks, gpu)["restricted"] and cti.judge(checks, cpu)["restricted"]
+
+
+# ---------------------------------------------------------------------------
+# DEV-0035 §3(b)（D68-4(b)）：0、1、换行的构造只留一份（src/e1/forced.grid_format_ids）
+# ---------------------------------------------------------------------------
+
+
+def test_grid_allowed_uses_grid_format_ids(cti, monkeypatch):
+    """check_training_interfaces 不再自己构造 0、1、换行，import src/e1/forced.grid_format_ids，停止 token 另加。"""
+    from src.e1 import forced
+
+    assert cti.grid_format_ids is forced.grid_format_ids
+    assert not hasattr(cti, "grid_to_text") and not hasattr(cti, "GRID_SIZE_E1")  # 原来的构造（示例网格）已删
+    calls = []
+
+    def spy(tok):
+        calls.append(tok)
+        return forced.grid_format_ids(tok)
+
+    monkeypatch.setattr(cti, "grid_format_ids", spy)
+    ad = make_adapter("qwen3.5-0.8b", device="cpu", dtype=torch.float32, tiny=True, init_std=cti.TINY_INIT_STD)
+    al = cti.grid_allowed(ad)
+    assert calls == [ad.tokenizer]
+    fmt = forced.grid_format_ids(ad.tokenizer)
+    assert sorted(set(al["ids"]) - set(al["stop_ids"])) == fmt["ids"] and al["stop_ids"] == list(ad.stop_token_ids())
+
+
+@pytest.mark.parametrize("key", FAMILY_KEYS)
+def test_grid_allowed_identical_to_69884b8(cti, key):
+    """allowed 一节与 69884b8 的构造逐字节相同（输出 JSON 的其余部分由 test_non_grid_outputs_identical_to_69884b8 钉住）。"""
+    old = _load(SNAPSHOT, "_check_training_interfaces_69884b8_allowed")
+    ad = make_adapter(key, device="cpu", dtype=torch.float32, tiny=True, init_std=cti.TINY_INIT_STD)
+    ad.add_grid_tokens([f"<g{i}>" for i in range(4)])
+    new_doc, old_doc = cti.grid_allowed(ad), old.grid_allowed(ad)
+    assert json.dumps(new_doc, ensure_ascii=False, indent=1) == json.dumps(old_doc, ensure_ascii=False, indent=1)

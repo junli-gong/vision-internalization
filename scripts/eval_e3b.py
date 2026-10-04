@@ -13,8 +13,11 @@
         --seed 0 --out /tmp/e
 
 顺序：读检查点 manifest（构造方式必须与 --model、--tiny 相符）→ 评测前的合并核对（scripts/check_training_interfaces.py --checkpoint
-的同一套函数，n 取配置的 eval.merge_check.n，可用 --merge-check-n 改；不通过就不评测）→ factory.load_trained(merge=True) →
-逐任务评测。批大小默认取配置冻结的 eval.batch_size（64，与 E1 相同）；真模型给别的值要加 --allow-unfrozen-batch。
+的同一套函数，n 取配置的 eval.merge_check.n，可用 --merge-check-n 改；--config 透传给它的 --e3b-config，带网格 token 的检查点做
+restricted 时读同一份配置；不通过就不评测）→ factory.load_trained(merge=True) → 逐任务评测。
+其他检查点（DEV-0035）：网格格式预热（scripts/train_e3b.py --supervision warmup，LoRA + 网格 token 行，与 E3b 同一种检查点）照常评，
+--variant warmup；C1′（--supervision grid --variant c1prime，冻结 LLM、只有网格 token 的行、没有 LoRA）：合并核对跳过 merge 一项、
+restricted 照做（含义见 src/e3/merge_check.py），--variant c1prime。批大小默认取配置冻结的 eval.batch_size（64，与 E1 相同）；真模型给别的值要加 --allow-unfrozen-batch。
 退出码：0 = 跑完；1 = 合并核对没有通过，拒绝评测；2 = 出错（报错先写进 <out>/eval/<变体>/<模型>/seed<k>/errors/；argparse 用法
 错误也是 2）。
 """
@@ -128,7 +131,7 @@ def cmd_run(a, argv) -> int:
     mc = settings["merge_check"]
     summ = run_merge_check(ck, model_key=a.model, tiny=a.tiny, n=mc["n"], checks=mc["checks"], out_json=mdir / EV.MERGE_CHECK,
                            device=a.device, dtype=a.dtype, data_root=a.data_root or os.environ.get("VISINT_DATA_ROOT"),
-                           dev_subsets=None)
+                           dev_subsets=None, e3b_config=a.config)  # 核对读评测用的同一份配置（D67-4(a)）
     ad, _ = factory.load_trained(ck, device=a.device, dtype=DTYPES[a.dtype], merge=True)
     if man.get("lora") is not None and ad.lora_state != "merged":
         raise RuntimeError(f"load_trained(merge=True) 之后 LoRA 状态是 {ad.lora_state}，应为 merged")

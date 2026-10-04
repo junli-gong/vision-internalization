@@ -39,6 +39,19 @@ LoRA（peft 的默认）；梯度检查点。
 - accounting.json：各次调用合计（步数、样本、各类 token、分阶段墙钟、GPU 小时、显存峰值）；compute.json：src/accounting 的
   Compute（每条样本记一次调用：generated_tokens = 教师强制的目标 token 数，prompt_tokens = 提示行长度，visual_tokens、
   image_pixels 按行；call_time_s = 所在微批前向 + 反向墙钟的等分，wall_time_s = 整步墙钟的等分）。
+
+**C1′**（DEV-0035 §1；变体 c1prime，run_cfg 的 frozen_llm = true；配置的 c1prime 节）：网格监督，数据、日程、步数、批、调度都同 E3b，
+只是不注入 LoRA：加载 base → torch.manual_seed → add_grid_tokens → frozen_llm_token_rows（LLM 的全部参数设为不求梯度，只让输入嵌入、
+不共享时另有 lm_head 的权重求梯度，不挂梯度掩码）→ TokenRows（必须是 fp32_master_rows：主副本只取网格 token 那几行的梯度、step 后
+只写回那几行，其余行逐位不变）→ 梯度检查点 → 优化器（只有 token_rows 一组）。每次存检查点之前核对冻结行的抽样（FrozenRowsProbe）
+与开始时逐位相同。检查点只有 token 行与 manifest（save_trained 在没有 LoRA 时就这样存）；续跑：load_trained(merge=False) 之后 LoRA
+状态必须是 none。
+
+**网格格式预热**（DEV-0035 §2；监督 warmup，变体 warmup）：LoRA + 网格 token 行、受限交叉熵同 E3b 的网格监督；样本来自
+src/e3/warmup.WarmupSource（纯文字，不给图像；不读训练池、没有去重清单）。每 warmup.eval_every 步在固定的留出集上做受限解码
+（warmup.evaluate_heldout），读数逐行写进 warmup_eval.jsonl（只含由模型输出决定的量，CPU 上续跑与一次跑完逐字节相同；墙钟在
+logs/run_<k>.json 的 warmup_evals 与 accounting.json 的 warmup_eval_s）；格式错误率连续 consecutive 次低于阈值（warmup.StopRule）就
+停在这一步，直接存 final；steps（= warmup.stop.max_steps）是上限。train_summary.json 另有 warmup 一节（是否满足、停在第几步、读数）。
 """
 
 from __future__ import annotations
@@ -56,6 +69,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 import yaml
@@ -63,14 +77,17 @@ import yaml
 from src.accounting import Compute, merge, write_compute_json
 from src.adapters.training import restricted_targets
 from src.e3 import data as D
-from src.e3.config import E3Config, VARIANT_OF
+from src.e3 import warmup as W
+from src.e3.config import C1PRIME, E3Config, VARIANT_OF
 from src.e3.targets import NoSupervision
 from src.e3.tokens import GRID_TASKS, GridTokens, add_vocab, attach_vocab, family_stop_id
 from src.runlog import write_run_metadata
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+GRID_LIKE: tuple[str, ...] = ("grid", "warmup")  # 有网格 token、用受限交叉熵的监督
 CONFIG = "config.yaml"
 TRAIN_LOG = "train_log.jsonl"
+WARMUP_EVAL = "warmup_eval.jsonl"
 SUMMARY = "train_summary.json"
 ACCOUNTING = "accounting.json"
 COMPUTE = "compute.json"
@@ -98,9 +115,14 @@ class RunSpec:
     model_dtype: str
     supervision: str
     seed: int
+    frozen_llm: bool = False  # C1′（DEV-0035 §1）：变体 c1prime
 
     @property
     def variant(self) -> str:
+        if self.frozen_llm:
+            if self.supervision != "grid":
+                raise ValueError("C1′（冻结 LLM）只配网格监督")
+            return C1PRIME
         return VARIANT_OF[self.supervision]
 
 
@@ -197,6 +219,41 @@ class TokenRows:
         self.after_step()
 
 
+def frozen_llm_token_rows(ad: Any) -> list[torch.nn.Parameter]:
+    """C1′（模块说明）：LLM 的全部参数设为不求梯度，只让输入嵌入（lm_head 不共享时另有 lm_head）的权重求梯度；返回这些权重
+    （共享时只有一个）。不挂梯度掩码：交给 TokenRows 的 fp32 主副本模式，它只取、只写网格 token 那几行。
+    （适配器的 trainable_token_rows 要求先注入 LoRA，C1′ 没有 LoRA，所以不用它；嵌入与 lm_head 取 HF 的 get_input_embeddings 与
+    适配器的 lm_head_weight，与 trainable_token_rows 取的是同两个张量。）"""
+    for p in ad.model.parameters():
+        p.requires_grad_(False)
+    emb = ad.model.get_input_embeddings().weight
+    head = ad.lm_head_weight()
+    if (emb is head) != bool(ad.tied_word_embeddings):
+        raise RuntimeError(f"tied_word_embeddings = {ad.tied_word_embeddings}，但嵌入与 lm_head {'是' if emb is head else '不是'}同一个张量")
+    params = [emb] if emb is head else [emb, head]
+    for w in params:
+        w.requires_grad_(True)
+    return params
+
+
+class FrozenRowsProbe:
+    """C1′ 的冻结行核对：开始时记下嵌入（与不共享的 lm_head）里均匀抽的至多 n 行（网格 token 的行除外），存检查点之前核对逐位不变
+    （save_trained 的冻结行核对只对 trainable_token_rows 打开的行生效，C1′ 不经过它）。"""
+
+    def __init__(self, params: Sequence[torch.Tensor], trainable_ids: Sequence[int], n: int = 512) -> None:
+        skip = {int(i) for i in trainable_ids}
+        self.items = []
+        for w in params:
+            rows = sorted({int(round(x)) for x in np.linspace(0, int(w.shape[0]) - 1, n)} - skip)
+            idx = torch.tensor(rows, dtype=torch.long, device=w.device)
+            self.items.append((w, idx, w.detach().index_select(0, idx).clone()))
+
+    def check(self) -> None:
+        for w, idx, rows in self.items:
+            if not torch.equal(w.detach().index_select(0, idx), rows):
+                raise RuntimeError("C1′：网格 token 以外的嵌入 / lm_head 行变了（冻结 LLM 只应改网格 token 的行）")
+
+
 # ---------------------------------------------------------------------------
 # 训练器：一个适配器上的一步优化（网格与 C3 共用）
 # ---------------------------------------------------------------------------
@@ -217,21 +274,28 @@ class Trainer:
         self.sched: torch.optim.lr_scheduler.LambdaLR | None = None
         self.stop_id = family_stop_id(adapter)
         self.audit: dict[str, Any] = {}
+        self.grid_like = supervision in GRID_LIKE
+        self.frozen_llm = bool(self.rc.get("frozen_llm", False))  # C1′（模块说明）
+        if self.frozen_llm and supervision != "grid":
+            raise ValueError("C1′（冻结 LLM）只配网格监督")
+        self.frozen_probe: FrozenRowsProbe | None = None
 
     # ----- 搭建 -----
     def setup_fresh(self) -> None:
         torch.manual_seed(self.seed)
-        if self.supervision == "grid":
+        if self.grid_like:
             self.tokens = add_vocab(self.ad, self.cfg.vocab)
-        lo = self.rc["lora"]
-        self.ad.inject_lora(r=int(lo["r"]), lora_alpha=float(lo["alpha"]), lora_dropout=float(lo["dropout"]))
+        if not self.frozen_llm:
+            lo = self.rc["lora"]
+            self.ad.inject_lora(r=int(lo["r"]), lora_alpha=float(lo["alpha"]), lora_dropout=float(lo["dropout"]))
         self._finish_setup()
 
     def setup_resume(self, model_dir: Path) -> None:
         self.ad.load_trained(model_dir, merge=False)
-        if self.ad.lora_state != "injected":
-            raise RuntimeError(f"续跑：检查点载入后 LoRA 状态是 {self.ad.lora_state}，应为 injected")
-        if self.supervision == "grid":
+        want = "none" if self.frozen_llm else "injected"
+        if self.ad.lora_state != want:
+            raise RuntimeError(f"续跑：检查点载入后 LoRA 状态是 {self.ad.lora_state}，应为 {want}")
+        if self.grid_like:
             self.tokens = attach_vocab(self.ad, self.cfg.vocab)
         elif self.ad.grid_token_ids:
             raise RuntimeError("续跑：C3 的检查点里不该有 grid token")
@@ -240,15 +304,28 @@ class Trainer:
     def _finish_setup(self) -> None:
         ad = self.ad
         lora = [p for n, p in ad.model.named_parameters() if "lora_" in n]
-        if not lora or not all(p.requires_grad for p in lora):
-            raise RuntimeError("LoRA 参数不存在或没有设为求梯度")
-        if self.tokens is not None:
-            row_params = ad.trainable_token_rows(list(self.cfg.vocab.names))
-            self.rows = TokenRows(row_params, ad.trainable_token_row_ids, self.rc["optim"]["token_rows"]["mode"])
+        if self.frozen_llm:  # C1′：没有 LoRA，只有网格 token 的行（模块说明）
+            if lora or ad.lora_state != "none":
+                raise RuntimeError(f"C1′ 不该有 LoRA（LoRA 状态 {ad.lora_state}，{len(lora)} 个 LoRA 参数）")
+            if self.tokens is None:
+                raise RuntimeError("C1′ 要有网格 token")
+            mode = self.rc["optim"]["token_rows"]["mode"]
+            if mode != "fp32_master_rows":
+                raise ValueError(f"C1′ 的 token 行必须是 fp32_master_rows，收到 {mode!r}")
+            self.rows = TokenRows(frozen_llm_token_rows(ad), self.tokens.grid_ids, mode)
+            self.frozen_probe = FrozenRowsProbe(self.rows.params, self.rows.ids)
+        else:
+            if not lora or not all(p.requires_grad for p in lora):
+                raise RuntimeError("LoRA 参数不存在或没有设为求梯度")
+            if self.tokens is not None:
+                row_params = ad.trainable_token_rows(list(self.cfg.vocab.names))
+                self.rows = TokenRows(row_params, ad.trainable_token_row_ids, self.rc["optim"]["token_rows"]["mode"])
         ad.set_gradient_checkpointing(bool(self.rc["gradient_checkpointing"]))
         o = self.rc["optim"]
-        groups = [{"params": lora, "lr": float(o["lora"]["lr"]), "weight_decay": float(o["lora"]["weight_decay"]),
-                   "name": "lora"}]
+        groups = []
+        if not self.frozen_llm:
+            groups.append({"params": lora, "lr": float(o["lora"]["lr"]), "weight_decay": float(o["lora"]["weight_decay"]),
+                           "name": "lora"})
         if self.rows is not None:
             groups.append({"params": self.rows.optim_params(), "lr": float(o["token_rows"]["lr"]),
                            "weight_decay": 0.0, "name": "token_rows"})
@@ -273,12 +350,21 @@ class Trainer:
         not32 = sorted({str(p.dtype) for p in lora if p.dtype != torch.float32})
         if not32:
             raise RuntimeError(f"LoRA 参数的 dtype 是 {not32}，应为 torch.float32")
-        return {"n_lora_params": int(sum(p.numel() for p in lora)),
-                "lora_dtypes": sorted({str(p.dtype) for p in lora}), "lora_devices": sorted({str(p.device) for p in lora}),
-                "token_row_ids": None if self.rows is None else list(self.rows.ids),
-                "token_row_mode": None if self.rows is None else self.rows.mode,
-                "token_row_tensors": None if self.rows is None else len(self.rows.params),
-                "tied_word_embeddings": bool(ad.tied_word_embeddings), "lora_targets": len(ad.lora_target_modules())}
+        out = {"n_lora_params": int(sum(p.numel() for p in lora)),
+               "lora_dtypes": sorted({str(p.dtype) for p in lora}), "lora_devices": sorted({str(p.device) for p in lora}),
+               "token_row_ids": None if self.rows is None else list(self.rows.ids),
+               "token_row_mode": None if self.rows is None else self.rows.mode,
+               "token_row_tensors": None if self.rows is None else len(self.rows.params),
+               "tied_word_embeddings": bool(ad.tied_word_embeddings), "lora_targets": len(ad.lora_target_modules())}
+        if self.frozen_llm:  # C1′：求梯度的只有嵌入（与不共享的 lm_head），优化器里只有网格 token 行的主副本
+            out.update(frozen_llm=True, n_requires_grad_tensors=sum(1 for p in ad.model.parameters() if p.requires_grad),
+                       n_optim_params=int(sum(p.numel() for p in self.rows.optim_params())))
+        return out
+
+    def check_frozen(self) -> None:
+        """存检查点之前（C1′）：冻结行的抽样逐位不变。其余监督什么都不做（save_trained 自己核对）。"""
+        if self.frozen_probe is not None:
+            self.frozen_probe.check()
 
     # ----- 一步 -----
     def lr_now(self) -> dict[str, float]:
@@ -298,7 +384,7 @@ class Trainer:
                 continue
             sel = torch.isin(trow, torch.tensor(rows, dtype=torch.long, device=trow.device)).nonzero().flatten()
             h, t, ws = th.index_select(0, sel), tid.index_select(0, sel), w.index_select(0, sel)
-            if self.supervision == "grid":
+            if self.grid_like:
                 allowed = self.tokens.allowed_ids(task, self.rc["allowed_scope"])
                 lg = ad.restricted_logits(h, allowed)
                 tt = restricted_targets(t, allowed)
@@ -444,8 +530,38 @@ def token_identity(ad: Any, tokens: GridTokens | None, scope: str) -> dict[str, 
             "allowed": {t: tokens.allowed_ids(t, scope) for t in GRID_TASKS}, "table": table}
 
 
+def warmup_identity(spec: RunSpec, cfg: E3Config, run_cfg: Mapping[str, Any], trainer: Trainer,
+                    source: W.WarmupSource) -> dict[str, Any]:
+    """网格格式预热的运行身份（键与 E3b 的相同；数据一节换成生成器与留出集的指纹，没有训练池、去重与加噪）。"""
+    held = source.heldout
+    return {
+        "experiment": "E3b",
+        "framework": "src/e3（DEV-0025；网格格式预热 src/e3/warmup.py，DEV-0035）",
+        "model": {"key": spec.model_key, "family": spec.family, "repo": spec.repo, "revision": spec.revision,
+                  "adapter_model_key": spec.adapter_model_key, "tiny": spec.tiny, "dtype": spec.model_dtype},
+        "image_policy": spec.image_policy,
+        "supervision": spec.supervision,
+        "variant": spec.variant,
+        "seed": spec.seed,
+        "training": dict(run_cfg),
+        "grid_size": cfg.grid_n,
+        "tokens": token_identity(trainer.ad, trainer.tokens, run_cfg["allowed_scope"]),
+        "stop_id": trainer.stop_id,
+        "instructions": {"orders": dict(source.orders), "templates": "data.warmup（配置的 warmup 节）"},
+        "c3": None,
+        "noise": None,
+        "config": {"path": cfg.path, "sha256": cfg.sha256, "version": cfg.doc["version"]},
+        "data": {"source": "src/e3/warmup.WarmupSource（纯文字，不给图像；与任何视觉数据无关）", "images": 0,
+                 "warmup": source.spec.identity(),
+                 "heldout": {"n": len(held), "sha256": W.items_digest(held),
+                             "by_task": {t: sum(1 for it in held if it.task == t) for t in GRID_TASKS}}},
+    }
+
+
 def run_identity(spec: RunSpec, cfg: E3Config, run_cfg: Mapping[str, Any], trainer: Trainer,
-                 pools: Mapping[str, Any], dedupe: Mapping[str, Any], builder: D.ExampleBuilder) -> dict[str, Any]:
+                 pools: Mapping[str, Any], dedupe: Mapping[str, Any], builder: Any) -> dict[str, Any]:
+    if spec.supervision == "warmup":
+        return warmup_identity(spec, cfg, run_cfg, trainer, builder)
     d = cfg.doc
     instr = {t: {k: v for k, v in d["tasks"][t].items() if k.endswith(("template", "instruction")) or k == "order"}
              for t in pools}
@@ -520,28 +636,54 @@ def accounting_doc(leaf: Path) -> tuple[dict[str, Any], Compute]:
     sums = {k: int(sum(r[k] for r in log)) for k in ("n_samples", "n_supervised_tokens", "n_target_tokens", "n_prompt_tokens",
                                                      "n_visual_tokens", "n_image_pixels")}
     wall = sum(float(r.get("wall_s") or 0.0) for r in runs)
-    return ({"n_runs": len(runs), "n_steps_timed": n_steps, "n_steps_logged": len(log), **sums, "phases_s": tot,
-             "wall_s": wall, "gpu_hours": wall / 3600.0, "peak_mem_bytes": max(peaks) if peaks else None,
-             "device": runs[-1].get("device") if runs else None, "gpu": runs[-1].get("gpu") if runs else None,
-             "note": "phases_s 按步相加：data_s = 构造样本（读图、解码 GT、加噪、渲染叠加图）；build_inputs_s = 处理器；fwd_s、bwd_s = 前向"
-                     "（含损失）与反向（CUDA 前后同步）；opt_s = 取主副本梯度、裁剪、step、写回；step_s = 整步。计入 n_steps_timed 的步可能"
-                     "多于 n_steps_logged（被中断的步的计时也记了，但没有写进 train_log）。compute.json 的 generated_tokens 是教师强制的"
-                     "目标 token 数"}, comp)
+    doc = {"n_runs": len(runs), "n_steps_timed": n_steps, "n_steps_logged": len(log), **sums, "phases_s": tot,
+           "wall_s": wall, "gpu_hours": wall / 3600.0, "peak_mem_bytes": max(peaks) if peaks else None,
+           "device": runs[-1].get("device") if runs else None, "gpu": runs[-1].get("gpu") if runs else None,
+           "note": "phases_s 按步相加：data_s = 构造样本（读图、解码 GT、加噪、渲染叠加图）；build_inputs_s = 处理器；fwd_s、bwd_s = 前向"
+                   "（含损失）与反向（CUDA 前后同步）；opt_s = 取主副本梯度、裁剪、step、写回；step_s = 整步。计入 n_steps_timed 的步可能"
+                   "多于 n_steps_logged（被中断的步的计时也记了，但没有写进 train_log）。compute.json 的 generated_tokens 是教师强制的"
+                   "目标 token 数"}
+    if any("warmup_evals" in r for r in runs):  # 网格格式预热：留出集的受限解码（不在 phases_s 里，含在 wall_s 里）
+        evs = [e for r in runs for e in r.get("warmup_evals") or []]
+        doc["warmup_eval_s"] = sum(float(e["wall_s"]) for e in evs)
+        doc["warmup_eval_n"] = len(evs)
+    return doc, comp
 
 
 def readme_text(spec: RunSpec, ident: Mapping[str, Any], summary: Mapping[str, Any], log: Sequence[Mapping[str, Any]]) -> str:
     tr = ident["training"]
     first, last = (log[0], log[-1]) if log else ({}, {})
+    sup = {"grid": "GT 网格 + 修正对", "text": "C3：稀疏文本", "warmup": "网格格式预热：纯文字给坐标 → 网格，不给图像"}[spec.supervision]
+    if tr.get("frozen_llm"):  # C1′
+        sup += "；C1′：冻结 LLM，只训练网格 token 的行"
+        opt = (f"不注入 LoRA，AdamW 只有 token 行一组：lr {tr['optim']['token_rows']['lr']}（{tr['optim']['token_rows']['mode']}），"
+               f"warmup {tr['warmup_steps']} 步 + 余弦")
+        ck = "只有 token 行、manifest"
+    else:
+        opt = (f"LoRA r {tr['lora']['r']} / alpha {tr['lora']['alpha']} / dropout {tr['lora']['dropout']}，"
+               f"AdamW lr {tr['optim']['lora']['lr']}（token 行 {tr['optim']['token_rows']['lr']}，{tr['optim']['token_rows']['mode']}），"
+               f"warmup {tr['warmup_steps']} 步 + 余弦")
+        ck = "只有 LoRA、token 行、manifest"
+    steps_line = (f"- 训练：{tr['steps']} 步 × {tr['batch_size']} 条（微批 {tr['micro_batch_size']} × 累积 {tr['grad_accum_steps']}），"
+                  if spec.supervision != "warmup" else
+                  f"- 训练：至多 {tr['steps']} 步 × {tr['batch_size']} 条（微批 {tr['micro_batch_size']} × 累积 {tr['grad_accum_steps']}；"
+                  f"实际 {summary.get('steps')} 步），")
     lines = [f"# E3b 训练 · {spec.variant} · {spec.model_key} · seed {spec.seed}", "",
              f"- 模型：{spec.repo}@{spec.revision}（{spec.family}；适配器 {spec.adapter_model_key}；{spec.model_dtype}）",
-             f"- 监督：{spec.supervision}（{'GT 网格 + 修正对' if spec.supervision == 'grid' else 'C3：稀疏文本'}）；图像口径 {spec.image_policy}",
-             f"- 训练：{tr['steps']} 步 × {tr['batch_size']} 条（微批 {tr['micro_batch_size']} × 累积 {tr['grad_accum_steps']}），"
-             f"LoRA r {tr['lora']['r']} / alpha {tr['lora']['alpha']} / dropout {tr['lora']['dropout']}，"
-             f"AdamW lr {tr['optim']['lora']['lr']}（token 行 {tr['optim']['token_rows']['lr']}，{tr['optim']['token_rows']['mode']}），"
-             f"warmup {tr['warmup_steps']} 步 + 余弦",
+             f"- 监督：{spec.supervision}（{sup}）；图像口径 {spec.image_policy}",
+             steps_line + opt,
              f"- 混合：{tr['mix']}；修正对比例：{tr['correction_fraction']}",
              f"- 第一步损失 {first.get('loss')}，最后一步损失 {last.get('loss')}（{len(log)} 步）",
-             f"- 检查点：{summary.get('final_checkpoint')}（{summary.get('final_checkpoint_bytes')} 字节；只有 LoRA、token 行、manifest）", ""]
+             f"- 检查点：{summary.get('final_checkpoint')}（{summary.get('final_checkpoint_bytes')} 字节；{ck}）", ""]
+    wsum = summary.get("warmup")
+    if wsum:
+        r = wsum["rule"]
+        lines += ["## 停止规则（网格格式预热）", "",
+                  f"- 规则：每 {r['eval_every']} 步在留出集（{r['heldout_n']} 条）上受限解码，格式错误率连续 {r['consecutive']} 次 "
+                  f"< {r['threshold']} 就停；上限 {r['max_steps']} 步",
+                  f"- 结果：stop_rule_met = {wsum['stop_rule_met']}，停在第 {wsum['stopped_at_step']} 步（{wsum['reason']}），"
+                  f"共 {wsum['n_evals']} 次读数；最后一次格式错误率 {(wsum.get('last') or {}).get('format_error_rate')}",
+                  "- 逐次读数：warmup_eval.jsonl", ""]
     if ident.get("tokens"):
         lay = ident["tokens"]["layout"]
         lines += ["## token 布局", "", f"- mask：{lay['mask']}；深度 {lay['depth_first']}–{lay['depth_last']}"
@@ -559,17 +701,22 @@ def readme_text(spec: RunSpec, ident: Mapping[str, Any], summary: Mapping[str, A
 def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[str, Any], paths: D.E3Paths,
                  out_dir: str | Path, *, resume: bool = False, argv: Sequence[str] = (), ckpt_root: str | Path | None = None,
                  stop_after_steps: int | None = None, keep_optimizer_state: bool = False,
-                 log: Callable[[str], None] | None = None, _fail_after_step: int | None = None) -> dict[str, Any] | None:
-    """跑一次训练；返回 train_summary（stop_after_steps 到了时返回 None）。adapter 必须是刚挂好的 base（规则见模块说明）。"""
+                 log: Callable[[str], None] | None = None, _fail_after_step: int | None = None,
+                 _warmup_eval: W.EvalFn | None = None) -> dict[str, Any] | None:
+    """跑一次训练；返回 train_summary（stop_after_steps 到了时返回 None）。adapter 必须是刚挂好的 base（规则见模块说明）。
+    _warmup_eval（只给测试）：替换留出集的读数 (adapter, tokens, 留出集) → 读数，用来核对停止规则的流程。"""
     log = log or (lambda m: print(m, file=sys.stderr, flush=True))
     rc = dict(run_cfg)
+    if rc["variant"] != spec.variant or bool(rc.get("frozen_llm", False)) != spec.frozen_llm or rc["supervision"] != spec.supervision:
+        raise ValueError(f"run_cfg（{rc['supervision']}/{rc['variant']}）与 RunSpec（{spec.supervision}/{spec.variant}）不符")
+    warm = spec.supervision == "warmup"
     leaf = leaf_dir(out_dir, spec.variant, spec.model_key, spec.seed)
     ckpt = (Path(ckpt_root) / spec.variant / spec.model_key / f"seed{spec.seed}") if ckpt_root else leaf / "ckpt"
     latest = ckpt / LATEST
 
-    # 数据（硬约束 7：加载器没有剔除清单就报错；这里另核对清单比较过本任务的评测集）
+    # 数据（硬约束 7：加载器没有剔除清单就报错；这里另核对清单比较过本任务的评测集）。网格格式预热不读训练池（纯文字，src/e3/warmup）
     pools, dedupe = {}, {}
-    for t in cfg.tasks:
+    for t in ([] if warm else cfg.tasks):
         pools[t] = D.load_pool(t, paths, cfg.task(t))
         dedupe[t] = D.check_dedupe(t, pools[t].stats.get("dedupe_file"), cfg.doc["dedupe"]["required_eval_sets"].get(t, []),
                                    real_model=not spec.tiny)
@@ -592,12 +739,20 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
         st = torch.load(latest / RESUME_STATE, map_location="cpu", weights_only=False)
     else:
         trainer.setup_fresh()
-    builder = D.ExampleBuilder(cfg, {t: p.records for t, p in pools.items()}, seed=spec.seed, supervision=spec.supervision,
-                               stop_id=trainer.stop_id, tokens=trainer.tokens,
-                               encode=lambda s: list(adapter.tokenizer(s, add_special_tokens=False)["input_ids"]),
-                               family=spec.family, format_boxes=adapter.format_boxes)
-    schedule = D.Schedule({t: p.records for t, p in pools.items()}, cfg, seed=spec.seed, supervision=spec.supervision,
-                          batch_size=int(rc["batch_size"]))
+    if warm:
+        source = W.WarmupSource(W.WarmupSpec.from_doc(cfg.doc, n=cfg.grid_n, tiny=spec.tiny), seed=spec.seed,
+                                tokens=trainer.tokens, batch_size=int(rc["batch_size"]),
+                                orders={t: cfg.task(t)["order"] for t in GRID_TASKS})
+        if source.spec.stop["max_steps"] != int(rc["steps"]):
+            raise ValueError(f"run_cfg 的 steps {rc['steps']} 不是 warmup 的 max_steps {source.spec.stop['max_steps']}")
+        builder, schedule = source, source
+    else:
+        builder = D.ExampleBuilder(cfg, {t: p.records for t, p in pools.items()}, seed=spec.seed, supervision=spec.supervision,
+                                   stop_id=trainer.stop_id, tokens=trainer.tokens,
+                                   encode=lambda s: list(adapter.tokenizer(s, add_special_tokens=False)["input_ids"]),
+                                   family=spec.family, format_boxes=adapter.format_boxes)
+        schedule = D.Schedule({t: p.records for t, p in pools.items()}, cfg, seed=spec.seed, supervision=spec.supervision,
+                              batch_size=int(rc["batch_size"]))
     ident = run_identity(spec, cfg, rc, trainer, pools, dedupe, builder)
     ident_sha = identity_sha256(ident)
     if exists:
@@ -624,6 +779,21 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
         log(f"[{spec.variant} {spec.model_key} seed{spec.seed}] 从第 {start} 步续跑")
     tl = [r for r in _read_log(leaf / TRAIN_LOG) if r["step"] < start]
     _atomic_write_text(leaf / TRAIN_LOG, "".join(_jsonl(r) for r in tl))
+    history: list[dict[str, Any]] = []
+    rule = None
+    if warm:  # 网格格式预热：留出集的读数（第 s 步做完之后的读数记 step = s；续跑时保留 step ≤ start 的）
+        wcfg = rc["warmup"]
+        rule = W.StopRule(threshold=float(wcfg["threshold"]), consecutive=int(wcfg["consecutive"]))
+        history = [r for r in _read_log(leaf / WARMUP_EVAL) if r["step"] <= start]
+        _atomic_write_text(leaf / WARMUP_EVAL, "".join(_jsonl(r) for r in history))
+        if rule.met(history):
+            raise RuntimeError(f"{leaf / WARMUP_EVAL}：第 {start} 步之前已满足停止规则，却没有完成的检查点")
+
+        def heldout_eval(ad: Any, tokens: GridTokens, items: Sequence[W.WarmupItem]) -> Mapping[str, Any]:
+            return W.evaluate_heldout(ad, tokens, items, n=cfg.grid_n, scope=rc["allowed_scope"], orders=source.orders,
+                                      enable_thinking=bool(rc["enable_thinking"]), batch_size=int(wcfg["heldout_batch_size"]))
+
+        eval_fn = _warmup_eval or heldout_eval
 
     (leaf / "logs").mkdir(exist_ok=True)
     dev = torch.device(adapter.device)
@@ -648,6 +818,7 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
         write_compute_json(leaf / COMPUTE, comp)
 
     def save_latest(step_done: int) -> None:
+        trainer.check_frozen()
         tmp = ckpt / (LATEST + ".tmp")
         if tmp.exists():
             shutil.rmtree(tmp)
@@ -713,14 +884,32 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
             s1 = step + 1
             if s1 % 10 == 0 or s1 == steps:
                 log(f"[{spec.variant} {spec.model_key} seed{spec.seed}] 第 {s1}/{steps} 步 loss {rec['loss']:.4f}（{step_s:.2f} s/步）")
-            stop = stop_after_steps is not None and done >= stop_after_steps and s1 < steps
-            if (s1 % every == 0 and s1 < steps) or stop:
+            met = False
+            if warm and s1 % int(wcfg["eval_every"]) == 0:  # 留出集的格式错误率与停止规则（模块说明）
+                t_e = time.perf_counter()
+                adapter.eval_mode()
+                ev = dict(eval_fn(adapter, trainer.tokens, source.heldout))
+                adapter.train_mode()
+                _sync(dev)
+                ev_rec = {"step": s1, **ev, "below_threshold": rule.below(ev["format_error_rate"])}
+                history.append(ev_rec)
+                met = rule.met(history)
+                ev_rec["stop_rule_met"] = met
+                _append(leaf / WARMUP_EVAL, [_jsonl(ev_rec)])
+                run_log.setdefault("warmup_evals", []).append({"step": s1, "wall_s": round(time.perf_counter() - t_e, 3)})
+                log(f"[{spec.variant} {spec.model_key} seed{spec.seed}] 第 {s1} 步 留出集格式错误率 {ev['format_error_rate']}"
+                    f"（{ev['n_format_errors']}/{ev['n']}）" + ("，满足停止规则" if met else ""))
+            stop = not met and stop_after_steps is not None and done >= stop_after_steps and s1 < steps
+            if not met and ((s1 % every == 0 and s1 < steps) or stop):
                 save_latest(s1)
             if _fail_after_step is not None and s1 == _fail_after_step:
                 raise RuntimeError(f"测试注入的中断（第 {s1} 步之后）")
             if stop:
                 raise StopRequested(f"本次跑了 {done} 步（到第 {s1}/{steps} 步），检查点已写")
+            if met:
+                break
         adapter.eval_mode()
+        trainer.check_frozen()
         final = ckpt / FINAL / MODEL_SUB
         if final.exists():
             shutil.rmtree(final)
@@ -730,12 +919,27 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
             shutil.rmtree(latest)
         man = json.loads((final / "manifest.json").read_text(encoding="utf-8"))
         tlog = _read_log(leaf / TRAIN_LOG)
-        summary = {"complete": True, "steps": steps, "variant": spec.variant, "model": spec.model_key, "seed": spec.seed,
+        steps_done = len(tlog) if warm else steps
+        summary = {"complete": True, "steps": steps_done, "variant": spec.variant, "model": spec.model_key, "seed": spec.seed,
                    "identity_sha256": ident_sha, "final_loss": tlog[-1]["loss"] if tlog else None,
                    "final_checkpoint": str(final.relative_to(leaf)) if final.is_relative_to(leaf) else str(final),
                    "final_checkpoint_bytes": _dir_bytes(final),
                    "final_checkpoint_files": {k: v["bytes"] for k, v in man["files"].items()},
                    "lora": man.get("lora"), "trainable_token_rows": man.get("trainable_token_rows")}
+        if trainer.frozen_llm:  # C1′：没有 LoRA，manifest 不记 trainable_token_rows（不经过适配器的开关），这里补上
+            summary.update(frozen_llm=True, trainable_token_rows=list(trainer.rows.ids))
+        if warm:
+            ok = rule.met(history)
+            summary["warmup"] = {
+                "stop_rule_met": ok, "stopped_at_step": steps_done, "max_steps": steps,
+                "reason": "format_error_below_threshold" if ok else "max_steps", "n_evals": len(history),
+                "last": ({k: history[-1][k] for k in ("step", "n", "n_format_errors", "format_error_rate")} if history else None),
+                "history": [{"step": h["step"], "format_error_rate": h["format_error_rate"]} for h in history],
+                "rule": {**{k: wcfg[k] for k in ("eval_every", "threshold", "consecutive", "max_steps", "heldout_n")},
+                         "text": "每 eval_every 步在留出集上受限解码，格式错误率连续 consecutive 次 < threshold 就停；max_steps 是上限"}}
+            if not ok:
+                log(f"[{spec.variant} {spec.model_key} seed{spec.seed}] 到了上限 {steps} 步仍未满足停止规则（检查点照存，"
+                    "train_summary.json 记 stop_rule_met = false）")
         (leaf / README).write_text(readme_text(spec, ident, summary, tlog), encoding="utf-8")
         _atomic_write_text(leaf / SUMMARY, json.dumps(summary, indent=1, ensure_ascii=False) + "\n")
         finish_log("complete")
@@ -754,14 +958,19 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
 
 
 __all__ = [
+    "FrozenRowsProbe",
+    "GRID_LIKE",
     "RunSpec",
     "StopRequested",
     "TokenRows",
     "Trainer",
+    "WARMUP_EVAL",
     "accounting_doc",
+    "frozen_llm_token_rows",
     "identity_sha256",
     "leaf_dir",
     "lr_factor",
     "run_identity",
     "run_training",
+    "warmup_identity",
 ]

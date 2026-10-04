@@ -153,6 +153,41 @@
   "score_workers_basis": "评分（上采样、Boundary IoU、深度指标）在 CPU 上，用这么多个进程并行（spawn）；0 = 在主进程里串行。逐样本的结果与进程数无关（tests 钉住），所以不进运行身份",
   "tiny": {"batch_size": 2, "merge_check_n": 3, "score_workers": 0}
  },
+ "c1prime": {
+  "basis": "C1′（D36-5、N3；DEV-0035 §1）：与 E3a 的 C1 同构，冻结 LLM，量出冻结的 LLM 本来能表达多少。scripts/train_e3b.py --supervision grid --variant c1prime，输出变体 c1prime。不注入 LoRA；LLM 的全部参数（含视觉塔、投影层、输入嵌入与 lm_head 的其余行）不求梯度、不进优化器；只训练 67 个网格 token 在输入嵌入里的行（lm_head 不共享时连同 lm_head 的同一组行），沿用 optim.token_rows 的 fp32 主副本（mode 必须是 fp32_master_rows：没有 LoRA 时适配器的 trainable_token_rows 不能调，梯度掩码不挂；主副本只取这几行的梯度、step 后只写回这几行，所以其余行逐位不变。dense_param 会把提示里出现的 token 的嵌入行一起更新，不允许）。AdamW 只有一个参数组 token_rows：lr = optim.token_rows.lr、weight_decay 0，betas、eps、max_grad_norm、warmup + 余弦同 optim。数据、样本日程（同一个种子下每一步的任务、样本 id、修正对与 E3b 逐个相同）、步数、批、检查点间隔都同 E3b 的网格监督（resolve_run 的 training 只多 frozen_llm = true、lora = null、optim 去掉 lora 一组）。学习率不另定，理由：Adam 每步对每个元素的更新约为 lr、与梯度的尺度无关，steps × lr 的累计可动量（4000 × 2e-4 = 0.8）远大于 LLM 嵌入元素的常见量级（约 1e-2；没有在本项目的模型上实测），学习率不是瓶颈；取同一个值，C1′ 与 E3b 的差别只剩 LoRA 训不训练。是否欠训练看训练日志的损失曲线，E3 预注册时复核。检查点只有 token 行、tokens.json 与 manifest（lora 为 null）；评测前的合并核对跳过 merge、restricted 照做（含义见 src/e3/merge_check.py）"
+ },
+ "warmup": {
+  "version": "e3b-warmup-v1",
+  "mix": {"refseg": 1, "depth": 1},
+  "refseg": {
+   "kinds": {"rect": 1, "rects": 1, "shape": 1},
+   "rects_count": [2, 4],
+   "rects_max_side": 16,
+   "shapes": ["disk", "diamond", "triangle"],
+   "shape_size": [1, 12],
+   "template": "A {n}x{n} grid has rows and columns numbered 0 to {last}, starting from the top-left cell. {cells} All other cells are background. Output the {n}x{n} mask grid.",
+   "rect": "Rows {rows}, columns {cols} are foreground.",
+   "rects": "Foreground cells: {regions}.",
+   "region": "rows {rows}, columns {cols}",
+   "shape": "Foreground cells, row by row: {rows}.",
+   "shape_row": "row {row}: columns {cols}",
+   "basis": "分割的三种（kinds 的整数权重，等权）：rect = 一个矩形（高、宽在 [1, n] 均匀取）；rects = rects_count 个矩形（含两端均匀取，高、宽在 [1, rects_max_side] 均匀取，可重叠，取并集）；shape = shapes 里均匀取一种（disk：欧氏距离 ≤ s；diamond：曼哈顿距离 ≤ s；triangle：顶点在中心、往下 s 行、第 i 行左右各伸 i 格），s 在 shape_size 均匀取，中心在全图均匀取，出界的格子裁掉，逐行列出。结尾一句与 E3b 网格指令（tasks.refseg.grid_template）的结尾相同"
+  },
+  "depth": {
+   "regions_count": [1, 4],
+   "template": "A {n}x{n} depth grid has rows and columns numbered 0 to {last}, starting from the top-left cell, and depth levels numbered 0 (nearest) to {max_level} (farthest). Every cell is at level {background} except {regions}. Later regions override earlier ones. Output the {n}x{n} depth grid.",
+   "region": "rows {rows}, columns {cols} at level {level}",
+   "basis": "背景档号在 [0, 63] 均匀取；regions_count 个矩形区域（含两端均匀取，高、宽在 [1, n] 均匀取），档号各自在 [0, 63] 均匀取，后面的覆盖前面的。档号方向同 src/grid/codec.depth_to_bins（0 = 最近）；结尾一句与 E3b 深度指令（tasks.depth.grid_instruction）的结尾相同"
+  },
+  "range": "{lo}-{hi}",
+  "joiner": "; ",
+  "run_joiner": " and ",
+  "data_seed": 20261004,
+  "heldout": {"n": 200, "seed": 0},
+  "stop": {"eval_every": 100, "threshold": 0.01, "consecutive": 2, "max_steps": 2000},
+  "basis": "网格格式预热（D36-5，N5 第 2 处；DEV-0035 §2）：E5 主比较里\"基座 + 网格格式预热\"那一臂。scripts/train_e3b.py --supervision warmup，输出变体 warmup。纯符号任务：输入只有文字（不给图像），用文字给出要涂的格子坐标（分割）或若干区域的深度档号（深度），目标是对应的 32×32 网格 token 序列，与 E3b 的网格监督同一套 token、同一种格式、同一个受限交叉熵；LoRA、token 行、优化器、批、检查点格式都同 E3b 的网格监督（eval_e3b 与 run_e1 --checkpoint 都能加载）。混合 mix：分割 : 深度 = 1 : 1（与 E3b 的 mix 相同）。坐标从左上角起编号 0..n−1，区间一律写成 range（单行也写 \"5-5\"）。随机数：训练样本 k 用 default_rng([data_seed, 0, 运行种子, k, attempt])，留出集第 i 条用 default_rng([data_seed, 1, heldout.seed, i])，与任何视觉数据无关；训练样本的指令与留出集某条逐字相同时重抽，留出集不进训练。停止规则：每 eval_every 步在留出集（heldout.n 条，按 mix 轮转，分割、深度各半）上做受限解码（与 E3b 单轮评测同一个设置：allowed_ids、max_new_tokens 1057、批大小取 eval.batch_size），格式错误 = src/e3/targets.parse_target 解析失败（没有停止 token、长度不对、行数或列数不对、格子里出现本任务以外的 token）；两个任务合计的格式错误率连续 consecutive 次 < threshold 就停，记下步数（train_summary.json 的 warmup 一节，逐次读数在 warmup_eval.jsonl）。max_steps 是步数上限（学习率的 warmup_ratio 与余弦按它排）；到了上限还没满足，照样存检查点并记 stop_rule_met = false。阈值 0.01 = 负责人原话\"格式错误率低于 1%\"，n = 200 时即至多 1 条；consecutive = 2 = 任务书的\"连续两次\"。eval_every、max_steps、n 是暂定值（简报 §9 的自由探索），E3 / E5 预注册冻结",
+  "tiny": {"max_steps": 6, "eval_every": 2, "heldout_n": 4}
+ },
  "tiny": {
   "basis": "--tiny：小型随机模型 + CPU + fp32 + tests/fixtures 的小数据。只改下面这些规模参数，其余同正式配置",
   "steps": 4,

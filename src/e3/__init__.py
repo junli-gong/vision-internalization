@@ -8,7 +8,9 @@
 - c3：C3 对照的稀疏文本目标（框用本家族原生格式与 E1 的定位提示、多边形、相对深度陈述）；
 - data：训练池（去重）、无状态的样本日程、修正对与 C3 样本的构造；
 - config：configs/e3b_train.json 的读取与生效参数；
-- train：训练循环（LoRA + 网格 token 行、受限交叉熵 / 分块交叉熵、AdamW、warmup + 余弦、检查点与续跑、记账）。
+- train：训练循环（LoRA + 网格 token 行、受限交叉熵 / 分块交叉熵、AdamW、warmup + 余弦、检查点与续跑、记账）；另有 C1′（变体 c1prime：
+  冻结 LLM、只训练网格 token 的行，DEV-0035 §1）与网格格式预热（监督 warmup，DEV-0035 §2）。
+- warmup：网格格式预热的样本（纯文字给坐标 → 网格，不给图像）、固定的留出集、格式错误率与停止规则。
 - evaluate：评测（单轮、叠加反馈多轮与计算记账、匹配计算量的单轮、汇总与输出）；eval_scoring：网格的紧凑编码、上采样到原图、
   逐样本指标；merge_check：评测前的合并核对（scripts/check_training_interfaces.py --checkpoint 的同一套函数）。
 入口：scripts/train_e3b.py（训练）、scripts/eval_e3b.py（评测）；训练后模型的 T 文本评测是 scripts/run_e1.py --checkpoint。

@@ -18,7 +18,8 @@
 batch_protocol（批大小读配置，左填充，选择顺序，连续样本成批；src/e1/runner.batch_plan）。
 
 allowed 集合（受限解码与教师强制共用）：E1 数字网格格式实际用到的 token —— 用本家族的 tokenizer 编码一张 16×16 的示例网格
-（src/grid/codec.grid_to_text），编码结果必须恰好由 "0"、"1"、"\\n" 三个单 token 组成，再加本家族的停止 token。不用新增的
+（src/grid/codec.grid_to_text），编码结果必须恰好由 "0"、"1"、"\\n" 三个单 token 组成（这三个 token 的构造只在
+src/e1/forced.grid_format_ids 写一份，本脚本 import 它，D68-4(b)），再加本家族的停止 token。不用新增的
 grid token：它们是均值初始化，logits 全部相同，只会得到平局（DEV-0020 的提醒）。
 
 检查：
@@ -105,12 +106,11 @@ import torch  # noqa: E402
 from src import runlog  # noqa: E402
 from src.adapters import checkpoint as CK  # noqa: E402
 from src.adapters import factory, registry, training  # noqa: E402
-from src.constants import GRID_SIZE_E1  # noqa: E402
 from src.data.subsets import seeded_sample  # noqa: E402
+from src.e1.forced import grid_format_ids  # noqa: E402
 from src.e1.prompts import PROMPTS_PATH, load_prompt_config  # noqa: E402
 from src.e1.runner import batch_plan, ids_digest, load_images  # noqa: E402
 from src.e1.tasks import DataPaths, select  # noqa: E402
-from src.grid.codec import grid_to_text  # noqa: E402
 
 FORMAT = "visint-training-interface-check/1"
 TASK, SUBSET = "grid16", "dev"  # E1 的 grid16 开发子集与提示
@@ -234,26 +234,12 @@ def load_dev(paths: DataPaths, prompts, family: str, n: int) -> tuple[list[Any],
 
 
 def grid_allowed(ad: Any) -> dict[str, Any]:
-    """E1 数字网格格式实际用到的 token（见模块说明）+ 本家族的停止 token。"""
+    """E1 数字网格格式实际用到的 token（见模块说明）+ 本家族的停止 token。0、1、换行三个 token 的构造只在
+    src/e1/forced.grid_format_ids 写一份（D68-4(b)），这里 import 它，再加停止 token；输出与原来的构造逐字节相同（tests 钉住）。"""
     tok = ad.tokenizer
-
-    def enc(s: str) -> list[int]:
-        return list(tok(s, add_special_tokens=False)["input_ids"])
-
-    probe = np.zeros((GRID_SIZE_E1, GRID_SIZE_E1), dtype=bool)
-    probe[GRID_SIZE_E1 // 4: GRID_SIZE_E1 // 2, GRID_SIZE_E1 // 4: 3 * GRID_SIZE_E1 // 4] = True
-    text = grid_to_text(probe)
-    rows = []
-    for role, s in (("digit_0", "0"), ("digit_1", "1"), ("newline", "\n")):
-        ids = enc(s)
-        if len(ids) != 1:
-            raise RuntimeError(f"{s!r} 在本家族的 tokenizer 里不是单个 token：{ids}")
-        rows.append({"role": role, "text": s, "id": ids[0], "token": tok.convert_ids_to_tokens(ids[0])})
-    fmt = {r["id"] for r in rows}
-    probe_ids = enc(text)
-    if set(probe_ids) != fmt:
-        raise RuntimeError(f"示例网格的编码用到了 {sorted(set(probe_ids))}，不只是 0、1、换行 {sorted(fmt)}：数字或换行与相邻字符合并了，"
-                           "allowed 集合要另定")
+    fmt = grid_format_ids(tok)
+    rows = [{"role": r["role"], "text": r["text"], "id": int(r["id"]), "token": r["token"]} for r in fmt["tokens"]]
+    probe = fmt["probe"]
     stops = [int(s) for s in ad.stop_token_ids()]
     for s in stops:
         rows.append({"role": "stop", "text": None, "id": s, "token": tok.convert_ids_to_tokens(s)})
@@ -263,7 +249,8 @@ def grid_allowed(ad: Any) -> dict[str, Any]:
     if set(ids) & set(ad.grid_token_ids.values()):
         raise RuntimeError("allowed 集合不能含新增的 grid token")
     return {"ids": ids, "stop_ids": stops, "tokens": rows,
-            "probe": {"grid_size": GRID_SIZE_E1, "n_tokens": len(probe_ids), "distinct_ids": sorted(set(probe_ids))},
+            "probe": {"grid_size": int(probe["grid_size"]), "n_tokens": int(probe["n_tokens"]),
+                      "distinct_ids": [int(i) for i in probe["distinct_ids"]]},
             "rule": "tokenizer 编码 16×16 示例网格（grid_to_text）必须恰好由 0、1、换行三个单 token 组成，再加本家族的停止 token；"
                     "不用新增的 grid token（均值初始化，logits 全同）"}
 

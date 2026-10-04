@@ -20,8 +20,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / "configs" / "e3b_train.json"
 SCHEMA = 1
 
-SUPERVISIONS: tuple[str, ...] = ("grid", "text")  # grid = E3b（GT 网格 + 修正对）；text = C3（稀疏文本）
-VARIANT_OF = {"grid": "e3b", "text": "c3"}  # 输出目录里的变体名
+# grid = E3b（GT 网格 + 修正对）；text = C3（稀疏文本）；warmup = 网格格式预热（纯文字给坐标 → 网格，DEV-0035 §2）
+SUPERVISIONS: tuple[str, ...] = ("grid", "text", "warmup")
+VARIANT_OF = {"grid": "e3b", "text": "c3", "warmup": "warmup"}  # 输出目录里的变体名（每种监督的默认变体）
+C1PRIME = "c1prime"  # C1′（DEV-0035 §1）：网格监督、冻结 LLM、只训练网格 token 的行（配置的 c1prime 节）
+VARIANTS: tuple[str, ...] = tuple(VARIANT_OF.values()) + (C1PRIME,)
 TOKEN_ROW_MODES: tuple[str, ...] = ("fp32_master_rows", "dense_param")
 _TINY_KEYS = ("steps", "micro_batch_size", "grad_accum_steps", "ckpt_every")
 
@@ -97,18 +100,38 @@ def load_config(path: str | Path = CONFIG_PATH) -> E3Config:
         raise ConfigError(f"c3.seg_kinds 只能有 box / polygon 且权重和 ≥ 1，收到 {kinds}")
     if len(set(int(s) for s in doc["seeds"])) != len(doc["seeds"]):
         raise ConfigError("seeds 有重复")
+    if "warmup" in doc:  # 网格格式预热（DEV-0035）：结构与模板一次核对（规则在 src/e3/warmup.py）
+        from src.e3.warmup import WarmupConfigError, WarmupSpec
+
+        try:
+            for tiny in (False, True):
+                WarmupSpec.from_doc(doc, n=check_grid_size(doc["grid"]["size"]), tiny=tiny)
+        except (WarmupConfigError, KeyError, TypeError, ValueError) as e:
+            raise ConfigError(f"warmup 节不合规：{e!r}") from None
     rel = str(p.relative_to(REPO_ROOT)) if p.resolve().is_relative_to(REPO_ROOT) else str(p)
     return E3Config(path=rel, sha256=hashlib.sha256(raw).hexdigest(), doc=doc)
 
 
-def resolve_run(cfg: E3Config, *, supervision: str, tiny: bool) -> dict[str, Any]:
-    """本次运行实际生效的训练参数（写进 config.yaml）：--tiny 时按 cfg.tiny 覆盖规模参数。"""
+def resolve_variant(supervision: str, variant: str | None) -> str:
+    """变体名：不给时取监督的默认变体（VARIANT_OF）；c1prime 只配网格监督。"""
     if supervision not in SUPERVISIONS:
         raise ConfigError(f"supervision 必须是 {SUPERVISIONS} 之一，收到 {supervision!r}")
+    v = VARIANT_OF[supervision] if variant is None else variant
+    if v != VARIANT_OF[supervision] and not (v == C1PRIME and supervision == "grid"):
+        raise ConfigError(f"变体 {v!r} 不能配 --supervision {supervision}（{C1PRIME} 只配 grid；其余变体由监督决定：{VARIANT_OF}）")
+    return v
+
+
+def resolve_run(cfg: E3Config, *, supervision: str, tiny: bool, variant: str | None = None) -> dict[str, Any]:
+    """本次运行实际生效的训练参数（写进 config.yaml）：--tiny 时按 cfg.tiny 覆盖规模参数。
+    变体 c1prime（DEV-0035 §1）：另记 frozen_llm = true、lora = null，optim 去掉 lora 一组，token 行必须是 fp32 主副本；其余同 E3b。
+    监督 warmup（DEV-0035 §2）：steps = warmup.stop.max_steps（--tiny 取 warmup.tiny.max_steps），mix 取 warmup.mix，没有修正对；
+    另记 warmup 一节（停止规则、留出集条数、留出集的批大小）。e3b、c3 的结果与原来逐项相同（不加键）。"""
+    v = resolve_variant(supervision, variant)
     d = cfg.doc
     out = {
         "supervision": supervision,
-        "variant": VARIANT_OF[supervision],
+        "variant": v,
         "steps": int(d["steps"]),
         "micro_batch_size": int(d["batch"]["micro_batch_size"]),
         "grad_accum_steps": int(d["batch"]["grad_accum_steps"]),
@@ -127,6 +150,23 @@ def resolve_run(cfg: E3Config, *, supervision: str, tiny: bool) -> dict[str, Any
         t = d["tiny"]
         for k in _TINY_KEYS:
             out[k] = int(t[k])
+    if v == C1PRIME:
+        if out["optim"]["token_rows"]["mode"] != "fp32_master_rows":
+            raise ConfigError("C1′ 的 token 行必须是 fp32_master_rows（配置的 c1prime 节）：没有 LoRA 时不挂梯度掩码，dense_param 会更新"
+                              "提示 token 的嵌入行")
+        out["lora"] = None
+        out["optim"] = {k: x for k, x in out["optim"].items() if k != "lora"}
+        out["frozen_llm"] = True
+    if supervision == "warmup":
+        if "warmup" not in d:
+            raise ConfigError("配置里没有 warmup 节")
+        from src.e3.warmup import WarmupSpec
+
+        ws = WarmupSpec.from_doc(d, n=cfg.grid_n, tiny=tiny)
+        out["steps"] = int(ws.stop["max_steps"])
+        out["mix"] = dict(ws.mix)
+        out["warmup"] = {"version": str(d["warmup"]["version"]), **dict(ws.stop), "heldout_n": ws.heldout_n,
+                         "heldout_batch_size": int(d["eval"]["tiny"]["batch_size"] if tiny else d["eval"]["batch_size"])}
     for k in ("steps", "micro_batch_size", "grad_accum_steps", "ckpt_every"):
         if out[k] < 1:
             raise ConfigError(f"{k} 必须 ≥ 1，收到 {out[k]}")
@@ -137,5 +177,5 @@ def resolve_run(cfg: E3Config, *, supervision: str, tiny: bool) -> dict[str, Any
     return out
 
 
-__all__ = ["CONFIG_PATH", "ConfigError", "E3Config", "SUPERVISIONS", "TOKEN_ROW_MODES", "VARIANT_OF", "load_config",
-           "resolve_run"]
+__all__ = ["C1PRIME", "CONFIG_PATH", "ConfigError", "E3Config", "SUPERVISIONS", "TOKEN_ROW_MODES", "VARIANTS", "VARIANT_OF",
+           "load_config", "resolve_run", "resolve_variant"]

@@ -37,7 +37,16 @@
     python scripts/run_e1.py --model qwen3.5-4b --task all --subset forced --data-root $PROJ/data --out experiments/E1/<NNNN_slug>
     # 写 <out>/<模型>/<任务>__debiased[_dev]/ 与 <任务>__forced_<读法>/；--task all 取这种读法支持的任务；--resume、--limit、--tiny 同上
     # （--tiny 用 tests/fixtures/e1_posthoc 的小数据：BLINK、CV-Bench 的提示是真实格式，RefCOCO 的图放大到 48×36）。不能配 --acceptance、--estimate、
-    # --checkpoint、附加口径。有效性检查与配对汇总：scripts/summarize_e1_posthoc.py。
+    # 附加口径。有效性检查与配对汇总：scripts/summarize_e1_posthoc.py。
+    # 训练后的检查点（DEV-0035；D66-3、D68-4(a)：E3 在四个选择题类任务上的迁移结论要同时看全量去偏读数与 free 200 条）：去偏读数可以配
+    # --checkpoint <检查点目录> --checkpoint-label <标签>，加载方式同上面的 T 文本评测（先合并核对，再 load_trained(merge=True)），结果写进
+    # <out>/<标签>/<模型>/<任务>__debiased/，config.yaml 另记 checkpoint；free 子集走正式运行模式（--subset free --checkpoint …，任务写全四个
+    # 选择题类任务名）。格式强制（forced）仍只用于 base 的 Qwen，不能配 --checkpoint。
+    python scripts/run_e1.py --model qwen3.5-0.8b --task all --subset debiased --data-root $PROJ/data \\
+        --checkpoint <训练叶目录>/ckpt/final/model --checkpoint-label t_text/e3b/seed0 --out experiments/E3/00NN_e3b_ttext
+    python scripts/run_e1.py --model qwen3.5-0.8b --task rel_depth_nyu rel_depth_blink spatial_cvbench spatial_embspatial \\
+        --subset free --data-root $PROJ/data --checkpoint <训练叶目录>/ckpt/final/model --checkpoint-label t_text/e3b/seed0 \\
+        --out experiments/E3/00NN_e3b_ttext
 
 --task：一个或多个任务名，或 all（refexp_box refexp_poly grid16 count ovd rel_depth_nyu rel_depth_blink spatial_cvbench
 spatial_embspatial）。--policy：default（E1 冻结的口径，D28-3）、qwen:1024（Qwen 约 1K token）、internvl:native（InternVL 原生
@@ -166,8 +175,10 @@ def parse_args(argv=None):
     if a.alt_batch_size is not None and not a.acceptance:
         p.error("--alt-batch-size 只用于 --acceptance")
     posthoc = a.subset in POSTHOC_SUBSETS
-    if posthoc and (a.acceptance or a.estimate or a.checkpoint is not None or a.policy != "default"):
-        p.error(f"--subset {a.subset}（事后读数）不能配 --acceptance、--estimate、--checkpoint 或附加口径")
+    if posthoc and (a.acceptance or a.estimate or a.policy != "default"):
+        p.error(f"--subset {a.subset}（事后读数）不能配 --acceptance、--estimate 或附加口径")
+    if a.subset == FORCED_SUBSET and a.checkpoint is not None:  # D68-3：格式强制只对 base 的 Qwen；去偏读数可以配（D68-4(a)）
+        p.error("--subset forced（格式强制诊断）只用于 base 的 Qwen，不能配 --checkpoint；训练后的模型用 --subset debiased 与 free")
     if a.task == ["all"]:
         a.task = list(POSTHOC_TASKS[a.subset]) if posthoc else list(TASKS)
     bad = [t for t in a.task if t not in TASKS]
@@ -342,19 +353,26 @@ def cmd_posthoc(a, argv) -> int:
         raise ValueError(f"{bad} 不在 {a.posthoc_config} 给 {a.subset} 的任务 {posthoc.tasks_for(a.subset)} 里")
     bs, _ = resolve_batch_sizes(a, prompts)
     paths = data_paths(a)
-    entry, policy, ad = build_adapter(a)
+    ck_info, extra, out = None, None, a.out
+    if a.checkpoint:  # D68-4(a)：去偏读数在训练后的检查点上，加载方式同 T 文本评测（合并核对 → load_trained(merge=True)）
+        if a.subset not in DEBIASED_SUBSETS:
+            raise ValueError(f"--subset {a.subset} 不能配 --checkpoint（格式强制只用于 base 的 Qwen）")
+        entry, policy, ad, ck_info, extra = build_checkpoint_adapter(a)
+        out = Path(a.out) / a.checkpoint_label
+    else:
+        entry, policy, ad = build_adapter(a)
     for task in a.task:
         sel = selection(task, posthoc.base_subset(a.subset), paths, a.limit, a.count_questions)
-        spec = make_spec(a, entry, policy, ad, task, a.subset, bs)
+        spec = make_spec(a, entry, policy, ad, task, a.subset, bs, checkpoint=ck_info)
         if a.subset in DEBIASED_SUBSETS:
-            m = run_debiased_task(ad, spec, sel, prompts, posthoc, paths, a.out, resume=a.resume, argv=argv)
+            m = run_debiased_task(ad, spec, sel, prompts, posthoc, paths, out, resume=a.resume, argv=argv, run_extra=extra)
             d = m["debiased"]
             orig = (d.get("original_letter") or {}).get("headline") or [{}]
             print(f"{entry.key} {task}/{a.subset} n={m['n']} {_headline(m)} original={orig[0].get('value')} "
                   f"random={d['random_level']}")
             continue
         for variant in posthoc.forced_variants(task):
-            m = run_forced_task(ad, spec, sel, prompts, posthoc, paths, a.out, variant=variant, resume=a.resume, argv=argv)
+            m = run_forced_task(ad, spec, sel, prompts, posthoc, paths, out, variant=variant, resume=a.resume, argv=argv)
             print(f"{entry.key} {task}/{forced_subset_name(variant)} n={m['n']} parse_fail={m['parse']['failure_rate']} "
                   f"trunc={m['truncation']['rate']} valid={m['valid']['rate']} {_headline(m)}")
     return 0

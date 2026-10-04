@@ -19,6 +19,10 @@
 - 格式强制（--subset forced）：<任务>__forced_<读法>/（refexp_poly__forced_prefill、grid16__forced_restricted、grid16__forced_structured），
   文件同主评测（predictions.jsonl、metrics.json、compute.json、README.md、config.yaml、meta.json、logs/）；记录另有 forced 一节
   （读法、是否固定长度、预填与它的 token）。
+
+训练后的检查点（DEV-0035；D66-3、D68-4(a)）：去偏读数可以在 load_trained(merge=True) 的模型上跑（scripts/run_e1.py --subset debiased
+--checkpoint …，先过合并核对），读法与输出同上，config.yaml 另记 checkpoint、README 另记一行，目录在 <out>/<标签>/ 之下。格式强制只用于
+base 的 Qwen（D68-3），不配检查点。base 运行的输出逐字节不变。
 """
 
 from __future__ import annotations
@@ -169,8 +173,12 @@ def check_spellings(scores: Sequence[Any], table: LetterTable, letters: Sequence
 
 def run_debiased_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: PromptConfig, posthoc: PosthocConfig,
                       paths: DataPaths, out_dir: str | Path, *, resume: bool = False, argv: Sequence[str] = (),
-                      log: Callable[[str], None] | None = None, warmup: bool = True) -> dict[str, Any]:
-    """去偏字母读数（规则见 src/e1/debiased.py 与 configs/e1_posthoc.json 的 debiased_letter）。返回 metrics。"""
+                      log: Callable[[str], None] | None = None, warmup: bool = True,
+                      run_extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """去偏字母读数（规则见 src/e1/debiased.py 与 configs/e1_posthoc.json 的 debiased_letter）。返回 metrics。
+    训练后的检查点（DEV-0035，D68-4(a)；scripts/run_e1.py --subset debiased --checkpoint）：adapter 是 load_trained(merge=True) 的结果，
+    spec.checkpoint 经 runner.run_config 进 config.yaml 的 checkpoint（base 没有这个键，输出不变）；run_extra（合并核对的摘要与检查点路径）
+    并进 logs/run_<k>.json。"""
     log = log or _log_default
     if spec.subset not in DEBIASED_SUBSETS or spec.task not in posthoc.tasks_for(spec.subset):
         raise ValueError(f"去偏字母读数只用于 {posthoc.debiased['tasks']} 的 {DEBIASED_SUBSETS}，收到 {spec.task}/{spec.subset}")
@@ -203,7 +211,8 @@ def run_debiased_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: Prom
     keep, trimmed = _resume_point(leaf / READINGS, expected, lambda r: (r["id"], int(r["order"])), plan, log, what)
     todo = [(a, b) for a, b in plan if a >= keep]
     run_k, run_path, run_log = _start_run_log(leaf, argv, n_done_before=keep, n_remaining=len(rows) - keep,
-                                              batch_size=spec.batch_size, trimmed_to_batch_boundary=trimmed)
+                                              batch_size=spec.batch_size, trimmed_to_batch_boundary=trimmed,
+                                              **dict(run_extra or {}))
     t_all = time.perf_counter()
     if todo and warmup:
         run_log["warmup_wall_s"] = adapter.warmup(load_images(sel.samples[rows[keep][0]]),
@@ -298,6 +307,10 @@ def debiased_readme(spec: RunSpec, cfg: Mapping[str, Any], metrics: Mapping[str,
              f"- 提示配置 sha256：{cfg['prompt']['config_sha256']}；事后配置 sha256：{ph['config_sha256']}",
              f"- 随机水平（逐题 1/k 的平均）：{_f(d['random_level'])}；k 的分布：{d['k_counts']}", "",
              "## 标题：去偏读数（严格读数）", ""]
+    if cfg.get("checkpoint"):  # 训练后的检查点（DEV-0035）；base 的 README 不变
+        ck = cfg["checkpoint"]
+        lines[5:5] = [f"- 训练后的检查点：标签 {ck.get('label')}，manifest sha256 {ck.get('manifest_sha256')}，"
+                      f"load_trained(merge=True)（合并核对 {ck.get('merge_check')}）"]
     for h in metrics["headline"]:
         lines.append(f"- {h['name']}（{h['scope']}）：{_f(h['value'])}，95% CI {_ci(h.get('ci'))}，n = {h['n']}")
     if "original_letter" in d:

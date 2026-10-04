@@ -578,3 +578,36 @@ def test_run_e1_checkpoint_arg_rules(tiny_ckpt, tmp_path):
     code = r1.main(["--tiny", "--model", "qwen3.5-2b", "--task", "grid16", "--checkpoint", str(tiny_ckpt), "--checkpoint-label",
                     "x", "--out", str(tmp_path / "y")])
     assert code == 2 and not (tmp_path / "y" / "x").exists()
+
+
+# ---------------------------------------------------------------------------
+# DEV-0035 §3(c)（D67-4(a)）：eval_e3b 的 --config 透传给合并核对
+# ---------------------------------------------------------------------------
+
+
+def test_eval_config_passed_to_merge_check(tiny_ckpt, tmp_path):
+    """非默认的 E3b 配置（网格指令改了一句）：合并核对的 restricted 读的是同一份配置（sha256、指令原文），评测的运行身份也是它；
+    复用已通过的核对时，配置的 sha256 不同就不复用。"""
+    from src.e3.merge_check import _reusable, load_cti
+
+    doc = json.loads((REPO / "configs" / "e3b_train.json").read_text(encoding="utf-8"))
+    doc["tasks"]["refseg"]["grid_template"] = "Segment {expression}, please. Output the {n}x{n} mask grid."
+    alt = tmp_path / "e3b_alt.json"
+    alt.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
+    sha = hashlib.sha256(alt.read_bytes()).hexdigest()
+    assert sha != CFG.sha256
+    out = tmp_path / "e"
+    p = run_script("eval_e3b", "--tiny", "--checkpoint", str(tiny_ckpt), "--model", FAMILIES[0], "--seed", "0", "--task", "depth",
+                   "--limit", "1", "--config", str(alt), "--out", str(out))
+    assert p.returncode == 0, p.stderr[-3000:]
+    mdir = out / "eval" / "e3b" / FAMILIES[0] / "seed0"
+    mc = json.loads((mdir / "merge_check.json").read_text())
+    assert mc["pass"] is True and "restricted" in mc["checks"]
+    ri = mc["restricted_inputs"]
+    assert ri["e3b_config"]["sha256"] == sha and ri["instruction_template"] == doc["tasks"]["refseg"]["grid_template"]
+    assert mc["argv"][mc["argv"].index("--e3b-config") + 1] == str(alt)
+    assert yaml.safe_load((mdir / "depth" / "config.yaml").read_text())["config"]["sha256"] == sha  # 评测读的同一份
+    kw = dict(manifest_sha=mc["checkpoint"]["manifest_sha256"], n=mc["data"]["n_requested"], checks=list(mc["checks"]), tiny=True,
+              dtype="fp32", criteria_version=load_cti().CRITERIA_VERSION)
+    assert _reusable(mc, **kw, e3b_config_sha=sha) and _reusable(mc, **kw)
+    assert not _reusable(mc, **kw, e3b_config_sha=CFG.sha256)  # 换回默认配置：不复用，重跑
