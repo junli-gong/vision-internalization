@@ -6,11 +6,14 @@
 - 续跑：中断在一批中间后 --resume，确定的输出（predictions、scores、metrics、README）与一次跑完逐字节相同；评分进程数不改变结果；
 - 命令行：--tiny 跑通（训练框架产出的小检查点、tests/fixtures 的评测小数据）、非空目录不加 --resume 拒绝、续跑复用已通过的合并核对；
 - 坏检查点（病态的 LoRA：合并前后的两条计算路径数值上分家）：合并核对不通过，评测拒绝运行，不写任何任务目录。
+- DEV-0032：评测前的核对按用途分开（eval.merge_check.checks）：网格评测是 merge 加 restricted，T 文本评测只有 merge；过拟合小检查点
+  的 restricted（检查点自己的网格 token、E3b 单轮评测的设置）通过。
 """
 
 from __future__ import annotations
 
 import copy
+import functools
 import hashlib
 import importlib.util
 import json
@@ -33,7 +36,7 @@ from src.e3 import eval_scoring as ES
 from src.e3 import evaluate as EV
 from src.e3.config import load_config, resolve_run
 from src.e3.feedback import feedback_image, upsample_cells
-from src.e3.merge_check import load_cti
+from src.e3.merge_check import DEFAULT_PURPOSE, PURPOSES, load_cti, settings_from_config
 from src.e3.targets import grid_to_ids, parse_target, seq_len
 from src.e3.tokens import add_vocab, attach_vocab
 from src.e3.train import Trainer
@@ -112,10 +115,24 @@ def test_eval_config_pins():
     assert e["multi_turn"]["k_values"] == [1, 2, 4]  # 任务书 K = 1、2、4
     e1 = json.loads((REPO / "configs" / "e1_prompts.json").read_text())
     assert e["batch_size"] == e1["batch_protocol"]["batch_size"] == 64  # 与 E1 冻结的批大小相同（D43）
-    assert e["merge_check"]["n"] == load_cti().DEFAULT_N == 200 and e["merge_check"]["checks"] == ["merge"]
+    assert e["merge_check"]["n"] == load_cti().DEFAULT_N == 200
+    # DEV-0032：检查项按用途分开；网格评测加 restricted，T 文本评测（run_e1 --checkpoint 不传 purpose）只有 merge
+    assert e["merge_check"]["checks"] == {"grid_eval": ["merge", "restricted"], "t_text": ["merge"]}
+    assert PURPOSES == ("grid_eval", "t_text") and DEFAULT_PURPOSE == "t_text"
+    assert settings_from_config(CFG.doc, tiny=False) == {"n": 200, "checks": ["merge"]}
+    assert settings_from_config(CFG.doc, tiny=True, purpose="grid_eval") == {"n": 3, "checks": ["merge", "restricted"]}
+    with pytest.raises(ValueError, match="purpose"):
+        settings_from_config(CFG.doc, tiny=False, purpose="eval")
+    for bad in (["merge"], {"grid_eval": [], "t_text": ["merge"]}, {"grid_eval": ["merge", "nope"], "t_text": ["merge"]},
+                {"grid_eval": ["merge", "merge"], "t_text": ["merge"]}, {"grid_eval": ["merge"]}):
+        d = copy.deepcopy(CFG.doc)
+        d["eval"]["merge_check"]["checks"] = bad
+        with pytest.raises(ValueError):
+            settings_from_config(d, tiny=False, purpose="grid_eval")
     assert e["upsample"]["primary"] == "guided" and e["upsample"]["methods"] == ["guided", "bilinear", "cells"]
     s = EV.resolve_eval(CFG, tiny=False)
     assert (s["batch_size"], s["n_rounds"], s["n_samples"], s["merge_check"]["n"]) == (64, 4, 3, 200)
+    assert s["merge_check"]["checks"] == ["merge", "restricted"]
     t = EV.resolve_eval(CFG, tiny=True)
     assert (t["batch_size"], t["merge_check"]["n"], t["score_workers"]) == (2, 3, 0)
     assert "score_workers" not in EV.identity_settings(s) and "merge_check" not in EV.identity_settings(s)
@@ -348,6 +365,36 @@ def test_overfit_checkpoint_perfect_single_and_multi_turn(overfit, tmp_path):
         assert ident["eval"]["k_values"] == [1, 2, 4] and "score_workers" not in ident["eval"]
 
 
+def test_overfit_checkpoint_restricted_check_passes(overfit, tmp_path, monkeypatch):
+    """DEV-0032（D56-5、D65-4(a)）：过拟合小检查点上，check_training_interfaces --checkpoint 的 restricted（检查点自己的网格 token、
+    E3b 单轮评测的设置）与 merge 都通过（CPU fp32：逐个相同）。正式设置（32×32 的指令）下，这个 8×8 训出来的检查点在开发图上
+    第一个 token 就停；所以另用 8×8 的指令（它训练时的指令）再核一遍，受限解码确实写出网格 token。"""
+    cti = load_cti()
+    key, ck = overfit["key"], overfit["ck"]
+    ad, _ = factory.load_trained(ck, device="cpu", merge=True)
+    allowed = attach_vocab(ad, CFG.vocab).allowed_ids("refseg", CFG.allowed_scope)
+    del ad
+    out = tmp_path / "mc.json"
+    code = cti.main(["--tiny", "--model", key, "--checkpoint", str(ck), "--checks", "restricted", "merge", "--out", str(out)])
+    doc = json.loads(out.read_text())
+    assert doc["error"] is None, doc["error"]
+    assert code == 0 and doc["pass"] is True, doc["failures"]
+    assert doc["allowed"]["ids"] == allowed and doc["restricted_inputs"]["max_new_tokens"] == seq_len(CFG.grid_n)
+    assert list(doc["checks"]["restricted"]["by_thinking"]) == ["thinking_off"]
+    monkeypatch.setattr(EV, "make_context", functools.partial(EV.make_context, n=N))
+    out8 = tmp_path / "mc8.json"
+    code = cti.main(["--tiny", "--model", key, "--checkpoint", str(ck), "--checks", "restricted", "--out", str(out8)])
+    d8 = json.loads(out8.read_text())
+    assert d8["error"] is None, d8["error"]
+    assert code == 0 and d8["pass"] is True, d8["failures"]
+    assert (d8["restricted_inputs"]["grid_size"], d8["restricted_inputs"]["max_new_tokens"]) == (N, seq_len(N))
+    r = d8["checks"]["restricted"]
+    tf = r["by_thinking"]["thinking_off"]["teacher_forcing"]
+    assert tf["agreement"] == 1.0 and tf["n_tokens"] > r["by_thinking"]["thinking_off"]["n_rows"]  # 不只是停止 token
+    am = r["across_merge"]["by_thinking"]["thinking_off"]["teacher_forcing"]
+    assert am["argmax_agreement"] == 1.0 and am["n_tokens"] == tf["n_tokens"]
+
+
 def test_resume_after_interruption_is_identical(overfit, tmp_path):
     if overfit["key"] != FAMILIES[0]:
         pytest.skip("续跑与评分进程数只在一个家族上核对")
@@ -414,7 +461,8 @@ def test_cli_tiny_and_resume(tiny_ckpt, tmp_path):
     assert p.stdout.count("single/guided") == 2
     mdir = out / "eval" / "e3b" / FAMILIES[0] / "seed0"
     mc = json.loads((mdir / "merge_check.json").read_text())
-    assert mc["pass"] is True and mc["checkpoint"]["manifest_sha256"] and list(mc["checks"]) == ["merge"]
+    assert mc["pass"] is True and mc["checkpoint"]["manifest_sha256"] and list(mc["checks"]) == ["merge", "restricted"]
+    assert mc["restricted_inputs"]["task"] == "refseg" and "across_merge" in mc["checks"]["restricted"]  # DEV-0032
     for task in ("refseg", "depth"):
         leaf = mdir / task
         m = json.loads((leaf / "metrics.json").read_text())
@@ -486,7 +534,8 @@ def test_run_e1_tiny_checkpoint_all_tasks(tiny_ckpt, tmp_path):
     assert p.returncode == 0, p.stderr[-3000:]
     base = out / "t_text" / "e3b" / "seed0" / FAMILIES[0]
     sha = hashlib.sha256((tiny_ckpt / "manifest.json").read_bytes()).hexdigest()
-    assert json.loads((base / "merge_check.json").read_text())["pass"] is True
+    mcj = json.loads((base / "merge_check.json").read_text())
+    assert mcj["pass"] is True and list(mcj["checks"]) == ["merge"]  # T 文本评测只有 merge（DEV-0032）
     for task in TASKS:
         leaf = base / task
         cfg = yaml.safe_load((leaf / "config.yaml").read_text())

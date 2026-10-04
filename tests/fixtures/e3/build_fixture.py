@@ -7,7 +7,9 @@ E2 的 fixture（tests/fixtures/e2/root/refcoco_train）只有 24×32 的图，�
 - refcoco_train：4 张 96×128 的 JPEG（平滑底色上画了几个色块，色块就是被指代的物体），RefCOCO（unc）、RefCOCO+（unc）、
   RefCOCOg（umd）三份 train 标注共用这些图（与真实数据相同：三者都来自 COCO train2014）。每张图 2–3 个物体（多边形 mask，
   "与邻近物体合并"有候选），其中一个物体的 mask 是 RLE（C3 的多边形目标退回框）；有一句指代句只有空白（加载后剔除并计数）。
-- dedupe/train_exclusions.json：新格式（schema 2），refcoco_train/train 有键（不剔除），eval_sets 含 refcoco/eval 与 nyuv2/test。
+- dedupe/train_exclusions.json：新格式（schema 2），refcoco_train/train 与 nyu_depth_train/train 都有键（不剔除），eval_sets 与 RUN-0026
+  的剔除清单相同（13 个，含 configs/e3b_train.json 的 dedupe.required_eval_sets；DEV-0032）。E3b 的 --tiny 两个训练池都用这一份
+  （src/e3/data.E3Paths.fixtures）。
 NYU 深度的训练数据用 tests/fixtures/e2/root（480×640，已足够）。数值全部由固定种子生成；重跑逐字节相同。
 DEV-0030 另造 eval_root/refcoco（E3b 评测 --tiny 的 RefCOCO val，E1 落地的布局；E1 的 fixture 只有 12×9 的图，同样切不出
 32×32）与 eval_dev_subsets.json（它的开发子集清单），见 build_refcoco_eval；NYU 的官方测试图用 tests/fixtures/e1/root/nyuv2。
@@ -37,6 +39,9 @@ ROOT = HERE / "root"
 EVAL_ROOT = HERE / "eval_root"  # DEV-0030：E3b 评测的 RefCOCO val 小数据（E1 落地的布局）
 EVAL_DEV = HERE / "eval_dev_subsets.json"  # 它的开发子集清单（E1 的 dev_subsets 格式）
 H, W = 96, 128
+# RUN-0026 剔除清单（experiments/P0/0026_a800_delta/results_0026/dedupe/train_exclusions.json）的 eval_sets，逐字照抄（tests 核对）
+EVAL_SETS = ["ade20k/val", "blink_reldepth/val", "coco_val2017/e1sub500", "coco_val2017_full/val2017", "countbench/eval", "cvbench/test",
+             "embspatial/test", "nyu_normals/test", "nyuv2/dev_train", "nyuv2/test", "odinw13/eval", "probe/D20", "refcoco/eval"]
 PALETTE = [(220, 40, 40), (40, 180, 60), (50, 70, 220), (230, 200, 30)]
 
 
@@ -129,10 +134,10 @@ def build_exclusions() -> None:
     d.mkdir(parents=True, exist_ok=True)
     doc = {"schema": 2, "created_utc": "fixture", "max_hamming": 8,
            "rule": "fixture：E3 的 RefCOCO 家族小数据（真实清单由 scripts/data/dedupe_report.py 生成）",
-           "train_sets": ["refcoco_train/train"], "eval_sets": ["nyuv2/test", "refcoco/eval"],
+           "train_sets": ["nyu_depth_train/train", "refcoco_train/train"], "eval_sets": EVAL_SETS,
            "inputs": [{"what": "fixture", "host": None, "root": None, "created_utc": "fixture", "git_commit": None, "sha256": None,
                        "sets_sha256": None, "sets": {}}],
-           "sets": {"refcoco_train/train": []}}
+           "sets": {"nyu_depth_train/train": [], "refcoco_train/train": []}}
     (d / "train_exclusions.json").write_text(json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
 
 

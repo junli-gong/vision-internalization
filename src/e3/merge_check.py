@@ -2,8 +2,11 @@
 
 就是 scripts/check_training_interfaces.py --checkpoint 的同一套函数（按文件路径载入那个脚本，调它的 main）：E1 grid16 开发子集按 sha256
 取 n 条，两种思考开关，factory.load_trained(merge=False) 对比 merge=True，判据 v1（D50-3；CPU fp32 时要求逐个相同）。
-- 设置（n、检查项）读 configs/e3b_train.json 的 eval.merge_check（--tiny 时 n 取 eval.tiny.merge_check_n），E3b 的网格评测
-  （scripts/eval_e3b.py）与训练后模型的 T 文本评测（scripts/run_e1.py --checkpoint）共用。
+- 设置（n、检查项）读 configs/e3b_train.json 的 eval.merge_check（--tiny 时 n 取 eval.tiny.merge_check_n）。n 两种用途共用；检查项按
+  用途（PURPOSES）分开：grid_eval = E3b 的网格评测（scripts/eval_e3b.py，经 evaluate.resolve_eval），merge 加 restricted（带网格 token
+  的检查点用它自己的网格 token 与 E3b 单轮评测的设置，见那个脚本的模块说明；DEV-0032）；t_text = 训练后模型的 T 文本评测
+  （scripts/run_e1.py --checkpoint，不传 purpose，取默认），只有 merge（T 文本评测用 base 的文本 token）。理由与用时写在配置的
+  eval.merge_check.checks_basis。
 - 输出写进调用方给的 JSON（那个脚本的格式）。同一个检查点（manifest 的 sha256）、同一组设置（n、检查项、判据版本、tiny、dtype）已经
   通过的 JSON 直接复用，不重跑；否则重跑并覆盖。
 - 不通过（退出码 1）或出错（退出码 2）都抛 MergeCheckFailed：调用方据此拒绝评测。
@@ -46,13 +49,28 @@ def load_cti() -> Any:
     return _CTI
 
 
-def settings_from_config(doc: Mapping[str, Any], *, tiny: bool, n: int | None = None) -> dict[str, Any]:
-    """configs/e3b_train.json 的 eval.merge_check（--tiny 时 n 取 eval.tiny.merge_check_n；n 可由命令行覆盖）。"""
+PURPOSES: tuple[str, ...] = ("grid_eval", "t_text")  # eval.merge_check.checks 的键（模块说明）
+DEFAULT_PURPOSE = "t_text"  # scripts/run_e1.py --checkpoint 调 settings_from_config 时不传 purpose
+
+
+def settings_from_config(doc: Mapping[str, Any], *, tiny: bool, n: int | None = None,
+                         purpose: str = DEFAULT_PURPOSE) -> dict[str, Any]:
+    """configs/e3b_train.json 的 eval.merge_check（--tiny 时 n 取 eval.tiny.merge_check_n；n 可由命令行覆盖）；检查项取
+    eval.merge_check.checks[purpose]（PURPOSES；不传时是 T 文本评测的 t_text）。"""
+    if purpose not in PURPOSES:
+        raise ValueError(f"purpose 必须是 {PURPOSES} 之一，收到 {purpose!r}")
     e = doc["eval"]
     nn = n if n is not None else (int(e["tiny"]["merge_check_n"]) if tiny else int(e["merge_check"]["n"]))
     if int(nn) < 1:
         raise ValueError(f"合并核对的 n 必须 ≥ 1，收到 {nn}")
-    return {"n": int(nn), "checks": [str(c) for c in e["merge_check"]["checks"]]}
+    by = e["merge_check"]["checks"]
+    if not isinstance(by, Mapping) or set(by) != set(PURPOSES):
+        raise ValueError(f"eval.merge_check.checks 必须按用途 {PURPOSES} 分开给，收到 {by!r}")
+    checks = [str(c) for c in by[purpose]]
+    known = load_cti().CHECKS
+    if not checks or len(set(checks)) != len(checks) or set(checks) - set(known):
+        raise ValueError(f"eval.merge_check.checks.{purpose} 必须是 {known} 里不重复的非空子集，收到 {checks}")
+    return {"n": int(nn), "checks": checks}
 
 
 def _sha256(path: Path) -> str:
@@ -127,4 +145,4 @@ def run_merge_check(checkpoint: str | Path, *, model_key: str, tiny: bool, n: in
     return summ
 
 
-__all__ = ["CTI_PATH", "MergeCheckFailed", "load_cti", "run_merge_check", "settings_from_config"]
+__all__ = ["CTI_PATH", "DEFAULT_PURPOSE", "MergeCheckFailed", "PURPOSES", "load_cti", "run_merge_check", "settings_from_config"]

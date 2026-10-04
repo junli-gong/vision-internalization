@@ -5,9 +5,10 @@
 服务器：
     python scripts/check_training_interfaces.py --model qwen3.5-0.8b --checks restricted merge --n 200 \\
         --data-root $PROJ/data --out <json>
-    # 评测前的合并核对（训练出来的检查点；--model 必须与检查点 manifest 的构造方式相同）：
+    # 评测前的合并核对（训练出来的检查点；--model 必须与检查点 manifest 的构造方式相同；带网格 token 的检查点 restricted 用
+    # 它自己的网格 token 与 E3b 单轮评测的设置，见下）：
     python scripts/check_training_interfaces.py --model qwen3.5-0.8b --checks merge restricted --n 200 \\
-        --data-root $PROJ/data --checkpoint <检查点目录> --out <json>
+        --data-root $PROJ/data --checkpoint <检查点目录> --out <json> [--e3b-config configs/e3b_train.json]
 开发机彩排（小型随机模型、CPU fp32、tests/fixtures/e1 的小数据；这时判据是逐个相同）：
     python scripts/check_training_interfaces.py --tiny --model gemma-4-e2b-it --checks restricted merge --out /tmp/x.json
 
@@ -35,6 +36,22 @@ grid token：它们是均值初始化，logits 全部相同，只会得到平局
     （training.project，lm_head 先升到 fp32）。
   - 读数：exact_rows、token_agreement、max_abs_logit（及 max_abs_hidden）、argmax 一致率、不一致位置的 logit 差。
 
+带网格 token 的检查点（DEV-0032；D56-5、D65-4(a)）：给了 --checkpoint、检查点又登记了网格 token 时，restricted 核对改用检查点自己的
+网格 token 与 E3b 单轮评测的设置（scripts/eval_e3b.py 的第 1 轮，src/e3/evaluate.make_context），merge 不变：
+- 样本：同 data（E1 grid16 的开发子集 = 三个 RefCOCO 开发子集，按 sha256 取 --n 条），即分割任务（GRID_TASK）的开发子集；
+- 提示：E3b 配置（--e3b-config，默认 configs/e3b_train.json）的 tasks.refseg.grid_template，指令在前，图像用 src/e3/data.load_rgb；
+- allowed 集合：tokens.attach_vocab(检查点, 词表).allowed_ids(refseg, allowed_scope)，与 eval_e3b 的单轮生成同一个集合（含停止 token）；
+  停止 token = 本家族的回合结束 token；max_new_tokens = 目标序列长度 n(n + 1) + 1（32×32 时 1057；--max-new-tokens 不影响它）；思考开关
+  只取 E3b 评测用的那一个（配置的 enable_thinking）。检查点的网格 token 与词表不同就报错（没有定义好的 allowed 集合）。
+- restricted.by_thinking：在 load_trained(merge=True)（评测用的模型）上调 training.restricted_consistency，读数与 v1 相同；
+- restricted.across_merge：训练时的受限 logits 是在未合并的 LoRA 上算的，评测在合并后的模型上解码。以合并后受限解码的序列为目标，
+  在 load_trained(merge=False) 上再做一遍教师强制，两侧只在 allowed 集合上的 logits 逐位置比较（checkpoint.compare_merge_sides）。
+  "合并前后网格 token 的 logits 分家"靠这一项查出：合并后的模型内部自洽，by_thinking 看不出来；merge 用 E1 的文本提示、全词表，
+  网格 token 从来不是 argmax，也看不出来。两侧不同时驻留：合并后的模型用完释放，再加载未合并的；合并后那一侧的目标隐藏状态留在设备上。
+- 判据：by_thinking 照 v1 的 restricted 一节（阈值不变）；across_merge 是合并前后的比较，数值噪声与 merge 相同，照 v1 的 merge 一节的
+  教师强制两条判（criteria.restricted_grid；CPU fp32 时逐个相同）。
+不带网格 token 的检查点（例如 C3）与不给 --checkpoint 的 base：行为不变（tests 拿 69884b8 的脚本存档逐字节比较输出）。
+
 不一致位置的 logit 差（gap，判据用它）：两种实现在某个位置选了不同的 token x ≠ y，gap 是参照 logits 上这两个 token 之差：
 - restricted 的教师强制：L = 教师强制 logits，gap = L[argmax] − L[解码 token]；
 - 生成序列第一个分歧处（restricted 的两种解码、merge 的合并前后）：分歧之前两条序列相同，教师强制 logits 在该位置对两者都有效，
@@ -58,7 +75,8 @@ criteria_version 与 criteria.version）：每种思考开关分别判，
 已有的输出可以用 rejudge_document 按当前判据重判（tests 用 RUN-0021 的 4 份 JSON 钉住：4/4 通过）。
 
 输出 JSON 的字段见 build_document（format、argv、written_utc、code、versions、gpu、model、checkpoint、data、generation、
-batch_protocol、allowed、criteria_version、criteria、checks、failures、pass、timing_s、error）。
+batch_protocol、allowed、criteria_version、criteria、checks、failures、pass、timing_s、error）；带网格 token 的检查点做 restricted 时
+另有 restricted_inputs（E3b 单轮评测的设置），allowed 换成网格 token 的集合，criteria 另有 restricted_grid。
 退出码：0 = 跑完且全部判据通过；1 = 跑完但有判据不过（JSON 照写）；2 = 出错（已有的结果与报错先写进 --out）。
 argparse 用法错误也是 2。
 """
@@ -76,7 +94,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -121,6 +139,7 @@ EFFECT_MAX_EXACT_ROWS = 0.5  # 随机 LoRA 的前提（只在开思考时判）�
 PREMISE_MODES = ("thinking_on",)  # 前提只在这些思考开关下判
 MAX_LISTED = 500  # JSON 里逐项列出的不一致位置 / 分歧行的上限（统计量用全部）
 TF_CHUNK = 256  # 全词表 logits 比较的分块
+GRID_TASK = "refseg"  # 带网格 token 的检查点：restricted 用 E3b 单轮评测的分割任务（样本 = data 的开发子集）
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +168,8 @@ def parse_args(argv=None):
     p.add_argument("--lora-seed", type=int, default=LORA_SEED, help=f"随机 LoRA 的种子（默认 {LORA_SEED}）")
     p.add_argument("--prompts", default=str(PROMPTS_PATH), help="E1 提示配置（默认 configs/e1_prompts.json）")
     p.add_argument("--dev-subsets", help="开发子集清单（默认 configs/e1_dev_subsets.json；--tiny 时取 fixture）")
+    p.add_argument("--e3b-config", help="带网格 token 的检查点做 restricted 时读的 E3b 配置（词表、allowed_scope、网格指令、思考开关；"
+                                        "默认 configs/e3b_train.json）")
     a = p.parse_args(argv)
     if a.model not in registry.MODELS:
         p.error(f"未登记的模型键 {a.model!r}；已登记：{sorted(registry.MODELS)}")
@@ -248,24 +269,147 @@ def grid_allowed(ad: Any) -> dict[str, Any]:
 
 
 def build_batches(ad: Any, samples: Sequence[Any], texts: Sequence[str], order: str,
-                  plan: Sequence[tuple[int, int]]) -> list[list[Any]]:
+                  plan: Sequence[tuple[int, int]], images: Callable[[Any], list[Any]] = load_images) -> list[list[Any]]:
     """每批的 ModelInputs（两种思考开关、两项检查共用）。注入了查询 token 的检查点：先取消查询再建输入（生成不收查询 token），
-    建完按原样恢复登记（不碰任何行）。"""
+    建完按原样恢复登记（不碰任何行）。images：样本 → 图像列表（默认 E1 的 load_images；网格的 restricted 用 E3b 评测的读法）。"""
     q = ad.token_table()["query"]
     n_q, mode = q.get("n"), q.get("position_mode")
     if n_q is not None:
         ad.clear_query_tokens()
     try:
-        return [[ad.build_inputs(load_images(samples[i]), texts[i], order) for i in range(lo, hi)] for lo, hi in plan]
+        return [[ad.build_inputs(images(samples[i]), texts[i], order) for i in range(lo, hi)] for lo, hi in plan]
     finally:
         if n_q is not None:
             ad.inject_query_tokens(int(n_q), mode)
 
 
 def make_runs(batches: Sequence[Sequence[Any]], plan: Sequence[tuple[int, int]],
-              sample_ids: Sequence[str]) -> list[tuple[list[Any], bool, list[str]]]:
-    """run = (一批输入, enable_thinking, 这批的样本 id)：先关思考的全部批，再开思考的全部批。"""
-    return [(list(b), thinking, list(sample_ids[lo:hi])) for thinking in THINKING for b, (lo, hi) in zip(batches, plan)]
+              sample_ids: Sequence[str], modes: Sequence[bool] = THINKING) -> list[tuple[list[Any], bool, list[str]]]:
+    """run = (一批输入, enable_thinking, 这批的样本 id)：按 modes 的顺序（默认先关思考的全部批，再开思考的全部批）。"""
+    return [(list(b), thinking, list(sample_ids[lo:hi])) for thinking in modes for b, (lo, hi) in zip(batches, plan)]
+
+
+# ---------------------------------------------------------------------------
+# 带网格 token 的检查点：restricted 用 E3b 单轮评测的设置（模块说明）
+# ---------------------------------------------------------------------------
+
+
+class GridSetup:
+    """检查点自己的网格 token 与 E3b 单轮评测的设置：cfg（E3Config）、tokens（GridTokens）、ctx（evaluate.TaskContext，分割）。
+    （不用 dataclass：本脚本由 src/e3/merge_check.load_cti 按文件路径载入，不在 sys.modules 里。）"""
+
+    def __init__(self, cfg: Any, tokens: Any, ctx: Any) -> None:
+        self.cfg, self.tokens, self.ctx = cfg, tokens, ctx
+
+    @property
+    def allowed(self) -> list[int]:
+        return [int(i) for i in self.ctx.allowed]
+
+    @property
+    def stop_ids(self) -> list[int]:
+        return [int(self.tokens.stop_id)]
+
+    @property
+    def modes(self) -> tuple[bool, ...]:
+        return (bool(self.ctx.enable_thinking),)
+
+    @property
+    def max_new_tokens(self) -> int:
+        return int(self.ctx.max_new_tokens)
+
+    def texts(self, samples: Sequence[Any]) -> list[str]:
+        return [self.ctx.instruction(s, correction=False) for s in samples]
+
+    def allowed_doc(self) -> dict[str, Any]:
+        return {"ids": self.allowed, "stop_ids": self.stop_ids, "task": self.ctx.task, "scope": self.cfg.allowed_scope,
+                "layout": self.tokens.layout(),
+                "rule": "检查点自己的网格 token：tokens.attach_vocab(检查点, E3b 词表).allowed_ids(任务, allowed_scope)，与 eval_e3b 的"
+                        "单轮生成同一个集合（含本家族的回合结束 token）"}
+
+    def inputs_doc(self) -> dict[str, Any]:
+        c = self.ctx
+        return {"source": "E3b 单轮评测（src/e3/evaluate.make_context；scripts/eval_e3b.py 的第 1 轮）", "task": c.task,
+                "samples": "同 data：E1 grid16 的开发子集（三个 RefCOCO 开发子集）按 sha256 取的样本，即分割任务的开发子集",
+                "instruction_template": c.grid_template, "grid_size": c.n, "order": c.order,
+                "images": "src/e3/data.load_rgb(sample.images[0])", "max_new_tokens": c.max_new_tokens,
+                "thinking_modes": list(self.modes), "stop_ids": self.stop_ids, "allowed_scope": self.cfg.allowed_scope,
+                "e3b_config": {"path": self.cfg.path, "sha256": self.cfg.sha256, "version": self.cfg.doc["version"]}}
+
+
+def grid_setup(a, ad: Any) -> GridSetup:
+    """检查点（合并后的适配器）的网格 token 对上 E3b 词表，建分割任务的单轮上下文。对不上就报错。"""
+    from src.e3.config import CONFIG_PATH, load_config
+    from src.e3.evaluate import make_context
+    from src.e3.tokens import GridTokenError, attach_vocab
+
+    cfg = load_config(a.e3b_config or CONFIG_PATH)
+    try:
+        tokens = attach_vocab(ad, cfg.vocab)
+    except GridTokenError as e:
+        raise RuntimeError(f"检查点登记了 {len(ad.grid_token_ids)} 个网格 token，与 E3b 词表（{cfg.path} 的 vocab）对不上：{e}；"
+                           "restricted 核对没有定义好的 allowed 集合") from None
+    return GridSetup(cfg=cfg, tokens=tokens, ctx=make_context(cfg, tokens, GRID_TASK))
+
+
+def make_grid_runs(ad: Any, g: GridSetup, samples: Sequence[Any], plan: Sequence[tuple[int, int]],
+                   sample_ids: Sequence[str]) -> list[tuple[list[Any], bool, list[str]]]:
+    from src.e3.data import load_rgb
+
+    batches = build_batches(ad, samples, g.texts(samples), g.ctx.order, plan, images=lambda s: [load_rgb(s.images[0])])
+    return make_runs(batches, plan, sample_ids, modes=g.modes)
+
+
+class RecordingAdapter:
+    """restricted_consistency 用的适配器代理：每个调用照原样转给 ad，另按调用顺序记下 generate_restricted 的结果与 training_forward
+    的输出（合并后那一侧：受限解码的序列当 across_merge 的目标，教师强制的目标隐藏状态当比较的一侧；不必再解码、再前向一遍）。"""
+
+    def __init__(self, ad: Any) -> None:
+        self._ad = ad
+        self.restricted: list[list[Any]] = []
+        self.forward: list[Any] = []
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._ad, name)
+
+    def generate_restricted(self, *args: Any, **kw: Any) -> list[Any]:
+        out = self._ad.generate_restricted(*args, **kw)
+        self.restricted.append(list(out))
+        return out
+
+    def training_forward(self, *args: Any, **kw: Any) -> Any:
+        out = self._ad.training_forward(*args, **kw)
+        self.forward.append(out)
+        return out
+
+
+def run_restricted_grid(ad: Any, runs, g: GridSetup) -> tuple[dict[str, Any], CK.MergeSide]:
+    """合并后的模型上的 restricted（v1 的读数）；返回 (读数, 合并后那一侧的 MergeSide：目标 = 受限解码的序列)。"""
+    rec = RecordingAdapter(ad)
+    out = run_restricted(rec, runs, {"ids": g.allowed, "stop_ids": g.stop_ids}, g.max_new_tokens, modes=g.modes)
+    if len(rec.restricted) != len(runs) or len(rec.forward) != len(runs):
+        raise RuntimeError(f"restricted_consistency 的调用次数不对：{len(rec.restricted)} 次受限解码、{len(rec.forward)} 次教师强制，"
+                           f"应各 {len(runs)} 次")
+    targets = [[list(r.token_ids) for r in res] for res in rec.restricted]
+    for k, tf in enumerate(rec.forward):
+        if [int(t) for t in tf.target_ids.tolist()] != [int(t) for row in targets[k] for t in row]:
+            raise RuntimeError("教师强制的目标不是受限解码的序列")
+    side = CK.MergeSide(generations=None, targets=targets, hidden=[tf.target_hidden.detach() for tf in rec.forward],
+                        offsets=[tuple(tf.target_offsets) for tf in rec.forward])
+    return out, side
+
+
+def run_restricted_across_merge(ad0: Any, runs0, merged: CK.MergeSide, g: GridSetup) -> dict[str, Any]:
+    """未合并的模型（ad0）上以合并后受限解码的序列为目标做教师强制，与合并后那一侧比较（只在 allowed 集合上）。"""
+    unmerged = CK.merge_side(ad0, _side_runs(runs0), max_new_tokens=g.max_new_tokens, targets=merged.targets, generate=False)
+    reps = CK.compare_merge_sides(ad0, merged, unmerged, allowed_ids=g.allowed, chunk_size=TF_CHUNK)
+    tfs = {t: TfAgg(("merged", "unmerged"), "argmax_agreement") for t in g.modes}
+    for rep, (_, thinking, ids) in zip(reps, runs0):
+        tf = rep["teacher_forcing"]
+        tfs[thinking].add(tf["n_tokens"], tf["disagreements"], ids, thinking, tf["max_abs_logit"], tf["max_abs_hidden"])
+    return {"compared": "目标 = load_trained(merge=True) 上受限解码（generate_restricted）的序列；教师强制在 merge=True 与 merge=False "
+                        "两侧各做一遍，只在 allowed 集合上比较 logits（checkpoint.compare_merge_sides）",
+            "by_thinking": {MODE_KEYS[t]: {"n_rows": sum(len(x) for x, th, _ in runs0 if th == t),
+                                           "teacher_forcing": tfs[t].summary()} for t in g.modes}}
 
 
 # ---------------------------------------------------------------------------
@@ -419,9 +563,10 @@ class TfAgg:
 # ---------------------------------------------------------------------------
 
 
-def run_restricted(ad: Any, runs, allowed: dict[str, Any], max_new_tokens: int) -> dict[str, Any]:
-    gens = {t: GenAgg(max_new_tokens, ("generate_batch", "restricted")) for t in THINKING}
-    tfs = {t: TfAgg(("decoded", "argmax"), "agreement") for t in THINKING}
+def run_restricted(ad: Any, runs, allowed: dict[str, Any], max_new_tokens: int,
+                   modes: Sequence[bool] = THINKING) -> dict[str, Any]:
+    gens = {t: GenAgg(max_new_tokens, ("generate_batch", "restricted")) for t in modes}
+    tfs = {t: TfAgg(("decoded", "argmax"), "agreement") for t in modes}
     for inputs, thinking, ids in runs:
         rep = training.restricted_consistency(ad, inputs, allowed["ids"], max_new_tokens=max_new_tokens,
                                               stop_ids=allowed["stop_ids"], enable_thinking=thinking)
@@ -431,7 +576,7 @@ def run_restricted(ad: Any, runs, allowed: dict[str, Any], max_new_tokens: int) 
         tfs[thinking].add(tf["n_tokens"], dis, ids, thinking)
     return {"on_model": "checkpoint (load_trained merge=True)" if getattr(ad, "lora_state", "none") == "merged" else "base",
             "by_thinking": {MODE_KEYS[t]: {"n_rows": gens[t].n_rows, "decode_vs_generate_batch": gens[t].summary(),
-                                           "teacher_forcing": tfs[t].summary()} for t in THINKING}}
+                                           "teacher_forcing": tfs[t].summary()} for t in modes}}
 
 
 def _side_runs(runs) -> list[tuple[list[Any], bool]]:
@@ -540,6 +685,24 @@ def criteria_block(exact: bool) -> dict[str, Any]:
     }
 
 
+def grid_criteria_block(exact: bool) -> dict[str, Any]:
+    """带网格 token 的检查点做 restricted 时另附（criteria.restricted_grid；规则见模块说明）。阈值都是 v1（D50-3）已冻结的值。"""
+    return {
+        "applies_to": "--checkpoint 且检查点登记了网格 token：restricted 用检查点自己的网格 token 与 E3b 单轮评测的设置",
+        "by_thinking": "照 v1 的 restricted 一节（criteria.restricted，阈值不变）；只有 E3b 评测用的思考开关（restricted_inputs.thinking_modes）",
+        "across_merge": {
+            "min_tf_agreement": MERGE_MIN_TF_AGREEMENT,
+            "max_median_gap": MERGE_MAX_MEDIAN_GAP,
+            "rules": [f"across_merge.teacher_forcing.argmax_agreement ≥ {MERGE_MIN_TF_AGREEMENT}",
+                      f"across_merge.teacher_forcing.gap.median ≤ {MERGE_MAX_MEDIAN_GAP}"],
+            "report_only": ["across_merge.teacher_forcing.gap.max", "top2_gap", "max_abs_logit", "max_abs_hidden"],
+            "basis": "合并前后两侧的比较，数值噪声的来源与 merge 相同，所以照 v1 merge 一节的教师强制两条判（D50-3）",
+        },
+        "exact": exact,
+        "exact_rules": ["CPU fp32：across_merge 的教师强制没有不一致的位置"],
+    }
+
+
 def _judge_exact(where: str, gen: dict[str, Any], tf: dict[str, Any], tf_key: str) -> list[str]:
     bad = []
     if gen["exact_rows"] != 1.0 or gen["token_agreement"] != 1.0:
@@ -577,12 +740,29 @@ def _judge_merge(where: str, gen: dict[str, Any], tf: dict[str, Any], crit: dict
     return bad
 
 
+def _judge_across_merge(where: str, tf: dict[str, Any], crit: dict[str, Any]) -> list[str]:
+    """restricted.across_merge（带网格 token 的检查点）：照 v1 merge 一节的教师强制两条判；CPU fp32 时逐个相同。"""
+    if crit["exact"]:
+        if tf["argmax_agreement"] != 1.0 or tf["n_disagreements"]:
+            return [f"{where}：合并前后的受限教师强制有 {tf['n_disagreements']} 个位置不同"]
+        return []
+    c, bad = crit["merge"], []
+    if tf["argmax_agreement"] < c["min_tf_agreement"]:
+        bad.append(f"{where}：合并前后受限教师强制的 argmax_agreement {tf['argmax_agreement']:.5f} < {c['min_tf_agreement']}")
+    s = tf["gap"]
+    if s["n"] and s["median"] > c["max_median_gap"]:
+        bad.append(f"{where}：合并前后受限教师强制不一致处 logit 差的中位数 {s['median']:.4f} > {c['max_median_gap']}")
+    return bad
+
+
 def judge(checks: dict[str, Any], crit: dict[str, Any]) -> dict[str, list[str]]:
     out = {}
     if "restricted" in checks:
         out["restricted"] = [m for k, r in checks["restricted"]["by_thinking"].items()
                              for m in _judge_restricted(f"restricted/{k}", k, r["decode_vs_generate_batch"],
                                                         r["teacher_forcing"], crit)]
+        for k, r in ((checks["restricted"].get("across_merge") or {}).get("by_thinking") or {}).items():
+            out["restricted"] += _judge_across_merge(f"restricted/across_merge/{k}", r["teacher_forcing"], crit)
     if "merge" in checks:
         m = checks["merge"]
         bad = [x for k, r in m["by_thinking"].items()
@@ -603,7 +783,10 @@ def rejudge_document(doc: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"不是本仪器的输出（format {doc.get('format')!r} ≠ {FORMAT!r}）")
     if doc.get("error"):
         raise ValueError("这份输出是出错时写的（error 非空），没有可判的读数")
-    crit = criteria_block(bool((doc.get("criteria") or {}).get("exact", False)))
+    exact = bool((doc.get("criteria") or {}).get("exact", False))
+    crit = criteria_block(exact)
+    if "across_merge" in (doc["checks"].get("restricted") or {}):
+        crit["restricted_grid"] = grid_criteria_block(exact)
     failures = judge(doc["checks"], crit)
     return {"criteria_version": CRITERIA_VERSION, "criteria": crit, "failures": failures,
             "pass": all(not bad for bad in failures.values())}
@@ -705,10 +888,31 @@ def run(a, argv, doc: dict[str, Any]) -> None:
             if ad is None:
                 ad, _ = load_checkpoint(a, merge=True)
                 doc["model"] = model_block(a, entry, ad)
-                doc["allowed"] = grid_allowed(ad)
-                runs = make_runs(build_batches(ad, samples, texts, prompts.order, plan), plan, ids)
-            doc["checks"]["restricted"] = run_restricted(ad, runs, doc["allowed"], a.max_new_tokens)
-            timing["restricted_s"] = time.perf_counter() - t2
+                if not ad.grid_token_ids:
+                    doc["allowed"] = grid_allowed(ad)
+                    runs = make_runs(build_batches(ad, samples, texts, prompts.order, plan), plan, ids)
+            if ad.grid_token_ids:  # 带网格 token 的检查点：E3b 单轮评测的设置 + across_merge（模块说明）
+                g = grid_setup(a, ad)
+                doc["allowed"], doc["restricted_inputs"] = g.allowed_doc(), g.inputs_doc()
+                doc["generation"]["restricted_generation"] = "allowed 集合；E3b 单轮评测的设置（见 restricted_inputs）"
+                doc["criteria"]["restricted_grid"] = grid_criteria_block(exact)
+                res, merged_side = run_restricted_grid(ad, make_grid_runs(ad, g, samples, plan, ids), g)
+                table = ad.token_table()
+                timing["restricted_s"] = time.perf_counter() - t2
+                ad = runs = None  # 合并后的模型用完释放，再加载未合并的（两侧不同时驻留）
+                _release_memory()
+                t3 = time.perf_counter()
+                ad0, _ = load_checkpoint(a, merge=False)
+                if ad0.token_table() != table:
+                    raise RuntimeError("load_trained(merge=False) 与 merge=True 的 token 表不同")
+                res["across_merge"] = run_restricted_across_merge(ad0, make_grid_runs(ad0, g, samples, plan, ids),
+                                                                  merged_side, g)
+                doc["checks"]["restricted"] = res
+                timing["restricted_across_merge_s"] = time.perf_counter() - t3
+                del ad0, merged_side
+            else:
+                doc["checks"]["restricted"] = run_restricted(ad, runs, doc["allowed"], a.max_new_tokens)
+                timing["restricted_s"] = time.perf_counter() - t2
     else:
         ad = make_base_adapter(a, entry)
         doc["model"] = model_block(a, entry, ad)

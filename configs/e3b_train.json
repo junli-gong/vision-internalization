@@ -114,8 +114,8 @@
  "seeds": [0, 1, 2],
  "seeds_basis": "简报 §8.4：每个配置 3 个种子。种子同时决定 LoRA 初始化、dropout、样本顺序、修正对与 C3 目标的随机数（无状态，src/e3/data）",
  "dedupe": {
-  "required_eval_sets": {"refseg": ["refcoco/eval"], "depth": ["nyuv2/test"]},
-  "basis": "开跑前核对：训练池用的去重剔除清单（schema 2）比较过这些评测集（src/data/train_dedupe 的集合名）。refcoco/eval 是 E1 的 refcoco 落地（RefCOCO、RefCOCO+ 的 unc val/testA/testB 与 RefCOCOg 的 umd val/test 共用的图），nyuv2/test 是官方 654；跨通道迁移的 T 文本评测集（CountBench、CV-Bench、BLINK 等）由第二部分（评测）补进这里。旧格式的清单只在 --tiny 时照读"
+  "required_eval_sets": {"refseg": ["blink_reldepth/val", "coco_val2017/e1sub500", "countbench/eval", "cvbench/test", "embspatial/test", "nyuv2/test", "odinw13/eval", "refcoco/eval"], "depth": ["blink_reldepth/val", "coco_val2017/e1sub500", "countbench/eval", "cvbench/test", "embspatial/test", "nyuv2/test", "odinw13/eval", "refcoco/eval"]},
+  "basis": "开跑前核对：训练池用的去重剔除清单（schema 2）比较过这些评测集（src/data/train_dedupe 的集合名，与 RUN-0026 剔除清单的 eval_sets 逐字相同）。训练出来的是一个模型，下面的评测集它都要评，所以两个训练池要求同一份名单（升序）：E3b 的网格评测用 refcoco/eval（E1 的 refcoco 落地：RefCOCO、RefCOCO+ 的 unc val/testA/testB 与 RefCOCOg 的 umd val/test 共用的图）与 nyuv2/test（官方 654）；训练后模型的 T 文本评测（scripts/run_e1.py --checkpoint，E1 的 eval 子集，D65-4(b)）另用 coco_val2017/e1sub500 与 odinw13/eval（ovd）、countbench/eval（count）、blink_reldepth/val（rel_depth_blink）、cvbench/test（spatial_cvbench）、embspatial/test（spatial_embspatial），refexp_box、refexp_poly、grid16 用 refcoco/eval，rel_depth_nyu 用 nyuv2/test。即 train_dedupe.E1_SET_NAMES 的全部集合加 nyuv2/test（tests 钉住）。不要求：coco_val2017_full/val2017（内置的 COCO val2017 全部 id，只有键；T 文本评测只用其中的 e1sub500）、probe/D20（E1 的评测集已剔除探针用图）、nyuv2/dev_train（E1 的开发子集，不进 T 文本评测）、ade20k/val 与 nyu_normals/test（只有 E2 用）。旧格式的清单只在 --tiny 时照读"
  },
  "eval": {
   "version": "e3b-eval-v1",
@@ -145,8 +145,9 @@
   },
   "merge_check": {
    "n": 200,
-   "checks": ["merge"],
-   "basis": "简报 §12：评测前合并 LoRA，并在开发子集上核对合并前后一致。用 scripts/check_training_interfaces.py --checkpoint 的同一套函数（E1 grid16 开发子集按 sha256 取 n 条，两种思考开关，load_trained(merge=False) 对比 merge=True，判据 v1 = D50-3）；不通过（或出错）就不评测，退出码非 0。n = 200 与 RUN-0021 相同；结果写进 <评测目录>/eval/<变体>/<模型>/seed<k>/merge_check.json，同一检查点、同一设置已通过的直接复用"
+   "checks": {"grid_eval": ["merge", "restricted"], "t_text": ["merge"]},
+   "basis": "简报 §12：评测前合并 LoRA，并在开发子集上核对合并前后一致。用 scripts/check_training_interfaces.py --checkpoint 的同一套函数（E1 grid16 开发子集按 sha256 取 n 条，load_trained(merge=False) 对比 merge=True，判据 v1 = D50-3）；不通过（或出错）就不评测，退出码非 0。n = 200 与 RUN-0021 相同；结果写进 <评测目录>/eval/<变体>/<模型>/seed<k>/merge_check.json（E3b 的网格评测）或 <out>/<标签>/<模型>/merge_check.json（T 文本评测），同一检查点、同一设置已通过的直接复用",
+   "checks_basis": "检查项按用途分开（src/e3/merge_check.settings_from_config 的 purpose）。grid_eval（scripts/eval_e3b.py）：merge 加 restricted（DEV-0032）。带网格 token 的检查点，restricted 用检查点自己的网格 token、E3b 单轮评测的提示与 allowed 集合（tokens.allowed_ids）：在合并后的模型上核对受限解码与 generate_batch、教师强制（v1 的 restricted 一节），另以合并后受限解码的序列为目标比较合并前后的受限 logits（across_merge，v1 的 merge 一节）。merge 用 E1 的文本提示、全词表，网格 token 从来不是 argmax，网格评测实际走的这条路它看不到；加上 restricted 更严，代价约为每个检查点在 B200 上 0.8B 3 分钟、9B 6 分钟（RUN-0021 的 restricted 实测按 1057 / 128 的 token 数折算，另加一次未合并模型的加载与一遍教师强制；A800 约 3 倍），不到这个检查点评测用量（D65-5）的 1%。t_text（scripts/run_e1.py --checkpoint，不传 purpose 时的默认）：只有 merge；T 文本评测用的是 base 的文本 token，网格 token 的 restricted 与它无关"
   },
   "score_workers": 16,
   "score_workers_basis": "评分（上采样、Boundary IoU、深度指标）在 CPU 上，用这么多个进程并行（spawn）；0 = 在主进程里串行。逐样本的结果与进程数无关（tests 钉住），所以不进运行身份",

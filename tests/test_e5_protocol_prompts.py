@@ -154,8 +154,36 @@ def test_render():
 
 
 # DEV-0018 定稿 d84b6efc…；DEV-0019 搬家不变；D43 批大小 16 → 64（管理员常量级修改）；
-# DEV-0028（D59-4、D59-5）：schema 2，b 与思维链的 a、b 用起伏网格，思维链预算强制收尾
-E5_PROMPTS_SHA256 = "7833f9d657dd28bd8283c39af857858e912540a14e1aba3ff44ea49f2c9a1ea3"
+# DEV-0028（D59-4、D59-5）：schema 2，b 与思维链的 a、b 用起伏网格，思维链预算强制收尾（7833f9d6…，存档见下）；
+# DEV-0032（D62-4）：只改说明文字，思维链按 thinking_end 四类分开报
+E5_PROMPTS_SHA256 = "c0e59d3589cfb51a29eb271d1e1527604899a062408f5d429c9acc4f80467ec4"
+OLD_PROMPTS_PATH = Path(__file__).resolve().parent / "fixtures" / "e5" / "e5_prompts_7833f9d6.json"  # DEV-0028 的配置原样存档
+OLD_PROMPTS_SHA256 = "7833f9d657dd28bd8283c39af857858e912540a14e1aba3ff44ea49f2c9a1ea3"
+
+
+def test_dev0032_only_description_text_changed():
+    """DEV-0032（D62-4）：与 7833f9d6… 相比只改了 rules 里思维链那一条的说明（"自然收尾与强制收尾分开报" → thinking_end 四类，
+    与 E1 同口径）；其余各项（提示模板、生成参数、预算、批配置、解析）逐项相同，渲染结果逐字相同。"""
+    from src.adapters.base import THINKING_ENDS
+
+    assert P.file_sha256(OLD_PROMPTS_PATH) == OLD_PROMPTS_SHA256
+    old = json.loads(OLD_PROMPTS_PATH.read_text(encoding="utf-8"))
+    new = json.loads(P.PROMPTS_PATH.read_text(encoding="utf-8"))
+    changed = [k for k, (a, b) in enumerate(zip(old["rules"], new["rules"])) if a != b]
+    assert len(old["rules"]) == len(new["rules"]) and len(changed) == 1
+    assert {k: v for k, v in old.items() if k != "rules"} == {k: v for k, v in new.items() if k != "rules"}
+    k = changed[0]
+    assert old["rules"][k].startswith("思维链（D59-5）") and "自然收尾与强制收尾分开报" in old["rules"][k]
+    text = new["rules"][k]
+    assert "自然收尾与强制收尾分开报" not in text and "thinking_end" in text and all(e in text for e in THINKING_ENDS)
+    assert old["rules"][k].split("metrics 按")[0] == text.split("metrics 按")[0]  # 前面的协议说明逐字不变
+    assert not any("分开报" in r for i, r in enumerate(new["rules"]) if i != k)
+    old_cfg, new_cfg = P.load_prompt_config(OLD_PROMPTS_PATH), P.load_prompt_config()
+    for system in ("zeroshot", "cot"):
+        assert old_cfg.enable_thinking(system) == new_cfg.enable_thinking(system)
+        for task in new["systems"][system]["format_of_task"]:
+            assert old_cfg.render(system, task, "Do it.", "red cube") == new_cfg.render(system, task, "Do it.", "red cube")
+    assert old_cfg.budgets("cot") == new_cfg.budgets("cot") and old_cfg.decoding() == new_cfg.decoding()
 
 
 def test_prompt_config_lives_in_configs_unchanged(tmp_path):

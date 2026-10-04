@@ -1,7 +1,8 @@
 """E3b 的评测（DEV-0030 §1；简报 §8.5、§4 第 11 条、§12）：一个检查点 × 一个任务 → <out>/eval/<变体>/<模型>/seed<k>/<任务>/。
 
 **加载**（调用方：scripts/eval_e3b.py）：先跑评测前的合并核对（src/e3/merge_check：check_training_interfaces --checkpoint 的同一套
-函数，判据 v1 = D50-3；不通过就不评测），再 factory.load_trained(检查点, merge=True)，attach_vocab 取回网格 token 的布局。
+函数，判据 v1 = D50-3；检查项取配置的 eval.merge_check.checks.grid_eval：merge 加 restricted，restricted 用检查点自己的网格 token 与
+本模块的单轮设置，DEV-0032；不通过就不评测），再 factory.load_trained(检查点, merge=True)，attach_vocab 取回网格 token 的布局。
 
 **单轮**（主要数字）：图 + 网格指令（tasks.<任务>.grid_template / grid_instruction，指令在前）→ adapter.generate_restricted，
 允许集合 = tokens.allowed_ids(任务, allowed_scope)（与训练损失同一个函数、同一个集合），max_new_tokens = 目标序列长度 n(n + 1) + 1，
@@ -175,7 +176,7 @@ def resolve_eval(cfg: E3Config, *, tiny: bool, batch_size: int | None = None, sc
                      "guided_filter": {"radius": GUIDED_FILTER_RADIUS, "eps": GUIDED_FILTER_EPS}},
         "matched_compute": {"method": mc["method"], "temperature": float(mc["temperature"]), "seed": int(mc["seed"]),
                             "sampling_kw": dict(SAMPLING_KW)},
-        "merge_check": settings_from_config(cfg.doc, tiny=tiny, n=merge_check_n),
+        "merge_check": settings_from_config(cfg.doc, tiny=tiny, n=merge_check_n, purpose="grid_eval"),
         "score_workers": int(score_workers if score_workers is not None else t.get("score_workers", e["score_workers"])),
     }
     if out["batch_size"] < 1 or out["score_workers"] < 0:

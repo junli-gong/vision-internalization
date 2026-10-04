@@ -24,7 +24,9 @@
   （configs/e2_probes.json 的 upsample.impl；DEV-0031），反传是两次 GEMM、没有原子加；impl = interpolate 时 F.interpolate 的反传用原子加。
 - accounting.json（各次运行合计）与 logs/run_<k>.json（每次调用一份）：GPU 墙钟（分阶段）、前向次数、视觉 token 与像素数、
   显存峰值（torch.cuda.max_memory_allocated；CPU 上为 null）。run_<k>.json 的 audit 另有 upsample：本进程上采样矩阵乘的 fp32 审计
-  （src/e2/bilinear.fp32_audit：全局 TF32 打开时受保护的矩阵乘与 float64 参照的相对差，按设备）。
+  （src/e2/bilinear.fp32_audit：全局 TF32 打开时受保护的矩阵乘与 float64 参照的相对差，按设备）；precision：运行时的卷积与矩阵乘精度
+  设置（backend_precision；只记录、不改，D64-4：探针的卷积走 cuDNN，PyTorch 默认允许 TF32）。精度设置是机器与进程的状态，
+  不进运行身份（config.yaml），只进运行记录（tests 钉住）。
 - 检查点：<ckpt_dir>/state.pt（默认 <叶目录>/ckpt/，可用 --ckpt-root 放到别处；不入库）：探针、优化器、调度器、标准化统计量、
   训练损失的累计量、步数，原子写入；每 ckpt_every 步与最后一步写一次。训练完成后另写 probes_final.pt（探针权重 + 标准化统计量）；
   整个任务完成后删掉 state.pt（优化器状态只为续跑；9B 约 2 GB），--keep-optimizer-state 保留。
@@ -132,6 +134,47 @@ def _identity(cfg: Mapping[str, Any]) -> dict[str, Any]:
 
 def identity_sha256(cfg: Mapping[str, Any]) -> str:
     return hashlib.sha256(yaml.safe_dump(_identity(cfg), sort_keys=True, allow_unicode=True).encode("utf-8")).hexdigest()
+
+
+# 运行记录里的精度设置（D64-4）：键是 torch 的属性路径；读法照原样，不改任何设置
+PRECISION_KEYS: tuple[str, ...] = (
+    "torch.backends.cudnn.allow_tf32",
+    "torch.backends.cudnn.deterministic",
+    "torch.backends.cudnn.benchmark",
+    "torch.backends.cudnn.conv.fp32_precision",  # 新接口（torch ≥ 2.9）；没有这个接口时记 null，原因进 unavailable
+    "torch.backends.cuda.matmul.fp32_precision",  # 作用域外的全局值（上采样的矩阵乘在作用域内另行强制 ieee，见 audit.upsample）
+)
+PRECISION_CONTEXT_KEYS: tuple[str, ...] = (
+    "torch.backends.cudnn.enabled",
+    "torch.backends.cudnn.fp32_precision",  # 新接口的上一级：conv 的值为 none 时继承它
+    "torch.backends.fp32_precision",  # 再上一级（cuda.matmul 的值为 none 时也继承它）
+)
+
+
+def _read_attr_path(path: str) -> Any:
+    obj: Any = torch
+    for part in path.split(".")[1:]:
+        obj = getattr(obj, part)
+    return obj
+
+
+def backend_precision() -> dict[str, Any]:
+    """运行时的卷积与矩阵乘精度设置（D64-4；只读，不改任何设置）：PRECISION_KEYS 各项的值，context 是解读用的上一级旗标。
+    读不到的项（接口不存在，或新旧接口混用时读 allow_tf32 报错）记 null，原因写进 unavailable。"""
+    out: dict[str, Any] = {}
+    unavailable: dict[str, str] = {}
+    context: dict[str, Any] = {}
+    for keys, dst in ((PRECISION_KEYS, out), (PRECISION_CONTEXT_KEYS, context)):
+        for k in keys:
+            try:
+                v = _read_attr_path(k)
+                dst[k] = v if isinstance(v, (bool, int, str)) or v is None else str(v)
+            except (AttributeError, RuntimeError) as e:
+                dst[k] = None
+                unavailable[k] = f"{type(e).__name__}: {e}"[:300]
+    return {**out, "context": context, "unavailable": unavailable, "torch": torch.__version__,
+            "note": "只记录、不改（D64-4）。fp32_precision 为 none 时继承上一级（cudnn.conv → cudnn → backends）；"
+                    "上采样的矩阵乘在作用域内另行强制 ieee（audit.upsample），这里是作用域外的全局值"}
 
 
 def _sync(device: Any) -> None:
@@ -558,7 +601,7 @@ def run_task(adapter: Any, cfg: E2Config, spec: RunSpec, task_cfg: Mapping[str, 
                        peak_mem_bytes=int(torch.cuda.max_memory_allocated(dev)) if dev.type == "cuda" else None,
                        post_proj_checks=run.extractor.post_proj_checks, n_train_skipped=run.n_skipped,
                        steps_this_run=done_box[0], audit={"features": run.extractor.audit, "probes": run.probe_audit(),
-                                                          "upsample": upsample_audits()})
+                                                          "upsample": upsample_audits(), "precision": backend_precision()})
         run_path.write_text(json.dumps(run_log, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
         (leaf / ACCOUNTING).write_text(json.dumps(accounting_doc(leaf), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -691,7 +734,9 @@ __all__ = [
     "SAMPLES",
     "STATE",
     "TaskRun",
+    "PRECISION_KEYS",
     "accounting_doc",
+    "backend_precision",
     "identity_sha256",
     "leaf_dir",
     "readme_text",

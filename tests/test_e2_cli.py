@@ -1,7 +1,9 @@
 """DEV-0023：scripts/run_e2.py 的 --tiny 彩排（真实的小型随机模型，CPU，tests/fixtures/e2 与 tests/fixtures/e1 的小数据；
 与服务器同一流程的子进程）：三个家族 × 四个任务 × 两种探针跑通，分段运行后续跑与一次跑完逐字节相同；中途崩溃后从检查点续跑
 也逐字节相同；--estimate；命令行的拒绝条件。DEV-0031：上采样走可分离矩阵乘（配置与运行记录里写明、fp32 审计进运行记录）；
-法向不再需要 --enable-normals（D59-6、D63-4）；估算覆盖法向与 pre_proj，表头写明层、参考线、是否含法向，每行写明上采样实现。"""
+法向不再需要 --enable-normals（D59-6、D63-4）；估算覆盖法向与 pre_proj，表头写明层、参考线、是否含法向，每行写明上采样实现。
+DEV-0032（D64-4）：运行记录（logs/run_k.json 的 audit.precision）与估算的表头写明运行时的卷积与矩阵乘精度设置，只记录、不改，
+不进运行身份（换了设置，config.yaml 与其余确定的输出逐字节不变）。"""
 
 from __future__ import annotations
 
@@ -161,6 +163,65 @@ def test_tiny_estimate_writes_table(tmp_path):
     assert "- 层：all（5 个，另加 L4_pre）" in md and "- 参考线：post_proj、pre_proj" in md and "- 含法向：是" in md
     assert "| 任务 | 上采样实现 |" in md
     assert not (tmp_path / "qwen3.5-0.8b" / "depth").exists()  # 估算不写正式运行的目录
+    # D64-4：表头写明运行时的精度设置（子进程里是 torch 的默认值）
+    from src.e2.runner import PRECISION_KEYS
+
+    pr = h["precision"]
+    assert set(PRECISION_KEYS) <= set(pr) and pr["torch.backends.cudnn.deterministic"] is False
+    assert pr["torch.backends.cudnn.benchmark"] is False and pr["torch.backends.cudnn.allow_tf32"] is True
+    assert "- 精度设置（只记录、不改，D64-4）：cudnn.allow_tf32 = True，cudnn.deterministic = False" in md
+
+
+def test_precision_recorded_but_not_in_identity(tmp_path):
+    """D64-4：run_k.json 的 audit.precision 记下运行时的 cudnn.allow_tf32、deterministic、benchmark、cudnn.conv.fp32_precision 与
+    作用域外的 cuda.matmul.fp32_precision；运行不改这些设置；换了设置，config.yaml 与其余确定的输出逐字节不变（不进运行身份）；
+    新旧接口混用、读 allow_tf32 报错时记 null 与原因，不中断运行。"""
+    from src.adapters import registry
+    from src.adapters.factory import make_adapter
+    from src.e2.runner import PRECISION_KEYS, RunSpec, backend_precision, run_task
+
+    e = registry.get_model("qwen3.5-0.8b")
+    cfg = load_config()
+    tc = resolve_task(cfg, "depth", tiny=True)
+    quiet = lambda _: None  # noqa: E731
+    cd = torch.backends.cudnn
+    saved = (cd.benchmark, cd.deterministic, cd.conv.fp32_precision)
+
+    def go(out: Path) -> tuple[Path, dict]:
+        ad = make_adapter(e.key, device="cpu", dtype=torch.float32, tiny=True, init_std=0.05)
+        spec = RunSpec(e.key, e.family, e.repo, e.revision, ad.model_key, True, {"type": "PixelBudget"}, "fp32", "depth",
+                       "all", tuple(range(ad.num_layers() + 1)), (), ad.num_layers(), ad.hidden_size(), pre_norm_last=True)
+        before = backend_precision()
+        run_task(ad, cfg, spec, tc, E2Paths.fixtures(), out, log=quiet)
+        assert backend_precision() == before  # 只记录，不改
+        leaf = out / e.key / "depth"
+        return leaf, json.loads((leaf / "logs" / "run_001.json").read_text())["audit"]["precision"]
+
+    try:
+        la, pa = go(tmp_path / "A")
+        cd.benchmark, cd.deterministic = True, True
+        lb, pb = go(tmp_path / "B")
+        cd.conv.fp32_precision = "ieee"  # 新接口改 conv、rnn 不动：读旧接口的 allow_tf32 会报"新旧接口混用"
+        lc, pc = go(tmp_path / "C")
+    finally:
+        cd.benchmark, cd.deterministic, cd.conv.fp32_precision = saved
+    assert backend_precision()["torch.backends.cudnn.conv.fp32_precision"] == saved[2]
+    for p in (pa, pb, pc):
+        assert set(PRECISION_KEYS) <= set(p) and set(p["context"]) and p["torch"] == torch.__version__
+    assert (pa["torch.backends.cudnn.benchmark"], pa["torch.backends.cudnn.deterministic"]) == (False, False)
+    assert (pb["torch.backends.cudnn.benchmark"], pb["torch.backends.cudnn.deterministic"]) == (True, True)
+    assert pa["torch.backends.cudnn.allow_tf32"] is True and pa["unavailable"] == {}
+    assert pa["torch.backends.cudnn.conv.fp32_precision"] == saved[2] and pa["torch.backends.cuda.matmul.fp32_precision"] is not None
+    assert pc["torch.backends.cudnn.conv.fp32_precision"] == "ieee" and pc["torch.backends.cudnn.allow_tf32"] is None
+    assert "RuntimeError" in pc["unavailable"]["torch.backends.cudnn.allow_tf32"]
+    for leaf in (lb, lc):
+        for f in DETERMINISTIC:
+            assert (la / f).read_bytes() == (leaf / f).read_bytes(), f
+    # 运行身份的键与 DEV-0031 时相同（没有新增精度一类的键）
+    cy = yaml.safe_load((la / "config.yaml").read_text())
+    assert list(cy) == ["experiment", "framework", "model", "image_policy", "task", "input", "layers", "references", "feature_keys",
+                        "training", "seed", "config", "data", "eval_limit"]
+    assert "precision" not in (la / "config.yaml").read_text() and "allow_tf32" not in (la / "config.yaml").read_text()
 
 
 @pytest.mark.parametrize("args,msg", [

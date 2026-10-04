@@ -9,7 +9,7 @@
   "a、b 两类用 33 个符号的起伏网格（D28-13；b 自 DEV-0028，D59-4）：背景 '.'，32 档 '0'–'9' 再接 'A'–'V'；档的定义见 src/synth/relief.py，符号表见 src/grid/codec.py。四个起伏模板（零样本与思维链 × a、b）的符号表说明逐字相同（取自零样本 a 的模板，未改），tests 钉住它们与 codec、relief 的定义一致。b 的模板只把 'after the rotation' 换成 'in the new view'、'from the camera' 换成 'from the camera at its new position'。",
   "e 类没有图像：'image' 换成 'canvas'。",
   "零样本（generation = plain）：generate_batch，关思考，上限 max_new_tokens。",
-  "思维链（D59-5）：开思考，预算强制收尾（generation = budgeted）：思考写满 thinking_budget = 4096 token 还没收尾时，由适配器补上本家族的思考结束标记，再给 answer_budget = 1024 token 作答；自然收尾的行同样只有 1024 token 作答。调用适配器的 generate_batch_budgeted（签名由 DEV-0027 固定），解析只看作答段 answer_text。a、b 先用文字推理，最后输出 33 符号的起伏网格（D59-4）；c、d、e 的最终回答是 0–1000 坐标的多边形 JSON（同 E1 refexp_poly 的格式），按 src/synth/raster.py 的整数规则光栅化后评分。metrics 按自然收尾与强制收尾分开报，并给条数。",
+  "思维链（D59-5）：开思考，预算强制收尾（generation = budgeted）：思考写满 thinking_budget = 4096 token 还没收尾时，由适配器补上本家族的思考结束标记，再给 answer_budget = 1024 token 作答；自然收尾的行同样只有 1024 token 作答。调用适配器的 generate_batch_budgeted（签名由 DEV-0027 固定），解析只看作答段 answer_text。a、b 先用文字推理，最后输出 33 符号的起伏网格（D59-4）；c、d、e 的最终回答是 0–1000 坐标的多边形 JSON（同 E1 refexp_poly 的格式），按 src/synth/raster.py 的整数规则光栅化后评分。metrics 按思考段的结束方式 thinking_end 四类分开报（natural 自然收尾、forced 强制收尾、not_opened 没写思考段、unclosed 思考段里就停了），每类给条数与读数，与 E1 同口径（D62）。",
   "作答段截断（零样本写满 max_new_tokens，或思维链写满 answer_budget）一律判解析失败（truncated），不从截断的输出里解析（同 E1，D22-3、D28-5）；零样本里思考段未闭合单列（thinking_unclosed）。"
  ],
  "image_order": "image_first",

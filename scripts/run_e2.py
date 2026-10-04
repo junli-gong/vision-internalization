@@ -10,7 +10,8 @@
     # 法向：D59-6 许可已确认（Bae 2021 / GeoNet；仅限非商业研究、不分发），--task all 含法向，不再需要 --enable-normals（D63-4）
 吞吐与算力估算（E2 预注册用；每个任务实测几步训练与几条评测，按配置外推 GPU 小时）：
     python scripts/run_e2.py --estimate --model qwen3.5-9b --task all --data-root $DATA --out <dir> [--reference post_proj pre_proj]
-    # 写 <out>/<模型>/estimate/estimate.json 与 estimate.md；表头写明层、参考线、是否含法向，每行写明上采样实现；
+    # 写 <out>/<模型>/estimate/estimate.json 与 estimate.md；表头写明层、参考线、是否含法向、运行时的卷积与矩阵乘精度设置
+    # （只记录、不改，D64-4），每行写明上采样实现；
     # 给了 --reference pre_proj 时，pre_proj 那组探针（探针数、步时间）与视觉塔的额外前向（前向开销）都在实测里
 开发机彩排（小型随机模型、CPU、tests/fixtures/e2 与 tests/fixtures/e1 的小数据）：上面任一条加 --tiny，可省 --data-root。
 
@@ -54,7 +55,7 @@ from src.e2.config import (  # noqa: E402
 from src.e2.bilinear import audits as upsample_audits  # noqa: E402
 from src.e2.data import E2Paths  # noqa: E402
 from src.e2.estimate import estimate_task, summary_markdown  # noqa: E402
-from src.e2.runner import RunSpec, run_task  # noqa: E402
+from src.e2.runner import RunSpec, backend_precision, run_task  # noqa: E402
 
 DTYPES = {"bf16": torch.bfloat16, "fp32": torch.float32}
 TINY_INIT_STD = 0.05  # 与 run_e1 / validate_batching 相同：小模型重取参数，隐藏状态才随输入变化
@@ -208,7 +209,8 @@ def cmd_estimate(a, argv) -> int:
               "layer_spec": spec0.layer_spec, "n_layers": len(spec0.layers),
               "pre_norm_last": pre_norm_key(spec0.num_layers) if spec0.pre_norm_last else None,
               "references": list(spec0.references), "tasks": list(a.task), "includes_normals": "normals" in a.task,
-              "upsample_impls": sorted({r["upsample_impl"] for r in rows}), "upsample_audit": upsample_audits()}
+              "upsample_impls": sorted({r["upsample_impl"] for r in rows}), "upsample_audit": upsample_audits(),
+              "precision": backend_precision()}
     doc = {"header": header, "tasks": rows, "gpu_hours_total": sum(r["gpu_hours"] for r in rows), "argv": list(argv),
            "written_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
     base = Path(a.out) / entry.key / "estimate"

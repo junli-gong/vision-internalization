@@ -4,6 +4,8 @@
 - 样本日程无状态：同种子同结果，换种子换结果，C3 与 E3b 每一步的样本 id 逐个相同（匹配曝光量）；混合循环与任务内序号；
 - 修正对：比例、可复现（图像逐字节相同）、换 epoch 换噪声、第二张图就是 feedback_image 的结果（与评测共用同一个函数）；
 - C3：框 / 多边形按权重选，RLE 的样本退回框；文本目标以停止 token 结尾。
+- DEV-0032（D65-4(b)）：dedupe.required_eval_sets 补上 T 文本评测集（两个训练池同一份名单），名字与 RUN-0026 剔除清单的 eval_sets
+  逐字相同；那份清单读进来照样通过（不挡训练），少比较一个集合就报错；--tiny 的两个训练池共用 E3 fixture 的清单。
 """
 
 from __future__ import annotations
@@ -90,6 +92,45 @@ def test_check_dedupe_required_eval_sets(pools):
     with pytest.raises(ValueError, match="硬约束 7"):
         D.check_dedupe("refseg", None, ["refcoco/eval"], real_model=True)
     assert D.check_dedupe("refseg", None, ["refcoco/eval"], real_model=False)["file_sha256"] is None
+
+
+RUN0026_EXCLUSIONS = REPO / "experiments/P0/0026_a800_delta/results_0026/dedupe/train_exclusions.json"
+
+
+def test_required_eval_sets_cover_t_text_and_pass_run0026(cfg, tmp_path):
+    """D65-4(b)：训练出来的模型要在 E3b 的网格评测集与 T 文本评测集（run_e1 --checkpoint，E1 的 eval 子集）上评，所以两个训练池
+    要求同一份名单 = train_dedupe.E1_SET_NAMES 的全部集合 + nyuv2/test；名字逐个在 RUN-0026 剔除清单的 eval_sets 里，用那份清单
+    核对照样通过；去掉其中一个就报错。"""
+    from src.data import train_dedupe as TD
+    from src.e3.tokens import GRID_TASKS
+
+    req = cfg.doc["dedupe"]["required_eval_sets"]
+    want = sorted(set(TD.E1_SET_NAMES.values()) | {"nyuv2/test"})
+    assert want == ["blink_reldepth/val", "coco_val2017/e1sub500", "countbench/eval", "cvbench/test", "embspatial/test",
+                    "nyuv2/test", "odinw13/eval", "refcoco/eval"]
+    assert set(req) == set(GRID_TASKS) and all(req[t] == want for t in GRID_TASKS)
+    meta = TD.exclusions_meta(RUN0026_EXCLUSIONS)
+    assert meta["schema"] == 2 and meta["legacy"] is False and set(want) <= set(meta["eval_sets"])
+    assert {"refcoco_train/train", "nyu_depth_train/train"} <= set(meta["train_sets"])
+    for t in cfg.tasks:
+        got = D.check_dedupe(t, RUN0026_EXCLUSIONS, req[t], real_model=True)
+        assert got["required_eval_sets"] == want and got["file_sha256"] == meta["sha256"]
+    # 少比较一个 T 文本评测集：真模型与 --tiny 都报错（新格式的清单缺一个就挡住）
+    doc = json.loads(RUN0026_EXCLUSIONS.read_text())
+    doc["eval_sets"] = [x for x in doc["eval_sets"] if x != "countbench/eval"]
+    bad = tmp_path / "train_exclusions.json"
+    bad.write_text(json.dumps(doc))
+    for real in (True, False):
+        with pytest.raises(ValueError, match="countbench/eval"):
+            D.check_dedupe("refseg", bad, req["refseg"], real_model=real)
+    # --tiny：两个训练池共用 E3 fixture 的清单，eval_sets 与 RUN-0026 的相同
+    paths = D.E3Paths.fixtures()
+    assert paths.exclusions == D.FIXTURE_EXCLUSIONS
+    assert json.loads(D.FIXTURE_EXCLUSIONS.read_text())["eval_sets"] == meta["eval_sets"]
+    for t in cfg.tasks:
+        pool = D.load_pool(t, paths, cfg.task(t))
+        assert pool.stats["dedupe_file"] == str(D.FIXTURE_EXCLUSIONS)
+        D.check_dedupe(t, pool.stats["dedupe_file"], req[t], real_model=True)
 
 
 def test_mix_cycle_and_slot_task():

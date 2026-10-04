@@ -54,6 +54,9 @@ from src.noising.mask_noise import corrupt, sample_severity
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_REFSEG_ROOT = REPO_ROOT / "tests" / "fixtures" / "e3" / "root"
 FIXTURE_DEPTH_ROOT = REPO_ROOT / "tests" / "fixtures" / "e2" / "root"
+# --tiny 的两个训练池共用 E3 fixture 的剔除清单（eval_sets 同 RUN-0026，含 dedupe.required_eval_sets；DEV-0032）。E2 fixture 的清单只比较过
+# E2 的评测集，按 E3b 的要求会挡住深度池；E2 的 fixture 不动（E2 的运行身份不变）
+FIXTURE_EXCLUSIONS = FIXTURE_REFSEG_ROOT / TD.EXCLUSIONS_REL
 TASK_INDEX = {t: i for i, t in enumerate(GRID_TASKS)}
 KINDS: tuple[str, ...] = ("grid", "correction", "text")
 
@@ -61,7 +64,8 @@ KINDS: tuple[str, ...] = ("grid", "correction", "text")
 @dataclass(frozen=True)
 class E3Paths:
     """refseg_root / depth_root：DEV-0022 的落地根（含 dedupe/train_exclusions.json）；真实运行两者相同（--data-root），
-    --tiny 时分别是 tests/fixtures/e3/root（RefCOCO 家族，图够大，能切 32×32）与 tests/fixtures/e2/root（NYU 深度）。"""
+    --tiny 时分别是 tests/fixtures/e3/root（RefCOCO 家族，图够大，能切 32×32）与 tests/fixtures/e2/root（NYU 深度），剔除清单两者都用
+    FIXTURE_EXCLUSIONS。"""
 
     refseg_root: Path
     depth_root: Path
@@ -75,7 +79,7 @@ class E3Paths:
 
     @classmethod
     def fixtures(cls) -> "E3Paths":
-        return cls(refseg_root=FIXTURE_REFSEG_ROOT, depth_root=FIXTURE_DEPTH_ROOT)
+        return cls(refseg_root=FIXTURE_REFSEG_ROOT, depth_root=FIXTURE_DEPTH_ROOT, exclusions=FIXTURE_EXCLUSIONS)
 
     def root_for(self, task: str) -> Path:
         if task == "refseg":

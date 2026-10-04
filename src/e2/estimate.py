@@ -12,7 +12,8 @@ bootstrap（CPU）不计入。墙钟在 CUDA 上前后同步；显存峰值取 t
 覆盖（DEV-0031）：--task all 含法向（D59-6 许可已确认，D63-4 撤掉许可门）。给了 --reference pre_proj 时，pre_proj 那组探针与
 正式运行一样在探针库里，所以已在实测里：前向开销（每次前向另调一次视觉塔的 pre_projection_features，计时在 t_前向 / t_步 /
 t_评测一条 之内；forwards.vision_extra 是外推的额外视觉塔前向次数）、探针数（n_probes 含 n_probes_pre_proj）、步时间（这组探针的
-上采样、损失与反传）。每行记下上采样实现（upsample_impl，configs/e2_probes.json 的 upsample.impl）；表头写明层、参考线、是否含法向。
+上采样、损失与反传）。每行记下上采样实现（upsample_impl，configs/e2_probes.json 的 upsample.impl）；表头写明层、参考线、是否含法向，
+以及运行时的卷积与矩阵乘精度设置（header.precision = runner.backend_precision；只记录、不改，D64-4）。
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ import torch
 
 from src.e2.config import PRE_PROJ, E2Config, curve_steps, layer_label
 from src.e2.data import E2Paths
-from src.e2.runner import RunSpec, TaskRun
+from src.e2.runner import PRECISION_KEYS, RunSpec, TaskRun
 from src.e2.tasks import PositionAccumulator
 
 N_STATS_SAMPLES = 2
@@ -85,6 +86,13 @@ def estimate_task(adapter: Any, cfg: E2Config, spec: RunSpec, task_cfg: Mapping[
             "peak_mem_bytes": int(torch.cuda.max_memory_allocated(dev)) if dev.type == "cuda" else None}
 
 
+def _precision_line(prec: Mapping[str, Any] | None) -> str:
+    """header.precision 的一行概括：PRECISION_KEYS 各项（去掉前缀 torch.backends.）。"""
+    if not prec:
+        return "没有记录"
+    return "，".join(f"{k.removeprefix('torch.backends.')} = {prec.get(k)}" for k in PRECISION_KEYS)
+
+
 def summary_markdown(model_key: str, rows: list[dict[str, Any]], header: Mapping[str, Any]) -> str:
     refs = list(header.get("references") or [])
     pre_norm = header.get("pre_norm_last")
@@ -94,7 +102,8 @@ def summary_markdown(model_key: str, rows: list[dict[str, Any]], header: Mapping
              f"- 层：{layers}",
              f"- 参考线：{'、'.join(refs) if refs else '无'}"
              + ("（pre_proj 那组探针与视觉塔的额外前向都在实测里）" if PRE_PROJ in refs else ""),
-             f"- 含法向：{'是' if header.get('includes_normals') else '否'}；任务：{'、'.join(header.get('tasks') or [])}", "",
+             f"- 含法向：{'是' if header.get('includes_normals') else '否'}；任务：{'、'.join(header.get('tasks') or [])}",
+             f"- 精度设置（只记录、不改，D64-4）：{_precision_line(header.get('precision'))}", "",
              "| 任务 | 上采样实现 | 探针数（pre_proj） | 步 × 批 | 前向 s | 一步 s | 评测一条 s | 评测集 | GPU 小时 | 显存峰值 GB |",
              "|---|---|---:|---|---:|---:|---:|---:|---:|---:|"]
     for r in rows:

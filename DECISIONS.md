@@ -1602,3 +1602,31 @@
    - **E6 里 Gemma 的 T 通道定位**：用条件读数与非人物子集，不用严格读数，因为它以拒答为主，人物上约六成。
    - **E6 里涉及 InternVL 的结论**：注明单 tile 低估了 InternVL-2B 约 15 个点。E2、E3 要网格对齐，所以口径不改。
    - **E5 的文本思维链对照**：可能是最强的竞争者，不只是陪衬。自由作答在空间问答上补回很多分，例如 Qwen-4B 的 CV-Bench 从 0.455 到 0.855。E5 预注册照此写。
+
+## D67 — DEV-0032（收尾四项）合入与偏离裁定（2026-10-03）
+
+1. **合入**，无返工。合入前验证：
+   - 普通条件 2274 passed + 16 skipped，比 D65 多 10 条，都是新增测试；
+   - server-parity 条件第一次被外部终止（退出码 144，当时 DEV-0033 在并行跑测试），单独重跑通过，2274 + 16。
+2. **内容**：
+   - **训练后检查点的 restricted 核对**（D56-5）：检查点带网格 token 时，改用 E3b 单轮评测的设置：分割开发子集、指令在前、`allowed_ids("refseg")`、1057 token。
+     - `by_thinking`：合并后模型自身的一致性，按 v1 的 restricted 一节判，阈值不变。
+     - `across_merge`：合并前后在受限集合上逐步比较，按 v1 的 merge 一节判，argmax 一致率 ≥ 0.98、gap 中位 ≤ 0.5。
+     - base 与不带网格 token 的检查点，输出与改动前的脚本逐字节相同（存了原脚本作对照）。
+   - **merge_check 的默认**：网格评测（eval_e3b）加 restricted，T 文本评测只做 merge。restricted 每个检查点约 3–6 分钟（B200）。
+   - **E3 去重要求**：两个训练池都要求比较过 `blink_reldepth/val、coco_val2017/e1sub500、countbench/eval、cvbench/test、embspatial/test、nyuv2/test、odinw13/eval、refcoco/eval`；用 RUN-0026 的剔除清单核对，能通过。
+   - **E5 配置**：思维链说明改为 `thinking_end` 四类，旧配置存档对照，其余逐项相同。
+   - **E2 运行记录**：audit 里加 `precision`，即 cuDNN 与矩阵乘的精度旗标，只读；运行身份不变。
+   - sha256：
+     - E3b `3459e668…` → `3bff36043ace0a63161b106ed92aa9bff8e674062140665ccdd76965faf064b6`；
+     - E5 `7833f9d6…` → `c0e59d3589cfb51a29eb271d1e1527604899a062408f5d429c9acc4f80467ec4`（E5 预注册已同步）；
+     - E1、E2 不变。
+3. **偏离全部接受**：
+   - `across_merge` 用 merge 一节的阈值：比较的是合并前后，噪声与 merge 同类；restricted 一节的 0.999 没有在合并噪声上标定过。
+   - 只跑关思考：E3b 评测只用关思考。
+   - 网格 token 与 E3b 词表对不上就报错，不退回 E1 的数字 token。
+   - `--tiny` 的 E3 训练池改用 E3 fixture 的剔除清单。
+4. **遗留**：
+   - (a) `eval_e3b.py` 没有把 `--config` 透传给合并核对，下一个 E3 任务加上；
+   - (b) `across_merge` 的阈值在第一个真实检查点上实测噪声底，做法同 D50。
+   - RUN-0029 的包是在本条之前打的：E2 运行记录里没有 `audit.precision`，由包的 step1 另记 `torch_backends.json` 代替（D66）。

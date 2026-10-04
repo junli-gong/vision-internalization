@@ -1,0 +1,84 @@
+{
+ "schema_version": 2,
+ "name": "E5 提示与生成协议（零样本基座、文本思维链；DEV-0018；DEV-0028 改：b 用起伏网格，思维链预算强制收尾、a 与 b 输出起伏网格）",
+ "status": "草稿，未冻结。冻结后 sha256 写进 PREREGISTRATION.md 的 E5 条目；之后改动只能新增修订条。",
+ "rules": [
+  "提示 = 生成器的指令原文（sample.instruction，不含输出格式，D23-2）+ 这里的格式段；三个家族逐字相同（统一提示，没有原生格式）。",
+  "模板用 Python str.format 的占位符：{instruction} = 生成器的指令，{target} = 被点名物体的描述（meta.target_description），{n} = 网格边长（GRID_SIZE_E3B = 32）。渲染后去掉首尾空白。",
+  "零样本的数字网格沿用 E1 grid16 的措辞（configs/e1_prompts.json），只把 16 换成 {n}，并加上 'as described above'（目标是变换后 / 新视角 / 非模态 / k 步之后的状态，见指令）。",
+  "a、b 两类用 33 个符号的起伏网格（D28-13；b 自 DEV-0028，D59-4）：背景 '.'，32 档 '0'–'9' 再接 'A'–'V'；档的定义见 src/synth/relief.py，符号表见 src/grid/codec.py。四个起伏模板（零样本与思维链 × a、b）的符号表说明逐字相同（取自零样本 a 的模板，未改），tests 钉住它们与 codec、relief 的定义一致。b 的模板只把 'after the rotation' 换成 'in the new view'、'from the camera' 换成 'from the camera at its new position'。",
+  "e 类没有图像：'image' 换成 'canvas'。",
+  "零样本（generation = plain）：generate_batch，关思考，上限 max_new_tokens。",
+  "思维链（D59-5）：开思考，预算强制收尾（generation = budgeted）：思考写满 thinking_budget = 4096 token 还没收尾时，由适配器补上本家族的思考结束标记，再给 answer_budget = 1024 token 作答；自然收尾的行同样只有 1024 token 作答。调用适配器的 generate_batch_budgeted（签名由 DEV-0027 固定），解析只看作答段 answer_text。a、b 先用文字推理，最后输出 33 符号的起伏网格（D59-4）；c、d、e 的最终回答是 0–1000 坐标的多边形 JSON（同 E1 refexp_poly 的格式），按 src/synth/raster.py 的整数规则光栅化后评分。metrics 按自然收尾与强制收尾分开报，并给条数。",
+  "作答段截断（零样本写满 max_new_tokens，或思维链写满 answer_budget）一律判解析失败（truncated），不从截断的输出里解析（同 E1，D22-3、D28-5）；零样本里思考段未闭合单列（thinking_unclosed）。"
+ ],
+ "image_order": "image_first",
+ "decoding": {
+  "do_sample": false,
+  "num_beams": 1,
+  "repetition_penalty": 1.0,
+  "temperature": null,
+  "top_p": null,
+  "top_k": null
+ },
+ "batching": {
+  "batch_size": 64,
+  "padding": "left",
+  "order": "eval_set_order",
+  "note": "照 E1 冻结的批配置：generate_batch、批大小 64（configs/e1_prompts.json 的 batch_protocol，D43 由 16 改为 64）、左填充（适配器内部）、按评测集的样本顺序切批、不排序（D28-5、D36-1）。批配置是协议的一部分：续跑不能改批大小。"
+ },
+ "systems": {
+  "zeroshot": {
+   "enable_thinking": false,
+   "generation": "plain",
+   "max_new_tokens": 2048,
+   "max_new_tokens_note": "32×32 网格约 32 × 33 ≈ 1,056 个 token（逐字符一个 token 时的上界），留约 2 倍余量；E1 的 16×16 网格是 1024。上线前在开发集上核对截断率，只依据截断率调整，调整写进 max_new_tokens_adjustments。",
+   "format_of_task": {
+    "rotation3d": "relief_image",
+    "viewpoint": "relief_image_view",
+    "occlusion": "binary_image",
+    "physics": "binary_image",
+    "imagery": "binary_canvas"
+   },
+   "templates": {
+    "binary_image": "{instruction} Answer with a {n}x{n} binary grid over the image. Split the image into {n} rows (top to bottom) and {n} columns (left to right) of equal size. Output exactly {n} lines, each with {n} digits and no spaces: 1 if the cell is mostly covered by the {target} as described above, otherwise 0. Output only the grid.",
+    "binary_canvas": "{instruction} Answer with a {n}x{n} binary grid over the canvas. Split the canvas into {n} rows (top to bottom) and {n} columns (left to right) of equal size. Output exactly {n} lines, each with {n} digits and no spaces: 1 if the cell is mostly covered by the {target} as described above, otherwise 0. Output only the grid.",
+    "relief_image": "{instruction} Answer with a {n}x{n} grid over the image that shows both where the {target} is after the rotation and how far each part of it is from the camera. Split the image into {n} rows (top to bottom) and {n} columns (left to right) of equal size. Output exactly {n} lines, each with {n} characters and no spaces. Write . for a cell that is not mostly covered by the {target}. For a covered cell, write the depth of the {target}'s surface in that cell relative to the average depth over all of its covered cells, using 32 steps written 0 1 2 3 4 5 6 7 8 9 A B C D E F G H I J K L M N O P Q R S T U V from nearest to farthest. Each step is 1/16 of the {target}'s radius (the distance from its center to its farthest point): G covers from the average depth to 1/16 radius farther, F covers from 1/16 radius nearer up to the average depth, and so on; anything more than one radius nearer or farther is written 0 or V. Output only the grid.",
+    "relief_image_view": "{instruction} Answer with a {n}x{n} grid over the image that shows both where the {target} is in the new view and how far each part of it is from the camera at its new position. Split the image into {n} rows (top to bottom) and {n} columns (left to right) of equal size. Output exactly {n} lines, each with {n} characters and no spaces. Write . for a cell that is not mostly covered by the {target}. For a covered cell, write the depth of the {target}'s surface in that cell relative to the average depth over all of its covered cells, using 32 steps written 0 1 2 3 4 5 6 7 8 9 A B C D E F G H I J K L M N O P Q R S T U V from nearest to farthest. Each step is 1/16 of the {target}'s radius (the distance from its center to its farthest point): G covers from the average depth to 1/16 radius farther, F covers from 1/16 radius nearer up to the average depth, and so on; anything more than one radius nearer or farther is written 0 or V. Output only the grid."
+   },
+   "parse": {
+    "binary_image": "src.grid.codec.parse_grid_text(text, n=32)",
+    "binary_canvas": "src.grid.codec.parse_grid_text(text, n=32)",
+    "relief_image": "src.grid.codec.parse_relief_grid_text(text, n=32)（偏离：E1 只有 0/1 网格，这里为 33 个符号扩展，规则相同）",
+    "relief_image_view": "同 relief_image（b 自 DEV-0028）"
+   }
+  },
+  "cot": {
+   "enable_thinking": true,
+   "generation": "budgeted",
+   "thinking_budget": 4096,
+   "answer_budget": 1024,
+   "budget_note": "D59-5：预算强制收尾。thinking_budget 同 E1 的思考预算（D28-10），answer_budget 是收尾之后的作答上限；E1 的思考子集同一口径（D59-1）。",
+   "format_of_task": {
+    "rotation3d": "relief_image_cot",
+    "viewpoint": "relief_image_view_cot",
+    "occlusion": "polygon_image",
+    "physics": "polygon_image",
+    "imagery": "polygon_canvas"
+   },
+   "templates": {
+    "polygon_image": "{instruction} First reason step by step in words about where the {target} ends up. Then outline the {target} as described above with a polygon. Report the polygon vertices in JSON format as a list of [x, y] points: [[x1, y1], [x2, y2], ...]. Coordinates are relative to the image size and range from 0 to 1000, with x first. If it is in several separate pieces, give a list of such polygons. Give the final answer as exactly one JSON block.",
+    "polygon_canvas": "{instruction} First reason step by step in words about where the {target} ends up. Then outline the {target} as described above with a polygon. Report the polygon vertices in JSON format as a list of [x, y] points: [[x1, y1], [x2, y2], ...]. Coordinates are relative to the canvas size and range from 0 to 1000, with x first. If it is in several separate pieces, give a list of such polygons. Give the final answer as exactly one JSON block.",
+    "relief_image_cot": "{instruction} First reason step by step in words about where the {target} ends up after the rotation and how far each part of it is from the camera. Then answer with a {n}x{n} grid over the image that shows both where the {target} is after the rotation and how far each part of it is from the camera. Split the image into {n} rows (top to bottom) and {n} columns (left to right) of equal size. Output exactly {n} lines, each with {n} characters and no spaces. Write . for a cell that is not mostly covered by the {target}. For a covered cell, write the depth of the {target}'s surface in that cell relative to the average depth over all of its covered cells, using 32 steps written 0 1 2 3 4 5 6 7 8 9 A B C D E F G H I J K L M N O P Q R S T U V from nearest to farthest. Each step is 1/16 of the {target}'s radius (the distance from its center to its farthest point): G covers from the average depth to 1/16 radius farther, F covers from 1/16 radius nearer up to the average depth, and so on; anything more than one radius nearer or farther is written 0 or V. Give the final answer as exactly one such grid.",
+    "relief_image_view_cot": "{instruction} First reason step by step in words about where the {target} appears in the new view and how far each part of it is from the camera at its new position. Then answer with a {n}x{n} grid over the image that shows both where the {target} is in the new view and how far each part of it is from the camera at its new position. Split the image into {n} rows (top to bottom) and {n} columns (left to right) of equal size. Output exactly {n} lines, each with {n} characters and no spaces. Write . for a cell that is not mostly covered by the {target}. For a covered cell, write the depth of the {target}'s surface in that cell relative to the average depth over all of its covered cells, using 32 steps written 0 1 2 3 4 5 6 7 8 9 A B C D E F G H I J K L M N O P Q R S T U V from nearest to farthest. Each step is 1/16 of the {target}'s radius (the distance from its center to its farthest point): G covers from the average depth to 1/16 radius farther, F covers from 1/16 radius nearer up to the average depth, and so on; anything more than one radius nearer or farther is written 0 or V. Give the final answer as exactly one such grid."
+   },
+   "parse": {
+    "polygon_image": "src.parsing.parse_polygons(answer_text, width=W, height=H, axis_order=\"xy\") → 顶点四舍五入到 1/256 px → src.synth.raster 的整数光栅化，多个多边形取并集（只看作答段）",
+    "polygon_canvas": "同 polygon_image",
+    "relief_image_cot": "src.grid.codec.parse_relief_grid_text(answer_text, n=32)（只看作答段）",
+    "relief_image_view_cot": "同 relief_image_cot"
+   }
+  }
+ },
+ "max_new_tokens_adjustments": []
+}
