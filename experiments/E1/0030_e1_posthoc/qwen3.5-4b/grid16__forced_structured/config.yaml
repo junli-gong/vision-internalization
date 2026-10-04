@@ -1,0 +1,131 @@
+experiment: E1
+framework: src/e1 事后读数（DEV-0033；E1 预注册 §10，D66）
+model:
+  key: qwen3.5-4b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-4B
+  revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+  adapter_model_key: qwen3.5-4b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+task: grid16
+subset: forced
+generation:
+  enable_thinking: false
+  max_new_tokens: 271
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  readout:
+    kind: forced_structured
+    parse: grid16
+  forced:
+    variant: structured
+    fixed_length: true
+    answer_prefix: null
+    allowed_texts:
+    - '0'
+    - '1'
+    - '
+
+      '
+    format_ids:
+      ids:
+      - 15
+      - 16
+      - 198
+      digit_ids:
+      - 15
+      - 16
+      newline_id: 198
+      tokens:
+      - role: digit_0
+        text: '0'
+        id: 15
+        token: '0'
+      - role: digit_1
+        text: '1'
+        id: 16
+        token: '1'
+      - role: newline
+        text: '
+
+          '
+        id: 198
+        token: Ċ
+      probe:
+        grid_size: 16
+        n_tokens: 271
+        distinct_ids:
+        - 15
+        - 16
+        - 198
+      rule: 同 scripts/check_training_interfaces.grid_allowed 的构造（编码 16×16 示例网格必须恰好由
+        0、1、换行三个单 token 组成），不加停止 token
+    n_tokens: 271
+    newline_period: 17
+    stop_tokens_allowed: false
+    rule: 补充（结构强制）：在主读法的允许集合之上，每行第 17 个位置（生成的第 t 个 token，t 从 0 起，t mod 17 = 16，即 16、33、…、254）只允许换行，其余位置只允许
+      0、1；固定 271 个 token，所以必然是合法的 16×16 网格。逐位置的允许集合用 logits 处理器实现（src/e1/forced.GridStructureProcessor，经
+      generate_batch 的 logits_processor 传入），不改模型。
+    fixed_length_rule: 固定长度的两种网格读法：停止 token 不在允许集合里，每行都恰好生成 n_tokens 个 token、stopped
+      = False，这是设计如此，不是截断：记录的 truncated 记 False（另记 fixed_length = true），解析时不判截断（parse_generation
+      只看思考段未闭合与空回答，再交给 parse_grid_text）。多边形预填照常：写满上限没有停止 token 就是截断。
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+  entry:
+    template: 'Segment {expression} in the image as a 16x16 binary grid. Split the
+      image into 16 rows (top to bottom) and 16 columns (left to right) of equal size.
+      Output exactly 16 lines, each with 16 digits and no spaces: 1 if the cell is
+      mostly covered by the object, otherwise 0. Output only the grid.'
+    native: false
+    provenance: unified
+    source_url: docs/RESEARCH_BRIEF.md §8.2
+    parse: grid16
+    max_new_tokens: 1024
+data:
+  n_samples: 200
+  sample_ids_sha256: 9e8242d61125c8aecb89f943852bbfd63218fa0529f969fd93bb4d6950bbc5c6
+  has_gt: true
+  selection_stats:
+    refcoco_unc_val:
+      n_total: 10834
+      n_kept: 10634
+      excluded_by_reason:
+        开发子集: 200
+    subset_name: think:grid16
+    n: 200
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: null
+map_ci_resamples: 0
+batch_size: 64
+batch_protocol:
+  protocol_version: 1
+  batch_size: 64
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: true
+  frozen_batch_size: 64
+posthoc:
+  kind: format_forced
+  config: configs/e1_posthoc.json
+  config_sha256: e02971cd232a57891e193f581eb2e09de5af164440f60409e8ba11383471b8cc
+  base_subset: think
+  note: 事后读数（D66；E1 预注册 §10，写于运行之前）：报告里注明"事后"
+  version: 1
+  variant: structured
