@@ -1,0 +1,453 @@
+{
+ "task": "grid16",
+ "subset": "forced",
+ "model": "qwen3.5-9b",
+ "family": "qwen3.5",
+ "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+ "image_policy": {
+  "tag": "default",
+  "type": "PixelBudget",
+  "pixel_budget_tokens": 300,
+  "min_pixels": 307200,
+  "max_pixels": 307200
+ },
+ "generation": {
+  "enable_thinking": false,
+  "max_new_tokens": 271,
+  "decoding": {
+   "do_sample": false,
+   "num_beams": 1,
+   "repetition_penalty": 1.0,
+   "temperature": null,
+   "top_p": null,
+   "top_k": null
+  },
+  "order": "image_first",
+  "readout": {
+   "kind": "forced_restricted",
+   "parse": "grid16"
+  },
+  "forced": {
+   "variant": "restricted",
+   "fixed_length": true,
+   "answer_prefix": null,
+   "allowed_texts": [
+    "0",
+    "1",
+    "\n"
+   ],
+   "format_ids": {
+    "ids": [
+     15,
+     16,
+     198
+    ],
+    "digit_ids": [
+     15,
+     16
+    ],
+    "newline_id": 198,
+    "tokens": [
+     {
+      "role": "digit_0",
+      "text": "0",
+      "id": 15,
+      "token": "0"
+     },
+     {
+      "role": "digit_1",
+      "text": "1",
+      "id": 16,
+      "token": "1"
+     },
+     {
+      "role": "newline",
+      "text": "\n",
+      "id": 198,
+      "token": "Ċ"
+     }
+    ],
+    "probe": {
+     "grid_size": 16,
+     "n_tokens": 271,
+     "distinct_ids": [
+      15,
+      16,
+      198
+     ]
+    },
+    "rule": "同 scripts/check_training_interfaces.grid_allowed 的构造（编码 16×16 示例网格必须恰好由 0、1、换行三个单 token 组成），不加停止 token"
+   },
+   "n_tokens": 271,
+   "newline_period": null,
+   "stop_tokens_allowed": false,
+   "rule": "主读法（负责人原话）：提示不变；受限解码，允许集合只有 0、1、换行三个 token（与 scripts/check_training_interfaces.py 的 grid16 允许集合同一套构造：用本家族分词器编码一张 16×16 的示例网格，必须恰好由这三个单 token 组成；那边另加停止 token，这里不加），不允许停止 token，固定生成 n_tokens = 16 × 16 个数字 + 15 个换行 = 271 个 token。解析同 E1（parse_grid_text 作用在 text 上）。",
+   "fixed_length_rule": "固定长度的两种网格读法：停止 token 不在允许集合里，每行都恰好生成 n_tokens 个 token、stopped = False，这是设计如此，不是截断：记录的 truncated 记 False（另记 fixed_length = true），解析时不判截断（parse_generation 只看思考段未闭合与空回答，再交给 parse_grid_text）。多边形预填照常：写满上限没有停止 token 就是截断。"
+  }
+ },
+ "batch_protocol": {
+  "protocol_version": 1,
+  "batch_size": 64,
+  "padding_side": "left",
+  "order": "selection",
+  "letter_batches": "same_letters",
+  "frozen": true,
+  "frozen_batch_size": 64
+ },
+ "prompt_config_sha256": "f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452",
+ "n": 200,
+ "has_gt": true,
+ "headline": [
+  {
+   "name": "gIoU",
+   "scope": "all",
+   "value": 0.003833871103868702,
+   "ci": {
+    "low": 0.0,
+    "high": 0.015335484415474807,
+    "level": 0.95,
+    "n_resamples": 1000
+   },
+   "n": 200
+  },
+  {
+   "name": "cIoU",
+   "scope": "all",
+   "value": 0.01973187293827932,
+   "ci": {
+    "low": 0.0,
+    "high": 0.0690545001830899,
+    "level": 0.95,
+    "n_resamples": 1000
+   },
+   "n": 200
+  }
+ ],
+ "parse": {
+  "n": 200,
+  "n_ok": 200,
+  "n_failed": 0,
+  "failure_rate": 0.0,
+  "failures": {}
+ },
+ "truncation": {
+  "n_truncated": 0,
+  "rate": 0.0
+ },
+ "thinking_unclosed": {
+  "n": 0,
+  "rate": 0.0
+ },
+ "diagnostics": {
+  "generated_tokens": {
+   "n": 200,
+   "min": 271,
+   "p05": 271.0,
+   "p50": 271.0,
+   "p95": 271.0,
+   "max": 271,
+   "mean": 271.0,
+   "n_distinct": 1,
+   "top": [
+    [
+     271,
+     200
+    ]
+   ]
+  },
+  "visual_tokens": {
+   "n": 200,
+   "min": 270,
+   "p05": 287.85,
+   "p50": 308.0,
+   "p95": 330.0,
+   "max": 330,
+   "mean": 311.6,
+   "n_distinct": 13,
+   "top": [
+    [
+     300,
+     75
+    ],
+    [
+     330,
+     72
+    ],
+    [
+     315,
+     11
+    ],
+    [
+     289,
+     10
+    ],
+    [
+     285,
+     9
+    ],
+    [
+     322,
+     6
+    ],
+    [
+     288,
+     4
+    ],
+    [
+     312,
+     4
+    ],
+    [
+     308,
+     3
+    ],
+    [
+     320,
+     2
+    ]
+   ]
+  },
+  "image_pixels": {
+   "n": 200,
+   "min": 276480,
+   "p05": 294758.4,
+   "p50": 315392.0,
+   "p95": 337920.0,
+   "max": 337920,
+   "mean": 319078.4,
+   "n_distinct": 13,
+   "top": [
+    [
+     307200,
+     75
+    ],
+    [
+     337920,
+     72
+    ],
+    [
+     322560,
+     11
+    ],
+    [
+     295936,
+     10
+    ],
+    [
+     291840,
+     9
+    ],
+    [
+     329728,
+     6
+    ],
+    [
+     294912,
+     4
+    ],
+    [
+     319488,
+     4
+    ],
+    [
+     315392,
+     3
+    ],
+    [
+     327680,
+     2
+    ]
+   ]
+  },
+  "failure_detail": {
+   "rule_version": 1,
+   "n": 0,
+   "counts": {},
+   "by_failure": {},
+   "ids": {}
+  },
+  "think_marker_when_off": {
+   "n": 0,
+   "rate": 0.0,
+   "n_thinking_unclosed": 0,
+   "markers": [
+    "</think>",
+    "<channel|>",
+    "<think>",
+    "<|channel>"
+   ],
+   "ids": []
+  }
+ },
+ "breakdown": {
+  "split": {
+   "refcoco_unc/val": {
+    "cIoU": {
+     "value": 0.01973187293827932,
+     "ci": {
+      "low": 0.0,
+      "high": 0.0690545001830899,
+      "level": 0.95,
+      "n_resamples": 1000
+     },
+     "n": 200
+    },
+    "gIoU": {
+     "value": 0.003833871103868702,
+     "ci": {
+      "low": 0.0,
+      "high": 0.015335484415474807,
+      "level": 0.95,
+      "n_resamples": 1000
+     },
+     "n": 200
+    },
+    "parse_failure_rate": 0.0
+   }
+  }
+ },
+ "valid": {
+  "n": 200,
+  "n_valid": 200,
+  "rate": 1.0,
+  "n_invalid": 0,
+  "n_refusal": 0,
+  "n_other_failure": 0
+ },
+ "three_columns": [
+  {
+   "name": "gIoU",
+   "scope": "all",
+   "strict": {
+    "value": 0.003833871103868702,
+    "ci": {
+     "low": 0.0,
+     "high": 0.015335484415474807,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "n": 200
+   },
+   "n": 200,
+   "n_valid": 200,
+   "valid_rate": 1.0,
+   "conditional": {
+    "value": 0.003833871103868702,
+    "ci": {
+     "low": 0.0,
+     "high": 0.015335484415474807,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "n": 200
+   }
+  },
+  {
+   "name": "cIoU",
+   "scope": "all",
+   "strict": {
+    "value": 0.01973187293827932,
+    "ci": {
+     "low": 0.0,
+     "high": 0.0690545001830899,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "n": 200
+   },
+   "n": 200,
+   "n_valid": 200,
+   "valid_rate": 1.0,
+   "conditional": {
+    "value": 0.01973187293827932,
+    "ci": {
+     "low": 0.0,
+     "high": 0.0690545001830899,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "n": 200
+   }
+  }
+ ],
+ "readout": {
+  "forced_restricted": 200
+ },
+ "refusal_by_person": {
+  "metric": "gIoU",
+  "person_category": "person",
+  "rule_version": 1,
+  "person": {
+   "n": 104,
+   "n_refusal": 0,
+   "refusal_rate": 0.0,
+   "n_valid": 104,
+   "valid_rate": 1.0,
+   "strict": {
+    "value": 0.0,
+    "ci": {
+     "low": 0.0,
+     "high": 0.0,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "n": 104
+   },
+   "conditional": {
+    "value": 0.0,
+    "ci": {
+     "low": 0.0,
+     "high": 0.0,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "n": 104
+   }
+  },
+  "non_person": {
+   "n": 96,
+   "n_refusal": 0,
+   "refusal_rate": 0.0,
+   "n_valid": 96,
+   "valid_rate": 1.0,
+   "strict": {
+    "value": 0.007987231466393128,
+    "ci": {
+     "low": 0.0,
+     "high": 0.023961694399179386,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "n": 96
+   },
+   "conditional": {
+    "value": 0.007987231466393128,
+    "ci": {
+     "low": 0.0,
+     "high": 0.023961694399179386,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "n": 96
+   }
+  }
+ },
+ "forced": {
+  "variant": "restricted",
+  "fixed_length": true,
+  "n_fixed_length": 200,
+  "n_stopped": 0,
+  "answer_prefix": null
+ },
+ "complete": true,
+ "n_expected": 200,
+ "posthoc": {
+  "kind": "format_forced",
+  "config": "configs/e1_posthoc.json",
+  "config_sha256": "e02971cd232a57891e193f581eb2e09de5af164440f60409e8ba11383471b8cc",
+  "base_subset": "think",
+  "note": "事后读数（D66；E1 预注册 §10，写于运行之前）：报告里注明\"事后\"",
+  "version": 1,
+  "variant": "restricted"
+ }
+}
