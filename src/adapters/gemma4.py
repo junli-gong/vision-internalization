@@ -843,6 +843,7 @@ class Gemma4Adapter(CheckpointSupport, TrainingSupport, BudgetSupport, ModelAdap
         enable_thinking: bool,
         allowed_token_ids: Sequence[int] | None = None,
         max_new_tokens: int,
+        answer_prefix: str | None = None,
         **gen_kwargs: Any,
     ) -> GenerationResult:
         """单条样本生成。默认 greedy（显式 do_sample=False，盖过仓库 generation_config 的采样设置）；
@@ -853,7 +854,8 @@ class Gemma4Adapter(CheckpointSupport, TrainingSupport, BudgetSupport, ModelAdap
         与 generate_batch 走同一条路径（一行的批，没有填充）；stopped、n_image_pixels 等字段见 base.GenerationResult。
         """
         (res,) = self._generate_rows([inputs], enable_thinking=enable_thinking, allowed_token_ids=allowed_token_ids,
-                                     max_new_tokens=max_new_tokens, gen_kwargs=gen_kwargs, where="generate")
+                                     max_new_tokens=max_new_tokens, gen_kwargs=gen_kwargs, where="generate",
+                                     answer_prefix=answer_prefix)
         return res
 
     def generate_batch(
@@ -863,13 +865,15 @@ class Gemma4Adapter(CheckpointSupport, TrainingSupport, BudgetSupport, ModelAdap
         enable_thinking: bool,
         max_new_tokens: int,
         allowed_token_ids: Sequence[int] | None = None,
+        answer_prefix: str | None = None,
         **gen_kwargs: Any,
     ) -> list[GenerationResult]:
         """批量生成（约定见 base.ModelAdapter.generate_batch）。每行的提示 = prompt_ids（思考 system 轮只在开启时插在 `<bos>` 之后）；
         左填充用 `<pad>`；图像按行的顺序拼接（相当于官方 processor 的"按样本嵌套传图"，D13-6），每行的图数可以不同。
         """
         return self._generate_rows(inputs_list, enable_thinking=enable_thinking, allowed_token_ids=allowed_token_ids,
-                                   max_new_tokens=max_new_tokens, gen_kwargs=gen_kwargs, where="generate_batch")
+                                   max_new_tokens=max_new_tokens, gen_kwargs=gen_kwargs, where="generate_batch",
+                                   answer_prefix=answer_prefix)
 
     def _prompt_row(self, inputs: ModelInputs, enable_thinking: bool) -> batching.PromptRow:
         ids = self.prompt_ids(inputs, enable_thinking=enable_thinking)[0].tolist()
@@ -883,7 +887,7 @@ class Gemma4Adapter(CheckpointSupport, TrainingSupport, BudgetSupport, ModelAdap
 
     def _generate_rows(self, inputs_list: Sequence[ModelInputs], *, enable_thinking: bool,
                        allowed_token_ids: Sequence[int] | None, max_new_tokens: int, gen_kwargs: dict[str, Any],
-                       where: str) -> list[GenerationResult]:
+                       where: str, answer_prefix: str | None = None) -> list[GenerationResult]:
         self._require_loaded()
         batching.check_generate_args(enable_thinking, max_new_tokens)
         self._require_eval(where)
@@ -891,7 +895,8 @@ class Gemma4Adapter(CheckpointSupport, TrainingSupport, BudgetSupport, ModelAdap
         batching.check_reserved(gen_kwargs, _RESERVED_GEN_KWARGS)
         for inp in items:
             self._check_entry(inp, None, where=where)
-        rows, kw = self._batch_kw(items, enable_thinking)
+        prefix_ids = self._answer_prefix_ids(answer_prefix, enable_thinking)  # DEV-0033；None → ()，输入与以前相同
+        rows, kw = self._batch_kw(items, enable_thinking, prefix_ids=prefix_ids)
         processors = list(gen_kwargs.pop("logits_processor", None) or [])
         if allowed_token_ids is not None:
             vocab_rows = self._model.get_output_embeddings().weight.shape[0]
@@ -903,12 +908,16 @@ class Gemma4Adapter(CheckpointSupport, TrainingSupport, BudgetSupport, ModelAdap
                                           stop_ids=stop_ids, pad_id=pad_id, processors=processors, gen_kwargs=gen_kwargs)
         return batching.make_results(rows, out, kw["input_ids"].shape[1], wall=wall, stop_ids=stop_ids, pad_id=pad_id,
                                      max_new_tokens=max_new_tokens, split_answer=self.split_answer,
-                                     enable_thinking=enable_thinking)
+                                     enable_thinking=enable_thinking, prefix_ids=prefix_ids)
 
-    def _batch_kw(self, items: Sequence[ModelInputs],
-                  enable_thinking: bool) -> tuple[list[batching.PromptRow], dict[str, Any]]:
+    def _answer_prefix_ids(self, answer_prefix: str | None, enable_thinking: bool) -> tuple[int, ...]:
+        """作答开头预填的 token（DEV-0033；规则见 batching.encode_answer_prefix）。None → ()。"""
+        return batching.adapter_answer_prefix_ids(self, answer_prefix, enable_thinking)
+
+    def _batch_kw(self, items: Sequence[ModelInputs], enable_thinking: bool,
+                  prefix_ids: Sequence[int] = ()) -> tuple[list[batching.PromptRow], dict[str, Any]]:
         """generate / generate_batch / option_logits 共用的拼批：每行的提示（prompt_ids）左填充成一批，各行的图按行的顺序拼接。"""
-        rows = [self._prompt_row(inp, enable_thinking) for inp in items]
+        rows = [batching.with_answer_prefix(self._prompt_row(inp, enable_thinking), prefix_ids) for inp in items]
         kw: dict[str, Any] = batching.batch_prompt(rows, pad_id=self._ids[PAD], device=self._device)
         kw.update(self._image_kw(items))
         return rows, kw

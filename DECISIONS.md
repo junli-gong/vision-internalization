@@ -1630,3 +1630,27 @@
    - (a) `eval_e3b.py` 没有把 `--config` 透传给合并核对，下一个 E3 任务加上；
    - (b) `across_merge` 的阈值在第一个真实检查点上实测噪声底，做法同 D50。
    - RUN-0029 的包是在本条之前打的：E2 运行记录里没有 `audit.precision`，由包的 step1 另记 `torch_backends.json` 代替（D66）。
+
+## D68 — DEV-0033（E1 事后读数：去偏字母读数与格式强制诊断）合入与偏离裁定（2026-10-03）
+
+1. **合入**，无返工。叠在 DEV-0032 之上验证：普通与 server-parity 条件都是 2351 passed + 16 skipped，比 D67 多 77 条，都是新增测试。
+   - E1 提示配置 sha256 仍是 `f3353de0…`；主评测 `--tiny` 三家族 108 个文件逐字节不变。
+   - 事后读数另起配置 `configs/e1_posthoc.json`，sha256 `e02971cd232a57891e193f581eb2e09de5af164440f60409e8ba11383471b8cc`，已写进 E1 预注册 §10。
+2. **内容**：
+   - **去偏读数**（`src/e1/debiased.py`）：选项循环移位，第 s 种顺序在第 i 个字母位置放原第 (i+s) mod k 个选项；每种顺序取合法字母的 softmax，映射回选项内容后平均。
+     - BLINK 与 CV-Bench 从数据集自带的提示里拆出选项行，原顺序拼回逐字节相同，运行前对每条样本断言；RUN-0027 与 RUN-0020 里的全部样本都核对过。
+     - 同一次运行里由 s = 0 顺带给出原字母读数，与 RUN-0027 逐条一致的比例在汇总里核对。
+   - **格式强制**（`src/e1/forced.py`）：
+     - 网格：允许集合是 0、1、换行，不允许停止，固定 271 个 token；结构强制用 logits 处理器，在 t mod 17 = 16 的位置只留换行；
+     - 多边形：适配器加了 `answer_prefix`，三个家族都实现，只加参数，不给时输入逐 token 不变，测试钉住。
+   - **汇总**：`scripts/summarize_e1_posthoc.py`，子命令 validity、forced、estimate。
+   - **用量估计**：去偏读数 8 个模型约 0.93 GPU 小时，格式强制 ≤ 0.14 小时（按 RUN-0027 的实测吞吐）。
+3. **偏离与选择全部接受**：
+   - "高 20 个点以上"取 ≥ 0.20；三处阈值比较留 1e-9 的浮点容差，写进了配置的规则文字。负责人原话"20 个点以上"含等号。
+   - 网格两种读法固定 271 个 token、不能停止，所以不判截断，其余解析规则同 E1。
+   - 格式强制只对 Qwen，事后读数不能配 `--checkpoint`。
+   - `grid_format_ids` 另写了一份，测试核对它与 `check_training_interfaces` 的集合相同。
+4. **遗留**，下一个 E3 任务做：
+   - (a) 事后读数放开 `--checkpoint`：D66-3 要求训练后的模型也跑去偏读数与 free；
+   - (b) `check_training_interfaces` 改为 import `grid_format_ids`，只留一份；
+   - (c) `eval_e3b` 透传 `--config`，见 D67-4(a)。

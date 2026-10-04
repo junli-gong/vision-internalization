@@ -28,6 +28,17 @@
     # 口径必须就是 E1 冻结的口径（--tiny 时照记检查点自己的口径）。config.yaml 另记 checkpoint（manifest 的 sha256 等）；metrics.json
     # 的 diagnostics 另记自由生成里冒出网格 token 的条数（grid_tokens_in_output）。
 
+事后读数（DEV-0033；D66；E1 预注册 §10，写于运行之前；口径在 configs/e1_posthoc.json，主评测的配置与输出不变）：
+    # 去偏字母读数（§10.1，N22 → (b)）：四个选择题与点对任务的全量评测集，k 种循环移位各读一次（option_logits），合法字母上 softmax、
+    # 映射回选项内容取平均；同一次运行顺带给出原字母读数（s = 0，批组成同主评测）。--subset debiased_dev 读开发子集（验收用）。
+    python scripts/run_e1.py --model qwen3.5-4b --task all --subset debiased --data-root $PROJ/data --out experiments/E1/<NNNN_slug>
+    # 格式强制诊断（§10.2，只做 Qwen）：思考子集的 id，关思考；refexp_poly 预填 "[["，grid16 受限解码固定 271 个 token（主读法 restricted
+    # 与结构强制 structured 两个目录）。
+    python scripts/run_e1.py --model qwen3.5-4b --task all --subset forced --data-root $PROJ/data --out experiments/E1/<NNNN_slug>
+    # 写 <out>/<模型>/<任务>__debiased[_dev]/ 与 <任务>__forced_<读法>/；--task all 取这种读法支持的任务；--resume、--limit、--tiny 同上
+    # （--tiny 用 tests/fixtures/e1_posthoc 的小数据：BLINK、CV-Bench 的提示是真实格式，RefCOCO 的图放大到 48×36）。不能配 --acceptance、--estimate、
+    # --checkpoint、附加口径。有效性检查与配对汇总：scripts/summarize_e1_posthoc.py。
+
 --task：一个或多个任务名，或 all（refexp_box refexp_poly grid16 count ovd rel_depth_nyu rel_depth_blink spatial_cvbench
 spatial_embspatial）。--policy：default（E1 冻结的口径，D28-3）、qwen:1024（Qwen 约 1K token）、internvl:native（InternVL 原生
 动态 tile）；后两个只用于 --subset extra 的附加对照（也可用于 --estimate 量它们的吞吐）。
@@ -70,8 +81,9 @@ from src.e1.prompts import (  # noqa: E402
     TASKS,
     load_prompt_config,
 )
+from src.e1.posthoc import DEBIASED_SUBSETS, FORCED_SUBSET, POSTHOC_PATH, POSTHOC_SUBSETS  # noqa: E402
 from src.e1.runner import RunSpec, leaf_dir, policy_dirname, read_jsonl_tolerant, run_task  # noqa: E402
-from src.e1.tasks import TASK_SUBSETS, DataPaths, default_nyu_cache, select  # noqa: E402
+from src.e1.tasks import CHOICE_TASKS, TASK_SUBSETS, DataPaths, default_nyu_cache, select  # noqa: E402
 
 DTYPES = {"bf16": torch.bfloat16, "fp32": torch.float32}  # 与 scripts/validate_batching.py 的 --dtype 取值相同
 POLICIES = ("default", "qwen:1024", "internvl:native")
@@ -82,6 +94,8 @@ RUN_DIR_NAME = re.compile(r"[0-9]{4}_[A-Za-z0-9][A-Za-z0-9_.-]*")
 CHECKPOINT_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*(/[A-Za-z0-9][A-Za-z0-9_.-]*)*")  # --checkpoint-label：相对路径，不含 ..
 TINY_BATCH_SIZE = 4  # --tiny 的默认批大小（fixture 每个任务只有几条；不受冻结的批配置约束）
 TINY_ALT_BATCH_SIZE = 3  # --tiny 验收的 B 遍批大小（与 4 不同，fixture 上也能换出不同的批组成）
+# 事后读数（DEV-0033）各自支持的任务（--task all 展开成它们；运行时再与 configs/e1_posthoc.json 核对）
+POSTHOC_TASKS = {**{s: CHOICE_TASKS for s in DEBIASED_SUBSETS}, FORCED_SUBSET: ("refexp_poly", "grid16")}
 
 
 def resolve_policy(tag: str, family: str):
@@ -100,7 +114,9 @@ def parse_args(argv=None):
     mode.add_argument("--estimate", action="store_true", help="吞吐与算力估算（开发子集，--batch-sizes 各一遍）")
     p.add_argument("--model", required=True, help="注册键（src/adapters/registry.py）")
     p.add_argument("--task", nargs="+", required=True, help=f"任务名或 all：{list(TASKS)}")
-    p.add_argument("--subset", default="eval", choices=SUBSET_KINDS, help="运行模式的子集（验收与估算一律用开发子集）")
+    p.add_argument("--subset", default="eval", choices=SUBSET_KINDS + POSTHOC_SUBSETS,
+                   help="运行模式的子集（验收与估算一律用开发子集）；debiased、debiased_dev、forced 是事后读数（DEV-0033，见上）")
+    p.add_argument("--posthoc-config", default=str(POSTHOC_PATH), help="事后读数的配置（默认 configs/e1_posthoc.json）")
     p.add_argument("--policy", default="default", choices=POLICIES, help="图像口径；默认 E1 冻结的口径（D28-3）")
     p.add_argument("--batch-size", type=int, help=f"批大小（默认取冻结的 batch_protocol.batch_size；--tiny 默认 {TINY_BATCH_SIZE}）；"
                                                   "1 = 逐条 generate。真模型给别的值要加 --allow-unfrozen-batch")
@@ -149,17 +165,22 @@ def parse_args(argv=None):
         p.error("--merge-check-n 必须是正整数")
     if a.alt_batch_size is not None and not a.acceptance:
         p.error("--alt-batch-size 只用于 --acceptance")
+    posthoc = a.subset in POSTHOC_SUBSETS
+    if posthoc and (a.acceptance or a.estimate or a.checkpoint is not None or a.policy != "default"):
+        p.error(f"--subset {a.subset}（事后读数）不能配 --acceptance、--estimate、--checkpoint 或附加口径")
     if a.task == ["all"]:
-        a.task = list(TASKS)
+        a.task = list(POSTHOC_TASKS[a.subset]) if posthoc else list(TASKS)
     bad = [t for t in a.task if t not in TASKS]
     if bad:
         p.error(f"未知任务 {bad}；可用：{list(TASKS)} 或 all")
+    if posthoc and any(t not in POSTHOC_TASKS[a.subset] for t in a.task):
+        p.error(f"--subset {a.subset} 只支持 {list(POSTHOC_TASKS[a.subset])}，收到 {a.task}")
     if a.model not in registry.MODELS:
         p.error(f"未登记的模型键 {a.model!r}；已登记：{sorted(registry.MODELS)}")
     family = registry.get_model(a.model).family
     if a.policy != "default" and POLICY_FAMILY[a.policy] != family:
         p.error(f"--policy {a.policy} 只用于 {POLICY_FAMILY[a.policy]} 家族")
-    if not (a.acceptance or a.estimate):
+    if not (a.acceptance or a.estimate or posthoc):
         unsupported = [t for t in a.task if a.subset not in TASK_SUBSETS[t]]
         if unsupported:
             p.error(f"{unsupported} 不支持 --subset {a.subset}")
@@ -195,8 +216,11 @@ def parse_args(argv=None):
 
 def data_paths(a) -> DataPaths:
     cache = Path(a.nyu_cache) if a.nyu_cache else default_nyu_cache()
-    base = DataPaths.fixtures(nyu_cache=cache) if (a.tiny and not a.data_root) else DataPaths(
-        root=Path(a.data_root or os.environ["VISINT_DATA_ROOT"]), nyu_cache=cache)
+    if a.tiny and not a.data_root:  # 事后读数的 --tiny 用 tests/fixtures/e1_posthoc（DEV-0033；见 tasks.FIXTURE_POSTHOC_DIR）
+        fx = DataPaths.posthoc_fixtures if a.subset in POSTHOC_SUBSETS else DataPaths.fixtures
+        base = fx(nyu_cache=cache)
+    else:
+        base = DataPaths(root=Path(a.data_root or os.environ["VISINT_DATA_ROOT"]), nyu_cache=cache)
     kw = {k: Path(v) for k, v in (("dev_subsets", a.dev_subsets), ("eval_subsets", a.eval_subsets),
                                  ("nyu_pairs", a.nyu_pairs)) if v}
     return DataPaths(root=base.root, dev_subsets=kw.get("dev_subsets", base.dev_subsets),
@@ -305,6 +329,37 @@ def cmd_run(a, argv) -> int:
     return 0
 
 
+def cmd_posthoc(a, argv) -> int:
+    """事后读数（DEV-0033）：--subset debiased | debiased_dev（去偏字母读数）或 forced（格式强制，每个任务的各种读法各一个目录）。
+    口径、批配置与提示配置的核对见 configs/e1_posthoc.json 与 src/e1/posthoc_runner.py。"""
+    from src.e1.posthoc import load_posthoc_config
+    from src.e1.posthoc_runner import forced_subset_name, run_debiased_task, run_forced_task
+
+    prompts = load_prompt_config(a.prompts)
+    posthoc = load_posthoc_config(prompts, a.posthoc_config)
+    bad = [t for t in a.task if t not in posthoc.tasks_for(a.subset)]
+    if bad:
+        raise ValueError(f"{bad} 不在 {a.posthoc_config} 给 {a.subset} 的任务 {posthoc.tasks_for(a.subset)} 里")
+    bs, _ = resolve_batch_sizes(a, prompts)
+    paths = data_paths(a)
+    entry, policy, ad = build_adapter(a)
+    for task in a.task:
+        sel = selection(task, posthoc.base_subset(a.subset), paths, a.limit, a.count_questions)
+        spec = make_spec(a, entry, policy, ad, task, a.subset, bs)
+        if a.subset in DEBIASED_SUBSETS:
+            m = run_debiased_task(ad, spec, sel, prompts, posthoc, paths, a.out, resume=a.resume, argv=argv)
+            d = m["debiased"]
+            orig = (d.get("original_letter") or {}).get("headline") or [{}]
+            print(f"{entry.key} {task}/{a.subset} n={m['n']} {_headline(m)} original={orig[0].get('value')} "
+                  f"random={d['random_level']}")
+            continue
+        for variant in posthoc.forced_variants(task):
+            m = run_forced_task(ad, spec, sel, prompts, posthoc, paths, a.out, variant=variant, resume=a.resume, argv=argv)
+            print(f"{entry.key} {task}/{forced_subset_name(variant)} n={m['n']} parse_fail={m['parse']['failure_rate']} "
+                  f"trunc={m['truncation']['rate']} valid={m['valid']['rate']} {_headline(m)}")
+    return 0
+
+
 def cmd_acceptance(a, argv) -> int:
     """批处理验收 v3（规则见 configs/e1_prompts.json 的 acceptance 与 src/e1/acceptance 的 v3 一节）。"""
     prompts = load_prompt_config(a.prompts)
@@ -409,6 +464,8 @@ def main(argv=None) -> int:
             return cmd_acceptance(a, argv)
         if a.estimate:
             return cmd_estimate(a, argv)
+        if a.subset in POSTHOC_SUBSETS:
+            return cmd_posthoc(a, argv)
         return cmd_run(a, argv)
     except MergeCheckFailed as e:  # --checkpoint：评测前的合并核对没有通过（DEV-0030 §2）
         print(f"拒绝评测：{e}", file=sys.stderr)

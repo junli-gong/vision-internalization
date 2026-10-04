@@ -1,0 +1,86 @@
+{
+ "schema_version": 1,
+ "name": "E1 事后读数的口径（D66；E1 预注册 §10，写于运行之前；DEV-0033）：去位置偏好的字母读数（10.1，N22 → (b)）与格式强制诊断（10.2）",
+ "status": "事后修订与事后诊断：报告里一律注明\"事后\"。本文件只加新读数的口径；E1 主评测的提示、批配置、图像口径、解码与输出都不变（configs/e1_prompts.json 不动）。",
+ "basis": "D66-2（格式强制诊断）、D66-3（N22 → (b) 去偏字母读数与有效性检查）；PREREGISTRATION.md 的 E1 §10.1、§10.2；DEV-0033 任务书",
+ "prompt_config": {
+  "path": "configs/e1_prompts.json",
+  "sha256": "f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452",
+  "rule": "提示原文、渲染、图像顺序、解码（greedy）、批配置（batch_protocol：批大小 64、左填充、选择顺序、按字母集合分批）、关思考都取这份冻结的配置；运行时核对它的 sha256 等于这里的值，不等就拒绝运行。新口径另起本文件，而不往 e1_prompts.json 里加条目：那样会改变它的 sha256，主评测的 config.yaml 就不再逐字节相同。"
+ },
+ "debiased_letter": {
+  "version": 1,
+  "readout": "letter_debiased",
+  "tasks": ["rel_depth_nyu", "rel_depth_blink", "spatial_cvbench", "spatial_embspatial"],
+  "subsets": {"debiased": "eval", "debiased_dev": "dev"},
+  "subsets_rule": "run_e1.py --subset debiased 读评测集（全量，§10.1 的标题）；--subset debiased_dev 读开发子集（验收与彩排用）。样本选择、顺序与主评测的 eval / dev 相同（src/e1/tasks.select）。",
+  "orders": "cyclic_shifts",
+  "order_rule": "每题 k 个选项（原顺序 c_0 … c_{k−1}，字母 A、B、… 按位置固定），读 k 种顺序 s = 0 … k−1：第 s 种顺序在第 i 个字母的位置放原顺序的第 (i + s) mod k 个选项（perm_s[i] = (i + s) mod k）。s = 0 就是原顺序。只换选项内容的位置，字母、题干与图都不变。",
+  "letter_logits": "每种顺序下用受限字母读数的同一套写法（configs/e1_prompts.json 的 letter_readout.spellings：\"{letter}\" 与 \" {letter}\"）取每个合法字母的 logit，两种写法取较大的（D36-4）：adapter.option_logits（只做一次前向，第一个生成位置的原始 logits；与 generate(allowed_token_ids) 的第一步逐位相同，D37）。运行时核对 option_logits 用的写法与本次运行的字母表（src/e1/letters.py，与主评测同一种构造）的 token 逐个相同，不同就报错。",
+  "softmax": "只在本题的合法字母上做 softmax（fp32，option_logits 的 probs），把第 i 个字母的概率记到它在这种顺序下对应的选项内容 c_{perm_s[i]} 上。",
+  "aggregate": "每个选项内容的概率在 k 种顺序上取算术平均（按 s = 0 … k−1 的顺序累加，float64）；平均概率最高的选项就是答案，回到原顺序的字母（c_j → 原字母 letter(j)）与 GT 比较。",
+  "tie_break": "平均概率完全相等时取原顺序里靠前的选项（j 小的）。",
+  "option_split": {
+   "line_format": "({letter}) {text}",
+   "line_joiner": "\n",
+   "how": {
+    "rel_depth_blink": "prompt_field",
+    "spatial_cvbench": "prompt_field",
+    "rel_depth_nyu": "rendered_template",
+    "spatial_embspatial": "option_format"
+   },
+   "rule": "prompt_field（BLINK、CV-Bench：提示是数据集自带的整段文字，模板是 \"{prompt}\"）：prompt 字段首尾的空白（如有）单独留出、拼回时原样放回（渲染时本来就去掉）；其余部分按 \"\\n\" 切成行；最后 k 行必须逐字等于 line_format.format(letter=A、B、…, text=数据集的 choices[i])（i = 0 … k−1），其余的行（用 \"\\n\" 接回）是题干，题干不能为空，题干的最后一行不能也是 \"(X) \" 开头的选项行（防止选项行比 choices 多）。按新顺序拼回 = 题干 + \"\\n\" + 各选项行用 \"\\n\" 连接；再按原模板渲染（PromptConfig.render，去首尾空白）。原顺序拼回必须与 prompt 字段逐字节相同，渲染结果必须与主评测的渲染逐字节相同：每条样本都断言，拆不出或还原不了就报错（OptionSplitError），不跳过。RUN-0027 的 eval 与 0020/0024 的 dev 里 BLINK 124 条、CV-Bench 2,638 条都满足（DEV-0033 核对）。rendered_template（NYU 点对：统一提示，选项写在模板里）：对渲染好的指令用同一条规则拆，选项取任务条目的 choices（\"A is closer\"、\"B is closer\"，指图上的标记，图不变，只换两行的顺序）。option_format（EmbSpatial）：用 e1_prompts.json 的 option_format 与 option_joiner 按新顺序重拼选项，即把样本的 choices 换成新顺序后照原模板渲染；原顺序同样断言与主评测的渲染逐字节相同。"
+  },
+  "batch_layout": {
+   "layout": "order_major",
+   "rule": "批配置同主评测（batch_protocol：批大小 64、左填充、样本顺序即选择顺序、受限字母读数按字母集合分批）。k 种顺序按\"顺序优先\"排成一条读数序列：先是 s = 0 的全部样本（选择顺序），再是 s = 1 的全部样本，……，s 只取 k > s 的样本；在这条序列上用 src/e1/runner.batch_plan 划批，分批键 = (s, 本题的字母集合)，所以同一批的顺序与字母集合都相同。s = 0 那一段的批划分与主评测的批划分逐批相同（同样的样本、同样的提示、同样的批组成）。划分在整份样本上一次算好，确定、与续跑无关；续跑时没写完的那一批整批重跑。"
+  },
+  "original_letter_control": "same_run_order0",
+  "original_letter_control_rule": "原字母读数在同一次运行里顺带算出：s = 0（原顺序）那一种顺序在合法字母上的 argmax（option_logits 的 choice；平局取 token id 小的，与 generate(allowed_token_ids) 相同），批组成与主评测相同。metrics 同时给出原字母读数的严格读数与 CI、去偏减原字母的配对差与配对 bootstrap CI；汇总脚本另报它与 RUN-0027 主评测字母读数逐条一致的比例（核对）。",
+  "per_order_rule": "另记每种顺序 s 单独的读数：该顺序下 argmax 字母映射回选项内容后的准确率（只含 k > s 的样本，记 n），以及该顺序下\"最常见字母占比\"（被选得最多的字母的条数 / n），并按 k 分开。",
+  "validity_check": {
+   "free_subset": "free",
+   "near_random_margin": 0.05,
+   "free_valid_rate_min": 0.9,
+   "free_minus_debiased_min": 0.2,
+   "rule": "§10.1 的有效性检查，在 free 子集的 200 条 id 上逐格（模型 × 任务）比较；两条同时满足就标为\"该模型的即时读数不反映能力\"，不用于规模斜率与迁移结论：(1) 去偏读数接近随机：这些 id 上去偏读数的点估计 ≤ 随机水平 + near_random_margin，随机水平 = 逐题 1/k 的平均；(2) 自由作答（free 子集，RUN-0027）的有效率 ≥ free_valid_rate_min，且自由作答的严格读数 − 去偏读数 ≥ free_minus_debiased_min（\"高 20 个点以上\"按 ≥ 取）。三处比较都留 1e-9 的浮点容差（读数是 200 条上的比例，0.7 − 0.5 在浮点下略小于 0.2；一条样本是 0.005）。汇总脚本：scripts/summarize_e1_posthoc.py validity。"
+  }
+ },
+ "format_forced": {
+  "version": 1,
+  "subset": "forced",
+  "families": ["qwen3.5"],
+  "models": ["qwen3.5-0.8b", "qwen3.5-2b", "qwen3.5-4b", "qwen3.5-9b"],
+  "sample_subset": "think",
+  "sample_rule": "样本取思考子集的同一批 id（configs/e1_eval_subsets.json 的 think:<任务>，每个任务 200 句），可与主评测（RUN-0027）、思考子集（RUN-0028）逐条配对；关思考、greedy、批配置同主评测（D43）。",
+  "enable_thinking": false,
+  "variants": {
+   "prefill": {
+    "task": "refexp_poly",
+    "answer_prefix": "[[",
+    "max_new_tokens": "entry",
+    "fixed_length": false,
+    "rule": "提示不变（refexp_poly 本家族的原文）。作答开头预填 \"[[\"（提示里给出的 JSON 格式的开头）：adapter.generate_batch(answer_prefix=\"[[\")，预填的 token 接在助手头之后（Qwen 关思考时在空思考块之后），作为输入的一部分、不计入生成；模型接着写，上限同 E1 多边形（任务条目的 max_new_tokens，1024，不含预填）。解析时把预填与续写拼在一起（适配器的 text = split_answer(预填 + 生成)），规则同 E1（parse_polygons；写满上限没有停止 token 判截断）。"
+   },
+   "restricted": {
+    "task": "grid16",
+    "allowed": ["0", "1", "\n"],
+    "stop_tokens_allowed": false,
+    "n_tokens": 271,
+    "fixed_length": true,
+    "rule": "主读法（负责人原话）：提示不变；受限解码，允许集合只有 0、1、换行三个 token（与 scripts/check_training_interfaces.py 的 grid16 允许集合同一套构造：用本家族分词器编码一张 16×16 的示例网格，必须恰好由这三个单 token 组成；那边另加停止 token，这里不加），不允许停止 token，固定生成 n_tokens = 16 × 16 个数字 + 15 个换行 = 271 个 token。解析同 E1（parse_grid_text 作用在 text 上）。"
+   },
+   "structured": {
+    "task": "grid16",
+    "allowed": ["0", "1", "\n"],
+    "stop_tokens_allowed": false,
+    "n_tokens": 271,
+    "newline_period": 17,
+    "fixed_length": true,
+    "rule": "补充（结构强制）：在主读法的允许集合之上，每行第 17 个位置（生成的第 t 个 token，t 从 0 起，t mod 17 = 16，即 16、33、…、254）只允许换行，其余位置只允许 0、1；固定 271 个 token，所以必然是合法的 16×16 网格。逐位置的允许集合用 logits 处理器实现（src/e1/forced.GridStructureProcessor，经 generate_batch 的 logits_processor 传入），不改模型。"
+   }
+  },
+  "fixed_length_rule": "固定长度的两种网格读法：停止 token 不在允许集合里，每行都恰好生成 n_tokens 个 token、stopped = False，这是设计如此，不是截断：记录的 truncated 记 False（另记 fixed_length = true），解析时不判截断（parse_generation 只看思考段未闭合与空回答，再交给 parse_grid_text）。多边形预填照常：写满上限没有停止 token 就是截断。",
+  "report_rule": "严格读数、有效率与条件读数（三列，同 E1 的 report_columns）；与同一批 id 的主评测（RUN-0027 的 eval）、思考子集（RUN-0028）逐条配对，汇总脚本给出配对差与配对 bootstrap 95% CI（scripts/summarize_e1_posthoc.py forced）。不改标题，不挡 E2。"
+ }
+}

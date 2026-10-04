@@ -1099,6 +1099,7 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
         enable_thinking: bool,
         allowed_token_ids: Sequence[int] | None = None,
         max_new_tokens: int,
+        answer_prefix: str | None = None,
         **gen_kwargs: Any,
     ) -> GenerationResult:
         """单条样本生成。默认 greedy；停止 token 是 <|im_end|> 与 <|endoftext|>（id 从 tokenizer 查）。
@@ -1108,7 +1109,8 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
         与 generate_batch 走同一条路径（一行的批，没有填充）；stopped、n_image_pixels 等字段见 base.GenerationResult。
         """
         (res,) = self._generate_rows([inputs], enable_thinking=enable_thinking, allowed_token_ids=allowed_token_ids,
-                                     max_new_tokens=max_new_tokens, gen_kwargs=gen_kwargs, where="generate")
+                                     max_new_tokens=max_new_tokens, gen_kwargs=gen_kwargs, where="generate",
+                                     answer_prefix=answer_prefix)
         return res
 
     def generate_batch(
@@ -1118,6 +1120,7 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
         enable_thinking: bool,
         max_new_tokens: int,
         allowed_token_ids: Sequence[int] | None = None,
+        answer_prefix: str | None = None,
         **gen_kwargs: Any,
     ) -> list[GenerationResult]:
         """批量生成（约定见 base.ModelAdapter.generate_batch）。左填充用 <|endoftext|>（也是 HF 给已结束的行补的 pad）；
@@ -1125,7 +1128,8 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
         M-RoPE：HF 按 attention_mask 跳过填充算 (T, H, W)；生成前逐行核对它与本适配器自己的规则（mrope_rows）逐个相等。
         """
         return self._generate_rows(inputs_list, enable_thinking=enable_thinking, allowed_token_ids=allowed_token_ids,
-                                   max_new_tokens=max_new_tokens, gen_kwargs=gen_kwargs, where="generate_batch")
+                                   max_new_tokens=max_new_tokens, gen_kwargs=gen_kwargs, where="generate_batch",
+                                   answer_prefix=answer_prefix)
 
     def _prompt_row(self, inputs: ModelInputs, enable_thinking: bool) -> batching.PromptRow:
         """一行送进模型的提示：user 轮（inputs）+ assistant 头；mm_token_type_ids 在头上为 0。"""
@@ -1142,7 +1146,7 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
 
     def _generate_rows(self, inputs_list: Sequence[ModelInputs], *, enable_thinking: bool,
                        allowed_token_ids: Sequence[int] | None, max_new_tokens: int, gen_kwargs: dict[str, Any],
-                       where: str) -> list[GenerationResult]:
+                       where: str, answer_prefix: str | None = None) -> list[GenerationResult]:
         self._require_loaded()
         batching.check_generate_args(enable_thinking, max_new_tokens)
         self._require_eval(where)
@@ -1150,7 +1154,8 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
         batching.check_reserved(gen_kwargs, _RESERVED_GEN_KWARGS)
         for inp in items:
             self._check_entry(inp, None, where=where)
-        rows, kw = self._batch_kw(items, enable_thinking)
+        prefix_ids = self._answer_prefix_ids(answer_prefix, enable_thinking)  # DEV-0033；None → ()，输入与以前相同
+        rows, kw = self._batch_kw(items, enable_thinking, prefix_ids=prefix_ids)
         processors = list(gen_kwargs.pop("logits_processor", None) or [])
         if allowed_token_ids is not None:
             vocab_rows = self._model.get_output_embeddings().weight.shape[0]
@@ -1163,13 +1168,17 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
                                           gen_kwargs=gen_kwargs, scope=self.gdn_scope())
         return batching.make_results(rows, out, kw["input_ids"].shape[1], wall=wall, stop_ids=stop_ids, pad_id=pad_id,
                                      max_new_tokens=max_new_tokens, split_answer=self.split_answer,
-                                     enable_thinking=enable_thinking)
+                                     enable_thinking=enable_thinking, prefix_ids=prefix_ids)
 
-    def _batch_kw(self, items: Sequence[ModelInputs],
-                  enable_thinking: bool) -> tuple[list[batching.PromptRow], dict[str, Any]]:
+    def _answer_prefix_ids(self, answer_prefix: str | None, enable_thinking: bool) -> tuple[int, ...]:
+        """作答开头预填的 token（DEV-0033；规则见 batching.encode_answer_prefix）。None → ()。"""
+        return batching.adapter_answer_prefix_ids(self, answer_prefix, enable_thinking)
+
+    def _batch_kw(self, items: Sequence[ModelInputs], enable_thinking: bool,
+                  prefix_ids: Sequence[int] = ()) -> tuple[list[batching.PromptRow], dict[str, Any]]:
         """generate / generate_batch / option_logits 共用的拼批：每行的提示（_prompt_row）左填充成一批，各行的图像张量按行的顺序
         拼接，并逐行核对 M-RoPE 位置（_check_batch_positions）。"""
-        rows = [self._prompt_row(inp, enable_thinking) for inp in items]
+        rows = [batching.with_answer_prefix(self._prompt_row(inp, enable_thinking), prefix_ids) for inp in items]
         kw: dict[str, Any] = batching.batch_prompt(rows, pad_id=self._ids[END_OF_TEXT], device=self._device)
         kw.update(self._image_kw(items))
         self._check_batch_positions(kw, items)

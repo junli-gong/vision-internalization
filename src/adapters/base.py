@@ -30,6 +30,11 @@
 - DEV-0027 的接口（同样不是抽象方法，三个家族都实现）：generate_batch_budgeted（预算强制收尾的思考生成，公共实现在
   src/adapters/budget.py）、pre_projection_features（E2 的 pre_proj 参考线）、format_boxes（parse_boxes 的逆）、
   end_of_turn_token_id / stop_token_ids（公开的停止 token，替代私有的 _stop_ids()）。
+- 作答开头预填（DEV-0033，D66-2 的格式强制诊断）：generate / generate_batch 的可选关键字参数 answer_prefix（默认 None = 不预填，
+  送进模型的输入与以前逐 token 相同）。给了时只用于关思考：预填文字按本家族的分词器编码，接在每行提示（助手头；Qwen 关思考时
+  助手头以空思考块结尾，所以在思考段之后）的末尾，作为输入的一部分，不计入生成；结果的 text、raw_text 按"预填的 token 是模型
+  已经生成的前几个 token"来解码（split_answer 作用在 预填 + 生成 上），token_ids 只含生成的 token，GenerationResult.answer_prefix_ids
+  记下预填的 token。公共部分在 src/adapters/batching.py（encode_answer_prefix、with_answer_prefix、make_results 的 prefix_ids）。
 """
 
 from __future__ import annotations
@@ -153,6 +158,10 @@ class GenerationResult:
         forced 时 raw_text = 思考段的解码 + 补的 token 的解码 + 作答段的解码（分段解码，所以区间是精确的）。
     text：完整序列按本家族的剥离规则（split_answer）得到的回答，与 generate 的口径相同；answer_text：作答段（收尾之后，forced 时
         在补的 token 之后）的解码，去掉末尾的停止 token 与首尾换行（与 text 同样的清理）。unclosed 时为空串。
+
+    DEV-0033 新增的字段（作答开头预填，generate / generate_batch 的 answer_prefix）：
+    answer_prefix_ids：预填的 token（接在提示末尾，是输入的一部分，计入 n_prompt_tokens，不计入 token_ids / n_generated_tokens）。
+        非空时 text、raw_text 是 预填 + 生成 一起按 split_answer 解码的结果（等价于预填的 token 由模型自己写出）。默认 () = 没有预填。
     """
 
     text: str
@@ -176,6 +185,7 @@ class GenerationResult:
     inserted_at: int | None = None
     inserted_span: tuple[int, int] | None = None
     answer_text: str | None = None
+    answer_prefix_ids: tuple[int, ...] = ()
 
     @property
     def natural_close(self) -> bool:
@@ -222,6 +232,11 @@ class GenerationResult:
 
     def __post_init__(self) -> None:
         self._check_budget_fields()
+        if not isinstance(self.answer_prefix_ids, tuple) or any(
+                isinstance(i, bool) or not isinstance(i, int) or i < 0 for i in self.answer_prefix_ids):
+            raise ValueError(f"answer_prefix_ids 必须是非负整数的元组，收到 {self.answer_prefix_ids!r}")
+        if self.answer_prefix_ids and self.thinking_end is not None:
+            raise ValueError("预填（answer_prefix_ids）只用于关思考的 generate / generate_batch，不与预算强制收尾同用")
         if self.n_generated_tokens != len(self.token_ids):
             raise ValueError(
                 f"n_generated_tokens={self.n_generated_tokens} 与 len(token_ids)={len(self.token_ids)} 不一致"
@@ -549,12 +564,14 @@ class ModelAdapter(abc.ABC):
         enable_thinking: bool,
         allowed_token_ids: Sequence[int] | None = None,
         max_new_tokens: int,
+        answer_prefix: str | None = None,
         **gen_kwargs: Any,
     ) -> GenerationResult:
         """生成。enable_thinking、max_new_tokens 必须每次显式给出（D1）。
 
         allowed_token_ids 非空时，每一步只在这组 token 上计算 logits 并采样（简报 §4 第 4 条）；
         训练与推理的限制实现必须一致（简报 §12）。
+        answer_prefix（DEV-0033）：作答开头预填，规则见模块说明；None 时与以前逐 token 相同。
         """
 
     @abc.abstractmethod
@@ -565,12 +582,14 @@ class ModelAdapter(abc.ABC):
         enable_thinking: bool,
         max_new_tokens: int,
         allowed_token_ids: Sequence[int] | None = None,
+        answer_prefix: str | None = None,
         **gen_kwargs: Any,
     ) -> list[GenerationResult]:
         """批量生成（DEV-0011，D28-5），返回与 inputs_list 等长、同顺序的结果。
 
         约定（三个家族一致）：
-        - enable_thinking、max_new_tokens、allowed_token_ids 与 gen_kwargs 对整批相同；必填参数的规则与 generate 相同（D1）。
+        - enable_thinking、max_new_tokens、allowed_token_ids、answer_prefix 与 gen_kwargs 对整批相同；必填参数的规则与 generate
+          相同（D1）。answer_prefix（DEV-0033）的规则见模块说明：预填接在每一行提示的末尾（左填充之前），max_new_tokens 不含它。
         - 每一行送进模型的提示（思考开关、system 轮、助手头）与 generate 对同一条输入送进去的逐个相同；行间左填充，
           attention_mask 把填充位置置 0；每一行非填充 token 的位置编码与单独生成时逐个相等（Qwen 的 M-RoPE 三维位置亦然）。
         - 逐行拆分：token_ids 从第一个生成 token 到第一个停止 token（含），之后的填充不计；text、raw_text、thinking_unclosed、

@@ -16,6 +16,11 @@
 然后走 first_step_logits：调一次 model.generate(max_new_tokens=1, output_logits=True)，取原始 logits（logits 处理器之前；HF 在
 _sample 里把 lm_head 的输出转成 fp32），也就是第一个生成位置的 logits；位置编码与 generate_batch 的第一步逐个相同。
 写法查找（option_spellings）、取最大值与 softmax（score_options）与家族无关，都在这里。
+
+作答开头预填（DEV-0033，generate / generate_batch 的 answer_prefix；规则见 base 的模块说明）：家族无关的三步都在这里——
+encode_answer_prefix（按本家族的分词器编码并核对）、with_answer_prefix（把预填的 token 接在一行提示的末尾，mm_token_type_ids 记文本）、
+make_results 的 prefix_ids（split_answer 作用在 预填 + 生成 上，token_ids 只含生成的部分）。不给预填时三者都原样返回，
+送进模型的输入与结果与以前逐 token 相同。
 """
 
 from __future__ import annotations
@@ -163,15 +168,21 @@ def split_generated(gen: Sequence[int], *, stop_ids: Iterable[int], pad_id: int,
 
 def make_results(rows: Sequence[PromptRow], out: torch.Tensor, prompt_len: int, *, wall: float,
                  stop_ids: Sequence[int], pad_id: int, max_new_tokens: int,
-                 split_answer: Callable[..., tuple[str, str, bool]], enable_thinking: bool) -> list[GenerationResult]:
-    """逐行拆分并组装 GenerationResult。墙钟按行等分（batch_wall_time_s / batch_size）。"""
+                 split_answer: Callable[..., tuple[str, str, bool]], enable_thinking: bool,
+                 prefix_ids: Sequence[int] = ()) -> list[GenerationResult]:
+    """逐行拆分并组装 GenerationResult。墙钟按行等分（batch_wall_time_s / batch_size）。
+    prefix_ids（DEV-0033，作答开头预填）：非空时 text、raw_text 由 split_answer(预填 + 生成) 得到，token_ids 只含生成的部分，
+    answer_prefix_ids 记下预填；rows 的提示已经含预填（with_answer_prefix），所以 n_prompt_tokens 含它。默认 () 与以前相同。"""
     n = len(rows)
     share = wall / n
+    prefix = [int(i) for i in prefix_ids]
     results = []
     for b, row in enumerate(rows):
         ids, stopped = split_generated(out[b, prompt_len:].tolist(), stop_ids=stop_ids, pad_id=pad_id,
                                        max_new_tokens=max_new_tokens)
-        text, raw_text, unclosed = split_answer(ids, enable_thinking=enable_thinking)
+        if prefix and list(row.ids[-len(prefix):]) != prefix:
+            raise RuntimeError(f"第 {b} 行的提示不以预填的 token {prefix} 结尾（拼批与 make_results 的 prefix_ids 不一致）")
+        text, raw_text, unclosed = split_answer(prefix + ids if prefix else ids, enable_thinking=enable_thinking)
         results.append(GenerationResult(
             text=text,
             token_ids=tuple(ids),
@@ -185,8 +196,63 @@ def make_results(rows: Sequence[PromptRow], out: torch.Tensor, prompt_len: int, 
             n_image_pixels=row.n_image_pixels,
             batch_size=n,
             batch_wall_time_s=wall,
+            answer_prefix_ids=tuple(prefix),
         ))
     return results
+
+
+# ---------------------------------------------------------------------------
+# 作答开头预填（DEV-0033）
+# ---------------------------------------------------------------------------
+
+
+def encode_answer_prefix(prefix: str | None, *, encode: Callable[[str], list[int]], decode: Callable[[list[int]], str],
+                         enable_thinking: bool, forbidden_ids: Iterable[int]) -> tuple[int, ...]:
+    """answer_prefix → 预填的 token（本家族分词器的 encode，不加特殊 token）。None → ()（不预填）。
+
+    规则：预填是非空字符串；只用于关思考（开思考时助手回合的开头是思考段，预填会落进思考段里，不是"作答开头"）；编码非空、
+    解码回来与原文逐字相同（预填的 token 就是模型写出这段文字时会用的 token）；不能含 forbidden_ids（停止 token 与分词器的
+    特殊 token）。不合规就报 ValueError，不猜。"""
+    if prefix is None:
+        return ()
+    if not isinstance(prefix, str) or prefix == "":
+        raise ValueError(f"answer_prefix 必须是非空字符串或 None，收到 {prefix!r}")
+    if not isinstance(enable_thinking, bool):
+        raise TypeError(f"enable_thinking 必须是 bool，收到 {enable_thinking!r}")
+    if enable_thinking:
+        raise ValueError("answer_prefix 只用于关思考（开思考时助手回合的开头是思考段）")
+    ids = [int(i) for i in encode(prefix)]
+    if not ids:
+        raise ValueError(f"answer_prefix {prefix!r} 编码为空")
+    back = decode(ids)
+    if back != prefix:
+        raise ValueError(f"answer_prefix {prefix!r} 编码为 {ids}，解码回来是 {back!r}，不是原文")
+    bad = sorted(set(ids) & {int(i) for i in forbidden_ids})
+    if bad:
+        raise ValueError(f"answer_prefix {prefix!r} 的 token {bad} 是停止 token 或特殊 token")
+    return tuple(ids)
+
+
+def adapter_answer_prefix_ids(adapter: Any, prefix: str | None, enable_thinking: bool) -> tuple[int, ...]:
+    """三个适配器共用的 _answer_prefix_ids：用适配器的 `_encode`（不加特殊 token）与 tokenizer 的 decode，禁止的 token = 本家族的
+    停止 token（`_stop_ids()`）与分词器登记的特殊 token（all_special_ids）。"""
+    if prefix is None:
+        return ()
+    tok = adapter._tok
+    forbidden = {int(i) for i in adapter._stop_ids()} | {int(i) for i in (getattr(tok, "all_special_ids", None) or ())}
+    return encode_answer_prefix(prefix, encode=adapter._encode,
+                                decode=lambda ids: tok.decode(list(ids), skip_special_tokens=False),
+                                enable_thinking=enable_thinking, forbidden_ids=forbidden)
+
+
+def with_answer_prefix(row: PromptRow, prefix_ids: Sequence[int]) -> PromptRow:
+    """一行提示的末尾接上预填的 token（mm_token_type_ids 记 0 = 文本）；prefix_ids 为空时原样返回同一个对象。"""
+    if not prefix_ids:
+        return row
+    extra = tuple(int(i) for i in prefix_ids)
+    mm = None if row.mm_token_type_ids is None else tuple(row.mm_token_type_ids) + (0,) * len(extra)
+    return PromptRow(ids=tuple(row.ids) + extra, n_visual_tokens=row.n_visual_tokens, n_image_pixels=row.n_image_pixels,
+                     mm_token_type_ids=mm)
 
 
 def image_pixels(inputs: ModelInputs) -> int:
@@ -380,6 +446,7 @@ def option_logits_rows(model: Any, tokenizer: Any, rows: Sequence[PromptRow], kw
 
 
 __all__ = [
+    "adapter_answer_prefix_ids",
     "OptionLogitsError",
     "OptionSpellingError",
     "PromptRow",
@@ -389,6 +456,7 @@ __all__ = [
     "check_inputs_list",
     "check_options",
     "check_reserved",
+    "encode_answer_prefix",
     "first_step_logits",
     "image_pixels",
     "make_option_scores",
@@ -400,4 +468,5 @@ __all__ = [
     "run_generate",
     "score_options",
     "split_generated",
+    "with_answer_prefix",
 ]

@@ -43,6 +43,13 @@ from src.e1.prompts import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "e1"
+# 事后读数的 --tiny（DEV-0033；e1 的 fixture 不动，主评测的彩排输出因而不变）。tests/fixtures/e1_posthoc/root 与 e1 的 fixture 的差别：
+# - BLINK、CV-Bench：e1 里 prompt 字段是占位的 "p"，拆不出选项行（去偏读数要拆）；这里换成真实格式的整段提示（id 与图同 e1，
+#   CV-Bench 的题目、选项与 GT 字母另编，k = 2、3、4 各有）；
+# - RefCOCO：e1 的图是 12×9，16×16 网格回填原图（grid_to_mask）要求边长 ≥ 16，格式强制的结构强制读法必然解析成功，会撞上它；这里图放大
+#   4 倍（48×36，最近邻），标注（框、多边形、面积、图的宽高）同比放大，phash 照抄（探针剔除与 e1 相同）；
+# - NYU 点对、EmbSpatial：原样复制。清单（dev / eval 子集、NYU 点对）仍用 e1 的。tests/test_e1_posthoc.py 核对这几条。
+FIXTURE_POSTHOC_DIR = REPO_ROOT / "tests" / "fixtures" / "e1_posthoc"
 
 # 选择题与点对任务：自由作答解析为 choice；协议 v2 的标题是受限字母读数（configs/e1_prompts.json 的 letter_readout.tasks，
 # tests 钉住两者相同），自由作答只在 free 子集上作诊断
@@ -72,6 +79,14 @@ class DataPaths:
     def fixtures(cls, nyu_cache: Path | None = None) -> "DataPaths":
         """开发机彩排（--tiny）与测试：tests/fixtures/e1/ 的小数据。"""
         return cls(root=FIXTURE_DIR / "root", dev_subsets=FIXTURE_DIR / "dev_subsets.json",
+                   eval_subsets=FIXTURE_DIR / "eval_subsets.json", nyu_pairs=FIXTURE_DIR / "nyu_pairs.json",
+                   nyu_cache=nyu_cache)
+
+    @classmethod
+    def posthoc_fixtures(cls, nyu_cache: Path | None = None) -> "DataPaths":
+        """事后读数的开发机彩排（--tiny --subset debiased | debiased_dev | forced；DEV-0033）：tests/fixtures/e1_posthoc/root（见
+        FIXTURE_POSTHOC_DIR 的说明），清单用 tests/fixtures/e1 的。"""
+        return cls(root=FIXTURE_POSTHOC_DIR / "root", dev_subsets=FIXTURE_DIR / "dev_subsets.json",
                    eval_subsets=FIXTURE_DIR / "eval_subsets.json", nyu_pairs=FIXTURE_DIR / "nyu_pairs.json",
                    nyu_cache=nyu_cache)
 
@@ -361,6 +376,8 @@ __all__ = [
     "CHOICE_TASKS",
     "DataPaths",
     "EXTRA_SUBSET_OF_TASK",
+    "FIXTURE_DIR",
+    "FIXTURE_POSTHOC_DIR",
     "OVD_DEV_SOURCE",
     "Selection",
     "TASK_SUBSETS",
