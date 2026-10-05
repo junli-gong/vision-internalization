@@ -35,7 +35,7 @@ from dataclasses import dataclass
 
 from src.constants import GRID_SIZE_E3B
 from src.synth.api import TASK_BINS
-from src.synth.constants import CANONICAL_PLATFORM, CANONICAL_PLATFORM_TASKS, ROT3D_BINS, TASK_ALIASES, TASKS
+from src.synth.constants import CANONICAL_PLATFORM, CANONICAL_PLATFORM_TASKS, ROT3D_BINS, TASK_ALIASES, TASKS, VIEW_ORBIT_BINS
 from src.synth.seeding import canonical_task
 
 # a–e 的顺序（简报 §7.4 的表）
@@ -55,6 +55,10 @@ DEFAULT_N_PER_BIN_DEV = 2
 A_HEADLINE_MIN_DEG = 30
 A_HEADLINE_BINS: tuple[int, ...] = tuple(b for b, (lo, _hi) in enumerate(ROT3D_BINS) if lo >= A_HEADLINE_MIN_DEG)
 B_HEADLINE_MOVE = "orbit"
+# b 的标题只统计环绕移动里下限 ≥ 20° 的档（D72-1：只统计非真值二维捷径——原样复制或平移——已经不比平面更好地解释起伏的档；
+# 同一条规则在 a 上复现 30°。val 上的复核见 RUN-0031）
+B_HEADLINE_MIN_DEG = 20
+B_HEADLINE_BINS: tuple[int, ...] = tuple(b for b, (lo, _hi) in enumerate(VIEW_ORBIT_BINS) if lo >= B_HEADLINE_MIN_DEG)
 
 
 @dataclass(frozen=True)
@@ -135,7 +139,7 @@ def in_headline(task: str, bin_index: int, groups: dict[str, str]) -> bool:
     if t == "rotation3d":
         return int(bin_index) in A_HEADLINE_BINS
     if t == "viewpoint":
-        return groups["move"] == B_HEADLINE_MOVE
+        return groups["move"] == B_HEADLINE_MOVE and int(bin_index) in B_HEADLINE_BINS
     return True
 
 
@@ -144,5 +148,5 @@ def headline_scope_text(task: str) -> str:
     if t == "rotation3d":
         return f"档 {list(A_HEADLINE_BINS)}（下限 ≥ {A_HEADLINE_MIN_DEG}°）"
     if t == "viewpoint":
-        return "环绕移动（全部档）"
+        return f"环绕移动，档 {list(B_HEADLINE_BINS)}（下限 ≥ {B_HEADLINE_MIN_DEG}°）"
     return "全部样本"

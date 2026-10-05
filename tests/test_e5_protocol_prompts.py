@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from src.synth.constants import VIEW_ORBIT_BINS
+
 from src.e5 import prompts as P
 from src.e5.protocol import (
     A_HEADLINE_BINS,
@@ -60,7 +62,11 @@ def test_groups_and_headline():
         assert in_headline("rotation3d", a.meta["difficulty"]["bin"], g) == (a.meta["rotation"]["angle_deg"] >= 30)
         b = generate("viewpoint", "test", i)
         gb = groups_of("viewpoint", b.meta)
-        assert gb["move"] == b.meta["move"]["type"] and in_headline("viewpoint", 0, gb) == (gb["move"] == "orbit")
+        kb = b.meta["difficulty"]["bin"]
+        assert gb["move"] == b.meta["move"]["type"]
+        # D72-1：b 的标题只统计环绕移动里下限 ≥ 20° 的档
+        assert in_headline("viewpoint", kb, gb) == (gb["move"] == "orbit" and VIEW_ORBIT_BINS[kb][0] >= 20)
+        assert in_headline("viewpoint", 0, gb) is False
     assert set(groups_of("occlusion", generate("c", "test", 0).meta)) == {"family"}
     assert set(groups_of("physics", generate("d", "test", 0).meta)) == {"action"}
     assert set(groups_of("imagery", generate("e", "test", 0).meta)) == {"transform"}
