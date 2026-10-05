@@ -82,5 +82,118 @@
   },
   "fixed_length_rule": "固定长度的两种网格读法：停止 token 不在允许集合里，每行都恰好生成 n_tokens 个 token、stopped = False，这是设计如此，不是截断：记录的 truncated 记 False（另记 fixed_length = true），解析时不判截断（parse_generation 只看思考段未闭合与空回答，再交给 parse_grid_text）。多边形预填照常：写满上限没有停止 token 就是截断。",
   "report_rule": "严格读数、有效率与条件读数（三列，同 E1 的 report_columns）；与同一批 id 的主评测（RUN-0027 的 eval）、思考子集（RUN-0028）逐条配对，汇总脚本给出配对差与配对 bootstrap 95% CI（scripts/summarize_e1_posthoc.py forced）。不改标题，不挡 E2。"
+ },
+ "letter_swap": {
+  "version": 1,
+  "readout": "letter_swap",
+  "basis": "D72-2（N26 → 问题 1 选 (a)：NYU 点对改用\"对调图上的 A、B 标记\"去偏，选项文字不变，按同一个物理点平均）；DEV-0036 任务书 §1。事后读数，报告里注明\"事后\"，不改 G1 的结论。BLINK 的标记画在数据集的原图里，不做（它的标题改用自由作答，见 headline_d72）。",
+  "tasks": [
+   "rel_depth_nyu"
+  ],
+  "subsets": {
+   "letter_swap": "eval",
+   "letter_swap_dev": "dev"
+  },
+  "subsets_rule": "run_e1.py --subset letter_swap 读评测集（全量 3,270 条，D72-2 的 NYU 标题）；--subset letter_swap_dev 读开发子集（彩排用）。样本选择、顺序与主评测的 eval / dev 相同（src/e1/tasks.select）。",
+  "views": [
+   "original",
+   "labels_swapped"
+  ],
+  "view_rule": "每题两张图（v = 0、1）。original：主评测送进模型的那张渲染图（点对缓存里的 PNG，加载器按点对配置的 render_sha256 核对过）。labels_swapped：同一张未加标记的原图（fields.raw_image）经 src/data/nyu_pairs.render_pair(…, swap_labels=True) 渲染：两个环与两个标签的位置都不变，只把两个标签框里的字形互换——物理点 1（原图里标 A 的点，fields.points.A）旁边改写 \"B\"，物理点 2（原图里标 B 的点）旁边改写 \"A\"。提示不变：选项文字仍是 \"(A) A is closer\" / \"(B) B is closer\"，指图上的标记。",
+  "image_check": "运行时逐条核对（不成立就报错，不跳过）：labels_swapped 与 original 形状相同，在两个标签框（src/data/nyu_pairs.label_boxes，半开区间）之外逐像素相同，两个框里都有像素不同。readings.jsonl 每行另记这张图的像素 sha256（nyu_pairs.pixels_sha256）。",
+  "letter_logits": "每张图读一次受限字母读数：adapter.option_logits（只做一次前向，第一个生成位置的原始 logits；D37），\"{letter}\" 与 \" {letter}\" 两种写法取较大（D36-4，写法取 e1_prompts.json 的 letter_readout.spellings，运行时核对与字母表的 token 逐个相同），只在 A、B 上 softmax（fp32）。",
+  "mapping": "字母概率映射到物理点：original 里 A → 点 1、B → 点 2；labels_swapped 里 A → 点 2、B → 点 1。即第 v 张图第 i 个字母对应物理点 perm_v[i] = (i + v) mod 2（与 debiased_letter 的 k = 2 循环移位同一个排列，代码复用 src/e1/debiased 的合成）。",
+  "aggregate": "两张图的概率按物理点取算术平均（v = 0、1 依次累加，float64）；平均概率高的物理点就是答案，换回原图的字母（点 1 → A、点 2 → B）与 GT（gt.closer）比较。",
+  "tie_break": "两点的平均概率完全相等时取点 1（原图里标 A 的点），同 debiased_letter 的\"原顺序里靠前\"。",
+  "batch_layout": {
+   "layout": "order_major",
+   "rule": "先是 original 的全部样本（选择顺序），再是 labels_swapped 的全部样本；在这条序列上用 src/e1/runner.batch_plan 划批，分批键 = (v, 字母集合)。original 那一段的批划分与主评测逐批相同（同样的样本、同样的提示与图、同样的批组成）。划分在整份样本上一次算好，续跑时没写完的那一批整批重跑。"
+  },
+  "original_letter_control": "same_run_view0",
+  "original_letter_control_rule": "原字母读数在同一次运行里顺带算出：original 那张图在 A、B 上的 argmax（option_logits 的 choice），批组成同主评测。metrics 给出原字母读数与 CI、对调标记的去偏读数减原字母读数的配对差与配对 bootstrap CI；汇总脚本（validity --letter-swap）另报它与 RUN-0027 主评测字母读数逐条一致的比例（同 D68 的 s = 0 核对，预期 1.0）。",
+  "per_view_rule": "另记两张图各自的读数：该图的 argmax 字母映射到物理点后的准确率（n = 全部样本），以及该图上\"最常见字母占比\"（被选得最多的字母的条数 / n）。只按标记作答的模型两张图都偏同一个字母，对调后按物理点平均会互相抵消。",
+  "output_rule": "输出目录 <out>/<模型>/rel_depth_nyu__letter_swap[_dev]/，文件与格式同 debiased_letter（readings.jsonl 每行另有 view 与 image_sha256；predictions.jsonl 的 orders 每项另有 view；metrics.json 的事后一节叫 letter_swap，per_order 换成 per_view）。"
+ },
+ "headline_d72": {
+  "version": 1,
+  "basis": "D72-2（N26 → 问题 1 选 (a)）；DEV-0036 任务书 §2。事后修订：报告里注明\"事后\"。",
+  "tasks": {
+   "rel_depth_nyu": "letter_swap",
+   "rel_depth_blink": "free",
+   "spatial_cvbench": "letter_debiased",
+   "spatial_embspatial": "letter_debiased"
+  },
+  "rule": "四个选择题与点对任务的标题读数：NYU 点对用对调标记的去偏读数（letter_swap，全量 3,270 条）；BLINK 用自由作答（RUN-0027 的 free 子集，112 条即全量）的严格读数；CV-Bench、EmbSpatial 仍用循环移位的去偏读数（debiased_letter，§10.1）。有效性检查（debiased_letter.validity_check 的两条规则）照旧逐格给出，NYU 改用 letter_swap 的读数。两个点对任务属于 N4 分组的高重合组（C3 的监督里有相对深度），不计入 H1 的\"至少 2 项\"（D72-2）。汇总：scripts/summarize_e1_posthoc.py validity --letter-swap <运行目录>。"
+ },
+ "format_forced_poly": {
+  "version": 1,
+  "basis": "D72-3（N26 → 问题 2 选 (a)，补三点：每个点只能是两个坐标的结构强制、近矩形占比、\"至少 8 个点\"的变体）；DEV-0036 任务书 §3。事后诊断，不改 G1 的结论。",
+  "subset": "forced_poly",
+  "families": [
+   "qwen3.5"
+  ],
+  "models": [
+   "qwen3.5-0.8b",
+   "qwen3.5-2b",
+   "qwen3.5-4b",
+   "qwen3.5-9b"
+  ],
+  "task": "refexp_poly",
+  "sample_subset": "think",
+  "sample_rule": "样本取思考子集的同一批 id（configs/e1_eval_subsets.json 的 think:refexp_poly，200 句），与主评测（RUN-0027）、思考子集（RUN-0028）、预填（RUN-0030）逐条配对；提示不变（refexp_poly 本家族的原文），关思考、greedy、批配置同主评测（D43）。",
+  "enable_thinking": false,
+  "max_new_tokens": "entry",
+  "max_points": 64,
+  "coord_range": [
+   0,
+   1000
+  ],
+  "pieces": {
+   "open": "[[",
+   "xy_sep": ", ",
+   "point_sep": "], [",
+   "close": "]]"
+  },
+  "integer_rule": "每个坐标是 coord_range 内的十进制整数：只有数字，不带符号、小数点与空白；不允许前导零（\"0\" 本身可以）；所以最多 4 位，4 位时只能是 1000。",
+  "tokenization": "数字逐位：每个十进制数字是本家族分词器里的一个单 token（\"0\"…\"9\"，Qwen 的分词器本来就把数字逐位切开）；四段结构各取本家族分词器单独编码 pieces 得到的 token 序列（Qwen3.5：open = \"[[\"，xy_sep = \",\" + \" \"，point_sep = \"],\" + \" [\"，close = \"]]\"）。运行时用探针多边形核对这就是本家族对整段文字的规范切分：整段文字的编码 = 各段编码与逐位数字的拼接，解码回来逐字相同；不成立（别的家族、分词器变了）就报错，不静默换写法（src/e1/poly_forced.poly_format_ids）。",
+  "grammar": "生成必须恰好是 open 点 (point_sep 点)… close，再接一个停止 token；点 = 整数 xy_sep 整数。逐位置的 logits 处理器（src/e1/poly_forced.PolyStructureProcessor，经 generate_batch 的 logits_processor 传入，不改模型）从已生成的 token 推出每一行的状态，只留合乎语法的下一个 token，其余 logit 置 −inf：开头只留 open；写数字时只留合乎 integer_rule 的数字，已写了至少一位时另留下一段的第一个 token（x 之后是 xy_sep；y 之后是 point_sep（已写完的点数 + 1 < max_points 时）与 close（已写完的点数 + 1 ≥ min_points 时））；一段写到一半时只留这一段的下一个 token；close 之后只留本家族的停止 token（adapter.stop_token_ids）。点数由模型决定。",
+  "max_points_rule": "点数上限 max_points = 64：写满 64 个点之后只允许 close。最长的生成 = len(open) + max_points × (2 × 4 + len(xy_sep)) + (max_points − 1) × len(point_sep) + len(close) + 1 个停止 token；Qwen3.5 的切分下是 1 + 64 × 10 + 63 × 2 + 1 + 1 = 769 ≤ 1024（任务条目的 max_new_tokens），所以必然在上限内停下。运行时按本家族的切分算这个上界，超过 max_new_tokens 就拒绝运行。",
+  "variants": {
+   "poly_structured": {
+    "min_points": 3,
+    "rule": "至少 3 个点（E1 解析的下限 MIN_POLYGON_POINTS）：第 3 个点写完之前不允许 close。"
+   },
+   "poly_structured_min8": {
+    "min_points": 8,
+    "rule": "至少 8 个点：第 8 个点写完之前不允许 close（结束符之前必须已有 8 个点）。"
+   }
+  },
+  "parse_rule": "解析与光栅化同 E1（text → parse_polygons → polygons_to_mask，与 GT mask 算 inter / union）；必然以停止 token 结束，不判截断。入口断言：每行以停止 token 结束，生成的 token 序列被同一份语法逐个接受，点数在 [min_points, max_points]；不成立说明处理器没生效，报错而不是当成模型的输出。",
+  "near_rectangle": {
+   "n_points": 4,
+   "min_area_ratio": 0.95,
+   "rule": "近矩形：解析出的只有一个多边形、恰好 n_points 个点，且多边形面积（鞋带公式取绝对值，点按输出的顺序）与它的外接框面积之比 ≥ min_area_ratio；外接框面积为 0 的不算。在解析后的绝对像素坐标上算（两轴各自缩放时面积比不变，与在 0–1000 坐标上算相同）。报告两种占比：占全部 n、占有效输出。汇总时主评测、思考、预填各读法也照同一规则算。"
+  },
+  "output_rule": "输出目录 <out>/<模型>/refexp_poly__<变体名>/（poly_structured、poly_structured_min8），文件同主评测；每条记录另有 forced_poly 一节（变体、点数、近矩形的判定与面积比），metrics.json 另有 forced_poly 一节（点数分布、近矩形占比）。",
+  "report_rule": "严格读数（cIoU、gIoU）、有效率与条件读数；近矩形占比；点数分布。与同一批 id 的主评测、思考、预填、\"模型自己的框\"并列：scripts/summarize_e1_posthoc.py ownbox。"
+ },
+ "own_box": {
+  "version": 1,
+  "basis": "D72-3（\"最要紧\"：模型自己的框——同一句话、同一个模型在 E1 给出的框，光栅化后算 cIoU 与 16×16 网格的 gIoU；不需要新的模型运行；开思考与格式强制的读数都放在它旁边比较）；DEV-0036 任务书 §4。",
+  "box_task": "refexp_box",
+  "targets": [
+   "refexp_poly",
+   "grid16"
+  ],
+  "sample_subset": "think",
+  "sources": {
+   "main": "RUN-0027 主评测的 refexp_box（eval，关思考）：<main>/<模型>/refexp_box",
+   "think": "RUN-0028 思考子集的 refexp_box：<think>/<模型>/refexp_box__think"
+  },
+  "id_match_rule": "目标任务的样本 = think:<目标任务> 的 200 句（src/e1/tasks.select(任务, \"think\")，带 GT）。三个任务的样本都出自同一个加载器（src/data/loaders.load_refcoco），id 是 <数据集>_<划分方式>/<划分>/<sent_id>，先按 id 对上；再核对是同一句话：用这个样本按 refexp_box 本家族的模板渲染的指令（PromptConfig.render）必须与框记录的 instruction 逐字相同，且框记录的 image_size 等于样本 GT mask 的宽高。三条都满足才算对上；对不上的按原因（缺 id、指令不同、图的宽高不同）照实报条数，不进比较。",
+  "think_rule": "开思考的框：think:refexp_box 与 think:<目标任务> 的 id 是各自独立抽的，只在交集上做（交集的条数照报，RUN-0027/0028 的实际交集是每个任务 4 条）；与同一批交集 id 上的思考读数配对。",
+  "raster_rule": "框 = 框记录的 parsed.box（parse_one_box 换算好的原图绝对像素 xyxy，同 E1 定位）；解析失败（parsed 为 null）的框是空 mask（同 E1：失败的预测 inter = 0、union = GT 面积）。多边形对照：框的四个角 (x0, y0)、(x1, y0)、(x1, y1)、(x0, y1) 当作一个多边形，经 E1 多边形的同一个光栅化（src/executors/raster.polygons_to_mask，pycocotools）得到 mask，与 GT mask 算 inter / union；cIoU = Σinter / Σunion，gIoU = 逐条 IoU 的平均。网格对照：同一个框 mask 经 src/grid/codec.mask_to_grid 填进 16×16 网格（格内前景占比 ≥ GRID_FG_AREA_THRESHOLD = 0.5 记 1，与网格的 GT 目标同一条规则），再 grid_to_mask 回填到原图，与 GT 算 gIoU 与 cIoU，同 E1 grid16 的评分。",
+  "valid_rule": "框的有效 = E1 对框记录的有效判定（scoring.is_valid(\"refexp_box\", 记录)：解析成功且不是拒答）。",
+  "report_rule": "对每个模型、两个目标任务各一组，同一批 id（对上的思考子集 id）：多边形——主评测、思考、预填、poly_structured、poly_structured_min8、自己的框、开思考的框；网格——主评测、思考、受限（restricted）、结构强制（structured）、自己的框、开思考的框。每行给 n、有效率、严格 cIoU 与 gIoU（bootstrap 95% CI）、条件读数、近矩形占比（多边形），以及减去\"自己的框\"的配对差（同一批 id，配对 bootstrap 95% CI）；开思考的框只在交集上，与同一批交集 id 上的思考读数配对。Qwen 以外的 4 个模型没有格式强制，只列主评测、思考与两个框。汇总：scripts/summarize_e1_posthoc.py ownbox（要 --data-root 取 GT mask；只读运行目录，不跑模型）。"
  }
 }

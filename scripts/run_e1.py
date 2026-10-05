@@ -47,6 +47,20 @@
     python scripts/run_e1.py --model qwen3.5-0.8b --task rel_depth_nyu rel_depth_blink spatial_cvbench spatial_embspatial \\
         --subset free --data-root $PROJ/data --checkpoint <训练叶目录>/ckpt/final/model --checkpoint-label t_text/e3b/seed0 \\
         --out experiments/E3/00NN_e3b_ttext
+    # --subset free 配 --task all 自动展开为四个选择题与点对任务（DEV-0036，D70-5）。
+
+事后读数之二（DEV-0036；D72-2、D72-3；口径在 configs/e1_posthoc.json 的 letter_swap、format_forced_poly，主评测的配置与输出不变）：
+    # NYU 点对的"对调标记"去偏读数（D72-2）：每题读两张图（主评测的渲染图、两个标签字形互换的图），提示不变，字母概率按物理点取平均；
+    # 同一次运行顺带给出原字母读数（original 那张图，批组成同主评测）。--subset letter_swap_dev 读开发子集。可配 --checkpoint（同 debiased）。
+    python scripts/run_e1.py --model qwen3.5-4b --task all --subset letter_swap --data-root $PROJ/data --out experiments/E1/<NNNN_slug>
+    # 结构强制的多边形（D72-3，只做 Qwen）：思考子集的 id，关思考；refexp_poly__poly_structured（至少 3 个点）与
+    # refexp_poly__poly_structured_min8（至少 8 个点）两个目录。不能配 --checkpoint。
+    python scripts/run_e1.py --model qwen3.5-4b --task all --subset forced_poly --data-root $PROJ/data --out experiments/E1/<NNNN_slug>
+    # 汇总：scripts/summarize_e1_posthoc.py validity --letter-swap（D72-2 的标题表）、ownbox（"模型自己的框"基线与并列表）。
+
+C1′ 的 T 文本评测（DEV-0036，D72-4）：--checkpoint … --mask-grid-tokens：自由生成时把检查点登记的网格 token 的 logits 置为 −inf（logits
+处理器，其余不变）；config.yaml 另记 mask_grid_tokens。受限字母读数本来只在字母上取，不挂处理器。只配 --checkpoint；思考子集
+（--subset think）走预算强制收尾的生成，它不收 logits 处理器，不支持；事后读数的子集也不支持（去偏与对调标记是字母读数）。
 
 --task：一个或多个任务名，或 all（refexp_box refexp_poly grid16 count ovd rel_depth_nyu rel_depth_blink spatial_cvbench
 spatial_embspatial）。--policy：default（E1 冻结的口径，D28-3）、qwen:1024（Qwen 约 1K token）、internvl:native（InternVL 原生
@@ -85,12 +99,20 @@ from src.e1 import estimate as EST  # noqa: E402
 from src.e1.prompts import (  # noqa: E402
     COUNT_QUESTION_SOURCES,
     DEFAULT_COUNT_QUESTIONS,
+    FREE_SUBSET,
     PROMPTS_PATH,
     SUBSET_KINDS,
     TASKS,
     load_prompt_config,
 )
-from src.e1.posthoc import DEBIASED_SUBSETS, FORCED_SUBSET, POSTHOC_PATH, POSTHOC_SUBSETS  # noqa: E402
+from src.e1.posthoc import (  # noqa: E402
+    DEBIASED_SUBSETS,
+    FORCED_POLY_SUBSET,
+    FORCED_SUBSET,
+    LETTER_SWAP_SUBSETS,
+    POSTHOC_PATH,
+    POSTHOC_SUBSETS,
+)
 from src.e1.runner import RunSpec, leaf_dir, policy_dirname, read_jsonl_tolerant, run_task  # noqa: E402
 from src.e1.tasks import CHOICE_TASKS, TASK_SUBSETS, DataPaths, default_nyu_cache, select  # noqa: E402
 
@@ -103,8 +125,11 @@ RUN_DIR_NAME = re.compile(r"[0-9]{4}_[A-Za-z0-9][A-Za-z0-9_.-]*")
 CHECKPOINT_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*(/[A-Za-z0-9][A-Za-z0-9_.-]*)*")  # --checkpoint-label：相对路径，不含 ..
 TINY_BATCH_SIZE = 4  # --tiny 的默认批大小（fixture 每个任务只有几条；不受冻结的批配置约束）
 TINY_ALT_BATCH_SIZE = 3  # --tiny 验收的 B 遍批大小（与 4 不同，fixture 上也能换出不同的批组成）
-# 事后读数（DEV-0033）各自支持的任务（--task all 展开成它们；运行时再与 configs/e1_posthoc.json 核对）
-POSTHOC_TASKS = {**{s: CHOICE_TASKS for s in DEBIASED_SUBSETS}, FORCED_SUBSET: ("refexp_poly", "grid16")}
+# 事后读数（DEV-0033、DEV-0036）各自支持的任务（--task all 展开成它们；运行时再与 configs/e1_posthoc.json 核对）
+POSTHOC_TASKS = {**{s: CHOICE_TASKS for s in DEBIASED_SUBSETS}, FORCED_SUBSET: ("refexp_poly", "grid16"),
+                 **{s: ("rel_depth_nyu",) for s in LETTER_SWAP_SUBSETS}, FORCED_POLY_SUBSET: ("refexp_poly",)}
+# 格式强制类的读法只对 base 的 Qwen（D68-3、D72-3），不配检查点；去偏与对调标记的字母读数可以配（D68-4(a)）
+BASE_ONLY_SUBSETS = (FORCED_SUBSET, FORCED_POLY_SUBSET)
 
 
 def resolve_policy(tag: str, family: str):
@@ -158,6 +183,9 @@ def parse_args(argv=None):
     p.add_argument("--checkpoint-label", help="--checkpoint 时必给：结果放在 <out>/<标签>/<模型>/…（如 t_text/e3b/seed0）")
     p.add_argument("--merge-check-n", type=int, help="--checkpoint 的合并核对的开发样本数（默认取 configs/e3b_train.json 的 "
                                                      "eval.merge_check.n）")
+    p.add_argument("--mask-grid-tokens", action="store_true",
+                   help="只配 --checkpoint（DEV-0036，D72-4：C1′ 的 T 文本评测）：自由生成时把检查点登记的网格 token 的 logits 置为 −inf；"
+                        "受限字母读数不受影响；不能配 --subset think 与事后读数")
     a = p.parse_args(argv)
     if a.checkpoint is not None:
         if a.acceptance or a.estimate:
@@ -177,10 +205,22 @@ def parse_args(argv=None):
     posthoc = a.subset in POSTHOC_SUBSETS
     if posthoc and (a.acceptance or a.estimate or a.policy != "default"):
         p.error(f"--subset {a.subset}（事后读数）不能配 --acceptance、--estimate 或附加口径")
-    if a.subset == FORCED_SUBSET and a.checkpoint is not None:  # D68-3：格式强制只对 base 的 Qwen；去偏读数可以配（D68-4(a)）
-        p.error("--subset forced（格式强制诊断）只用于 base 的 Qwen，不能配 --checkpoint；训练后的模型用 --subset debiased 与 free")
+    if a.subset in BASE_ONLY_SUBSETS and a.checkpoint is not None:  # D68-3、D72-3：格式强制只对 base 的 Qwen；去偏读数可以配（D68-4(a)）
+        p.error(f"--subset {a.subset}（格式强制诊断）只用于 base 的 Qwen，不能配 --checkpoint；训练后的模型用 --subset debiased、"
+                "letter_swap 与 free")
+    if a.mask_grid_tokens:  # DEV-0036（D72-4）
+        if a.checkpoint is None:
+            p.error("--mask-grid-tokens 只配 --checkpoint（base 没有网格 token）")
+        if a.subset == "think" or posthoc:
+            p.error(f"--mask-grid-tokens 不能配 --subset {a.subset}：思考子集走预算强制收尾的生成（不收 logits 处理器），"
+                    "事后读数是字母读数或只用于 base")
     if a.task == ["all"]:
-        a.task = list(POSTHOC_TASKS[a.subset]) if posthoc else list(TASKS)
+        if posthoc:
+            a.task = list(POSTHOC_TASKS[a.subset])
+        elif a.subset == FREE_SUBSET and not (a.acceptance or a.estimate):  # DEV-0036（D70-5）：free 只有四个选择题与点对任务
+            a.task = list(CHOICE_TASKS)
+        else:
+            a.task = list(TASKS)
     bad = [t for t in a.task if t not in TASKS]
     if bad:
         p.error(f"未知任务 {bad}；可用：{list(TASKS)} 或 all")
@@ -283,11 +323,16 @@ def build_checkpoint_adapter(a):
 
 
 def make_spec(a, entry, policy, ad, task: str, subset: str, batch_size: int, checkpoint=None) -> RunSpec:
+    kw = {}
+    if getattr(a, "mask_grid_tokens", False):  # DEV-0036（D72-4）；不给时 RunSpec 与原来相同（config.yaml 没有这个键）
+        from src.e1.grid_mask import mask_record
+
+        kw["mask_grid_tokens"] = mask_record(ad)
     return RunSpec(model_key=entry.key, family=entry.family, repo=entry.repo, revision=entry.revision,
                    adapter_model_key=str(getattr(ad, "model_key", entry.key)), task=task, subset=subset,
                    policy_tag=a.policy, policy={"type": type(policy).__name__, **policy.as_dict()}, batch_size=batch_size,
                    limit=a.limit, tiny=a.tiny, map_ci_resamples=a.map_ci_resamples, count_questions=a.count_questions,
-                   checkpoint=checkpoint)
+                   checkpoint=checkpoint, **kw)
 
 
 def selection(task: str, subset: str, paths: DataPaths, limit: int | None, count_questions: str = DEFAULT_COUNT_QUESTIONS):
@@ -344,7 +389,13 @@ def cmd_posthoc(a, argv) -> int:
     """事后读数（DEV-0033）：--subset debiased | debiased_dev（去偏字母读数）或 forced（格式强制，每个任务的各种读法各一个目录）。
     口径、批配置与提示配置的核对见 configs/e1_posthoc.json 与 src/e1/posthoc_runner.py。"""
     from src.e1.posthoc import load_posthoc_config
-    from src.e1.posthoc_runner import forced_subset_name, run_debiased_task, run_forced_task
+    from src.e1.posthoc_runner import (
+        forced_subset_name,
+        run_debiased_task,
+        run_forced_poly_task,
+        run_forced_task,
+        run_letter_swap_task,
+    )
 
     prompts = load_prompt_config(a.prompts)
     posthoc = load_posthoc_config(prompts, a.posthoc_config)
@@ -355,7 +406,7 @@ def cmd_posthoc(a, argv) -> int:
     paths = data_paths(a)
     ck_info, extra, out = None, None, a.out
     if a.checkpoint:  # D68-4(a)：去偏读数在训练后的检查点上，加载方式同 T 文本评测（合并核对 → load_trained(merge=True)）
-        if a.subset not in DEBIASED_SUBSETS:
+        if a.subset not in DEBIASED_SUBSETS + LETTER_SWAP_SUBSETS:
             raise ValueError(f"--subset {a.subset} 不能配 --checkpoint（格式强制只用于 base 的 Qwen）")
         entry, policy, ad, ck_info, extra = build_checkpoint_adapter(a)
         out = Path(a.out) / a.checkpoint_label
@@ -364,12 +415,20 @@ def cmd_posthoc(a, argv) -> int:
     for task in a.task:
         sel = selection(task, posthoc.base_subset(a.subset), paths, a.limit, a.count_questions)
         spec = make_spec(a, entry, policy, ad, task, a.subset, bs, checkpoint=ck_info)
-        if a.subset in DEBIASED_SUBSETS:
-            m = run_debiased_task(ad, spec, sel, prompts, posthoc, paths, out, resume=a.resume, argv=argv, run_extra=extra)
-            d = m["debiased"]
+        if a.subset in DEBIASED_SUBSETS + LETTER_SWAP_SUBSETS:
+            run = run_debiased_task if a.subset in DEBIASED_SUBSETS else run_letter_swap_task
+            m = run(ad, spec, sel, prompts, posthoc, paths, out, resume=a.resume, argv=argv, run_extra=extra)
+            d = m["debiased"] if a.subset in DEBIASED_SUBSETS else m["letter_swap"]
             orig = (d.get("original_letter") or {}).get("headline") or [{}]
             print(f"{entry.key} {task}/{a.subset} n={m['n']} {_headline(m)} original={orig[0].get('value')} "
                   f"random={d['random_level']}")
+            continue
+        if a.subset == FORCED_POLY_SUBSET:
+            for variant in posthoc.forced_poly["variants"]:
+                m = run_forced_poly_task(ad, spec, sel, prompts, posthoc, paths, out, variant=variant, resume=a.resume, argv=argv)
+                nr = m["forced_poly"]["near_rectangle"]
+                print(f"{entry.key} {task}/{variant} n={m['n']} parse_fail={m['parse']['failure_rate']} "
+                      f"valid={m['valid']['rate']} near_rect={nr['share_of_all']} {_headline(m)}")
             continue
         for variant in posthoc.forced_variants(task):
             m = run_forced_task(ad, spec, sel, prompts, posthoc, paths, out, variant=variant, resume=a.resume, argv=argv)

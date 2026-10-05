@@ -3,8 +3,9 @@
 口径照 configs/e1_posthoc.json 的 format_forced（规则文字在配置里，这里实现）。三种读法（variant）：
 - prefill（refexp_poly）：提示不变，作答开头预填 "[["：adapter.generate_batch(answer_prefix="[[")（适配器把预填接在助手头之后，作为输入、
   不计入生成；text = split_answer(预填 + 生成)，即"解析时拼上预填"），上限同 E1 多边形；解析与截断规则同 E1。
-- restricted（grid16，主读法）：允许集合只有 0、1、换行三个 token（grid_format_ids，与 scripts/check_training_interfaces.py 的 grid16 允许集合
-  同一套构造，不加停止 token），固定生成 GRID_FIXED_TOKENS = 271 个 token。
+- restricted（grid16，主读法）：允许集合只有 0、1、换行三个 token（grid_format_ids，不加停止 token），固定生成 GRID_FIXED_TOKENS = 271
+  个 token。这三个 token 的构造只在本模块的 grid_format_ids 写一份，被 scripts/check_training_interfaces.py import（它的 grid16 允许集合
+  = 这三个 + 本家族的停止 token；D68-4(b)、D70-5）。
 - structured（grid16，补充）：在 restricted 之上用 GridStructureProcessor（HF 的 LogitsProcessor，经 generate_batch 的 logits_processor 传入）
   逐位置限制：生成的第 t 个 token（t 从 0 起）在 t mod 17 = 16 时只允许换行，其余只允许 0、1；必然是合法的 16×16 网格。
 
@@ -38,9 +39,10 @@ class ForcedOutputError(RuntimeError):
 
 
 def grid_format_ids(tokenizer: Any) -> dict[str, Any]:
-    """数字网格格式的 0、1、换行三个 token（不含停止 token）。构造与 scripts/check_training_interfaces.grid_allowed 相同：每个字符编码恰为
-    一个 token；用本家族分词器编码一张 16×16 的示例网格（src/grid/codec.grid_to_text），用到的 token 必须恰好是这三个。tests 核对两边的
-    id 相同（那边另加停止 token）。"""
+    """数字网格格式的 0、1、换行三个 token（不含停止 token）：每个字符编码恰为一个 token；用本家族分词器编码一张 16×16 的示例网格
+    （src/grid/codec.grid_to_text），用到的 token 必须恰好是这三个。约定只在这里写一份，被 scripts/check_training_interfaces.grid_allowed
+    import（那边另加停止 token；D68-4(b)、D70-5），tests 核对两边的 id 相同。返回值里的 rule 文字是运行身份的一部分（格式强制的
+    config.yaml 记它），保持原样。"""
 
     def enc(s: str) -> list[int]:
         return [int(i) for i in tokenizer(s, add_special_tokens=False)["input_ids"]]

@@ -29,6 +29,9 @@ batch_size 条；受限字母读数时字母集合一变就另起一批（genera
 三列）。RunSpec.checkpoint（manifest 的 sha256 与摘要）写进 config.yaml 的 checkpoint；适配器登记了网格 token 时，predictions 每条另记
 n_grid_tokens（生成的 token 里网格 token 的个数），metrics.json 的 diagnostics 另有 grid_tokens_in_output。base 运行两者都没有，
 输出与原来逐字节相同。
+--mask-grid-tokens（DEV-0036，D72-4，C1′ 的 T 文本评测）：RunSpec.mask_grid_tokens 写进 config.yaml 的 mask_grid_tokens（另记这个
+任务挂没挂：applied）；自由生成且检查点有网格 token 时挂 src/e1/grid_mask.GridTokenMask（网格 token 的 logits 置 −inf）。不给这个选项
+时 config.yaml 没有这个键、生成调用与原来逐个相同。
 
 断点续传（--resume）：目录里已有 predictions.jsonl 时必须给 --resume，并且 config.yaml 与本次完全相同（DEV-0017 起批大小也是
 运行身份的一部分），否则报错；末尾不完整的一行截掉；已完成的 id 必须是样本顺序的前缀。已完成的条数不在批的边界上时（上次
@@ -88,6 +91,9 @@ class RunSpec:
     # 训练后的检查点（DEV-0030 §2，run_e1 --checkpoint）：manifest 的 sha256 与摘要，写进 config.yaml 的 checkpoint；base 运行为 None
     # （config.yaml 没有这个键，与原来逐字节相同）
     checkpoint: Mapping[str, Any] | None = None
+    # 解码时屏蔽网格 token（DEV-0036，D72-4；run_e1 --checkpoint … --mask-grid-tokens）：src/e1/grid_mask.mask_record 的结果，写进
+    # config.yaml 的 mask_grid_tokens；不给时为 None（config.yaml 没有这个键，与原来逐字节相同）
+    mask_grid_tokens: Mapping[str, Any] | None = None
 
 
 def policy_dirname(tag: str) -> str:
@@ -217,7 +223,16 @@ def run_config(spec: RunSpec, sel: Selection, prompts: PromptConfig, paths: Data
     }
     if spec.checkpoint is not None:  # DEV-0030 §2：训练后的模型（base 运行没有这个键）
         cfg["checkpoint"] = json.loads(json.dumps(dict(spec.checkpoint), ensure_ascii=False))
+    if spec.mask_grid_tokens is not None:  # DEV-0036（D72-4）：不给这个选项时没有这个键
+        mg = json.loads(json.dumps(dict(spec.mask_grid_tokens), ensure_ascii=False))
+        mg["applied"] = mask_applies(ro["kind"], int(mg["n_ids"]))
+        cfg["mask_grid_tokens"] = mg
     return cfg
+
+
+def mask_applies(readout_kind: str, n_grid_ids: int) -> bool:
+    """--mask-grid-tokens 在这个任务上挂不挂处理器：自由生成（text 读法）且检查点有网格 token 才挂（受限字母读数只在字母上取）。"""
+    return readout_kind != "letter" and n_grid_ids > 0
 
 
 def generation_record(prompts: PromptConfig, spec: RunSpec, readout: Mapping[str, Any]) -> dict[str, Any]:
@@ -430,11 +445,15 @@ def budget_fields(res: Any) -> dict[str, Any]:
 
 def generate_rows(adapter: Any, inputs: Sequence[Any], *, batch_size: int, enable_thinking: bool, max_new_tokens: int,
                   decoding: Mapping[str, Any], allowed_token_ids: Sequence[int] | None = None,
-                  think_budget: tuple[int, int] | None = None) -> list[Any]:
+                  think_budget: tuple[int, int] | None = None, logits_processor: Sequence[Any] | None = None) -> list[Any]:
     """batch_size = 1 走 generate（逐条 greedy 的路径）；否则 generate_batch（即使这一批只有一行）。
     allowed_token_ids 只在受限字母读数时给（整批相同）。
     think_budget = (thinking_budget, answer_budget) 时（思考子集，D59-1）一律走 generate_batch_budgeted（batch_size = 1 时是一行的批）：
-    它固定 greedy、开思考，所以 decoding 必须是 greedy、enable_thinking 必须为 True，max_new_tokens 必须是两个预算之和。"""
+    它固定 greedy、开思考，所以 decoding 必须是 greedy、enable_thinking 必须为 True，max_new_tokens 必须是两个预算之和。
+    logits_processor（DEV-0036 的 --mask-grid-tokens）：给了才传给 generate / generate_batch（None 时调用与原来逐个相同）；
+    预算强制收尾的生成不收处理器，两者同给就报错。"""
+    if logits_processor is not None and think_budget is not None:
+        raise ValueError("预算强制收尾的生成（generate_batch_budgeted）不收 logits 处理器")
     if think_budget is not None:
         tb, ab = think_budget
         if not enable_thinking or decoding.get("do_sample") is not False or max_new_tokens != tb + ab:
@@ -447,6 +466,8 @@ def generate_rows(adapter: Any, inputs: Sequence[Any], *, batch_size: int, enabl
     kw = dict(decoding)
     if allowed_token_ids is not None:
         kw["allowed_token_ids"] = list(allowed_token_ids)
+    if logits_processor is not None:
+        kw["logits_processor"] = list(logits_processor)
     if batch_size == 1:
         if len(inputs) != 1:
             raise ValueError("batch_size = 1 时每批只能有一条")
@@ -523,6 +544,11 @@ def run_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: PromptConfig,
     max_new = prompts.max_new_tokens(spec.task, spec.family, spec.subset)
     decoding = prompts.decoding()
     think_budget = prompts.think_budget() if prompts.uses_think_budget(spec.subset) else None
+    procs = None  # DEV-0036（D72-4）：--mask-grid-tokens 且这个任务是自由生成、检查点有网格 token 时才挂
+    if spec.mask_grid_tokens is not None and mask_applies(ro["kind"], len(grid_ids)):
+        from src.e1.grid_mask import GridTokenMask
+
+        procs = [GridTokenMask(sorted(grid_ids))]
     parser = ro["parse"]
     t_all = time.perf_counter()
     if remaining and warmup:
@@ -537,7 +563,7 @@ def run_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: PromptConfig,
         allowed = table.allowed_ids(rendered[0].extras["letters"]) if table is not None else None
         results = generate_rows(adapter, inputs, batch_size=spec.batch_size, enable_thinking=enable_thinking,
                                 max_new_tokens=max_new, decoding=decoding, allowed_token_ids=allowed,
-                                think_budget=think_budget)
+                                think_budget=think_budget, logits_processor=procs)
         if len(results) != len(batch):
             raise RuntimeError("generate_batch 返回的行数与输入不同")
         lines, tlines = [], []
@@ -586,6 +612,7 @@ __all__ = [
     "ids_digest",
     "leaf_dir",
     "load_images",
+    "mask_applies",
     "policy_dirname",
     "read_jsonl_tolerant",
     "readout_info",

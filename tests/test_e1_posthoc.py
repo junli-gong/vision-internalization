@@ -39,7 +39,7 @@ from src.e1.tasks import CHOICE_TASKS, FIXTURE_DIR, FIXTURE_POSTHOC_DIR, DataPat
 
 REPO = Path(__file__).resolve().parents[1]
 E1_PROMPTS_SHA256 = "f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452"  # D60：主评测、free、extra、think 的冻结配置
-POSTHOC_SHA256 = "e02971cd232a57891e193f581eb2e09de5af164440f60409e8ba11383471b8cc"  # configs/e1_posthoc.json（DEV-0033）
+POSTHOC_SHA256 = "9a5607826bae8b2387cd9b5bbd88cd71d5887ebf86237b786546ab13ac613ce1"  # configs/e1_posthoc.json（DEV-0033；DEV-0036 在末尾新增四节，已有条目不动，见 test_e1_dev0036）
 FAMILY_KEYS = ("qwen3.5-0.8b", "gemma-4-e2b-it", "internvl3.5-2b-hf")
 
 

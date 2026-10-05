@@ -13,6 +13,8 @@
 坐标：点是整数像素 (x, y) = (列, 行)，标记以该像素为中心；深度取该像素的值。
 
 渲染：两个环形标记与两个字母合成一个 mask，交给 src/executors/overlay.render_overlay（执行器白名单里的叠加渲染）。
+对调标记（DEV-0036，D72-2；E1 事后读数 letter_swap 用）：render_pair(…, swap_labels=True) 只把两个标签位置上的字形互换，位置与环
+不变；默认 False 与原来逐位相同（点对配置记录的 render_sha256 照旧）。
 """
 
 from __future__ import annotations
@@ -314,23 +316,50 @@ def label_layout(first: Sequence[int], second: Sequence[int], H: int, W: int) ->
     return out
 
 
-def marker_mask(shape: tuple[int, int], A: Sequence[int], B: Sequence[int]) -> np.ndarray:
+def marker_mask(shape: tuple[int, int], A: Sequence[int], B: Sequence[int], *, swap_labels: bool = False) -> np.ndarray:
+    """两个环 + 两个字母的 mask。swap_labels（DEV-0036，D72-2 的"对调标记"去偏）：标签的位置照原样（label_layout(A, B) 给出的两个
+    位置），只把两个位置上的字形互换——点 A 旁边写 "B"，点 B 旁边写 "A"；环不变。默认 False 与原来逐位相同。"""
     H, W = shape
     lay = label_layout(A, B, H, W)
     if lay is None:
         raise ValueError(f"A={A}、B={B} 的标签放不下")
     m = ring_mask(shape, int(A[0]), int(A[1])) | ring_mask(shape, int(B[0]), int(B[1]))
     for k in LETTERS:
-        g = glyph(k)
+        g = glyph(_drawn_letter(k, swap_labels))
         x0, y0 = lay[k]
         m[y0 : y0 + g.shape[0], x0 : x0 + g.shape[1]] |= g
     return m
 
 
-def render_pair(rgb: np.ndarray, A: Sequence[int], B: Sequence[int]) -> np.ndarray:
-    """在 RGB 图上画 A、B 两个点标记，返回新图（不改输入）。"""
+def _drawn_letter(k: str, swap_labels: bool) -> str:
+    """位置 k（"A" 的标签位置 = 点 A 旁边）上画的字母：不对调就是 k，对调就是另一个。对调要求两个字形同样大小（标签框不变）。"""
+    if not swap_labels:
+        return k
+    other = LETTERS[1 - LETTERS.index(k)]
+    if glyph(k).shape != glyph(other).shape:
+        raise ValueError(f"字形 {k} 与 {other} 的大小不同，对调后标签框会变")
+    return other
+
+
+def label_boxes(shape: tuple[int, int], A: Sequence[int], B: Sequence[int]) -> dict[str, tuple[int, int, int, int]]:
+    """两个标签的框（半开区间 (x0, y0, x1, y1)，像素坐标），位置同 marker_mask（对调与否都一样）。"""
+    H, W = shape
+    lay = label_layout(A, B, H, W)
+    if lay is None:
+        raise ValueError(f"A={A}、B={B} 的标签放不下")
+    out = {}
+    for k in LETTERS:
+        g = glyph(k)
+        x0, y0 = lay[k]
+        out[k] = (x0, y0, x0 + g.shape[1], y0 + g.shape[0])
+    return out
+
+
+def render_pair(rgb: np.ndarray, A: Sequence[int], B: Sequence[int], *, swap_labels: bool = False) -> np.ndarray:
+    """在 RGB 图上画 A、B 两个点标记，返回新图（不改输入）。swap_labels（DEV-0036）：两个标签的字形互换、位置不变（见
+    marker_mask）；默认 False 与原来逐位相同。"""
     img = np.asarray(rgb)
-    m = marker_mask(img.shape[:2], A, B)
+    m = marker_mask(img.shape[:2], A, B, swap_labels=swap_labels)
     empty = np.zeros(img.shape[:2], dtype=bool)
     return render_overlay(img, [empty] * NYU_MARKER_COLOR_INDEX + [m])
 
