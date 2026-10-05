@@ -1,0 +1,64 @@
+{
+ "schema": 1,
+ "version": "e5-train-v1",
+ "framework": "src/e5（DEV-0037：E5 主比较的训练与训练后评测）；规则见 src/e5/train_data.py、token_grid.py、stack.py、train.py、trained_eval.py 的模块说明",
+ "status": "草稿，未冻结。数据量档、epoch 数、学习率、批、提示与映射都是暂定值（各节 basis），由 E5 预注册冻结（简报 §8.8；E5 预注册草稿 §5、§7）",
+ "e3b_config": "configs/e3b_train.json",
+ "e3b_config_basis": "同一套 token、同一种格式（简报 §8.8：训练后的系统用像素 token 网格）：网格词表（67 个 token）、网格边长、受限 logits 的允许集合规则（allowed_scope）、思考开关、模型 dtype、梯度检查点、LoRA 的结构（r、alpha、dropout）与优化器的结构（AdamW、betas、eps、梯度裁剪、warmup + 余弦、token 行的 fp32 主副本）都取这份 E3b 配置（src/e3/config.resolve_run 的网格监督），E5 只改下面 training 一节列出的几项。E3b 配置的 sha256 进运行身份",
+ "starts": {
+  "base_warmup": {"checkpoint": true, "variant": "warmup", "grid_tokens": "from_checkpoint", "role": "对照：基座 + 网格格式预热（D36-5、N5 第 2 处；DEV-0035 的 scripts/train_e3b.py --supervision warmup）"},
+  "e3b": {"checkpoint": true, "variant": "e3b", "grid_tokens": "from_checkpoint", "role": "主比较：E3b 模型（scripts/train_e3b.py --supervision grid）"},
+  "e3a": {"checkpoint": true, "variant": "full", "grid_tokens": "add", "role": "第二条证据：E3a 模型（scripts/train_e3a.py --variant full 的 ckpt/final/model；没有网格 token，先加上与 E3b 同一套 token 行、同一种初始化）"},
+  "base": {"checkpoint": false, "grid_tokens": "add", "role": "诊断：基座加网格 token 行，不预热"},
+  "basis": "variant 是起点检查点所在训练叶目录 config.yaml 的 variant（找得到时核对，防止把预热与 E3b 检查点弄混；两者的检查点结构相同）。grid_tokens：from_checkpoint = 起点检查点必须带 E3b 词表的 67 个网格 token，行取检查点里训练过的值（restore_tokens）；add = 起点不能带网格 token，按 E3b 的规则新加（add_grid_tokens：基础词表行的均值，与 E3b 开训时的初始化逐位相同）"
+ },
+ "start_lora": {
+  "mode": "merge_then_new_lora",
+  "basis": "起点检查点的 LoRA 先在内存里合并进基座，当作新的起点权重，再注入一份新的 LoRA（r、alpha、dropout 同 E3b）在 E5 上训练。理由：预算对齐——每个起点在 E5 上训练的都是同样大小、同样初始化的一份新 LoRA（同一个种子下新 LoRA 的初始值在各起点之间逐位相同，样本日程也逐个相同），起点之间只差起点权重；继续训练原 LoRA 时，E3 起点的 LoRA 已有一段学习率日程与优化器历史，基座起点却从零开始，可训练参数的出发点不对等。不存合并后的整模型（D34）：E5 检查点 = LoRA + 网格 token 行 + 起点检查点的引用（ckpt/final/e5_stack.json 与 extra.safetensors 里起点 manifest 的 sha256），评测时按顺序合并（起点 LoRA → E5 LoRA）。开训前核对：起点检查点的合并核对（scripts/check_training_interfaces.py --checkpoint，判据 v1 = D50-3，检查项与它自己的评测相同：E3b / 预热 = grid_eval，E3a = t_text）不过就拒绝训练；合并后的权重指纹必须与 factory.load_trained(起点, merge=True) 的相同（src/e5/stack.py）"
+ },
+ "data": {
+  "tiers": [1000, 4000, 16000, 64000],
+  "tiers_basis": "学习曲线的数据量档（E5 预注册草稿 §5，暂定）。数据量 = 五类合计的条数；每类 = 数据量 / 5（等量）。只训练部分任务（--tasks，例如 a–d，用于图像到文本的迁移，简报 §8.8 第 3 条）时每类条数不变、各类样本与五类全训的运行逐条相同，合计 = 每类 × 任务数",
+  "split": "train",
+  "seed_stride": 4294967296,
+  "index_basis": "样本由 (数据种子, 任务, j) 唯一决定、无状态：生成器的 train 划分序号 = 数据种子 × seed_stride + j，档 = j mod 档数（同 E5 评测集的轮转），即 src.synth.generate(任务, train, 序号, bin = 档)。j < 每类条数，所以小档是大档的前缀（同一个数据种子下嵌套，学习曲线上的点可以配对）。数据种子默认等于运行种子（--data-seed 可另给），不同数据种子的序号区间不相交（seed_stride = 2^32，数据种子 < 2^16）。train 划分的场景种子与物体身份与 val、test 不相交（D23-2；src/synth/seeding.py、shapes.py、solids.py）",
+  "tiny": {"tiers": [10, 20]}
+ },
+ "format": {
+  "order": "instruction_first",
+  "order_basis": "指令在前，同 E3b 的网格输出（简报 §8.5、§12）。零样本用 E5 提示配置的 image_first（E1 的约定）；训练后的系统沿用 E3b 的格式，起点模型学过的就是这个顺序",
+  "template": "{instruction} {ending}",
+  "endings_from": {"binary": "tasks.refseg.grid_template", "relief": "tasks.depth.grid_instruction"},
+  "template_basis": "提示 = 生成器的指令原文（sample.instruction：E5 提示配置里任务的原文，即零样本模板里的 {instruction}；它已经点名目标物体与变换）+ E3b 网格指令的结尾句（取 E3b 配置里 endings_from 所指模板的最后一句：二值网格 'Output the {n}x{n} mask grid.'，a、b 的起伏网格 'Output the {n}x{n} depth grid.'；只在 E3b 配置里写一处）。零样本模板里的输出格式说明（数字网格、33 个符号）不用：训练后的系统输出网格 token，那些说明与之矛盾。configs/e5_prompts.json 不改",
+  "relief_depth_bins": "centered",
+  "relief_basis": "a、b 的 33 档起伏网格（D28-13）映射到 E3b 的网格 token：背景 = 二值 token 0（mask 的第 0 个），起伏档 k（0 最近 … 31 最远，代码 k + 1）= 深度 token 第 (DEPTH_NUM_BINS − RELIEF_NUM_LEVELS) / 2 + k 档，即 64 档深度 token 正中间连续的 32 档（第 16–47 档，档几何中心约 1.1–4.6 m）。理由：(1) 保序且保邻接——起伏的一档对应深度 token 的一档，近 → 远同向，E3b 学到的相邻深度 token 的相似结构原样可用；(2) 取 64 档的中段：NYU 深度的主体落在这一段（E3b 训练最多的行），E5 场景的物理深度（a：相机距物体 1.8–2.8 m；b：4–5 m）也大致在这一段；(3) 起伏 0（物体平均深度）落在深度 token 的中点，对称。另一种取法（每隔一档取 32 档，铺满 0.5–10 m）会用到 NYU 里很少出现、训练得最少的两端；或新加 32 个 token（预算内，但起点模型完全没见过）。由 E5 预注册定",
+  "basis": "c、d、e 的二值网格用二值 token（0 / 1），与 E3b 的分割同一组。受限 logits 的允许集合 = 本任务的值 token + 行分隔 + 停止 token（E3b 配置的 allowed_scope = task；all 时是全部 67 个网格 token + 停止）。目标序列与 E3b 同一种格式（src/e3/targets.grid_to_ids：光栅顺序、每行之后一个行分隔、最后接本家族的回合结束 token，32 × 33 + 1 = 1057 个 token），全部格子都监督。评分时 token 映射回 E5 的格子表示（二值网格 / 33 档起伏代码），用 src/e5/scoring 的同一套评分（与零样本完全可比，tests 钉住同一个网格两条路径同分）"
+ },
+ "training": {
+  "epochs": 2,
+  "epochs_basis": "每个数据量档按固定的 epoch 数训练（不是固定步数）：步数 = ceil(epochs × 训练集条数 / 批大小)，1K 档 125 步、64K 档 8000 步（批 16）。理由：(1) 学习曲线的横轴是数据量，固定 epoch 让各档的'每条样本见几次'相同，档与档只差数据量（和随之成比例的算力）；固定步数会把数据量与重复次数绑在一起（同样 8000 步，1K 档每条见 128 次、64K 档见 2 次），小档读到的主要是记忆而不是学习效率。(2) 算力与数据量成正比，四档合计约是最大档的 1.33 倍；固定步数是 4 倍。(3) 2 而不是 1：1 个 epoch 时 1K 档只有 63 步，warmup + 余弦来不及；也不是 3：B200 的用时（见 DEV-0037 完成总结的推算）。由 E5 预注册冻结",
+  "micro_batch_size": 4,
+  "grad_accum_steps": 4,
+  "batch_basis": "每步 16 条（4 × 4），同 E3b 的暂定值",
+  "lr": {"lora": 0.0002, "token_rows": 0.0002},
+  "lr_basis": "同 E3b（LLaVA-1.5 的 LoRA 微调脚本：2e-4，warmup 3%，余弦到 0）；没有在 E5 的任何数据上调过。只能在 val 上选（简报 §4 第 7 条），由 E5 预注册定",
+  "warmup_ratio": 0.03,
+  "ckpt_every": 500,
+  "data_workers": 4,
+  "data_workers_basis": "下一步的样本由线程池在本步的 GPU 计算期间生成（生成器单核一条几十毫秒以内，DEV-0037 开发机实测、不是约定；一步 16 条远小于一步的 GPU 时间）；每条样本由 (数据种子, 任务, j) 唯一决定，线程数不改变任何结果",
+  "seeds": [0, 1, 2],
+  "seeds_basis": "D72-4：E5 主比较 3 个种子；每个运行一个，命令行给出。种子决定新 LoRA 的初始化、dropout、样本顺序；数据种子默认同运行种子（训练集随种子换一份，学习曲线的种子间差异包含抽样的差异）",
+  "tiny": {"epochs": 1, "micro_batch_size": 2, "grad_accum_steps": 2, "ckpt_every": 2, "warmup_steps": 1}
+ },
+ "eval": {
+  "subset": "eval",
+  "n_per_bin": {"rotation3d": 100, "viewpoint": 200, "occlusion": 100, "physics": 100, "imagery": 100},
+  "n_per_bin_basis": "E5 预注册草稿 §2 的评测集：test 划分，每档 100 条，b 每档 200 条（标题只用环绕，约占一半）。样本清单与零样本完全相同（src/e5/protocol.eval_items）",
+  "headline_basis": "标题口径与判定的统计范围用 src/e5/protocol.in_headline（与零样本同一个函数，不在这里另写；D72-1 / D73：b 统计环绕的 [20,180] 三档）",
+  "batch_size": 64,
+  "batch_basis": "同 E1 / E5 冻结的批大小与 E3b 的评测（D43）；单轮受限解码 max_new_tokens = n(n + 1) + 1 = 1057（src/e3/targets.seq_len），关思考，贪心",
+  "merge_check": {"n_per_task": 8, "subset": "dev", "batch_size": 64},
+  "merge_check_basis": "评测前的合并核对（起点 LoRA 合并之后，E5 LoRA 合并前 vs 合并后；src/e5/trained_eval.py）：E5 val 划分每类 n_per_task 条（合计 40 条，二值 24 条、起伏 16 条，各一批），E5 训练后的提示与允许集合，每批 3 次整段生成（未合并的受限解码；合并后的受限解码与 generate_batch），判据 v1（D50-3；scripts/check_training_interfaces.py 的同一套判定函数，CPU fp32 时逐个相同）。不通过就拒绝评测。8 条 × 5 类是暂定：B200 上约几分钟（D67 的 E3b restricted 核对是 200 条约 3–6 分钟）",
+  "tiny": {"batch_size": 2, "merge_check_n_per_task": 1, "merge_check_batch_size": 4, "n_resamples": 50}
+ }
+}

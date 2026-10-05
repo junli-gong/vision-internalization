@@ -98,10 +98,14 @@ JUDGMENT_BASELINES = (FLAT_BASELINE, GT_AFFINE, CONVEX_BASELINE)
 CURRENT_KEYS = {"iou_current_full": "mask_iou_current_full", "iou_current_grid": "mask_iou_current_grid"}
 
 class E5Failure(str, enum.Enum):
-    """E5 自己的失败原因（ParseFailure、GridParseFailure 之外）：外部预测没有给出 mask。"""
+    """E5 自己的失败原因（ParseFailure、GridParseFailure 之外）：外部预测没有给出 mask；训练后系统的网格 token 序列不合格式
+    （DEV-0037：src/e3/targets.GridIdsFailure 的三种，取值相同；截断 truncated 归到 ParseFailure.TRUNCATED，见 src/e5/token_grid）。"""
 
     EXTERNAL_MISSING = "external_missing"  # 外部预测文件里没有这个 id
     EXTERNAL_FAILURE = "external_failure"  # 外部预测明确记了失败
+    GRID_WRONG_LENGTH = "wrong_length"  # 网格 token：以停止 token 结尾，但长度不是 n(n + 1) + 1
+    GRID_ROW_SEPARATOR = "row_separator"  # 网格 token：行末不是行分隔，或行内出现了行分隔
+    GRID_FOREIGN_TOKEN = "foreign_token"  # 网格 token：格子位置出现了本任务值 token 以外的 token
 
 
 _FAILURES = {e.value: e for e in list(ParseFailure) + list(GridParseFailure) + list(E5Failure)}
