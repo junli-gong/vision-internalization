@@ -1,0 +1,91 @@
+{
+ "marker": {
+  "format_version": 1,
+  "system": "lisa-7b-v1",
+  "note": "LISA-7B-v1 外部对照（D36-5）：只经 scripts/run_e5.py --system external 评分，输出绝不进入我们的数据、标签或奖励（硬约束 1）。由 scripts/external/lisa_e5_infer.py（DEV-0019）写出。",
+  "lisa_repo": "https://github.com/dvlab-research/LISA",
+  "lisa_commit": "3cb2d4301f1af4691bd4f3938335ef06e76f155a",
+  "weights": {
+   "lisa": {
+    "repo": "xinlai/LISA-7B-v1",
+    "revision": "43c754eef75871fcc11c84d3930a402f7b0a754f"
+   },
+   "clip": {
+    "repo": "openai/clip-vit-large-patch14",
+    "revision": "32bd64288804d66eefd0ccbe215aa642df71cc41"
+   }
+  },
+  "prompt_template": "{instruction} Please output segmentation mask.",
+  "fixes_applied": [
+   "addedtoken_str_patch",
+   "vision_tower_local_snapshot"
+  ],
+  "mask_encoding": "uncompressed RLE, COCO column-major (Fortran) order"
+ },
+ "script": "scripts/external/lisa_e5_infer.py",
+ "dev_task": "DEV-0019",
+ "chat_py_defaults": {
+  "precision": "bf16",
+  "image_size": 1024,
+  "model_max_length": 512,
+  "use_mm_start_end": true,
+  "conv_type": "llava_v1"
+ },
+ "generation": {
+  "path": "LISAForCausalLM.evaluate（chat.py）",
+  "max_new_tokens": 512,
+  "num_beams": 1,
+  "do_sample": false
+ },
+ "mask": {
+  "which": "第一个 [SEG]",
+  "threshold": "logit > 0（chat.py）",
+  "size": "原图 = 画布",
+  "failures": {
+   "no_seg": "生成里没有 [SEG]",
+   "empty_mask": "mask 全空",
+   "<异常类名>": "推理抛异常"
+  }
+ },
+ "fix_descriptions": {
+  "addedtoken_str_patch": "没装 tokenizers 时，加载分词器之前给 transformers 4.31 的 AddedToken 替身补上 __str__ = content；只在没装 tokenizers 时用（RUN-0015 §4）",
+  "vision_tower_local_snapshot": "config 的 vision_tower / mm_vision_tower 改成 --clip-weights 的本地快照路径（同一份权重）再 from_pretrained；每次都用（RUN-0015 §4）"
+ },
+ "tasks": [
+  "rotation3d",
+  "viewpoint",
+  "occlusion",
+  "physics"
+ ],
+ "skipped_tasks": {
+  "imagery": "e 类没有图像（画布只有文字描述），LISA 只分割图像里的物体，不适用；跳过"
+ },
+ "inputs": {
+  "rotation3d": {
+   "inputs_sha256": "7de12625af209501902514d1e980f2b8c57aeb568bef72bd9406cd74fb4bca96",
+   "n_rows": 400,
+   "n_selected": 5,
+   "selected_ids_sha256": "6c45cd0fc6beacda2d308fc80a6b838b8a35cd83a73a8813ea9e68c272726c59"
+  },
+  "viewpoint": {
+   "inputs_sha256": "ea10163b44fcf2652f3ce7cd7f2ee9de40c14a8c9446119d197d00ef3612e91e",
+   "n_rows": 400,
+   "n_selected": 5,
+   "selected_ids_sha256": "f3e2e9ed54d406830953f46c9507107e8678c2399bcf9d8282a928629b8670f3"
+  },
+  "occlusion": {
+   "inputs_sha256": "4b92844b46fde3d53b37f101e3133ca561f3829139dcf9d2fc9090b28a786088",
+   "n_rows": 300,
+   "n_selected": 5,
+   "selected_ids_sha256": "2c13c347eacdce06a07b324d3c3a6c34d1571df5a1be26e90adf1ed1482a75b8"
+  },
+  "physics": {
+   "inputs_sha256": "ae4a2302ec86905b5b40a12e7ac0d06a901efa925c56ff528164a703c0a9d486",
+   "n_rows": 400,
+   "n_selected": 5,
+   "selected_ids_sha256": "2d180da28a54520145ccaf61e6bb8874fc5732250fa634678888753d57e87e63"
+  }
+ },
+ "limit": 5,
+ "max_consecutive_exceptions": 3
+}
