@@ -1,0 +1,3082 @@
+{
+ "experiment": "E2",
+ "task": "semseg",
+ "model": "qwen3.5-9b",
+ "family": "qwen3.5",
+ "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+ "feature_keys": [
+  "pre_proj",
+  "L0",
+  "L2",
+  "L4",
+  "L6",
+  "L8",
+  "L10",
+  "L12",
+  "L14",
+  "L16",
+  "L18",
+  "L20",
+  "L22",
+  "L24",
+  "L26",
+  "L28",
+  "L30",
+  "L32",
+  "L32_pre"
+ ],
+ "curve_keys": [
+  "L0",
+  "L2",
+  "L4",
+  "L6",
+  "L8",
+  "L10",
+  "L12",
+  "L14",
+  "L16",
+  "L18",
+  "L20",
+  "L22",
+  "L24",
+  "L26",
+  "L28",
+  "L30",
+  "L32"
+ ],
+ "single_keys": [
+  "pre_proj",
+  "L32_pre"
+ ],
+ "layers": [
+  0,
+  2,
+  4,
+  6,
+  8,
+  10,
+  12,
+  14,
+  16,
+  18,
+  20,
+  22,
+  24,
+  26,
+  28,
+  30,
+  32
+ ],
+ "references": [
+  "post_proj",
+  "pre_proj"
+ ],
+ "pre_norm_last": "L32_pre",
+ "headline": [
+  {
+   "metric": "miou",
+   "better": "↑"
+  },
+  {
+   "metric": "pixel_acc",
+   "better": "↑"
+  }
+ ],
+ "positions": {
+  "definition": "half：像素中心 y + 0.5 < H/2 归上半，否则下半；raster_quartile：像素中心所在 LLM token 格 (r, c) 的光栅下标 k = r·W_t + c，q = ⌊4k / (H_t·W_t)⌋；深度 / 语义分割 / 法向按像素划分，指代分割按 GT 掩码质心划分整条样本（src/e2/positions.py）",
+  "splits": {
+   "half": [
+    "top",
+    "bottom"
+   ],
+   "raster_quartile": [
+    "q1",
+    "q2",
+    "q3",
+    "q4"
+   ]
+  },
+  "unit": "pixel",
+  "ci": null,
+  "n_samples": 2000,
+  "n_unassigned": 0
+ },
+ "n_eval": 2000,
+ "n_val": 64,
+ "n_train": 20120,
+ "n_train_skipped": 18,
+ "post_proj_check": {
+  "phase": "eval",
+  "sample": "ade20k/val/ADE_val_00000001",
+  "equal": true,
+  "max_abs_diff": 0.0,
+  "note": "post_proj = vision_features；D21-3：与第 0 层在图像位置上逐位相同"
+ },
+ "probes": {
+  "pre_proj/linear": {
+   "feature": "pre_proj",
+   "kind": "linear",
+   "n_params": 172950,
+   "on_curve": false,
+   "eval": {
+    "n": 2000,
+    "miou": 0.2850928675430725,
+    "pixel_acc": 0.644514292027006,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.2762853523120037,
+     "high": 0.29165622819802245,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.6377120256003856,
+     "high": 0.651312387626766,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.24638975282322587,
+      "pixel_acc": 0.6742602050499937,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.27425367956038127,
+      "pixel_acc": 0.6135689719811328,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.16814613772180054,
+      "pixel_acc": 0.6825688897338617,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.27303005911181816,
+      "pixel_acc": 0.665987493792301,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.2976312927101228,
+      "pixel_acc": 0.6278955711229942,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.21546019800078606,
+      "pixel_acc": 0.5989995256234719,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.2410873410717127,
+    "pixel_acc": 0.6368166851986441,
+    "n_classes_present": 136
+   }
+  },
+  "pre_proj/conv": {
+   "feature": "pre_proj",
+   "kind": "conv",
+   "n_params": 3000214,
+   "on_curve": false,
+   "eval": {
+    "n": 2000,
+    "miou": 0.40030367805661166,
+    "pixel_acc": 0.7690011335208307,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.38558445524670126,
+     "high": 0.4089676754110107,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7624590869191339,
+     "high": 0.7760676606539941,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3740467568871112,
+      "pixel_acc": 0.8005967091470015,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.38026937405839456,
+      "pixel_acc": 0.7361315692539732,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.31562784338609806,
+      "pixel_acc": 0.8254047603348219,
+      "n": 2000,
+      "n_classes_present": 143,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.38295545212591026,
+      "pixel_acc": 0.7751963262914785,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3918824739695106,
+      "pixel_acc": 0.7302827524979554,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.3278547762086628,
+      "pixel_acc": 0.7416037643692684,
+      "n": 2000,
+      "n_classes_present": 148,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.34293894788640233,
+    "pixel_acc": 0.7765132756847358,
+    "n_classes_present": 123
+   }
+  },
+  "L0/linear": {
+   "feature": "L0",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.34101229172686087,
+    "pixel_acc": 0.7035898695958411,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.3291598627885301,
+     "high": 0.34825394050081077,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.6972019474772855,
+     "high": 0.7102913972495184,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3178985907366848,
+      "pixel_acc": 0.7387738093899532,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3187031460763277,
+      "pixel_acc": 0.6669872520677754,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.24121220508415916,
+      "pixel_acc": 0.7603650540452385,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.33299212777539594,
+      "pixel_acc": 0.7169562631876065,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.33260883743826014,
+      "pixel_acc": 0.6663738050559531,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.26844013280927564,
+      "pixel_acc": 0.6670068246304997,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.2529919906724482,
+    "pixel_acc": 0.700659322464506,
+    "n_classes_present": 144
+   }
+  },
+  "L0/conv": {
+   "feature": "L0",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.394974080021159,
+    "pixel_acc": 0.7694898771081925,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.37948099778688305,
+     "high": 0.4023750816192014,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7631981591234255,
+     "high": 0.7758050863703436,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3652498139549531,
+      "pixel_acc": 0.804336600709903,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3741314764753299,
+      "pixel_acc": 0.7332380729167506,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.30837743983048405,
+      "pixel_acc": 0.8339461508527991,
+      "n": 2000,
+      "n_classes_present": 142,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.3741699299571699,
+      "pixel_acc": 0.7739104226043576,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3786341268754534,
+      "pixel_acc": 0.7188806809093798,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.3289286540237171,
+      "pixel_acc": 0.7471904557165091,
+      "n": 2000,
+      "n_classes_present": 147,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.32050316857268174,
+    "pixel_acc": 0.7671992697990958,
+    "n_classes_present": 125
+   }
+  },
+  "L2/linear": {
+   "feature": "L2",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.3535538562032603,
+    "pixel_acc": 0.7152369956947507,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.3411804763714492,
+     "high": 0.36090556963664644,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7088409510841006,
+     "high": 0.7218731355821335,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3303726290792257,
+      "pixel_acc": 0.7499097695345648,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3304919596276351,
+      "pixel_acc": 0.6791661552225811,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.2589900832890868,
+      "pixel_acc": 0.7716925913175986,
+      "n": 2000,
+      "n_classes_present": 147,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.34459152795311465,
+      "pixel_acc": 0.7279039062533227,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.34414257518465247,
+      "pixel_acc": 0.6773095536664522,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.28057126851058733,
+      "pixel_acc": 0.6804076691703079,
+      "n": 2000,
+      "n_classes_present": 148,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.26111904336248604,
+    "pixel_acc": 0.7099136380856282,
+    "n_classes_present": 141
+   }
+  },
+  "L2/conv": {
+   "feature": "L2",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.40278038686904255,
+    "pixel_acc": 0.7736799204907887,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.38651382803778556,
+     "high": 0.41032080023714507,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7675257071294884,
+     "high": 0.7799265448277369,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3773674592091274,
+      "pixel_acc": 0.8079846938283123,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3791217871784704,
+      "pixel_acc": 0.737991918942125,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.3253556622187969,
+      "pixel_acc": 0.8376448630134687,
+      "n": 2000,
+      "n_classes_present": 142,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.38411403089820234,
+      "pixel_acc": 0.7775574095701073,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3815129997789013,
+      "pixel_acc": 0.7238710519126339,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.34200236129044004,
+      "pixel_acc": 0.7516590327478458,
+      "n": 2000,
+      "n_classes_present": 147,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.32211495198291906,
+    "pixel_acc": 0.7710053490275736,
+    "n_classes_present": 125
+   }
+  },
+  "L4/linear": {
+   "feature": "L4",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.3674922803026738,
+    "pixel_acc": 0.7264253490582724,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.35384582727588365,
+     "high": 0.3752800871516839,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7200078022949552,
+     "high": 0.7329737995585671,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.34372525451311303,
+      "pixel_acc": 0.7586834362854741,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.34449035024622304,
+      "pixel_acc": 0.6928665595687042,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.26874625911114813,
+      "pixel_acc": 0.7786039440319379,
+      "n": 2000,
+      "n_classes_present": 148,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.35762467752916555,
+      "pixel_acc": 0.7386328884800537,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3556325704848734,
+      "pixel_acc": 0.6892667040723739,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.2973814148829647,
+      "pixel_acc": 0.6958086102626251,
+      "n": 2000,
+      "n_classes_present": 148,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.27505742371053243,
+    "pixel_acc": 0.7227564184281544,
+    "n_classes_present": 138
+   }
+  },
+  "L4/conv": {
+   "feature": "L4",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.40572554431760344,
+    "pixel_acc": 0.7765005168699933,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.389881578001983,
+     "high": 0.4131461349188612,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7702845003478834,
+     "high": 0.7827842936621131,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.37601830441266115,
+      "pixel_acc": 0.8091602820229938,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3860567597623335,
+      "pixel_acc": 0.7425238531010376,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.3178841729167452,
+      "pixel_acc": 0.837174832578443,
+      "n": 2000,
+      "n_classes_present": 142,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.3861487918925931,
+      "pixel_acc": 0.7803851680204124,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3875125903272587,
+      "pixel_acc": 0.7279336849479583,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.3466658789412421,
+      "pixel_acc": 0.7567091913228758,
+      "n": 2000,
+      "n_classes_present": 147,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.33418086349950255,
+    "pixel_acc": 0.774608586339568,
+    "n_classes_present": 122
+   }
+  },
+  "L6/linear": {
+   "feature": "L6",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.37109778989814846,
+    "pixel_acc": 0.7255706486479911,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.357260570635997,
+     "high": 0.37837182496039856,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7192882772413328,
+     "high": 0.7322171499389315,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.34806470607105616,
+      "pixel_acc": 0.757197425440101,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3476695885834038,
+      "pixel_acc": 0.6926686251298394,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.26824667914171807,
+      "pixel_acc": 0.7762553581085793,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.3615362018873174,
+      "pixel_acc": 0.7379973617624397,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3596084830135636,
+      "pixel_acc": 0.6902683365644866,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.30004031117290997,
+      "pixel_acc": 0.6944664215985695,
+      "n": 2000,
+      "n_classes_present": 148,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.28014857259678605,
+    "pixel_acc": 0.7182699751670503,
+    "n_classes_present": 135
+   }
+  },
+  "L6/conv": {
+   "feature": "L6",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.4062652559698134,
+    "pixel_acc": 0.7762681345329193,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.3908192559849386,
+     "high": 0.4136970027388169,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7699096055327493,
+     "high": 0.7827744946260317,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.37419809583650193,
+      "pixel_acc": 0.8088685394410109,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.37935817703913927,
+      "pixel_acc": 0.7423532245173377,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.32461810943242136,
+      "pixel_acc": 0.8373778170866811,
+      "n": 2000,
+      "n_classes_present": 141,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.38379573780053555,
+      "pixel_acc": 0.7798099409775003,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.38098061530504634,
+      "pixel_acc": 0.7270651541663198,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.3458774858437024,
+      "pixel_acc": 0.7569973348334481,
+      "n": 2000,
+      "n_classes_present": 148,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.3358070288161617,
+    "pixel_acc": 0.7768048281325316,
+    "n_classes_present": 120
+   }
+  },
+  "L8/linear": {
+   "feature": "L8",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.38110578825701064,
+    "pixel_acc": 0.7293607585716809,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.36646782962650415,
+     "high": 0.3884915666256574,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7231242160535486,
+     "high": 0.7358079708332402,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.35883125549727224,
+      "pixel_acc": 0.7594071357608614,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3588349760277059,
+      "pixel_acc": 0.6981028591211023,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.2738850209243493,
+      "pixel_acc": 0.7754770084308923,
+      "n": 2000,
+      "n_classes_present": 147,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.37201218165981503,
+      "pixel_acc": 0.7431700452784091,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3690751576003252,
+      "pixel_acc": 0.6951539000431061,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.3164598428672165,
+      "pixel_acc": 0.7005759651794483,
+      "n": 2000,
+      "n_classes_present": 148,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.28809831025920446,
+    "pixel_acc": 0.7238298683484724,
+    "n_classes_present": 135
+   }
+  },
+  "L8/conv": {
+   "feature": "L8",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.41050438023932145,
+    "pixel_acc": 0.7774091447291169,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.39372838020755635,
+     "high": 0.4175975087045457,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7710237160371638,
+     "high": 0.7839249963302727,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.380567633345758,
+      "pixel_acc": 0.8094211814830956,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.38699278648134916,
+      "pixel_acc": 0.7441063268964094,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.3218621787666417,
+      "pixel_acc": 0.8349742488415718,
+      "n": 2000,
+      "n_classes_present": 141,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.39166786375130597,
+      "pixel_acc": 0.7832379912757395,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3867337712757159,
+      "pixel_acc": 0.7295173260957843,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.35793771864481483,
+      "pixel_acc": 0.7582440045085035,
+      "n": 2000,
+      "n_classes_present": 148,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.3291081764236689,
+    "pixel_acc": 0.7717574013678369,
+    "n_classes_present": 123
+   }
+  },
+  "L10/linear": {
+   "feature": "L10",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.3733800988660623,
+    "pixel_acc": 0.7229788416742389,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.3591127303788646,
+     "high": 0.38052720744711593,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7167292031114053,
+     "high": 0.7295406658948448,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.352651474660912,
+      "pixel_acc": 0.7531902224441227,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.35121023761770853,
+      "pixel_acc": 0.6915492854111887,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.27167245390096456,
+      "pixel_acc": 0.7691391104030735,
+      "n": 2000,
+      "n_classes_present": 147,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.3655934578678735,
+      "pixel_acc": 0.7370803030974672,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.36277382702456057,
+      "pixel_acc": 0.689128007621593,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.30414721508763626,
+      "pixel_acc": 0.6934974786422904,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.2841040943020283,
+    "pixel_acc": 0.7186738592935492,
+    "n_classes_present": 136
+   }
+  },
+  "L10/conv": {
+   "feature": "L10",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.4085509736155776,
+    "pixel_acc": 0.7766063900761997,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.39231367088517616,
+     "high": 0.4167107810344629,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7701789825188127,
+     "high": 0.7831641542054636,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3829950822305796,
+      "pixel_acc": 0.8084271374706916,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3851812842920986,
+      "pixel_acc": 0.7435025747231306,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.3241281995767007,
+      "pixel_acc": 0.8337839921599288,
+      "n": 2000,
+      "n_classes_present": 140,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.39076300251504914,
+      "pixel_acc": 0.7824057454334408,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.38886513045367876,
+      "pixel_acc": 0.7296122810171944,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.3499112588840716,
+      "pixel_acc": 0.7569907076142985,
+      "n": 2000,
+      "n_classes_present": 148,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.3503302338805013,
+    "pixel_acc": 0.769473348896795,
+    "n_classes_present": 117
+   }
+  },
+  "L12/linear": {
+   "feature": "L12",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.3691333361397053,
+    "pixel_acc": 0.7179760548424904,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.3557229890875213,
+     "high": 0.3769214798203344,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7116099305709974,
+     "high": 0.7248216786861246,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.34701453410862365,
+      "pixel_acc": 0.7486901159856758,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3476671411068568,
+      "pixel_acc": 0.686023549257946,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.2575529338028912,
+      "pixel_acc": 0.7636885972723158,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.3616465841535136,
+      "pixel_acc": 0.733566505718646,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3587530414718514,
+      "pixel_acc": 0.6840155504112839,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.3035523681295426,
+      "pixel_acc": 0.6875577949492159,
+      "n": 2000,
+      "n_classes_present": 148,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.2910223560034711,
+    "pixel_acc": 0.71616971771904,
+    "n_classes_present": 132
+   }
+  },
+  "L12/conv": {
+   "feature": "L12",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.40510129102413667,
+    "pixel_acc": 0.7739130593519744,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.389032541257757,
+     "high": 0.41238127939397995,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7670687827267046,
+     "high": 0.7804951250358944,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3729629370906601,
+      "pixel_acc": 0.8053508872991058,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3860806537137895,
+      "pixel_acc": 0.7412076034253318,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.3262963497089137,
+      "pixel_acc": 0.830468607211302,
+      "n": 2000,
+      "n_classes_present": 140,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.3812683656141244,
+      "pixel_acc": 0.7796709767869298,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3860991948229495,
+      "pixel_acc": 0.7264124192027017,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.35501454047451036,
+      "pixel_acc": 0.7554964283504457,
+      "n": 2000,
+      "n_classes_present": 147,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.32995675175188355,
+    "pixel_acc": 0.7717608508052337,
+    "n_classes_present": 119
+   }
+  },
+  "L14/linear": {
+   "feature": "L14",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.36143511106596055,
+    "pixel_acc": 0.711890873927571,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.34820017092727124,
+     "high": 0.36929853952992747,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7053838437773795,
+     "high": 0.7186763118417658,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3402680283243818,
+      "pixel_acc": 0.7435317296832817,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.33874840830899,
+      "pixel_acc": 0.6789742037574842,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.2578687443974337,
+      "pixel_acc": 0.7597754807347332,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.35417855063751386,
+      "pixel_acc": 0.7270906036023241,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3503751764430202,
+      "pixel_acc": 0.6779353679483976,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.29237798333722304,
+      "pixel_acc": 0.6795775623755271,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.2712811229699781,
+    "pixel_acc": 0.7105479596277847,
+    "n_classes_present": 139
+   }
+  },
+  "L14/conv": {
+   "feature": "L14",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.4015644924142041,
+    "pixel_acc": 0.7727259837554457,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.38497772442955897,
+     "high": 0.40891472714894994,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7661864844836501,
+     "high": 0.7792526027892112,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.36889318513089836,
+      "pixel_acc": 0.8054841819318419,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.37958149291611193,
+      "pixel_acc": 0.7386469179721457,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.32015734985243965,
+      "pixel_acc": 0.8318617881607304,
+      "n": 2000,
+      "n_classes_present": 141,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.37873857064724076,
+      "pixel_acc": 0.7784490030338113,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.38027823237602176,
+      "pixel_acc": 0.7245158571788612,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.3479210364575999,
+      "pixel_acc": 0.7523291343568957,
+      "n": 2000,
+      "n_classes_present": 148,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.32409620247896415,
+    "pixel_acc": 0.76971008528509,
+    "n_classes_present": 120
+   }
+  },
+  "L16/linear": {
+   "feature": "L16",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.3546314704857937,
+    "pixel_acc": 0.7063757462047545,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.3419854250005585,
+     "high": 0.36238531671883983,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.6999046897591225,
+     "high": 0.713223600659977,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3337072013351382,
+      "pixel_acc": 0.7390687864074507,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.33258749331408655,
+      "pixel_acc": 0.6723644656781428,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.24924309828196836,
+      "pixel_acc": 0.755498245083738,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.3471250728231549,
+      "pixel_acc": 0.7223463707630448,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.342033069829096,
+      "pixel_acc": 0.6710165055277683,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.28862730416050164,
+      "pixel_acc": 0.6733626994993548,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.26382196976065275,
+    "pixel_acc": 0.7054037236526722,
+    "n_classes_present": 140
+   }
+  },
+  "L16/conv": {
+   "feature": "L16",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.3979032023987876,
+    "pixel_acc": 0.7702143080833934,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.38253760667790593,
+     "high": 0.4058716544856807,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7635202557773787,
+     "high": 0.7772103182659605,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.367016865385532,
+      "pixel_acc": 0.803334332740352,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3750343056208493,
+      "pixel_acc": 0.7357588263456252,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.312530764793218,
+      "pixel_acc": 0.8294063184627366,
+      "n": 2000,
+      "n_classes_present": 141,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.37771963055626906,
+      "pixel_acc": 0.7766390162509803,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.37256697576119696,
+      "pixel_acc": 0.7217871530771126,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.34971433334358903,
+      "pixel_acc": 0.7492581662230766,
+      "n": 2000,
+      "n_classes_present": 147,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.3402502408775291,
+    "pixel_acc": 0.7653212011120987,
+    "n_classes_present": 117
+   }
+  },
+  "L18/linear": {
+   "feature": "L18",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.34544705469034165,
+    "pixel_acc": 0.69886110517019,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.3332464368894369,
+     "high": 0.35328169626169337,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.6923504145078364,
+     "high": 0.7056989064681775,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.32617670290074635,
+      "pixel_acc": 0.7323944171157014,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.32306008266767927,
+      "pixel_acc": 0.6639756716805535,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.24455760494082207,
+      "pixel_acc": 0.749888671340534,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.3400531558797813,
+      "pixel_acc": 0.7145175475256553,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3326924364480086,
+      "pixel_acc": 0.662120740246225,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.28013854679742245,
+      "pixel_acc": 0.6655286827812653,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.25472330315319824,
+    "pixel_acc": 0.6919122991040161,
+    "n_classes_present": 142
+   }
+  },
+  "L18/conv": {
+   "feature": "L18",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.3927417529640797,
+    "pixel_acc": 0.7672016750881004,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.3769110802444324,
+     "high": 0.4014657799564707,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7605393920139106,
+     "high": 0.7739258861284739,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3622464430464184,
+      "pixel_acc": 0.8015615907184953,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3663757298981986,
+      "pixel_acc": 0.7314563078132729,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.30936599464871484,
+      "pixel_acc": 0.8278067795397193,
+      "n": 2000,
+      "n_classes_present": 141,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.37229073178951466,
+      "pixel_acc": 0.7745320155325983,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.36794224897706834,
+      "pixel_acc": 0.7189761669190678,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.33456851602448806,
+      "pixel_acc": 0.7436344676137727,
+      "n": 2000,
+      "n_classes_present": 148,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.313012813079366,
+    "pixel_acc": 0.7608394820804727,
+    "n_classes_present": 123
+   }
+  },
+  "L20/linear": {
+   "feature": "L20",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.338027248154384,
+    "pixel_acc": 0.6902697428674744,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.32630883973558494,
+     "high": 0.34463670055536677,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.683785038201202,
+     "high": 0.6970219767419955,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3151244243767448,
+      "pixel_acc": 0.72407421909927,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.31841295049865587,
+      "pixel_acc": 0.6551022112752319,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.23698891009417025,
+      "pixel_acc": 0.7405397403426508,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.32885380062709646,
+      "pixel_acc": 0.7073556954577609,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3312843579939467,
+      "pixel_acc": 0.6552238996757395,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.2678726949155111,
+      "pixel_acc": 0.6546011236808174,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.2590515813619421,
+    "pixel_acc": 0.6856602688101571,
+    "n_classes_present": 137
+   }
+  },
+  "L20/conv": {
+   "feature": "L20",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.39425442212314493,
+    "pixel_acc": 0.7636397096274787,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.3780856559933855,
+     "high": 0.4006546567068048,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7572535484538201,
+     "high": 0.7701169156341054,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3568006300511932,
+      "pixel_acc": 0.7975327533317892,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3760690932609159,
+      "pixel_acc": 0.7283800393679674,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.3046819724680199,
+      "pixel_acc": 0.8245337608408934,
+      "n": 2000,
+      "n_classes_present": 141,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.3676813486783093,
+      "pixel_acc": 0.7700424791944768,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3770114893590713,
+      "pixel_acc": 0.7158111554836385,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.34480229130635287,
+      "pixel_acc": 0.740320196223709,
+      "n": 2000,
+      "n_classes_present": 147,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.3194842544498526,
+    "pixel_acc": 0.7664742880436201,
+    "n_classes_present": 123
+   }
+  },
+  "L22/linear": {
+   "feature": "L22",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.32958490855490213,
+    "pixel_acc": 0.6823512920247945,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.3176258642962386,
+     "high": 0.33587983113419545,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.6761023974805161,
+     "high": 0.6888770566646968,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.30342896154391713,
+      "pixel_acc": 0.7163326173909592,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.30935905190788615,
+      "pixel_acc": 0.6469997804330586,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.2276425458128349,
+      "pixel_acc": 0.7329250201026694,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.31799937040148296,
+      "pixel_acc": 0.69941686112726,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3218829121594075,
+      "pixel_acc": 0.6475154829630726,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.2591326036327536,
+      "pixel_acc": 0.6461755165955857,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.24978799666805812,
+    "pixel_acc": 0.6753058826105462,
+    "n_classes_present": 139
+   }
+  },
+  "L22/conv": {
+   "feature": "L22",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.39454507552922263,
+    "pixel_acc": 0.7633121369187776,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.3789895870593767,
+     "high": 0.4015795062879462,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7569192986208814,
+     "high": 0.769913966422019,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3616191871912276,
+      "pixel_acc": 0.7982687821777369,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3734909630185203,
+      "pixel_acc": 0.7269459788374113,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.30909000792301883,
+      "pixel_acc": 0.8252763879301334,
+      "n": 2000,
+      "n_classes_present": 141,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.373240701088558,
+      "pixel_acc": 0.7706156775630738,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3771833018232105,
+      "pixel_acc": 0.7139003090164615,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.33730146195594335,
+      "pixel_acc": 0.739514975498101,
+      "n": 2000,
+      "n_classes_present": 147,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.33021508825412027,
+    "pixel_acc": 0.7679422486192502,
+    "n_classes_present": 121
+   }
+  },
+  "L24/linear": {
+   "feature": "L24",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.3273449888880161,
+    "pixel_acc": 0.676371803553683,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.31623981553147884,
+     "high": 0.33279696614319826,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.6699078985542537,
+     "high": 0.6827927429274936,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3004934773086903,
+      "pixel_acc": 0.7085519836178074,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.30768663157150333,
+      "pixel_acc": 0.6428940625797018,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.2212142388815195,
+      "pixel_acc": 0.7229782026118091,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.316820692463245,
+      "pixel_acc": 0.6939693634231765,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.32023797414512906,
+      "pixel_acc": 0.6431935323410236,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.25863190961377397,
+      "pixel_acc": 0.6421923403036236,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.24535139583818533,
+    "pixel_acc": 0.6678984407643114,
+    "n_classes_present": 138
+   }
+  },
+  "L24/conv": {
+   "feature": "L24",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.39479493381111697,
+    "pixel_acc": 0.7605837427525408,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.37885828878397215,
+     "high": 0.4010720089765593,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7541351923294713,
+     "high": 0.7670280357059572,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.36173984581763435,
+      "pixel_acc": 0.7949942422889908,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.375052891329361,
+      "pixel_acc": 0.7247857519404619,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.31254678169030764,
+      "pixel_acc": 0.8225086919658324,
+      "n": 2000,
+      "n_classes_present": 140,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.3715783818171989,
+      "pixel_acc": 0.7668426458589694,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3771220863065091,
+      "pixel_acc": 0.7109073701830705,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.34242576881679687,
+      "pixel_acc": 0.7381543013349404,
+      "n": 2000,
+      "n_classes_present": 147,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.3251001379365105,
+    "pixel_acc": 0.7582348568948405,
+    "n_classes_present": 119
+   }
+  },
+  "L26/linear": {
+   "feature": "L26",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.31778207191117186,
+    "pixel_acc": 0.6676162041064383,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.3068738580221521,
+     "high": 0.32315146099081987,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.6611213040176919,
+     "high": 0.674197869453844,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.28963427265522074,
+      "pixel_acc": 0.6989814202338066,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.29908209528069546,
+      "pixel_acc": 0.6349862878346026,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.2122023593797544,
+      "pixel_acc": 0.7121994558634812,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.305765372076426,
+      "pixel_acc": 0.6856407211026065,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3131957256945629,
+      "pixel_acc": 0.6354790264265499,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.2473791717779154,
+      "pixel_acc": 0.6341022645189702,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.24042052224368254,
+    "pixel_acc": 0.65379181655472,
+    "n_classes_present": 136
+   }
+  },
+  "L26/conv": {
+   "feature": "L26",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.39018094849433027,
+    "pixel_acc": 0.7581714707781415,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.3752717202342014,
+     "high": 0.39674578593929805,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7520669175021565,
+     "high": 0.7646500735188975,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3576401322563628,
+      "pixel_acc": 0.7921874656765227,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.36870048537320294,
+      "pixel_acc": 0.7227838917182648,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.30290321114069024,
+      "pixel_acc": 0.8191122663967757,
+      "n": 2000,
+      "n_classes_present": 141,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.3680404878076236,
+      "pixel_acc": 0.7646602282831616,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.37348759486944727,
+      "pixel_acc": 0.7085095707052292,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.3309932978521288,
+      "pixel_acc": 0.7365302790707479,
+      "n": 2000,
+      "n_classes_present": 147,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.31997830601121413,
+    "pixel_acc": 0.7495031310393275,
+    "n_classes_present": 119
+   }
+  },
+  "L28/linear": {
+   "feature": "L28",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.3076629659236971,
+    "pixel_acc": 0.6577513327695317,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.29713039796537677,
+     "high": 0.3128618099720286,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.6513475854930655,
+     "high": 0.6642940886637523,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.27709651521572104,
+      "pixel_acc": 0.6887175278047768,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.2894908254488108,
+      "pixel_acc": 0.6255365268152467,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.20035722717522306,
+      "pixel_acc": 0.7004059931126574,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.29346153928499946,
+      "pixel_acc": 0.6768886730980507,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.30395672415756714,
+      "pixel_acc": 0.6254573265257828,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.2397129838063393,
+      "pixel_acc": 0.625290519926194,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.2289221886909455,
+    "pixel_acc": 0.6398276691071686,
+    "n_classes_present": 139
+   }
+  },
+  "L28/conv": {
+   "feature": "L28",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.388673013777141,
+    "pixel_acc": 0.7552072910321456,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.37361932186319735,
+     "high": 0.39511063261821894,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7489003245736792,
+     "high": 0.7618009254630997,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3548717332823632,
+      "pixel_acc": 0.7888870634339813,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.36897438592237985,
+      "pixel_acc": 0.7201694915454889,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.30536300889004214,
+      "pixel_acc": 0.8158297211006454,
+      "n": 2000,
+      "n_classes_present": 140,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.36503365923980025,
+      "pixel_acc": 0.7614596119505502,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.37389971350509504,
+      "pixel_acc": 0.7056267685926406,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.32932137792118993,
+      "pixel_acc": 0.7340618257898097,
+      "n": 2000,
+      "n_classes_present": 148,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.3084792972325291,
+    "pixel_acc": 0.745036634524909,
+    "n_classes_present": 121
+   }
+  },
+  "L30/linear": {
+   "feature": "L30",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.3043823102915055,
+    "pixel_acc": 0.6526073414934196,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.29368691002230607,
+     "high": 0.30917981688889185,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.6462945312051566,
+     "high": 0.6590260278023121,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.27191957704369285,
+      "pixel_acc": 0.682957203861923,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.28793803298570947,
+      "pixel_acc": 0.6210337198124938,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.19503293079524175,
+      "pixel_acc": 0.6940721914356217,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.2887706929439773,
+      "pixel_acc": 0.6717946807910328,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3029500861326145,
+      "pixel_acc": 0.6210897664086957,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.2363741573456763,
+      "pixel_acc": 0.6205802805779642,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.22124507513637295,
+    "pixel_acc": 0.6320302908595608,
+    "n_classes_present": 140
+   }
+  },
+  "L30/conv": {
+   "feature": "L30",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.3887136061068292,
+    "pixel_acc": 0.7537826802543723,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.3735342698797413,
+     "high": 0.39533055884852986,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7477037533194474,
+     "high": 0.7604071605776426,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3560867695431591,
+      "pixel_acc": 0.7878844103083744,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.3673441746598518,
+      "pixel_acc": 0.7183059090480712,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.2971648699510834,
+      "pixel_acc": 0.814449861897041,
+      "n": 2000,
+      "n_classes_present": 142,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.3656504928480568,
+      "pixel_acc": 0.7605522962609059,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3699775726155,
+      "pixel_acc": 0.7040861730654074,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.3358613405701819,
+      "pixel_acc": 0.7321778279629211,
+      "n": 2000,
+      "n_classes_present": 147,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.31355776744678365,
+    "pixel_acc": 0.7496060142590744,
+    "n_classes_present": 122
+   }
+  },
+  "L32/linear": {
+   "feature": "L32",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.2997504514741058,
+    "pixel_acc": 0.6473879789920975,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.28904562742509127,
+     "high": 0.3043208448993852,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.6411304758359553,
+     "high": 0.6541888801702646,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.2657898294733091,
+      "pixel_acc": 0.6778940517711102,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.2835375707167758,
+      "pixel_acc": 0.6156518482248321,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.18769956925636536,
+      "pixel_acc": 0.6891847888450792,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.28269080676294883,
+      "pixel_acc": 0.6665216401803363,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.2970877068547522,
+      "pixel_acc": 0.615769076809979,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.23473819870833101,
+      "pixel_acc": 0.615166223303288,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.216575267776111,
+    "pixel_acc": 0.6305495073753471,
+    "n_classes_present": 141
+   }
+  },
+  "L32/conv": {
+   "feature": "L32",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": true,
+   "eval": {
+    "n": 2000,
+    "miou": 0.3865323147877812,
+    "pixel_acc": 0.7516449484252854,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.37061311696227395,
+     "high": 0.3934865447749317,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7454789493594176,
+     "high": 0.7583582806390824,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.3492040035229382,
+      "pixel_acc": 0.7851518200043902,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.36424618250910923,
+      "pixel_acc": 0.7167870214236813,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.29723483086825075,
+      "pixel_acc": 0.8116750145304275,
+      "n": 2000,
+      "n_classes_present": 141,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.3590026667717901,
+      "pixel_acc": 0.7580767441442894,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3669415971133623,
+      "pixel_acc": 0.7025569043692047,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.33290050148196704,
+      "pixel_acc": 0.7304530556489224,
+      "n": 2000,
+      "n_classes_present": 147,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.3222085436256406,
+    "pixel_acc": 0.7413140166838789,
+    "n_classes_present": 117
+   }
+  },
+  "L32_pre/linear": {
+   "feature": "L32_pre",
+   "kind": "linear",
+   "n_params": 614550,
+   "on_curve": false,
+   "eval": {
+    "n": 2000,
+    "miou": 0.29860099468834905,
+    "pixel_acc": 0.6460889177423367,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.2881301952152054,
+     "high": 0.30336164420847517,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.639811322700802,
+     "high": 0.6528552984480245,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.26590775829348046,
+      "pixel_acc": 0.6769174667076467,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.2824362478226953,
+      "pixel_acc": 0.6140173079872709,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.1877548699562152,
+      "pixel_acc": 0.6884301050595216,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.2827509476744059,
+      "pixel_acc": 0.6653555439478213,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.2966596960049216,
+      "pixel_acc": 0.6149401395751272,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.2327450159087105,
+      "pixel_acc": 0.6126927293467724,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.2149664790378853,
+    "pixel_acc": 0.6281377507328555,
+    "n_classes_present": 142
+   }
+  },
+  "L32_pre/conv": {
+   "feature": "L32_pre",
+   "kind": "conv",
+   "n_params": 9783190,
+   "on_curve": false,
+   "eval": {
+    "n": 2000,
+    "miou": 0.38804415089164107,
+    "pixel_acc": 0.7514437732657246,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.37178912798551883,
+     "high": 0.39466506771133913,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.7452441022548671,
+     "high": 0.7580930520744903,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "eval_by_position": {
+    "half": {
+     "top": {
+      "miou": 0.35345093209722606,
+      "pixel_acc": 0.7842258610784036,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 2000
+     },
+     "bottom": {
+      "miou": 0.37046517585057764,
+      "pixel_acc": 0.7173398545743973,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1995
+     }
+    },
+    "raster_quartile": {
+     "q1": {
+      "miou": 0.2956294638543085,
+      "pixel_acc": 0.8106738526297875,
+      "n": 2000,
+      "n_classes_present": 141,
+      "n_used": 2000
+     },
+     "q2": {
+      "miou": 0.36375655893374687,
+      "pixel_acc": 0.7571782638651481,
+      "n": 2000,
+      "n_classes_present": 150,
+      "n_used": 1998
+     },
+     "q3": {
+      "miou": 0.3747423106535705,
+      "pixel_acc": 0.7041815949782344,
+      "n": 2000,
+      "n_classes_present": 149,
+      "n_used": 1994
+     },
+     "q4": {
+      "miou": 0.3322845618188339,
+      "pixel_acc": 0.7299973640711795,
+      "n": 2000,
+      "n_classes_present": 148,
+      "n_used": 1986
+     }
+    }
+   },
+   "val_final": {
+    "n": 64,
+    "miou": 0.3199376436595796,
+    "pixel_acc": 0.7475605728705648,
+    "n_classes_present": 121
+   }
+  }
+ },
+ "complete": true
+}

@@ -1,0 +1,266 @@
+experiment: E2
+framework: src/e2（DEV-0023）
+model:
+  key: qwen3.5-4b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-4B
+  revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+  adapter_model_key: qwen3.5-4b
+  tiny: false
+  dtype: bf16
+image_policy:
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+task: normals
+input:
+  order: image_first
+  instruction: Describe this image.
+layers:
+  spec: all
+  list:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+  - 16
+  - 17
+  - 18
+  - 19
+  - 20
+  - 21
+  - 22
+  - 23
+  - 24
+  - 25
+  - 26
+  - 27
+  - 28
+  - 29
+  - 30
+  - 31
+  - 32
+  num_layers: 32
+  hidden_size: 2560
+  pre_norm_last: L32_pre
+  convention: 0 = 视觉特征并入之后的嵌入输出；i = 第 i 个 decoder 层输出；num_layers = 最终归一化之后（D19）；L{N}_pre
+    = 最后一个 decoder 层的原始输出（最终归一化之前，单列；D53-3）
+references:
+- post_proj
+- pre_proj
+feature_keys:
+- pre_proj
+- L0
+- L1
+- L2
+- L3
+- L4
+- L5
+- L6
+- L7
+- L8
+- L9
+- L10
+- L11
+- L12
+- L13
+- L14
+- L15
+- L16
+- L17
+- L18
+- L19
+- L20
+- L21
+- L22
+- L23
+- L24
+- L25
+- L26
+- L27
+- L28
+- L29
+- L30
+- L31
+- L32
+- L32_pre
+training:
+  steps: 1000
+  batch_size: 8
+  eval_every: 100
+  ckpt_every: 100
+  probe_chunk: 8
+  probe_chunk_max_elements: 134217728
+  out_channels: 3
+  holdout:
+    group: idx
+    min_items: 32
+    n_val: 32
+  loss:
+    kind: cosine
+    basis: 预测逐像素单位化后 1 − cos(预测, GT) 在有效掩码（GT 非 (0,0,0)）上的平均
+  optim:
+    optimizer: adamw
+    lr:
+      linear: 0.001
+      conv: 0.0005
+    betas:
+    - 0.9
+    - 0.999
+    eps: 1.0e-08
+    weight_decay: 0.0001
+    schedule: warmup_cosine
+    warmup_steps: 100
+    min_lr_ratio: 0.0
+  feature_norm:
+    kind: per_channel_standardize
+    n_samples: 256
+    eps: 1.0e-06
+  probes:
+    linear:
+      kind: conv1x1
+    conv:
+      kind: conv3x3_gelu_conv3x3
+      hidden: 256
+      kernel: 3
+      padding: 1
+  upsample:
+    mode: bilinear
+    align_corners: false
+    impl: separable_matmul
+  bootstrap_resamples: 1000
+seed: 20261002
+config:
+  path: configs/e2_probes.json
+  sha256: 095685ed58274616677b391a575d01b1da18131defa445d4ddaaa5158ccf4ece
+  version: e2-probes-v1
+data:
+  train_pool:
+    set: nyu_normals/train
+    n_total: 795
+    n_missing: 0
+    n_dedupe_excluded: 50
+    n_kept: 745
+    role: train
+  train_exclusions_sha256: 4ddb8fc2bab1ac3ca0d764150cd5e3a6148c17dc183e1e2ff74cbf1de617bd0b
+  dedupe:
+    schema: 2
+    legacy: false
+    max_hamming: 8
+    eval_sets:
+    - ade20k/val
+    - blink_reldepth/val
+    - coco_val2017/e1sub500
+    - coco_val2017_full/val2017
+    - countbench/eval
+    - cvbench/test
+    - embspatial/test
+    - nyu_normals/test
+    - nyuv2/dev_train
+    - nyuv2/test
+    - odinw13/eval
+    - probe/D20
+    - refcoco/eval
+    required_eval_sets:
+    - nyu_normals/test
+  holdout:
+    group: idx
+    n_groups: 745
+    n_held_groups: 32
+    held_groups:
+    - '24'
+    - '112'
+    - '121'
+    - '223'
+    - '278'
+    - '368'
+    - '375'
+    - '393'
+    - '450'
+    - '460'
+    - '491'
+    - '496'
+    - '504'
+    - '514'
+    - '601'
+    - '643'
+    - '661'
+    - '702'
+    - '849'
+    - '864'
+    - '913'
+    - '968'
+    - '981'
+    - '1024'
+    - '1043'
+    - '1116'
+    - '1161'
+    - '1311'
+    - '1313'
+    - '1345'
+    - '1350'
+    - '1427'
+    n_held_items: 32
+    n_val: 32
+    n_train: 713
+    n_stats: 256
+  train_ids_sha256: c5a71caa95c570ee4e80f5c915de758c26965be283ffeebec158f6b918f6a992
+  val_ids:
+  - nyu_normals/train/1024
+  - nyu_normals/train/1043
+  - nyu_normals/train/1116
+  - nyu_normals/train/112
+  - nyu_normals/train/1161
+  - nyu_normals/train/121
+  - nyu_normals/train/1311
+  - nyu_normals/train/1313
+  - nyu_normals/train/1345
+  - nyu_normals/train/1350
+  - nyu_normals/train/1427
+  - nyu_normals/train/223
+  - nyu_normals/train/24
+  - nyu_normals/train/278
+  - nyu_normals/train/368
+  - nyu_normals/train/375
+  - nyu_normals/train/393
+  - nyu_normals/train/450
+  - nyu_normals/train/460
+  - nyu_normals/train/491
+  - nyu_normals/train/496
+  - nyu_normals/train/504
+  - nyu_normals/train/514
+  - nyu_normals/train/601
+  - nyu_normals/train/643
+  - nyu_normals/train/661
+  - nyu_normals/train/702
+  - nyu_normals/train/849
+  - nyu_normals/train/864
+  - nyu_normals/train/913
+  - nyu_normals/train/968
+  - nyu_normals/train/981
+  stats_ids_sha256: 196a04b46b55edde4394f449f9bed4db1bf364fd542c74c61a49f5930abcbb64
+  eval:
+    n: 654
+    ids_sha256: 797e05f6ec08c68ea590736d18718d888262ecac0f67baa62f6a25e159aeca77
+    stats:
+      set: nyu_normals/test
+      n_total: 654
+      n_missing: 0
+      n_dedupe_excluded: 0
+      n_kept: 654
+      role: eval
+    subset: null
+eval_limit: null
