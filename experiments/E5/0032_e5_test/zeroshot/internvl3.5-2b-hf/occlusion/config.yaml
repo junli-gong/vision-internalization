@@ -1,0 +1,61 @@
+experiment: E5
+framework: src/e5（DEV-0018；DEV-0028）
+system: zeroshot
+task: occlusion
+task_letter: c
+subset: eval
+data:
+  generator: src.synth.generate
+  split: test
+  n_per_bin: 100
+  n_samples: 300
+  sample_ids_sha256: d3c7f8190c0755e80768534462cf0d3b97a6d2091b1c002452fef5e0718f956e
+  index_rule: 序号 0..B·n−1，档 = 序号 mod B（src/e5/protocol.py）
+  limit: null
+  task_generator_version: 2
+  synth_generator_version: 5
+  platform:
+    machine: x86_64
+    system: Linux
+n_resamples: 1000
+tiny: false
+gate:
+  rule: D59-4：配对 bootstrap 95% CI，判定条件同时胜过 copy_flat、gt_affine_upper、copy_convex
+  convex_prior: null
+model:
+  key: internvl3.5-2b-hf
+  family: internvl3.5
+  repo: OpenGVLab/InternVL3_5-2B-HF
+  revision: 3f301ffcf3dcbb47893afae6650ea3e78d96fb6d
+  adapter_model_key: internvl3.5-2b-hf
+image_policy:
+  type: TilePolicy
+  crop_to_patches: false
+  max_patches: 1
+generation:
+  enable_thinking: false
+  mode: plain
+  max_new_tokens: 2048
+  max_new_tokens_override: null
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+batching:
+  batch_size: 64
+  padding: left
+  order: eval_set_order
+  path: generate_batch
+prompt:
+  config: configs/e5_prompts.json
+  config_sha256: c0e59d3589cfb51a29eb271d1e1527604899a062408f5d429c9acc4f80467ec4
+  format: binary_image
+  template: '{instruction} Answer with a {n}x{n} binary grid over the image. Split
+    the image into {n} rows (top to bottom) and {n} columns (left to right) of equal
+    size. Output exactly {n} lines, each with {n} digits and no spaces: 1 if the cell
+    is mostly covered by the {target} as described above, otherwise 0. Output only
+    the grid.'
