@@ -14,6 +14,10 @@ data.tiny.tiers；d 的数据只在规范平台上生成，非规范平台上只
     python scripts/train_e5.py --tiny --init base --model qwen3.5-0.8b --n-train 10 --seed 0 --out <dir>
 
 --n-train 必须是配置的数据量档之一（--tiny 时是 data.tiny.tiers 之一）；--seed 必须在配置的 training.seeds 里；--data-seed 默认等于 --seed。
+小档（DEV-0038，D77-3）：training.min_steps 所列的档（1K、4K；--tiny 时 10 条的档）步数 = max(按 epoch 的步数, 下限)，并在 val 划分上
+选检查点（selection 一节；src/e5/val_select.py），final/ 就是 val 上最好的那一步；16K、64K 照旧固定 epoch、取最后一步。
+配种子（D77-3）：起点检查点必须来自 E3 的同一个种子（它训练叶目录 config.yaml 的 seed = --seed），不符或核对不了就拒绝训练（退出码 2）；
+--allow-seed-mismatch 放开，记进运行身份（config.yaml 的 seed_pairing）。
 评测：scripts/eval_e5_trained.py --checkpoint <叶目录>/ckpt/final。
 退出码：0 = 跑完或按 --stop-after-steps 停下；1 = 起点检查点的合并核对没有通过，拒绝训练；2 = 出错（报错先写进
 <out>/train/<起点>/<模型>/errors/；argparse 用法错误也是 2）。
@@ -58,6 +62,8 @@ def parse_args(argv=None):
     p.add_argument("--tasks", nargs="+", default=["all"], help="任务子集（任务名或字母 a–e；默认 all）")
     p.add_argument("--seed", type=int, required=True, help="种子（必须在配置的 training.seeds 里）")
     p.add_argument("--data-seed", type=int, help="数据种子（默认等于 --seed）")
+    p.add_argument("--allow-seed-mismatch", action="store_true",
+                   help="起点检查点的种子与 --seed 不同（或核对不了）时也训练（D77-3 的配种子放开；记进运行身份）")
     p.add_argument("--out", required=True, help="本次运行的目录（experiments/E5/<NNNN_slug>）")
     p.add_argument("--resume", action="store_true", help="续跑：从 <ckpt>/latest 接着训练")
     p.add_argument("--ckpt-root", help="检查点的根目录（默认 <叶目录>/ckpt；检查点不入库）")
@@ -117,11 +123,15 @@ def cmd_run(a, argv) -> int:
     ts = TrainSet.build(cfg, a.n_train, a.tasks, a.data_seed)
     start = STK.resolve_start(cfg, a.init, a.start_checkpoint and Path(a.start_checkpoint).resolve(), model_key=a.model,
                               tiny=a.tiny)
-    rc = resolve_run(cfg, n_examples=len(ts), tiny=a.tiny)
+    pairing = STK.check_seed_pairing(start, int(a.seed), allow_mismatch=a.allow_seed_mismatch)
+    if pairing["status"] not in ("match", "not_applicable"):
+        print(f"注意：配种子放开（{pairing['status']}：起点的种子 {pairing['start_seed']}，--seed {a.seed}），已记进运行身份",
+              file=sys.stderr)
+    rc = resolve_run(cfg, n_train=int(a.n_train), n_examples=len(ts), tiny=a.tiny)
     entry, ad, dtype = build_adapter(a, cfg)
     spec = RunSpec(model_key=entry.key, family=entry.family, repo=entry.repo, revision=entry.revision,
                    adapter_model_key=str(getattr(ad, "model_key", entry.key)), tiny=a.tiny, image_policy=policy_spec(ad.image_policy),
-                   model_dtype=dtype, seed=int(a.seed), start=start, trainset=ts)
+                   model_dtype=dtype, seed=int(a.seed), start=start, trainset=ts, seed_pairing=pairing)
     try:
         s = run_e5_training(ad, cfg, spec, rc, a.out, resume=a.resume, argv=argv, ckpt_root=a.ckpt_root,
                             stop_after_steps=a.stop_after_steps, keep_optimizer_state=a.keep_optimizer_state, data_root=a.data_root,
@@ -132,8 +142,8 @@ def cmd_run(a, argv) -> int:
     if s is None:
         print(f"{entry.key} {a.init} {ts.tag} seed{a.seed}：按 --stop-after-steps 停下，检查点已写；加 --resume 接着跑")
         return 0
-    print(f"{entry.key} {a.init} {ts.tag} seed{a.seed} steps={s['steps']} final_loss={s['final_loss']:.4f} "
-          f"ckpt={s['final_checkpoint']} ({s['final_checkpoint_bytes']} B)")
+    print(f"{entry.key} {a.init} {ts.tag} seed{a.seed} steps={s['steps']} selected_step={s.get('selected_step')} "
+          f"final_loss={s['final_loss']:.4f} ckpt={s['final_checkpoint']} ({s['final_checkpoint_bytes']} B)")
     return 0
 
 

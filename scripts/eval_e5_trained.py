@@ -13,6 +13,8 @@
 
 顺序：读 e5_stack.json 与 E5 检查点 manifest（构造方式必须与 --model、--tiny 相符）→ 建 base、合并起点 LoRA、核对起点（manifest 的 sha256、
 权重指纹）→ load_trained(E5 检查点, merge=False) → 评测前的合并核对（不通过就不评测）→ 逐任务评测。
+小档（DEV-0038）：E5 检查点的 final/ 就是训练时 val 上选中的那一步；e5_stack.json 的 selection（规则、选中的步、分数）照记进
+config.yaml 的 checkpoint.selection。test 只在这个检查点上评一次。
 每档条数默认取配置的 eval.n_per_bin（test：每档 100 条，b 200 条，与零样本相同）；--n-per-bin 统一覆盖。批大小默认取配置的 eval.batch_size（64）；
 真模型给别的值要加 --allow-unfrozen-batch。
 退出码：0 = 跑完；1 = 合并核对没有通过，拒绝评测；2 = 出错（报错先写进 <out>/trained/errors/；argparse 用法错误也是 2）。
@@ -139,6 +141,10 @@ def cmd_run(a, argv) -> int:
     checkpoint = {"manifest_sha256": e5_sha, "train_identity_sha256": stack["identity_sha256"],
                   "start": {"kind": start_kind, "manifest_sha256": stack["start"]["manifest_sha256"]},
                   "lora": man.get("lora"), "build_spec": man.get("build_spec"), "data": stack["data"], "seed": seed}
+    if stack.get("selection"):  # DEV-0038：val 选中的那一步（小档）；test 只在它上面评这一次。没有选择的检查点，运行身份与原来相同
+        sel = stack["selection"]
+        checkpoint["selection"] = {k: sel[k] for k in ("rule", "split", "selected_step", "selected_score", "steps", "val_every",
+                                                       "n_per_task")}
     extra = {"checkpoint_dir": str(fd), "start_checkpoint": None if st.start_checkpoint is None else str(st.start_checkpoint),
              "merge_check": mc, "fingerprint": st.fingerprint,
              "gpu": torch.cuda.get_device_name(0) if a.device.startswith("cuda") and torch.cuda.is_available() else None}

@@ -16,12 +16,20 @@
 开发机彩排（小型随机模型、CPU、tests/fixtures/e2 与 tests/fixtures/e1 的小数据）：上面任一条加 --tiny，可省 --data-root。
 
 --task：depth semseg normals refseg 中的一个或多个，或 all。--layers 不给时取配置（configs/e2_probes.json 的 layers：9B 每隔一层，
-其余全部层）；配置的 layers.pre_norm_last 为真时另加特征键 L{N}_pre（最后一层归一化之前，单列；D53-3）。--reference post_proj 就是
+其余全部层）；--layers L24 L8 …（DEV-0038）只训练给定层上的探针（不补最后一层；要 L{N}_pre 就写进列表），探针设置不变；配置的 layers.pre_norm_last 为真时另加特征键 L{N}_pre（最后一层归一化之前，单列；D53-3）。--reference post_proj 就是
 第 0 层（D21-3），只核对、不另训；pre_proj 用适配器的 pre_projection_features（三个家族都已实现，D59-8、D60；各家族取的位置写在适配器里）。
 --stop-after-steps N：本次只跑 N 步训练就写检查点退出（分段运行；下次加 --resume 接着跑）。
 去重（硬约束 7；DEV-0024）：训练池的剔除清单必须有这个训练集的键、且 eval_sets 含这个任务的评测集，否则开跑前报错；旧格式的
 清单（没有 eval_sets）只在 --tiny 时照读。
-退出码：0 = 跑完或按 --stop-after-steps 停下；2 = 出错（报错先写进 <out>/<模型>/errors/，再退出；argparse 用法错误也是 2）。
+训练后的检查点（DEV-0038 §2；D77-2(b)：E3 的机制测量，A800）：加 --checkpoint <检查点> --checkpoint-label <标签>，只用于正式运行：
+    python scripts/run_e2.py --model qwen3.5-2b --task depth refseg --layers L24 L8 --data-root $DATA --eval-root $E1_DATA \
+        --checkpoint <E3b 训练叶目录>/ckpt/final/model --checkpoint-label e3b/seed0 --out experiments/E3/00NN_e3_probes
+    # E3b、C3、C1′、预热：<叶>/ckpt/final/model；E3a：<叶>/ckpt/final（或 final/model），只用 LoRA，不用查询与读出；C1、C2 拒绝
+    # （LLM 权重没动：引用 E2 的 base 读数）。先做合并核对（src/e3/merge_check，判据 v1；输出 <out>/<标签>/<模型>/merge_check.json；
+    # 用 --eval-root（没有就 --data-root）下 E1 的 grid16 开发子集），再 load_trained(merge=True)；结果写进 <out>/<标签>/<模型>/<任务>/，
+    # config.yaml 另记 checkpoint（manifest 的 sha256 等）。规则见 src/e2/checkpoint.py。
+退出码：0 = 跑完或按 --stop-after-steps 停下；1 = --checkpoint 的合并核对没有通过，拒绝运行；2 = 出错（含被拒的检查点，如 C1、C2；
+报错先写进 <out>/<模型>/errors/，再退出；argparse 用法错误也是 2）。
 """
 
 from __future__ import annotations
@@ -47,11 +55,14 @@ from src.e2.config import (  # noqa: E402
     REFERENCES,
     TASKS,
     expand_layers,
+    explicit_pre_norm,
     load_config,
     parse_layer_spec,
     pre_norm_key,
     resolve_task,
 )
+from src.e2 import checkpoint as E2CK  # noqa: E402
+from src.e3.merge_check import MergeCheckFailed  # noqa: E402
 from src.e2.bilinear import audits as upsample_audits  # noqa: E402
 from src.e2.data import E2Paths  # noqa: E402
 from src.e2.estimate import estimate_task, summary_markdown  # noqa: E402
@@ -67,7 +78,7 @@ def parse_args(argv=None):
     p.add_argument("--estimate", action="store_true", help="吞吐与算力估算（每个任务实测几步，按配置外推）")
     p.add_argument("--model", required=True, help="注册键（src/adapters/registry.py）")
     p.add_argument("--task", nargs="+", required=True, help=f"任务名或 all：{list(TASKS)}")
-    p.add_argument("--layers", nargs="+", help="all 或 every k（默认取配置的 layers）")
+    p.add_argument("--layers", nargs="+", help="all、every k，或指定层 L24 L8 …（默认取配置的 layers）")
     p.add_argument("--reference", nargs="+", default=[], choices=REFERENCES, help="参考线：post_proj（= 第 0 层）、pre_proj")
     p.add_argument("--enable-normals", action="store_true",
                    help="无作用，只为兼容旧命令：D59-6 已确认法向数据的许可（Bae 2021 / GeoNet），真模型跑 normals 不再需要它（D63-4）")
@@ -85,6 +96,10 @@ def parse_args(argv=None):
     p.add_argument("--config", default=str(CONFIG_PATH), help="E2 配置（默认 configs/e2_probes.json）")
     p.add_argument("--device", help="默认：真模型 cuda，--tiny 时 cpu")
     p.add_argument("--dtype", choices=sorted(DTYPES), help="默认：真模型 bf16，--tiny 时 fp32")
+    p.add_argument("--checkpoint", help="训练后的检查点（DEV-0038）：合并核对 → load_trained(merge=True) 替代 base；规则见 src/e2/checkpoint.py")
+    p.add_argument("--checkpoint-label", help="--checkpoint 时必给：结果放在 <out>/<标签>/<模型>/<任务>/（如 e3b/seed0）")
+    p.add_argument("--merge-check-n", type=int, help="--checkpoint 的合并核对的开发样本数（默认取 configs/e3b_train.json 的 "
+                                                     "eval.merge_check.n；--tiny 取 eval.tiny.merge_check_n）")
     a = p.parse_args(argv)
     if a.task == ["all"]:
         a.task = list(TASKS)
@@ -108,6 +123,18 @@ def parse_args(argv=None):
             p.error(f"--{name.replace('_', '-')} 必须是正整数")
     if a.estimate and (a.resume or a.stop_after_steps):
         p.error("--estimate 不接受 --resume / --stop-after-steps")
+    if a.checkpoint is not None:  # DEV-0038
+        if a.estimate:
+            p.error("--checkpoint 只用于正式运行（不能配 --estimate）")
+        lab = a.checkpoint_label
+        if not lab or not E2CK.CHECKPOINT_LABEL.fullmatch(lab) or ".." in lab:
+            p.error(f"--checkpoint 要配 --checkpoint-label（相对路径，字母、数字、_ . -，用 / 分隔），收到 {lab!r}")
+        if not Path(a.checkpoint).is_dir():
+            p.error(f"--checkpoint {a.checkpoint!r} 不是目录")
+        if a.merge_check_n is not None and a.merge_check_n < 1:
+            p.error("--merge-check-n 必须是正整数")
+    elif a.checkpoint_label is not None or a.merge_check_n is not None:
+        p.error("--checkpoint-label、--merge-check-n 只配 --checkpoint 用")
     a.device = a.device or ("cpu" if a.tiny else "cuda")
     a.dtype = a.dtype or ("fp32" if a.tiny else "bf16")
     if not a.tiny and not (a.data_root or os.environ.get("VISINT_DATA_ROOT")):
@@ -137,10 +164,35 @@ def build_adapter(a):
     return entry, ad
 
 
-def make_spec(a, cfg, entry, ad, task: str) -> RunSpec:
-    policy = default_image_policy(entry.family)
+def build_checkpoint_adapter(a):
+    """--checkpoint（DEV-0038；src/e2/checkpoint.py）：认变体（C1、C2 拒绝）→ 构造方式核对 → 合并核对（不通过抛 MergeCheckFailed）
+    → load_trained(merge=True)。返回 (entry, 适配器, config.yaml 的 checkpoint, 运行记录的附加项)。"""
+    from src.adapters.checkpoint import policy_spec
+    from src.e3.config import load_config as load_e3b_config
+    from src.e3.merge_check import run_merge_check, settings_from_config
+
+    entry = registry.get_model(a.model)
+    ref = E2CK.resolve_checkpoint(a.checkpoint)
+    spec = ref.manifest.get("build_spec") or {}
+    if spec.get("key") != a.model or bool(spec.get("tiny")) != a.tiny:
+        raise ValueError(f"检查点的构造方式（key {spec.get('key')!r}，tiny {spec.get('tiny')}）与 --model {a.model!r}、--tiny {a.tiny} 不符")
+    if not a.tiny and ref.manifest.get("image_policy") != policy_spec(default_image_policy(entry.family)):
+        raise ValueError(f"检查点的图像口径 {ref.manifest.get('image_policy')} 不是 E2 的冻结口径（同 E1，D28-3）：探针设置不变，拒绝")
+    mc = settings_from_config(load_e3b_config().doc, tiny=a.tiny, n=a.merge_check_n, purpose=E2CK.MERGE_CHECK_PURPOSE)
+    out_json = Path(a.out) / a.checkpoint_label / entry.key / E2CK.MERGE_CHECK_FILE
+    summ = run_merge_check(ref.model_dir, model_key=a.model, tiny=a.tiny, n=mc["n"], checks=mc["checks"], out_json=out_json,
+                           device=a.device, dtype=a.dtype, data_root=a.eval_root or a.data_root or os.environ.get("VISINT_DATA_ROOT"),
+                           dev_subsets=a.dev_subsets)
+    ad = E2CK.load_for_probes(ref, device=a.device, dtype=DTYPES[a.dtype])
+    info = E2CK.checkpoint_record(ref, label=a.checkpoint_label, merge_check=summ)
+    return entry, ad, info, {"checkpoint_dir": str(ref.model_dir), "merge_check": summ}
+
+
+def make_spec(a, cfg, entry, ad, task: str, checkpoint=None) -> RunSpec:
+    policy = default_image_policy(entry.family) if checkpoint is None else ad.image_policy  # 检查点：照记它自己的口径（真模型已核对相同）
     layer_spec = a.layers or cfg.default_layer_spec(entry.key)
     layers = expand_layers(layer_spec, ad.num_layers(), always_include_last=bool(cfg.doc["layers"]["always_include_last"]))
+    pre_norm = explicit_pre_norm(layer_spec, ad.num_layers())  # 指定层（DEV-0038）：列表里有 L{N}_pre 才加；否则取配置
     if "post_proj" in a.reference and 0 not in layers:
         layers = [0] + layers
     return RunSpec(model_key=entry.key, family=entry.family, repo=entry.repo, revision=entry.revision,
@@ -148,7 +200,7 @@ def make_spec(a, cfg, entry, ad, task: str) -> RunSpec:
                    policy={"type": type(policy).__name__, **policy.as_dict()}, model_dtype=a.dtype, task=task,
                    layer_spec=layer_spec, layers=tuple(layers), references=tuple(a.reference),
                    num_layers=int(ad.num_layers()), hidden_size=int(ad.hidden_size()), eval_limit=a.eval_limit,
-                   pre_norm_last=cfg.pre_norm_last)
+                   pre_norm_last=cfg.pre_norm_last if pre_norm is None else pre_norm, checkpoint=checkpoint)
 
 
 def _headline(m) -> str:
@@ -176,12 +228,17 @@ def cmd_run(a, argv) -> int:
     cfg = load_config(a.config)
     paths = data_paths(a)
     reference_notice(a)
-    entry, ad = build_adapter(a)
+    out, ck_info, extra = Path(a.out), None, None
+    if a.checkpoint:  # DEV-0038：训练后的检查点，结果放在 <out>/<标签>/<模型>/<任务>/
+        entry, ad, ck_info, extra = build_checkpoint_adapter(a)
+        out = out / a.checkpoint_label
+    else:
+        entry, ad = build_adapter(a)
     for task in a.task:
-        spec = make_spec(a, cfg, entry, ad, task)
+        spec = make_spec(a, cfg, entry, ad, task, checkpoint=ck_info)
         tc = resolve_task(cfg, task, tiny=a.tiny)
-        m = run_task(ad, cfg, spec, tc, paths, a.out, resume=a.resume, argv=argv, ckpt_root=a.ckpt_root,
-                     stop_after_steps=a.stop_after_steps, keep_optimizer_state=a.keep_optimizer_state)
+        m = run_task(ad, cfg, spec, tc, paths, out, resume=a.resume, argv=argv, ckpt_root=a.ckpt_root,
+                     stop_after_steps=a.stop_after_steps, keep_optimizer_state=a.keep_optimizer_state, run_extra=extra)
         if m is None:
             print(f"{entry.key} {task}：按 --stop-after-steps 停下，检查点已写；加 --resume 接着跑（后面的任务没有开始）")
             return 0
@@ -226,6 +283,9 @@ def main(argv=None) -> int:
     a = parse_args(argv)
     try:
         return cmd_estimate(a, argv) if a.estimate else cmd_run(a, argv)
+    except MergeCheckFailed as e:  # --checkpoint：合并核对没有通过（DEV-0038）
+        print(f"拒绝运行：{e}", file=sys.stderr)
+        return 1
     except Exception as e:  # noqa: BLE001 — 证据先落盘，再以非零码退出
         err_dir = Path(a.out) / a.model / "errors"
         err_dir.mkdir(parents=True, exist_ok=True)

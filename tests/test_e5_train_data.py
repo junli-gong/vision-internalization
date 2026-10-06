@@ -61,11 +61,12 @@ def test_config_pins():
     assert CFG.seed_stride == 2**32 and CFG.seed_stride * 2**16 <= SCENE_SEED_STRIDE
     assert CFG.seeds == (0, 1, 2)  # D72-4：3 个种子
     assert d["training"]["epochs"] == 2
-    # epochs_basis 里的步数：1K 档 125 步、64K 档 8000 步（批 16）
-    steps = {n: resolve_run(CFG, n_examples=len(_ts(n)), tiny=False)["steps"] for n in CFG.tiers(False)}
-    assert steps == {1000: 125, 4000: 500, 16000: 2000, 64000: 8000}
-    rc = resolve_run(CFG, n_examples=1000, tiny=False)
-    assert rc["batch_size"] == 16 and rc["warmup_steps"] == math.ceil(0.03 * 125)
+    # epochs_basis 里的步数：1K 档 125 步、64K 档 8000 步（批 16）；D77-3（DEV-0038）：1K、4K 另有 1,000 步的下限，16K、64K 不变
+    rcs = {n: resolve_run(CFG, n_train=n, n_examples=len(_ts(n)), tiny=False) for n in CFG.tiers(False)}
+    assert {n: r["steps_by_epochs"] for n, r in rcs.items()} == {1000: 125, 4000: 500, 16000: 2000, 64000: 8000}
+    assert {n: r["steps"] for n, r in rcs.items()} == {1000: 1000, 4000: 1000, 16000: 2000, 64000: 8000}
+    rc = rcs[1000]
+    assert rc["batch_size"] == 16 and rc["warmup_steps"] == math.ceil(0.03 * 1000)  # 学习率调度按实际步数排
     # LoRA 与优化器的结构同 E3b（configs/e3b_train.json；只换学习率等几项）
     e3 = CFG.e3b.doc
     assert rc["lora"] == {k: e3["lora"][k] for k in ("r", "alpha", "dropout")} and rc["lora"]["r"] == 32

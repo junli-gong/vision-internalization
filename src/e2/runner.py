@@ -31,6 +31,10 @@
   训练损失的累计量、步数，原子写入；每 ckpt_every 步与最后一步写一次。训练完成后另写 probes_final.pt（探针权重 + 标准化统计量）；
   整个任务完成后删掉 state.pt（优化器状态只为续跑；9B 约 2 GB），--keep-optimizer-state 保留。
 
+训练后的检查点与指定层（DEV-0038；src/e2/checkpoint.py）：RunSpec.checkpoint 不为 None 时 config.yaml 另有 checkpoint 一键
+（manifest 的 sha256 等），README 多一行；为 None 时（base）一切与原来逐字节相同。指定层（--layers L8 L24）只是层集合不同，
+流程不变。注意：同一层上的探针与全部层时逐字节相同的前提是它所在的块（probe_chunk 个探针一块做上采样与损失）一样大——批内的矩阵乘
+与求和对块的大小不是逐位不变的，块大小不同时差在 fp32 舍入量级（tests/test_e2_checkpoint.py 钉住）。
 断点续传（--resume）：叶目录非空时必须给 --resume 且 config.yaml 与本次完全相同；从检查点的步数接着训练，curves.jsonl 里检查点
 之后的行截掉重算；训练已完成而评测没完成时，评测整段重做（确定性的）。metrics.json 已标记完成就直接返回。
 """
@@ -107,6 +111,7 @@ class RunSpec:
     hidden_size: int
     eval_limit: int | None = None
     pre_norm_last: bool = False  # 加特征键 L{N}_pre（最后一层归一化之前；configs/e2_probes.json 的 layers.pre_norm_last）
+    checkpoint: Mapping[str, Any] | None = None  # 训练后的检查点（DEV-0038；src/e2/checkpoint.checkpoint_record）；None = base
 
 
 def leaf_dir(out: str | Path, model_key: str, task: str) -> Path:
@@ -388,6 +393,8 @@ def run_config(run: TaskRun, cfg: E2Config) -> dict[str, Any]:
                      "subset": tc.get("eval_subset")},
         },
         "eval_limit": spec.eval_limit,
+        # 训练后的检查点（DEV-0038）：只在给了 --checkpoint 时加这个键，base 的运行身份与原来逐字节相同
+        **({} if spec.checkpoint is None else {"checkpoint": dict(spec.checkpoint)}),
     }
 
 
@@ -456,6 +463,10 @@ def readme_text(run: TaskRun, cfg_doc: Mapping[str, Any], metrics: Mapping[str, 
              f"- 验证子集（训练集留出，只记曲线）：{metrics['n_val']} 条；评测集：{metrics['n_eval']} 条（全部，不抽样）；"
              f"bootstrap {tr['bootstrap_resamples']} 次，95%",
              f"- GT 无有效像素而跳过的训练样本：{metrics['n_train_skipped']}"]
+    ck = cfg_doc.get("checkpoint")
+    if ck:  # DEV-0038：训练后的检查点（base 的 README 不变）
+        lines.append(f"- 检查点：{ck['label']}（{ck['kind']}；manifest {str(ck['manifest_sha256'])[:16]}…；训练种子 {ck['train_seed']}）；"
+                     f"{ck['use']}；合并核对 {ck['merge_check']['criteria_version']}，检查项 {ck['merge_check']['checks']}")
     pc = metrics.get("post_proj_check")
     if pc:
         lines.append(f"- post_proj 核对（评测集第一条 {pc['sample']}）：vision_features 与第 0 层逐位相同 = {pc['equal']}")
@@ -549,8 +560,10 @@ def accounting_doc(leaf: Path) -> dict[str, Any]:
 def run_task(adapter: Any, cfg: E2Config, spec: RunSpec, task_cfg: Mapping[str, Any], paths: E2Paths, out_dir: str | Path, *,
              resume: bool = False, argv: Sequence[str] = (), ckpt_root: str | Path | None = None,
              stop_after_steps: int | None = None, log: Callable[[str], None] | None = None,
-             keep_optimizer_state: bool = False, _fail_after_step: int | None = None) -> dict[str, Any] | None:
-    """跑一个任务；返回 metrics（stop_after_steps 到了时返回 None）。规则见模块说明。"""
+             keep_optimizer_state: bool = False, _fail_after_step: int | None = None,
+             run_extra: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+    """跑一个任务；返回 metrics（stop_after_steps 到了时返回 None）。规则见模块说明。run_extra：并进运行记录 logs/run_<k>.json
+    的附加项（DEV-0038：检查点的路径与合并核对的摘要；不进运行身份）。"""
     log = log or (lambda m: print(m, file=sys.stderr, flush=True))
     run = TaskRun(adapter, cfg, spec, task_cfg, paths, log=log)
     run.load_data()
@@ -587,7 +600,7 @@ def run_task(adapter: Any, cfg: E2Config, spec: RunSpec, task_cfg: Mapping[str, 
     run_path = leaf / "logs" / f"run_{run_k:03d}.json"
     run_log: dict[str, Any] = {"argv": list(argv), "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                                "device": str(dev), "gpu": torch.cuda.get_device_name(dev) if dev.type == "cuda" else None,
-                               "paths": paths.as_dict(), "ckpt_dir": str(ckpt_dir), "finished_utc": None}
+                               "paths": paths.as_dict(), "ckpt_dir": str(ckpt_dir), "finished_utc": None, **dict(run_extra or {})}
     run_path.write_text(json.dumps(run_log, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     walls: dict[str, float] = {}
     done_box = [0]  # 本次调用跑了几步（finish_log 用）

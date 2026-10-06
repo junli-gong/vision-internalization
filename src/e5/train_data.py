@@ -12,8 +12,10 @@
 - 训练集的清单 = 先按 tasks 的顺序（E5_TASKS 的 a–e 顺序）、再按 j 列出的 (任务, j)；清单的 sha256（items_digest）进运行身份。
 
 **样本日程**（Schedule；无状态，续跑按步号重算）：固定 epoch（configs/e5_train.json 的 training.epochs_basis）。第 k 个训练样本
-（k = 步 × 批大小 + 批内下标，0 ≤ k < epochs × 训练集条数）取第 e = k // 训练集条数 个 epoch 的置换
-np.random.default_rng([ORDER_SALT, 运行种子, 训练集条数, e]).permutation(训练集条数) 的第 k mod 训练集条数 个位置。最后一步可能不满。
+（k = 步 × 批大小 + 批内下标，0 ≤ k < 总条数）取第 e = k // 训练集条数 个 epoch 的置换
+np.random.default_rng([ORDER_SALT, 运行种子, 训练集条数, e]).permutation(训练集条数) 的第 k mod 训练集条数 个位置。总条数 = epochs × 训练集
+条数（最后一步可能不满）；步数下限生效时（DEV-0038，training.min_steps）总条数 = 步数 × 批大小，epoch 照样往后数（置换与总条数无关，
+所以前 epochs 个 epoch 与不设下限时逐条相同）。
 
 **一条训练样本**（ExampleBuilder.build → src/e3/data.Example，与 E3b 的训练器同一个接口）：图像（a–d 一张 PIL 图，e 没有）、提示
 （src/e5/token_grid.PromptFormat：指令原文 + E3b 网格指令的结尾句，指令在前）、目标 token（src/e5/token_grid.E5Tokens：二值网格或起伏网格
@@ -142,13 +144,17 @@ def make_train_sample(it: TrainItem) -> Sample:
 class Schedule:
     """固定 epoch 的样本日程（模块说明）。接口同 src/e3/data.Schedule：step_plans(step)。"""
 
-    def __init__(self, ts: TrainSet, *, seed: int, epochs: int, batch_size: int) -> None:
+    def __init__(self, ts: TrainSet, *, seed: int, epochs: int, batch_size: int, total: int | None = None) -> None:
+        """total（DEV-0038，步数下限生效时 = 步数 × 批大小）：日程的总条数；不给时 = epochs × 训练集条数。给了 total 时 epoch 数
+        = ceil(total / 训练集条数)（最后一个 epoch 可能只取置换的前一段）；第 e 个 epoch 的置换与 total 无关。"""
         self.ts = ts
         self.seed = int(seed)
-        self.epochs = int(epochs)
         self.batch_size = int(batch_size)
         self.n = len(ts)
-        self.total = self.epochs * self.n
+        self.total = int(epochs) * self.n if total is None else int(total)
+        if self.total < 1:
+            raise ValueError(f"日程的总条数必须 ≥ 1，收到 {self.total}")
+        self.epochs = -(-self.total // self.n)
         self._perm: dict[int, np.ndarray] = {}
 
     def permutation(self, epoch: int) -> np.ndarray:

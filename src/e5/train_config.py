@@ -5,6 +5,11 @@
 - resolve_run：以 E3b 网格监督的生效参数（src/e3/config.resolve_run(supervision = grid)）为底，换上 E5 的几项（training 一节：
   epoch、批、学习率、warmup 比例、检查点间隔、数据线程；--tiny 时按 training.tiny 覆盖），步数由数据量档与 epoch 算出；
   去掉 E3b 专有的键（mix、correction_fraction），supervision / variant 记为 e5。Trainer（src/e3/train.Trainer）读的键都在。
+- 小档的步数下限（DEV-0038，D77-3；training.min_steps）：数据量档在 min_steps.tiers 里（--tiny 时 min_steps.tiny.tiers）时，
+  步数 = max(按 epoch 算出的步数, min_steps.steps)；下限生效时样本日程的总条数 = 步数 × 批大小（每步满批），否则仍是 epoch × 训练集条数。
+  warmup 与余弦按实际步数排。下限按数据量档（--n-train）判，不按条数：--tasks 子集的同一档同样受下限。
+- val 选检查点（DEV-0038；selection 一节，规则见 src/e5/val_select.py）：只对下限所列的档（applies_to = min_steps）；run_cfg 的
+  selection 记生效的设置，其余档为 null（取最后一步）。
 """
 
 from __future__ import annotations
@@ -30,6 +35,9 @@ SCHEMA = 1
 STARTS: tuple[str, ...] = ("base_warmup", "e3b", "e3a", "base")
 GRID_TOKEN_SOURCES = ("from_checkpoint", "add")
 START_LORA_MODES = ("merge_then_new_lora",)
+SELECTION_RULES: tuple[str, ...] = ("mean_headline_v1",)  # 规则的定义在 src/e5/val_select.py（selection_score）
+SELECTION_APPLIES_TO = ("min_steps",)
+SELECTION_SPLIT = "val"
 MAX_DATA_SEED = 1 << 16  # 序号 = 数据种子 × seed_stride + j < 2^48（src/synth/constants.SCENE_SEED_STRIDE）
 
 
@@ -59,6 +67,21 @@ class E5TrainConfig:
     @property
     def seeds(self) -> tuple[int, ...]:
         return tuple(int(s) for s in self.doc["training"]["seeds"])
+
+    def min_steps(self, n_train: int, tiny: bool) -> int | None:
+        """数据量档 n_train 的步数下限（training.min_steps；不在所列的档里为 None）。"""
+        ms = self.doc["training"]["min_steps"]
+        ms = ms["tiny"] if tiny else ms
+        return int(ms["steps"]) if int(n_train) in {int(x) for x in ms["tiers"]} else None
+
+    def selection(self, n_train: int, tiny: bool) -> dict[str, Any] | None:
+        """数据量档 n_train 的 val 选检查点设置（selection 一节；只对下限所列的档，其余为 None）。"""
+        if self.min_steps(n_train, tiny) is None:
+            return None
+        s = self.doc["selection"]
+        over = dict(s["tiny"]) if tiny else {}
+        return {"rule": str(s["rule"]), "split": str(s["split"]), "applies_to": str(s["applies_to"]),
+                **{k: int(over.get(k, s[k])) for k in ("val_every", "n_per_task", "batch_size")}}
 
     def start(self, kind: str) -> Mapping[str, Any]:
         if kind not in STARTS:
@@ -128,6 +151,28 @@ def load_train_config(path: str | Path = CONFIG_PATH, e3b_path: str | Path | Non
     seeds = t.get("seeds", [])
     if not seeds or len(set(seeds)) != len(seeds) or any(isinstance(s, bool) or not isinstance(s, int) or s < 0 for s in seeds):
         bad.append("training.seeds 必须是不重复的非负整数")
+    ms = t.get("min_steps")
+    for name, m, tiers in (("training.min_steps", ms, d.get("tiers")),
+                           ("training.min_steps.tiny", (ms or {}).get("tiny") if isinstance(ms, dict) else None,
+                            (d.get("tiny") or {}).get("tiers"))):
+        if not isinstance(m, dict) or not _posint(m.get("steps")) or not isinstance(m.get("tiers"), list) or \
+                any(not _posint(x) for x in m["tiers"]) or len(set(m["tiers"])) != len(m["tiers"]):
+            bad.append(f"{name} 要 steps（正整数）与 tiers（不重复的正整数列表）")
+        elif isinstance(tiers, list) and not set(m["tiers"]) <= set(tiers):
+            bad.append(f"{name}.tiers {m['tiers']} 必须是对应数据量档 {tiers} 的子集")
+    sel = doc.get("selection")
+    if not isinstance(sel, dict):
+        bad.append("缺少 selection 一节（DEV-0038）")
+    else:
+        if sel.get("rule") not in SELECTION_RULES:
+            bad.append(f"selection.rule 只实现了 {SELECTION_RULES}，收到 {sel.get('rule')!r}")
+        if sel.get("applies_to") not in SELECTION_APPLIES_TO:
+            bad.append(f"selection.applies_to 只能是 {SELECTION_APPLIES_TO}")
+        if sel.get("split") != SELECTION_SPLIT:
+            bad.append(f"selection.split 必须是 {SELECTION_SPLIT}（test 只在决策门用，简报 §4 第 7 条）")
+        for k in ("val_every", "n_per_task", "batch_size"):
+            if not _posint(sel.get(k)) or not _posint((sel.get("tiny") or {}).get(k)):
+                bad.append(f"selection.{k}（与 tiny 里的同名项）必须是正整数")
     e = doc.get("eval", {})
     npb = e.get("n_per_bin", {})
     if set(npb) != set(E5_TASKS) or any(not _posint(v) for v in npb.values()):
@@ -161,8 +206,19 @@ def steps_for(n_examples: int, epochs: int, batch_size: int) -> int:
     return int(math.ceil(int(epochs) * int(n_examples) / int(batch_size)))
 
 
-def resolve_run(cfg: E5TrainConfig, *, n_examples: int, tiny: bool) -> dict[str, Any]:
-    """本次运行实际生效的训练参数（写进 config.yaml；规则见模块说明）。n_examples = 训练集条数（每类 × 任务数）。"""
+def plan_steps(n_examples: int, epochs: int, batch_size: int, min_steps: int | None) -> dict[str, int]:
+    """步数与样本日程的总条数（模块说明）：steps_by_epochs = ceil(epochs × 条数 / 批)；有下限且下限更大时 steps = 下限、
+    n_samples = steps × 批（每步满批），否则 steps = steps_by_epochs、n_samples = epochs × 条数（最后一步可能不满）。"""
+    by_ep = steps_for(n_examples, epochs, batch_size)
+    if min_steps is not None and int(min_steps) > by_ep:
+        return {"steps_by_epochs": by_ep, "steps": int(min_steps), "n_samples": int(min_steps) * int(batch_size),
+                "floor_binding": 1}
+    return {"steps_by_epochs": by_ep, "steps": by_ep, "n_samples": int(epochs) * int(n_examples), "floor_binding": 0}
+
+
+def resolve_run(cfg: E5TrainConfig, *, n_train: int, n_examples: int, tiny: bool) -> dict[str, Any]:
+    """本次运行实际生效的训练参数（写进 config.yaml；规则见模块说明）。n_train = 数据量档（--n-train，下限与 val 选择按它判），
+    n_examples = 训练集条数（每类 × 任务数）。"""
     base = resolve_e3b_run(cfg.e3b, supervision="grid", tiny=tiny)
     t = cfg.doc["training"]
     over = dict(t["tiny"]) if tiny else {}
@@ -175,8 +231,15 @@ def resolve_run(cfg: E5TrainConfig, *, n_examples: int, tiny: bool) -> dict[str,
     rc["batch_size"] = rc["micro_batch_size"] * rc["grad_accum_steps"]
     rc["ckpt_every"] = int(over.get("ckpt_every", t["ckpt_every"]))
     rc["data_workers"] = int(over.get("data_workers", t["data_workers"]))
+    rc["n_train"] = int(n_train)
     rc["n_examples"] = int(n_examples)
-    rc["steps"] = steps_for(n_examples, rc["epochs"], rc["batch_size"])
+    rc["min_steps"] = cfg.min_steps(n_train, tiny)
+    plan = plan_steps(n_examples, rc["epochs"], rc["batch_size"], rc["min_steps"])
+    rc["steps_by_epochs"] = plan["steps_by_epochs"]
+    rc["steps"] = plan["steps"]
+    rc["n_samples"] = plan["n_samples"]
+    rc["min_steps_binding"] = bool(plan["floor_binding"])
+    rc["selection"] = cfg.selection(n_train, tiny)
     rc["optim"]["lora"]["lr"] = float(t["lr"]["lora"])
     rc["optim"]["token_rows"]["lr"] = float(t["lr"]["token_rows"])
     rc["optim"]["warmup_ratio"] = float(t["warmup_ratio"])
@@ -189,5 +252,5 @@ def resolve_run(cfg: E5TrainConfig, *, n_examples: int, tiny: bool) -> dict[str,
     return rc
 
 
-__all__ = ["CONFIG_PATH", "E3B_CONFIG_PATH", "E5ConfigError", "E5TrainConfig", "MAX_DATA_SEED", "STARTS", "load_train_config",
-           "per_task", "resolve_run", "steps_for"]
+__all__ = ["CONFIG_PATH", "E3B_CONFIG_PATH", "E5ConfigError", "E5TrainConfig", "MAX_DATA_SEED", "SELECTION_RULES", "STARTS",
+           "load_train_config", "per_task", "plan_steps", "resolve_run", "steps_for"]

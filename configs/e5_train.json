@@ -1,7 +1,7 @@
 {
  "schema": 1,
- "version": "e5-train-v1",
- "framework": "src/e5（DEV-0037：E5 主比较的训练与训练后评测）；规则见 src/e5/train_data.py、token_grid.py、stack.py、train.py、trained_eval.py 的模块说明",
+ "version": "e5-train-v2",
+ "framework": "src/e5（DEV-0037：E5 主比较的训练与训练后评测；DEV-0038：小档的步数下限、val 选检查点、配种子）；规则见 src/e5/train_data.py、token_grid.py、stack.py、train.py、val_select.py、trained_eval.py 的模块说明",
  "status": "草稿，未冻结。数据量档、epoch 数、学习率、批、提示与映射都是暂定值（各节 basis），由 E5 预注册冻结（简报 §8.8；E5 预注册草稿 §5、§7）",
  "e3b_config": "configs/e3b_train.json",
  "e3b_config_basis": "同一套 token、同一种格式（简报 §8.8：训练后的系统用像素 token 网格）：网格词表（67 个 token）、网格边长、受限 logits 的允许集合规则（allowed_scope）、思考开关、模型 dtype、梯度检查点、LoRA 的结构（r、alpha、dropout）与优化器的结构（AdamW、betas、eps、梯度裁剪、warmup + 余弦、token 行的 fp32 主副本）都取这份 E3b 配置（src/e3/config.resolve_run 的网格监督），E5 只改下面 training 一节列出的几项。E3b 配置的 sha256 进运行身份",
@@ -36,7 +36,9 @@
  },
  "training": {
   "epochs": 2,
-  "epochs_basis": "每个数据量档按固定的 epoch 数训练（不是固定步数）：步数 = ceil(epochs × 训练集条数 / 批大小)，1K 档 125 步、64K 档 8000 步（批 16）。理由：(1) 学习曲线的横轴是数据量，固定 epoch 让各档的'每条样本见几次'相同，档与档只差数据量（和随之成比例的算力）；固定步数会把数据量与重复次数绑在一起（同样 8000 步，1K 档每条见 128 次、64K 档见 2 次），小档读到的主要是记忆而不是学习效率。(2) 算力与数据量成正比，四档合计约是最大档的 1.33 倍；固定步数是 4 倍。(3) 2 而不是 1：1 个 epoch 时 1K 档只有 63 步，warmup + 余弦来不及；也不是 3：B200 的用时（见 DEV-0037 完成总结的推算）。由 E5 预注册冻结",
+  "epochs_basis": "每个数据量档按固定的 epoch 数训练（不是固定步数）：步数 = ceil(epochs × 训练集条数 / 批大小)，1K 档 125 步、64K 档 8000 步（批 16）。理由：(1) 学习曲线的横轴是数据量，固定 epoch 让各档的'每条样本见几次'相同，档与档只差数据量（和随之成比例的算力）；固定步数会把数据量与重复次数绑在一起（同样 8000 步，1K 档每条见 128 次、64K 档见 2 次），小档读到的主要是记忆而不是学习效率。(2) 算力与数据量成正比，四档合计约是最大档的 1.33 倍；固定步数是 4 倍。(3) 2 而不是 1：1 个 epoch 时 1K 档只有 63 步，warmup + 余弦来不及；也不是 3：B200 的用时（见 DEV-0037 完成总结的推算）。由 E5 预注册冻结。D77-3 起小档另有步数下限（min_steps），16K、64K 仍按这里的 epoch 数",
+  "min_steps": {"steps": 1000, "tiers": [1000, 4000], "tiny": {"steps": 6, "tiers": [10]}},
+  "min_steps_basis": "D77-3（负责人第六批答复）：固定 2 个 epoch 时 1K 档只有 125 步，小数据量上量到的混着'样本少'与'优化步数少'。修法：tiers 里的档（1K、4K，H5 的主信号所在）步数 = max(按 epoch 算出的步数, steps)，即 1K、4K 都是 1,000 步（4K 按 epoch 是 500 步）；16K（2,000 步）、64K（8,000 步）不受影响。下限生效时样本日程按步数排：总条数 = 步数 × 批大小（每步都满批；1K 档 16,000 条 = 16 个 epoch，4K 档 4 个 epoch），第 e 个 epoch 的置换与固定 epoch 时同一个（src/e5/train_data.Schedule），所以前 2 个 epoch 的样本顺序与不设下限时逐条相同；学习率的 warmup（3%）与余弦按实际步数排。只设下限、步数更多会过拟合，所以这些档另用 val 选检查点（selection 一节）。tiny 是开发机彩排的同构缩小（10 条的档 6 步，按 epoch 是 3 步）",
   "micro_batch_size": 4,
   "grad_accum_steps": 4,
   "batch_basis": "每步 16 条（4 × 4），同 E3b 的暂定值",
@@ -47,8 +49,18 @@
   "data_workers": 4,
   "data_workers_basis": "下一步的样本由线程池在本步的 GPU 计算期间生成（生成器单核一条几十毫秒以内，DEV-0037 开发机实测、不是约定；一步 16 条远小于一步的 GPU 时间）；每条样本由 (数据种子, 任务, j) 唯一决定，线程数不改变任何结果",
   "seeds": [0, 1, 2],
-  "seeds_basis": "D72-4：E5 主比较 3 个种子；每个运行一个，命令行给出。种子决定新 LoRA 的初始化、dropout、样本顺序；数据种子默认同运行种子（训练集随种子换一份，学习曲线的种子间差异包含抽样的差异）",
+  "seeds_basis": "D72-4：E5 主比较 3 个种子；每个运行一个，命令行给出。种子决定新 LoRA 的初始化、dropout、样本顺序；数据种子默认同运行种子（训练集随种子换一份，学习曲线的种子间差异包含抽样的差异）。配种子（D77-3）：E5 的第 i 个种子用 E3 的第 i 个种子训练的起点检查点；起点的种子取它训练叶目录 config.yaml 的 seed（检查点 manifest 不记种子），不符或核对不了就拒绝训练，--allow-seed-mismatch 放开并记进运行身份（src/e5/stack.check_seed_pairing）",
   "tiny": {"epochs": 1, "micro_batch_size": 2, "grad_accum_steps": 2, "ckpt_every": 2, "warmup_steps": 1}
+ },
+ "selection": {
+  "applies_to": "min_steps",
+  "split": "val",
+  "val_every": 200,
+  "n_per_task": 64,
+  "batch_size": 64,
+  "rule": "mean_headline_v1",
+  "tiny": {"val_every": 2, "n_per_task": 1, "batch_size": 4},
+  "basis": "val_every 由 DEV-0038 的 100 改为 200（D78：管理员定；1,000 步的档读 5 次加最后一步，val 评测的开销从约 10 小时降到约 5 小时）。D77-3：受步数下限影响的档（training.min_steps.tiers：1K、4K）用 val 选检查点，防止过拟合；16K、64K 不选，取最后一步。实现见 src/e5/val_select.py 的模块说明。(1) 划分：生成器的 val 划分（E5 评测的 dev 子集，与 test 不相交）；每条样本生成前断言划分是 val，训练进程里不生成任何 test 样本（tests 钉住）。(2) 样本：每类固定 n_per_task 条标题口径内的 val 样本（src/e5/protocol.in_headline，与 test 的标题口径同一个函数；a 另要求目标起伏不全平，起伏误差才有定义）：按 val 序号升序（档的轮转同评测集）取前 n_per_task 条落在口径里的，清单的 id 指纹进运行身份；口径外的样本不进分数，所以不解码。只用本次训练的任务（--tasks 子集时只用那几类）。(3) 解码与评分：每 val_every 步（以及最后一步）一次，与 test 评测同一条路径：单轮受限解码（generate_restricted；允许集合、max_new_tokens = 1057、停止 token、关思考、贪心同 src/e5/trained_eval），按格式（二值 / 起伏）连续成批，批大小 batch_size（= eval.batch_size；64 条一类恰好一批），src/e5/trained_eval.record 与 src/e5/scoring.aggregate 的同一套评分。训练中的模型 LoRA 未合并（eval 模式、no_grad）；随机数状态在评测前后不变，有没有 val 评测，训练轨迹逐位相同。(4) 规则 mean_headline_v1：分数 = 训练任务各类标题指标的平均，越高越好。b、c、d、e 取标题口径的网格 mask IoU（严格读数，解析失败记 0；b 的标题指标就是环绕上的 mask IoU，E5 预注册 §2 的表）；a 取 1 − 起伏误差（严格读数，失败记 2.0）/ 2.0，把 a 的标题指标线性映到 [0, 1]（0 = 前后翻转或失败，约 0.5 = 平面，1 = 完全正确），与 IoU 同向、同尺度。选分数最高的一步，同分取较早的一步。理由：与 test 的标题口径、严格读数完全相同（格式崩坏照样扣分）；每类等权，H5 按类计数；线性映射保留起伏误差的大小与顺序。另一种做法是各类分别排名再求和，对各类的尺度不变，但丢掉了幅度，小样本下平局多，没有用。每类的 IoU、起伏误差、有效率、解析失败率都逐步记进 val_selection.jsonl，规则可以事后核对。(5) 选中那一步的检查点就是 final/（train_summary.json 与 e5_stack.json 记 selection：规则、选中的步、分数与全部 val 曲线）；test 只在它上面由 scripts/eval_e5_trained.py 评一次。(6) 用量（B200 推算）：一次 val 评测是 5 批 × 64 条的受限解码；按 DEV-0037 的评测推算，一批约 39 秒，一次约 3.3 分钟；1K、4K 档每次运行 10 次，约 33 分钟。tiny 是开发机彩排的同构缩小"
  },
  "eval": {
   "subset": "eval",

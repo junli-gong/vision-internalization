@@ -18,6 +18,17 @@ warmup + 余弦、梯度检查点、续跑状态、记账都原样复用；只�
 manifest，起点有检查点时 extra.safetensors 里存起点 manifest 的 sha256）+ <ckpt>/final/e5_stack.json（起点的引用、叠加后的权重指纹、
 训练集与种子）。评测：scripts/eval_e5_trained.py --checkpoint <ckpt>/final（src/e5/trained_eval.py）。<ckpt> 默认是 <叶目录>/ckpt。
 
+**小档的修正**（DEV-0038，D77-3；configs/e5_train.json 的 training.min_steps 与 selection）：
+- 步数下限：1K、4K 档步数 = max(按 epoch 的步数, 1,000)，样本日程的总条数 = 步数 × 批（src/e5/train_config.plan_steps、
+  src/e5/train_data.Schedule 的 total）；warmup 与余弦按实际步数排。
+- val 选检查点（只对下限所列的档；src/e5/val_select.py）：完成第 val_every·k 步（以及最后一步）后在 val 划分上评一次（eval 模式、no_grad、
+  随机数状态前后不变），一行写进 val_selection.jsonl；分数刷新最好时先把当前模型存成候选 <ckpt>/best_step<k>/（save_trained），再存
+  latest（评测步一律存 latest，续跑状态里带全部 val 历史），再删掉别的候选。续跑时历史以 latest 的续跑状态为准，之后的候选作废。
+  训练完成后选中的候选原样拷成 <ckpt>/final/model/；train_summary.json 与 e5_stack.json 记 selection（规则、选中的步、分数、val 曲线）。
+  其余档照旧取最后一步。
+- 配种子：起点检查点训练叶目录 config.yaml 的 seed 必须等于 --seed（src/e5/stack.check_seed_pairing；scripts/train_e5.py
+  --allow-seed-mismatch 放开），记录进运行身份的 seed_pairing。
+
 **记账**：同 E3b（train_log.jsonl 每步的确定性记录，CPU 上续跑与一次跑完逐字节相同；logs/run_<k>.json、logs/timing_run_<k>.jsonl；
 accounting.json、compute.json）。train_log 的 loss_by_task、n_supervised_by_task 按 E5 的任务名。
 """
@@ -39,6 +50,7 @@ import torch.nn.functional as F
 import yaml
 
 from src.accounting import merge, write_compute_json
+from src.adapters.checkpoint import read_manifest
 from src.adapters.training import restricted_targets
 from src.e3.targets import NoSupervision
 from src.e3.train import (
@@ -64,6 +76,7 @@ from src.e5 import stack as STK
 from src.e5.protocol import E5_TASKS, TASK_LETTER
 from src.e5.token_grid import E5Tokens, PromptFormat
 from src.e5.train_config import E5TrainConfig
+from src.e5 import val_select as VS
 from src.e5.train_data import ExampleBuilder, Schedule, TrainSet
 from src.runlog import write_run_metadata
 
@@ -84,6 +97,7 @@ class RunSpec:
     seed: int
     start: STK.StartRef
     trainset: TrainSet
+    seed_pairing: Mapping[str, Any] | None = None  # src/e5/stack.check_seed_pairing 的记录（DEV-0038；进运行身份）
 
 
 def seed_dir_name(seed: int, data_seed: int) -> str:
@@ -156,7 +170,7 @@ class E5Trainer(Trainer):
 
 
 def run_identity(spec: RunSpec, cfg: E5TrainConfig, run_cfg: Mapping[str, Any], trainer: E5Trainer,
-                 prompt: PromptFormat) -> dict[str, Any]:
+                 prompt: PromptFormat, selector: VS.ValSelector | None = None) -> dict[str, Any]:
     return {
         "experiment": "E5",
         "framework": "src/e5（DEV-0037：E5 主比较的训练）",
@@ -172,7 +186,26 @@ def run_identity(spec: RunSpec, cfg: E5TrainConfig, run_cfg: Mapping[str, Any], 
         "prompt": prompt.as_dict(),
         "config": cfg.identity(),
         "data": spec.trainset.identity(),
+        "seed_pairing": None if spec.seed_pairing is None else dict(spec.seed_pairing),
+        "selection": None if selector is None else selector.identity(),
     }
+
+
+def steps_text(tr: Mapping[str, Any]) -> str:
+    """README 的步数说明：固定 epoch，或步数下限生效（DEV-0038）。"""
+    if tr.get("min_steps_binding"):
+        ep = tr["n_samples"] / max(1, int(tr["n_examples"]))
+        return (f"步数下限 {tr['min_steps']}（按 {tr['epochs']} 个 epoch 是 {tr['steps_by_epochs']} 步）= {tr['steps']} 步，"
+                f"共 {tr['n_samples']} 条（{ep:g} 个 epoch）")
+    return f"{tr['epochs']} 个 epoch = {tr['steps']} 步"
+
+
+def selection_text(sel: Mapping[str, Any] | None) -> str:
+    if not sel:
+        return "- 检查点的选择：取最后一步（这一档不做 val 选择）"
+    curve = "，".join(f"{h['step']}: {h['score']:.4f}" for h in sel["history"])
+    return (f"- 检查点的选择（val 划分，每类 {sel['n_per_task']} 条，每 {sel['val_every']} 步一次；规则 {sel['rule']}）：选中第 "
+            f"{sel['selected_step']} 步（分数 {sel['selected_score']:.4f}）；val 曲线 {curve}（全部读数在 {sel['val_log']}）")
 
 
 def readme_text(spec: RunSpec, ident: Mapping[str, Any], summary: Mapping[str, Any], log: Sequence[Mapping[str, Any]]) -> str:
@@ -186,11 +219,14 @@ def readme_text(spec: RunSpec, ident: Mapping[str, Any], summary: Mapping[str, A
              f"{(spec.start.manifest_sha256 or '—')[:16]}；起点 LoRA 合并进基座后注入新 LoRA）",
              f"- 数据：train 划分，数据量档 {d['n_train']}，任务 {letters}（每类 {d['per_task']} 条，共 {d['n_examples']} 条），"
              f"数据种子 {d['data_seed']}；清单 sha256 {d['items_sha256'][:16]}…",
-             f"- 训练：{tr['epochs']} 个 epoch = {tr['steps']} 步 × {tr['batch_size']} 条（微批 {tr['micro_batch_size']} × 累积 "
+             f"- 训练：{steps_text(tr)}；每步 {tr['batch_size']} 条（微批 {tr['micro_batch_size']} × 累积 "
              f"{tr['grad_accum_steps']}），LoRA r {tr['lora']['r']} / alpha {tr['lora']['alpha']} / dropout {tr['lora']['dropout']}，"
              f"AdamW lr {tr['optim']['lora']['lr']}（token 行 {tr['optim']['token_rows']['lr']}，{tr['optim']['token_rows']['mode']}），"
              f"warmup {tr['warmup_steps']} 步 + 余弦；受限交叉熵（允许集合见 config.yaml 的 tokens.e5）",
              f"- 第一步损失 {first.get('loss')}，最后一步损失 {last.get('loss')}（{len(log)} 步）",
+             f"- 配种子：{(ident.get('seed_pairing') or {}).get('status')}（起点的种子 {(ident.get('seed_pairing') or {}).get('start_seed')}，"
+             f"--allow-seed-mismatch {(ident.get('seed_pairing') or {}).get('allow_mismatch')}）",
+             selection_text(summary.get("selection")),
              f"- 检查点：{summary.get('final_checkpoint')}（{summary.get('final_checkpoint_bytes')} 字节；新 LoRA、网格 token 行、"
              f"manifest；起点的引用在 {STK.STACK_FILE}）", "",
              "## 文件", "",
@@ -208,9 +244,11 @@ def run_e5_training(adapter: Any, cfg: E5TrainConfig, spec: RunSpec, run_cfg: Ma
                     resume: bool = False, argv: Sequence[str] = (), ckpt_root: str | Path | None = None,
                     stop_after_steps: int | None = None, keep_optimizer_state: bool = False,
                     data_root: str | Path | None = None, device: str | None = None, dtype_name: str | None = None,
-                    log: Callable[[str], None] | None = None, _fail_after_step: int | None = None) -> dict[str, Any] | None:
+                    log: Callable[[str], None] | None = None, _fail_after_step: int | None = None,
+                    _val_eval: Callable[[int], Mapping[str, Any]] | None = None) -> dict[str, Any] | None:
     """跑一次 E5 训练；返回 train_summary（stop_after_steps 到了时返回 None）。adapter 必须是刚挂好的 base。
-    起点检查点的合并核对不过时抛 src/e3/merge_check.MergeCheckFailed（叶目录不建）。"""
+    起点检查点的合并核对不过时抛 src/e3/merge_check.MergeCheckFailed（叶目录不建）。
+    _val_eval（只给测试）：替换 val 选择的一次评测（完成的步数 → {score, by_task}），用来核对选择与存盘的流程。"""
     log = log or (lambda m: print(m, file=sys.stderr, flush=True))
     rc = dict(run_cfg)
     if int(rc["n_examples"]) != len(spec.trainset):
@@ -226,7 +264,8 @@ def run_e5_training(adapter: Any, cfg: E5TrainConfig, spec: RunSpec, run_cfg: Ma
         if s.get("complete"):
             old = yaml.safe_load((leaf / CONFIG).read_text(encoding="utf-8"))
             now = {"start": spec.start.identity(), "data": spec.trainset.identity(), "training": _identity(dict(rc)),
-                   "seed": spec.seed, "config": cfg.identity()}
+                   "seed": spec.seed, "config": cfg.identity(),
+                   "seed_pairing": None if spec.seed_pairing is None else dict(spec.seed_pairing)}
             bad = sorted(k for k, v in now.items() if _identity({k: old.get(k)}) != _identity({k: v}))
             if bad:
                 raise ValueError(f"{leaf} 已完成，但运行身份与本次不同（{bad}），拒绝混写")
@@ -259,11 +298,14 @@ def run_e5_training(adapter: Any, cfg: E5TrainConfig, spec: RunSpec, run_cfg: Ma
     prompt = cfg.prompt_format()
     n = cfg.grid_n
     builder = ExampleBuilder(spec.trainset, tokens=trainer.e5, prompt=prompt, n=n, tiny=spec.tiny)
-    schedule = Schedule(spec.trainset, seed=spec.seed, epochs=int(rc["epochs"]), batch_size=int(rc["batch_size"]))
-    if schedule.total != int(rc["epochs"]) * len(spec.trainset) or \
-            -(-schedule.total // int(rc["batch_size"])) != int(rc["steps"]):
+    bs = int(rc["batch_size"])
+    schedule = Schedule(spec.trainset, seed=spec.seed, epochs=int(rc["epochs"]), batch_size=bs, total=int(rc["n_samples"]))
+    want_total = int(rc["steps"]) * bs if rc.get("min_steps_binding") else int(rc["epochs"]) * len(spec.trainset)
+    if schedule.total != want_total or -(-schedule.total // bs) != int(rc["steps"]):
         raise RuntimeError("日程的总条数与步数对不上 run_cfg")
-    ident = run_identity(spec, cfg, rc, trainer, prompt)
+    sel_cfg = rc.get("selection")
+    selector = VS.ValSelector.build(sel_cfg, spec.trainset.tasks, tiny=spec.tiny) if sel_cfg else None  # DEV-0038（val_select）
+    ident = run_identity(spec, cfg, rc, trainer, prompt, selector)
     ident_sha = identity_sha256(ident)
     if exists:
         if not (leaf / CONFIG).exists():
@@ -287,6 +329,16 @@ def run_e5_training(adapter: Any, cfg: E5TrainConfig, spec: RunSpec, run_cfg: Ma
         log(f"[E5 {spec.start.kind} {spec.model_key} {spec.trainset.tag} seed{spec.seed}] 从第 {start} 步续跑")
     tl = [r for r in _read_log(leaf / TRAIN_LOG) if r["step"] < start]
     _atomic_write_text(leaf / TRAIN_LOG, "".join(_jsonl(r) for r in tl))
+    # val 选择（DEV-0038）：历史以续跑状态里的为准（第 s 步做完之后的评测记 step = s；保留 step ≤ start 的），val_selection.jsonl 按它重写；
+    # 候选检查点在 <ckpt>/best_step<k>/，只留历史里最好的那一个（之后的、没被 latest 记下的作废）
+    history: list[dict[str, Any]] = []
+    if selector is not None:
+        if st is not None:
+            history = [dict(h) for h in (st.get("selection") or {}).get("history", [])]
+            if any(int(h["step"]) > start for h in history):
+                raise RuntimeError(f"{latest / RESUME_STATE} 的 val 历史有第 {start} 步之后的记录")
+        _atomic_write_text(leaf / VS.VAL_LOG, "".join(_jsonl(r) for r in history))
+        _prune_best(ckpt, VS.best_of(history))
 
     (leaf / "logs").mkdir(exist_ok=True)
     dev = torch.device(adapter.device)
@@ -320,7 +372,8 @@ def run_e5_training(adapter: Any, cfg: E5TrainConfig, spec: RunSpec, run_cfg: Ma
             shutil.rmtree(tmp)
         tmp.mkdir(parents=True)
         adapter.save_trained(tmp / MODEL_SUB, extra=STK.marker_extra(spec.start))
-        torch.save({"identity_sha256": ident_sha, "step": step_done, **trainer.state_dict()}, tmp / RESUME_STATE)
+        extra_state = {} if selector is None else {"selection": {"history": [dict(h) for h in history]}}
+        torch.save({"identity_sha256": ident_sha, "step": step_done, **trainer.state_dict(), **extra_state}, tmp / RESUME_STATE)
         old = ckpt / (LATEST + ".old")
         if old.exists():
             shutil.rmtree(old)
@@ -333,6 +386,22 @@ def run_e5_training(adapter: Any, cfg: E5TrainConfig, spec: RunSpec, run_cfg: Ma
     steps = int(rc["steps"])
     every = int(rc["ckpt_every"])
     workers = int(rc["data_workers"])
+
+    def val_round(step_done: int) -> dict[str, Any]:
+        """一次 val 评测（val_select 的模块说明）：eval 模式、no_grad，随机数状态前后不变（有没有评测，训练轨迹逐位相同）。"""
+        t_v = time.perf_counter()
+        devices = [dev] if dev.type == "cuda" else []
+        with torch.random.fork_rng(devices=devices):
+            adapter.eval_mode()
+            try:
+                with torch.no_grad():
+                    ev = dict(_val_eval(step_done)) if _val_eval is not None else \
+                        selector.evaluate(adapter, trainer.e5, prompt, n, log=log)
+            finally:
+                adapter.train_mode()
+        _sync(dev)
+        run_log.setdefault("val_evals", []).append({"step": step_done, "wall_s": round(time.perf_counter() - t_v, 3)})
+        return {"step": step_done, "score": float(ev["score"]), "by_task": ev["by_task"]}
     pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="e5-data") if workers > 0 else None
 
     def build_one(plan: Any) -> tuple[Any, dict[str, Any] | None]:
@@ -382,8 +451,26 @@ def run_e5_training(adapter: Any, cfg: E5TrainConfig, spec: RunSpec, run_cfg: Ma
                 log(f"[E5 {spec.start.kind} {spec.model_key} {spec.trainset.tag} seed{spec.seed}] 第 {s1}/{steps} 步 "
                     f"loss {rec['loss']:.4f}（{step_s:.2f} s/步）")
             stop = stop_after_steps is not None and done >= stop_after_steps and s1 < steps
-            if (s1 % every == 0 and s1 < steps) or stop:
+            evaluated = selector is not None and selector.is_eval_step(s1, steps)
+            if evaluated:  # val 选择（DEV-0038）：评测 → 新的最好就先存候选 → latest 记下历史 → 删掉别的候选
+                ev_rec = val_round(s1)
+                prev = VS.best_of(history)
+                history.append(ev_rec)
+                best = VS.best_of(history)
+                ev_rec["best_step"] = int(best["step"])
+                _append(leaf / VS.VAL_LOG, [_jsonl(ev_rec)])
+                if prev is None or int(best["step"]) != int(prev["step"]):
+                    bdir = _best_dir(ckpt, s1)
+                    if bdir.exists():
+                        shutil.rmtree(bdir)
+                    bdir.parent.mkdir(parents=True, exist_ok=True)
+                    adapter.save_trained(bdir, extra=STK.marker_extra(spec.start))
+                log(f"[E5 {spec.start.kind} {spec.model_key} {spec.trainset.tag} seed{spec.seed}] 第 {s1} 步 val 分数 "
+                    f"{ev_rec['score']:.4f}（目前最好：第 {best['step']} 步 {best['score']:.4f}）")
+            if (s1 % every == 0 and s1 < steps) or stop or (evaluated and s1 < steps):
                 save_latest(s1)
+            if evaluated:
+                _prune_best(ckpt, VS.best_of(history))
             if _fail_after_step is not None and s1 == _fail_after_step:
                 raise RuntimeError(f"测试注入的中断（第 {s1} 步之后）")
             if stop:
@@ -394,17 +481,38 @@ def run_e5_training(adapter: Any, cfg: E5TrainConfig, spec: RunSpec, run_cfg: Ma
         if final_dir.exists():
             shutil.rmtree(final_dir)
         final_dir.mkdir(parents=True)
-        adapter.save_trained(final, extra=STK.marker_extra(spec.start))
+        selection = None
+        if selector is None:
+            adapter.save_trained(final, extra=STK.marker_extra(spec.start))
+        else:  # val 选中的那一步（DEV-0038）：候选检查点原样拷成 final/model
+            best = VS.best_of(history)
+            if best is None or [int(h["step"]) for h in history] != selector.eval_steps(steps):
+                raise RuntimeError(f"val 历史的步 {[h['step'] for h in history]} 不是应评的 {selector.eval_steps(steps)}")
+            bdir = _best_dir(ckpt, int(best["step"]))
+            if not (bdir / "manifest.json").is_file():
+                raise RuntimeError(f"选中的第 {best['step']} 步的检查点不在 {bdir}")
+            shutil.copytree(bdir, final)
+            read_manifest(final)  # 逐个核对文件的 sha256 与字节数
+            selection = {"rule": selector.rule, "rule_text": VS.RULE_TEXT, "split": VS.VAL_SPLIT, "selected_step": int(best["step"]),
+                         "selected_score": float(best["score"]), "steps": steps, "val_every": selector.val_every,
+                         "n_per_task": selector.n_per_task, "n_evals": len(history), "val_log": VS.VAL_LOG,
+                         "history": [{"step": int(h["step"]), "score": float(h["score"]),
+                                      "by_task": {t: v["h"] for t, v in h["by_task"].items()}} for h in history]}
         tlog = _read_log(leaf / TRAIN_LOG)
         stack_doc = {"model_dir": MODEL_SUB, "start": spec.start.record(), "fingerprint": stack_rec["fingerprint"],
                      "model": ident["model"], "seed": spec.seed, "tag": spec.trainset.tag, "data": spec.trainset.identity(),
                      "identity_sha256": ident_sha,
-                     "config": cfg.identity(), "train_leaf": str(leaf), "tokens_e5": trainer.e5.layout()}
+                     "config": cfg.identity(), "train_leaf": str(leaf), "tokens_e5": trainer.e5.layout(),
+                     "steps": steps, "selection": selection, "seed_pairing": ident["seed_pairing"]}
         STK.write_stack_file(final_dir, stack_doc)
+        _prune_best(ckpt, None)
         if not keep_optimizer_state and latest.exists():
             shutil.rmtree(latest)
         man = json.loads((final / "manifest.json").read_text(encoding="utf-8"))
-        summary = {"complete": True, "steps": steps, "epochs": int(rc["epochs"]), "start": spec.start.kind,
+        summary = {"complete": True, "steps": steps, "epochs": int(rc["epochs"]), "min_steps": rc.get("min_steps"),
+                   "n_samples": int(rc["n_samples"]), "selected_step": steps if selection is None else selection["selected_step"],
+                   "selection": None if selection is None else {**selection, "history_full": history},
+                   "start": spec.start.kind,
                    "model": spec.model_key, "tag": spec.trainset.tag, "seed": spec.seed, "identity_sha256": ident_sha,
                    "final_loss": tlog[-1]["loss"] if tlog else None,
                    "final_checkpoint": str(final_dir.relative_to(leaf)) if final_dir.is_relative_to(leaf) else str(final_dir),
@@ -430,4 +538,24 @@ def run_e5_training(adapter: Any, cfg: E5TrainConfig, spec: RunSpec, run_cfg: Ma
             pool.shutdown(wait=True, cancel_futures=True)
 
 
-__all__ = ["E5Trainer", "RunSpec", "TRAIN_SUB", "leaf_dir", "run_e5_training", "run_identity", "seed_dir_name"]
+BEST_PREFIX = "best_step"
+
+
+def _best_dir(ckpt: Path, step: int) -> Path:
+    """val 选择的候选检查点：<ckpt>/best_step<步，6 位>/（save_trained 的目录）。"""
+    return ckpt / f"{BEST_PREFIX}{int(step):06d}"
+
+
+def _prune_best(ckpt: Path, keep: Mapping[str, Any] | None) -> None:
+    """删掉 <ckpt>/best_step* 里除 keep（历史里最好的那一条）以外的候选；keep 为 None 时全删。"""
+    if not ckpt.exists():
+        return
+    want = None if keep is None else _best_dir(ckpt, int(keep["step"])).name
+    for d in ckpt.glob(f"{BEST_PREFIX}*"):
+        if d.name != want:
+            shutil.rmtree(d)
+    if want is not None and not (ckpt / want / "manifest.json").is_file():
+        raise RuntimeError(f"val 历史里最好的第 {keep['step']} 步的候选检查点不在 {ckpt / want}")
+
+
+__all__ = ["BEST_PREFIX", "E5Trainer", "RunSpec", "TRAIN_SUB", "leaf_dir", "run_e5_training", "run_identity", "seed_dir_name"]

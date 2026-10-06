@@ -8,6 +8,9 @@
 起点检查点的核对（resolve_start）：manifest 的构造方式与 --model、--tiny 相同；带网格 token 的起点（from_checkpoint）必须恰好是 E3b 词表的
 67 个；e3a 不能带网格 token；三者都必须有 LoRA。检查点在训练叶目录 <叶>/ckpt/final/model 下时，另读 <叶>/config.yaml 的 variant 核对
 （预热与 E3b 的检查点结构相同，防止弄混）；找不到就记 null。
+配种子（DEV-0038，D77-3；check_seed_pairing）：E5 的第 i 个种子用 E3 的第 i 个种子训练的起点。起点的种子取 <叶>/config.yaml 的 seed
+（检查点 manifest 不记种子，src/adapters 不改）；不等于 E5 的种子、或找不到叶目录的 config.yaml 时抛 StartError，除非调用方明确放开
+（scripts/train_e5.py --allow-seed-mismatch）；结果（match / mismatch / unverifiable / not_applicable）进运行身份。
 
 **起点 LoRA 的处理**（merge_then_new_lora）：起点的 LoRA 先在内存里合并进基座（merge_start_lora：peft 的 LoraConfig.from_pretrained +
 get_peft_model + set_peft_model_state_dict + merge_and_unload，与适配器的 load_trained(merge=True) 走同一串调用，只是不改适配器的 LoRA
@@ -86,6 +89,7 @@ class StartRef:
     leaf_variant: str | None = None
     expected_variant: str | None = None
     leaf_config: str | None = None
+    leaf_seed: int | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
 
     @property
@@ -98,24 +102,38 @@ class StartRef:
         return {"kind": self.kind, "grid_tokens": self.grid_tokens, "manifest_sha256": self.manifest_sha256,
                 "lora": m.get("lora"), "build_spec": m.get("build_spec"), "image_policy": m.get("image_policy"),
                 "dtype": m.get("dtype"), "n_grid_tokens": self.n_grid_tokens, "leaf_variant": self.leaf_variant,
-                "expected_variant": self.expected_variant}
+                "expected_variant": self.expected_variant, "leaf_seed": self.leaf_seed}
 
     def record(self) -> dict[str, Any]:
         return {**self.identity(), "checkpoint": None if self.checkpoint is None else str(self.checkpoint),
                 "leaf_config": self.leaf_config}
 
 
-def _leaf_variant(ckpt: Path) -> tuple[str | None, str | None]:
-    """检查点在 <叶>/ckpt/final/model 下时，读 <叶>/config.yaml 的 variant。"""
+def _leaf_config(ckpt: Path) -> tuple[dict[str, Any] | None, str | None]:
+    """检查点在 <叶>/ckpt/final/model 下时，读 <叶>/config.yaml（训练的运行身份）；找不到返回 (None, None)。"""
     p = ckpt.resolve()
     if p.name != "model" or p.parent.name != "final" or p.parent.parent.name != "ckpt":
         return None, None
     cfg = p.parents[2] / "config.yaml"
     if not cfg.is_file():
         return None, None
-    doc = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+    return (yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}), str(cfg)
+
+
+def _leaf_variant(ckpt: Path) -> tuple[str | None, str | None]:
+    """检查点在 <叶>/ckpt/final/model 下时，读 <叶>/config.yaml 的 variant。"""
+    doc, cfg = _leaf_config(ckpt)
+    if doc is None:
+        return None, None
     v = doc.get("variant")
-    return (None if v is None else str(v)), str(cfg)
+    return (None if v is None else str(v)), cfg
+
+
+def _leaf_seed(ckpt: Path) -> int | None:
+    """起点检查点训练时的种子：<叶>/config.yaml 的 seed（检查点 manifest 不记种子；DEV-0038）。找不到为 None。"""
+    doc, _ = _leaf_config(ckpt)
+    s = None if doc is None else doc.get("seed")
+    return None if s is None or isinstance(s, bool) else int(s)
 
 
 def resolve_start(cfg: E5TrainConfig, kind: str, checkpoint: str | Path | None, *, model_key: str, tiny: bool) -> StartRef:
@@ -147,7 +165,32 @@ def resolve_start(cfg: E5TrainConfig, kind: str, checkpoint: str | Path | None, 
         raise StartError(f"起点 {kind} 的检查点来自变体 {variant!r}（{leaf_cfg}），应为 {want!r}")
     return StartRef(kind=kind, checkpoint=d, grid_tokens=str(spec["grid_tokens"]),
                     manifest_sha256=file_sha256(d / MANIFEST), manifest=man, n_grid_tokens=len(names), leaf_variant=variant,
-                    expected_variant=want, leaf_config=leaf_cfg)
+                    expected_variant=want, leaf_config=leaf_cfg, leaf_seed=_leaf_seed(d))
+
+
+SEED_PAIRING_RULE = ("D77-3：E5 的第 i 个种子用 E3 的第 i 个种子训练的起点检查点；起点的种子取它训练叶目录 config.yaml 的 seed"
+                     "（manifest 不记种子）；不符或核对不了就拒绝训练，--allow-seed-mismatch 放开（记进运行身份）")
+
+
+def check_seed_pairing(start: StartRef, seed: int, *, allow_mismatch: bool) -> dict[str, Any]:
+    """配种子（DEV-0038，D77-3）：起点检查点的种子必须等于 E5 的运行种子。返回进运行身份的记录；不符或核对不了时，没有
+    allow_mismatch 就抛 StartError。base 起点没有检查点，不适用。"""
+    rec: dict[str, Any] = {"seed": int(seed), "start_seed": start.leaf_seed, "allow_mismatch": bool(allow_mismatch),
+                           "rule": SEED_PAIRING_RULE}
+    if not start.has_checkpoint:
+        return {**rec, "status": "not_applicable"}
+    if start.leaf_seed is None:
+        status = "unverifiable"
+        msg = (f"起点检查点 {start.checkpoint} 的种子核对不了：它不在 <训练叶目录>/ckpt/final/model 下，或叶目录的 config.yaml "
+               "没有 seed")
+    elif start.leaf_seed != int(seed):
+        status = "mismatch"
+        msg = f"起点检查点来自种子 {start.leaf_seed}（{start.leaf_config}），E5 的 --seed 是 {seed}：E5 的第 i 个种子要用 E3 的第 i 个种子"
+    else:
+        return {**rec, "status": "match"}
+    if not allow_mismatch:
+        raise StartError(f"{msg}（D77-3 配种子）；确要这样就加 --allow-seed-mismatch（记进运行身份）")
+    return {**rec, "status": status}
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +437,7 @@ def load_stacked(final_dir: str | Path, *, device: str, dtype: torch.dtype, star
                                 "device_key": device_key(ad)})
 
 
-__all__ = ["EXTRA_KEY", "STACK_FILE", "STACK_FORMAT", "StartError", "StartRef", "Stacked", "check_same_base", "device_key",
+__all__ = ["EXTRA_KEY", "SEED_PAIRING_RULE", "STACK_FILE", "STACK_FORMAT", "StartError", "StartRef", "Stacked", "check_same_base",
+           "check_seed_pairing", "device_key",
            "load_stacked", "marker_extra", "merge_start_lora", "read_marker", "read_stack_file", "reference_fingerprint",
            "resolve_start", "setup_start", "stack_fingerprint", "start_checks_dir", "start_merge_check", "write_stack_file"]

@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+import yaml
 
 from src.adapters import factory
 from src.adapters.checkpoint import read_manifest
@@ -99,20 +100,23 @@ def test_four_starts_train_and_eval(starts, tmp_path):
     out = tmp_path / "o"
     for init in STARTS:
         ck = starts[init]
-        args = ["--tiny", "--init", init, "--model", key, "--n-train", "10", "--seed", "0", "--out", str(out)]
+        args = ["--tiny", "--init", init, "--model", key, "--n-train", "20", "--seed", "0", "--out", str(out)]
         if ck is not None:
             args += ["--start-checkpoint", str(ck)]
         assert tr.main(args) == 0, init
-        leaf = out / "train" / init / key / "n10" / "seed0"
+        leaf = out / "train" / init / key / "n20" / "seed0"
         final = leaf / "ckpt" / "final"
         summary = json.loads((leaf / "train_summary.json").read_text())
-        assert summary["complete"] and summary["steps"] == 3 and summary["epochs"] == 1  # 10 条 × 1 epoch ÷ 批 4
+        assert summary["complete"] and summary["steps"] == 5 and summary["epochs"] == 1  # 20 条 × 1 epoch ÷ 批 4（不设下限的档）
+        assert summary["selection"] is None and summary["selected_step"] == 5  # 不做 val 选择，取最后一步（DEV-0038）
+        pair = yaml.safe_load((leaf / "config.yaml").read_text())["seed_pairing"]
+        assert pair["status"] == ("not_applicable" if ck is None else "match") and pair["start_seed"] == (None if ck is None else 0)
         assert sorted(p.name for p in final.iterdir()) == ["e5_stack.json", "model"]
         files = set(json.loads((final / "model" / "manifest.json").read_text())["files"])
         assert {"lora/adapter_model.safetensors", "token_rows.safetensors", "tokens.json"} <= files  # 不存合并后的整模型（D34）
         assert not any("model.safetensors" == f or f.endswith("pytorch_model.bin") for f in files)
         stack = json.loads((final / "e5_stack.json").read_text())
-        assert stack["start"]["kind"] == init and stack["tag"] == "n10" and stack["seed"] == 0
+        assert stack["start"]["kind"] == init and stack["tag"] == "n20" and stack["seed"] == 0
         if ck is None:
             assert STK.read_marker(final / "model") is None and stack["start"]["manifest_sha256"] is None
         else:
@@ -130,7 +134,7 @@ def test_four_starts_train_and_eval(starts, tmp_path):
         tasks = ("rotation3d", "imagery") if init == "e3b" else ("rotation3d",)  # 二值路径另由合并核对与续跑测试覆盖（省时间）
         assert ev.main(["--tiny", "--checkpoint", str(final), "--model", key, "--out", str(out), "--limit", "1",
                         "--task", *tasks]) == 0, init
-        mdir = out / "trained" / init / key / "n10" / "seed0"
+        mdir = out / "trained" / init / key / "n20" / "seed0"
         mc = json.loads((mdir / "merge_check.json").read_text())
         assert mc["pass"] is True and mc["data"]["n"] == 5 and mc["data"]["n_runs"] == 2  # 每类 1 条，二值、起伏各一批
         for task in tasks:
@@ -180,7 +184,7 @@ def test_stacking_equals_merged_checkpoint(starts):
 def test_new_lora_same_init_across_starts(starts):
     if starts["key"] != FAMILIES[0]:
         pytest.skip("一个家族就够")
-    rc = resolve_run(CFG, n_examples=10, tiny=True)
+    rc = resolve_run(CFG, n_train=10, n_examples=10, tiny=True)
     lora = {}
     for init in ("base", "e3b", "e3a"):
         ck = starts[init]
@@ -244,8 +248,9 @@ def test_bad_start_refused(tmp_path):
     _pathological_lora(ad)
     bad = ad.save_trained(tmp_path / "bad_ck")
     out = tmp_path / "o"
+    # 不在训练叶目录下的检查点，配种子核对不了（DEV-0038）：这里只测合并核对，所以放开
     code = _script("train_e5").main(["--tiny", "--init", "e3a", "--start-checkpoint", str(bad), "--model", key, "--n-train", "10",
-                                     "--seed", "0", "--out", str(out)])
+                                     "--seed", "0", "--out", str(out), "--allow-seed-mismatch"])
     assert code == 1
     assert not (out / "train" / "e3a" / key / "n10").exists()  # 不建叶目录
     (mc,) = (out / "train" / "e3a" / key / "start_checks").glob("merge_check_*.json")
@@ -264,7 +269,7 @@ def test_bad_e5_lora_refused(tmp_path):
     key = FAMILIES[0]
     ad = _tiny(key)
     start = STK.resolve_start(CFG, "base", None, model_key=key, tiny=True)
-    tr = E5Trainer(ad, CFG, resolve_run(CFG, n_examples=10, tiny=True), seed=0, start=start)
+    tr = E5Trainer(ad, CFG, resolve_run(CFG, n_train=10, n_examples=10, tiny=True), seed=0, start=start)
     tr.setup_fresh()
     _pathological_lora(ad)
     final = tmp_path / "final"
@@ -293,7 +298,7 @@ def test_overfit_near_perfect(key):
     网格 IoU 满分，a、b 的起伏误差为 0。"""
     n = 8
     ad = _tiny(key)
-    rc = resolve_run(CFG, n_examples=5, tiny=True)
+    rc = resolve_run(CFG, n_train=20, n_examples=5, tiny=True)
     rc["optim"] = copy.deepcopy(rc["optim"])
     rc["optim"]["lora"]["lr"] = 3e-3
     rc["optim"]["token_rows"]["lr"] = 3e-2
