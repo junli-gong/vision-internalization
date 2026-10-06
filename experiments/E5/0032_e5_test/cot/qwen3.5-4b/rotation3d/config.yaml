@@ -1,0 +1,77 @@
+experiment: E5
+framework: src/e5（DEV-0018；DEV-0028）
+system: cot
+task: rotation3d
+task_letter: a
+subset: eval
+data:
+  generator: src.synth.generate
+  split: test
+  n_per_bin: 100
+  n_samples: 400
+  sample_ids_sha256: d69b689316eef31de384f54b37b0116fb4497771f751809dfa5d626fcd7dfc41
+  index_rule: 序号 0..B·n−1，档 = 序号 mod B（src/e5/protocol.py）
+  limit: null
+  task_generator_version: 4
+  synth_generator_version: 5
+  platform:
+    machine: x86_64
+    system: Linux
+n_resamples: 1000
+tiny: false
+gate:
+  rule: D59-4：配对 bootstrap 95% CI，判定条件同时胜过 copy_flat、gt_affine_upper、copy_convex
+  convex_prior:
+    baseline: copy_convex
+    source_baseline: copy
+    amplitude: 2
+    definition: src/synth/relief.py convex_prior_codes（D59-4，DEV-0028）
+model:
+  key: qwen3.5-4b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-4B
+  revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+  adapter_model_key: qwen3.5-4b
+image_policy:
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+generation:
+  enable_thinking: true
+  mode: budgeted
+  thinking_budget: 4096
+  answer_budget: 1024
+  allowed_token_ids: null
+  max_new_tokens_override: null
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+batching:
+  batch_size: 64
+  padding: left
+  order: eval_set_order
+  path: generate_batch_budgeted
+prompt:
+  config: configs/e5_prompts.json
+  config_sha256: c0e59d3589cfb51a29eb271d1e1527604899a062408f5d429c9acc4f80467ec4
+  format: relief_image_cot
+  template: '{instruction} First reason step by step in words about where the {target}
+    ends up after the rotation and how far each part of it is from the camera. Then
+    answer with a {n}x{n} grid over the image that shows both where the {target} is
+    after the rotation and how far each part of it is from the camera. Split the image
+    into {n} rows (top to bottom) and {n} columns (left to right) of equal size. Output
+    exactly {n} lines, each with {n} characters and no spaces. Write . for a cell
+    that is not mostly covered by the {target}. For a covered cell, write the depth
+    of the {target}''s surface in that cell relative to the average depth over all
+    of its covered cells, using 32 steps written 0 1 2 3 4 5 6 7 8 9 A B C D E F G
+    H I J K L M N O P Q R S T U V from nearest to farthest. Each step is 1/16 of the
+    {target}''s radius (the distance from its center to its farthest point): G covers
+    from the average depth to 1/16 radius farther, F covers from 1/16 radius nearer
+    up to the average depth, and so on; anything more than one radius nearer or farther
+    is written 0 or V. Give the final answer as exactly one such grid.'
