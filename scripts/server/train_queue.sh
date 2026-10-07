@@ -6,7 +6,8 @@
 #   - 两段之间过闸：暂停文件（评测要用卡，STANDBY"后台训练"一节）、origin 上的 HOLD、别人的 GPU 进程、
 #     内存（可用 < 60 GB 停，D77-5）、根盘（剩 < 3 GB 停，D6）、本项目根盘份额（> 15 GB 停，D28-8）；
 #   - 跑一段时每 30 秒看一次内存，每 5 分钟写一次心跳；
-#   - 一条跑完：final/ 从内存盘拷到根盘，逐文件 sha256 核对，删掉内存盘上的那份，记账（ckpt_ledger.tsv），推结果；
+#   - 一条跑完：final/ 从内存盘拷到根盘（按训练叶目录的结构，见 finalize），逐文件 sha256 核对，删掉内存盘上的那份，
+#     记账（ckpt_ledger.tsv 的 checkpoint 列 = 训练脚本打印的那一层，可以直接给评测或 E5 的 --start-checkpoint），推结果；
 #   - 一条失败就从检查点重试一次；还失败就记进 failed.txt、跳到下一条；连续两条失败就停。
 #
 # 队列脚本先设好下面的变量，再 source 本文件，然后逐条调用  run <名字> <脚本> <参数…>，最后调用 finish。
@@ -37,7 +38,7 @@ DRV=$OUT/driver
 OUT_REL=${OUT#"$REPO"/}
 mkdir -p "$DRV/logs" "$CK_TMP" "$CK_FINAL" "$LOGS"
 touch "$DRV/done.txt"
-[ -f "$OUT/ckpt_ledger.tsv" ] || printf 'name\tfinal_dir\tkbytes\tmanifest\tmanifest_sha256\n' > "$OUT/ckpt_ledger.tsv"
+[ -f "$OUT/ckpt_ledger.tsv" ] || printf 'name\tcheckpoint\tkbytes\tmanifest\tmanifest_sha256\n' > "$OUT/ckpt_ledger.tsv"
 FAILS_IN_ROW=0
 
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -113,28 +114,40 @@ chunk() {  # $1 = 名字，其余 = 命令；输出写进 $DRV/logs/<名字>.cur
   return $rc
 }
 
-finalize() {  # $1 = 名字，$2 = 训练脚本打印的 final 目录
-  local name=$1 src=$2 rel dst man kb
-  case "$src" in
-    "$CK_TMP"/*) rel=${src#"$CK_TMP"/}; dst="$CK_FINAL/$rel" ;;
-    *) die "$name：final 目录不在 CK_TMP 下（$src）" ;;
+finalize() {  # $1 = 名字，$2 = 训练脚本打印的检查点（<ckpt>/final 或 <ckpt>/final/model）
+  # 根盘上按训练叶目录的结构存：$CK_FINAL/<叶目录相对 OUT 的路径>/ckpt/final，旁边放叶目录的 config.yaml 与 train_summary.json。
+  # 这样 <新位置>/ckpt/final/model 与默认布局（不给 --ckpt-root）一样能找到训练时的运行身份：E5 的配种子与变体核对读
+  # <叶>/config.yaml（src/e5/stack.py 的 _leaf_config）。叶目录由 logs/run_*.json 记下的 ckpt_dir 找到。
+  local name=$1 printed=$2 fin sub ckdir f leaf rel dst man kb
+  case "$printed" in
+    */final) fin=$printed; sub="" ;;
+    */final/model) fin=${printed%/model}; sub=/model ;;
+    *) die "$name：认不出检查点路径（$printed）" ;;
   esac
-  if [ -d "$src" ]; then
+  case "$fin" in "$CK_TMP"/*) ;; *) die "$name：final 目录不在 CK_TMP 下（$fin）" ;; esac
+  ckdir=$(dirname "$fin")
+  f=$(grep -rlF "\"ckpt_dir\": \"$ckdir\"" "$OUT" --include='run_*.json' 2>/dev/null | head -n 1)
+  [ -n "$f" ] || die "$name：在 $OUT 里找不到 ckpt_dir = $ckdir 的训练叶目录"
+  leaf=$(dirname "$(dirname "$f")"); rel=${leaf#"$OUT"/}
+  dst="$CK_FINAL/$rel/ckpt/final"
+  if [ -d "$fin" ]; then
     mkdir -p "$(dirname "$dst")"; rm -rf "$dst.part"
-    cp -a "$src" "$dst.part" || die "$name：拷贝 final 失败"
-    if ! cmp -s <(dir_sums "$src") <(dir_sums "$dst.part"); then die "$name：拷贝后 sha256 不一致"; fi
+    cp -a "$fin" "$dst.part" || die "$name：拷贝 final 失败"
+    if ! cmp -s <(dir_sums "$fin") <(dir_sums "$dst.part"); then die "$name：拷贝后 sha256 不一致"; fi
     rm -rf "$dst"; mv "$dst.part" "$dst"
     dir_sums "$dst" > "$dst.sha256.txt"
-    rm -rf "$src"
-    rel=$(dirname "$src"); while [ "$rel" != "$CK_TMP" ] && rmdir "$rel" 2>/dev/null; do rel=$(dirname "$rel"); done
+    rm -rf "$fin"
+    f=$ckdir; while [ "$f" != "$CK_TMP" ] && rmdir "$f" 2>/dev/null; do f=$(dirname "$f"); done
   elif [ ! -d "$dst" ]; then
-    die "$name：final 目录既不在内存盘（$src）也不在根盘（$dst）"
+    die "$name：final 目录既不在内存盘（$fin）也不在根盘（$dst）"
   fi
+  cp "$leaf/config.yaml" "$CK_FINAL/$rel/config.yaml" || die "$name：叶目录没有 config.yaml（$leaf）"
+  [ -f "$leaf/train_summary.json" ] && cp "$leaf/train_summary.json" "$CK_FINAL/$rel/train_summary.json"
   man=$(cd "$dst" && find . -name manifest.json | LC_ALL=C sort | head -n 1)
   kb=$(du -sk "$dst" | awk '{print $1}')
-  printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$dst" "$kb" "$man" "$( [ -n "$man" ] && sha "$dst/$man" | awk '{print $1}')" >> "$OUT/ckpt_ledger.tsv"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$dst$sub" "$kb" "$man" "$( [ -n "$man" ] && sha "$dst/$man" | awk '{print $1}')" >> "$OUT/ckpt_ledger.tsv"
   echo "$name" >> "$DRV/done.txt"
-  note "$name 完成：final → $dst（${kb} KB）"
+  note "$name 完成：final → $dst$sub（${kb} KB）"
 }
 
 run() {  # $1 = 名字（队列内唯一），$2 = 脚本，其余 = 参数（不含 --out/--ckpt-root/--resume/--stop-after-steps）
