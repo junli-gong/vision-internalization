@@ -1,0 +1,387 @@
+experiment: E3a
+framework: src/readout（DEV-0034）
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  adapter_model_key: qwen3.5-9b
+  tiny: false
+  dtype: bf16
+image_policy: pixel_budget:300
+variant: full
+seed: 0
+training:
+  variant: full
+  steps: 4000
+  micro_batch_size: 4
+  grad_accum_steps: 4
+  ckpt_every: 500
+  lora:
+    r: 32
+    alpha: 64
+    dropout: 0.05
+  optim:
+    optimizer: adamw
+    betas:
+    - 0.9
+    - 0.999
+    eps: 1.0e-08
+    groups:
+      lora:
+        lr: 0.0002
+        weight_decay: 0.0
+      query:
+        lr: 0.0002
+        weight_decay: 0.0
+      mix:
+        lr: 0.001
+        weight_decay: 0.0
+      readout:
+        lr: 0.0005
+        weight_decay: 0.0001
+    max_grad_norm: 1.0
+    schedule: warmup_cosine
+    warmup_ratio: 0.03
+    min_lr_ratio: 0.0
+  loss:
+    task_weights:
+      refseg: 1.0
+      depth: 1.0
+      semseg: 1.0
+      normals: 1.0
+    reduction: sample_mean
+  gradient_checkpointing: true
+  enable_thinking: false
+  mix:
+    refseg: 1
+    depth: 1
+    semseg: 1
+    normals: 1
+  data_workers: 4
+  query:
+    n: 256
+    grid: 16
+    init_noise_ratio: 0.1
+  decoder:
+    widths:
+    - 256
+    - 128
+    - 64
+    - 64
+    res_blocks:
+    - 2
+    - 1
+    - 1
+    - 0
+    embed_dim: 64
+    out_size: 128
+  batch_size: 16
+  warmup_steps: 120
+readout:
+  spec:
+    variant: full
+    hidden_size: 4096
+    n_sources: 33
+    grid: 16
+    widths:
+    - 256
+    - 128
+    - 64
+    - 64
+    res_blocks:
+    - 2
+    - 1
+    - 1
+    - 0
+    embed_dim: 64
+    out_size: 128
+    head_channels:
+      depth: 1
+      normals: 3
+      refseg: 1
+    norm_eps: 1.0e-06
+  sources:
+  - llm_hidden:query
+  - llm_hidden:class_names
+  params:
+    mix: 34
+    decoder: 4199616
+    class_proj: 270400
+    decoder_budget_total: 4470050
+    heads:
+      refseg: 65
+      depth: 65
+      normals: 195
+    readout_total: 4470375
+    limits:
+      decoder_budget_total: 50000000
+      each_head: 1000
+    basis: decoder_budget_total = mix + decoder + class_proj（class_proj 只用于类别头，保守地计入解码器的预算）；每个线性头单独
+      ≤ each_head
+  layers:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+  - 16
+  - 17
+  - 18
+  - 19
+  - 20
+  - 21
+  - 22
+  - 23
+  - 24
+  - 25
+  - 26
+  - 27
+  - 28
+  - 29
+  - 30
+  - 31
+  - 32
+  query:
+    n: 256
+    grid: 16
+    position_mode: grid2d
+instructions:
+  refseg:
+    order: instruction_first
+    instruction_template: Segment {expression} in the image.
+  depth:
+    order: instruction_first
+    instruction_template: Estimate the depth of the image.
+  semseg:
+    order: instruction_first
+    instruction_template: 'Segment the image into these classes: {classes}.'
+    class_names_sha256: f9dbd8a75a0722c971d8c82db76dc205e06cb422d98153f4e5bbf90408ef5438
+  normals:
+    order: instruction_first
+    instruction_template: Estimate the surface normals of the image.
+class_names_check:
+  checked: true
+  file: /dev/shm/visint/train_data/ade20k/objectInfo150.txt
+  sha256: c368be0cf078eb49264b5a0d0c4ad2e63bbfedf260c48458984302e2a7995671
+losses:
+  refseg:
+    kind: bce_dice
+    bce_weight: 1.0
+    dice_weight: 1.0
+    dice_smooth: 1.0
+  depth:
+    kind: silog
+    variance_focus: 0.85
+    scale: 10.0
+  semseg:
+    kind: cross_entropy
+  normals:
+    kind: cosine
+gt:
+  refseg:
+    gt: src/e1/scoring.gt_mask（与 E1、E3b 同一套解码）→ 最近邻到 128 × 128（0/1）
+  depth:
+    gt: 有效像素（NYU_DEPTH_MIN < d < NYU_DEPTH_MAX，与 E2 的 depth_train_valid 相同）上 log 深度的面积平均（即几何平均）到
+      128 × 128；有效面积不足 min_valid_fraction 的格子不监督
+    min_valid_fraction: 0.5
+  semseg:
+    gt: 标签最近邻到 128 × 128，再 reduce_zero_label（0 → ADE_IGNORE_INDEX 忽略，其余减 1；与 E2 相同）
+  normals:
+    gt: 有效像素（GT 非 (0,0,0)）上单位法向的面积平均，再单位化，到 128 × 128；有效面积不足 min_valid_fraction 或平均向量的范数
+      < 1e-6 的格子不监督
+    min_valid_fraction: 0.5
+config:
+  path: configs/e3a_train.json
+  sha256: 28be66e52fd3e9e5b45c5b04e299342bda469c9c2f9d20e3b2de022b0c790067
+  version: e3a-train-v1
+data:
+  refseg:
+    pool:
+      set: refcoco_train/train
+      datasets:
+        refcoco:
+          set: refcoco_train/train
+          n_total: 107859
+          n_missing: 0
+          n_dedupe_excluded: 27
+          n_kept: 107832
+          dataset: refcoco
+        refcoco+:
+          set: refcoco_train/train
+          n_total: 107376
+          n_missing: 0
+          n_dedupe_excluded: 27
+          n_kept: 107349
+          dataset: refcoco+
+        refcocog:
+          set: refcoco_train/train
+          n_total: 72369
+          n_missing: 0
+          n_dedupe_excluded: 32
+          n_kept: 72337
+          dataset: refcocog
+      n_kept: 287518
+      n_empty_expression: 0
+    n: 287518
+    ids_sha256: 835f4f7940948432226da31d61a1fbf20ef3d56daa4019ccef2da1230fed5185
+    dedupe:
+      file_sha256: 40f214fb14315c990de811ef9d23172d6c36ea661e40a241ad46fc667f3c1838
+      schema: 2
+      legacy: false
+      max_hamming: 8
+      eval_sets:
+      - ade20k/val
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - coco_val2017_full/val2017
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyu_normals/test
+      - nyuv2/dev_train
+      - nyuv2/test
+      - odinw13/eval
+      - probe/D20
+      - refcoco/eval
+      required_eval_sets:
+      - ade20k/val
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyu_normals/test
+      - nyuv2/test
+      - odinw13/eval
+      - refcoco/eval
+  depth:
+    pool:
+      set: nyu_depth_train/train
+      n_total: 22848
+      n_missing: 0
+      n_dedupe_excluded: 132
+      n_kept: 22716
+    n: 22716
+    ids_sha256: ade362c2b310428ee01d18f4234c46a61c0753ecceb0f777f3e11437985ec96e
+    dedupe:
+      file_sha256: 40f214fb14315c990de811ef9d23172d6c36ea661e40a241ad46fc667f3c1838
+      schema: 2
+      legacy: false
+      max_hamming: 8
+      eval_sets:
+      - ade20k/val
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - coco_val2017_full/val2017
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyu_normals/test
+      - nyuv2/dev_train
+      - nyuv2/test
+      - odinw13/eval
+      - probe/D20
+      - refcoco/eval
+      required_eval_sets:
+      - ade20k/val
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyu_normals/test
+      - nyuv2/test
+      - odinw13/eval
+      - refcoco/eval
+  semseg:
+    pool:
+      set: ade20k/train
+      n_total: 20210
+      n_missing: 0
+      n_dedupe_excluded: 26
+      n_kept: 20184
+      role: train
+    n: 20184
+    ids_sha256: 583402326666f5892cda7add3a9f9be7d2ef036f7320befc95bcadc6e496c010
+    dedupe:
+      file_sha256: 40f214fb14315c990de811ef9d23172d6c36ea661e40a241ad46fc667f3c1838
+      schema: 2
+      legacy: false
+      max_hamming: 8
+      eval_sets:
+      - ade20k/val
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - coco_val2017_full/val2017
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyu_normals/test
+      - nyuv2/dev_train
+      - nyuv2/test
+      - odinw13/eval
+      - probe/D20
+      - refcoco/eval
+      required_eval_sets:
+      - ade20k/val
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyu_normals/test
+      - nyuv2/test
+      - odinw13/eval
+      - refcoco/eval
+  normals:
+    pool:
+      set: nyu_normals/train
+      n_total: 795
+      n_missing: 0
+      n_dedupe_excluded: 50
+      n_kept: 745
+      role: train
+    n: 745
+    ids_sha256: 4ad5376789a40ce7ca375dc13113df3ccce1c97529cfc0d05a2cb75a3f57f71d
+    dedupe:
+      file_sha256: 40f214fb14315c990de811ef9d23172d6c36ea661e40a241ad46fc667f3c1838
+      schema: 2
+      legacy: false
+      max_hamming: 8
+      eval_sets:
+      - ade20k/val
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - coco_val2017_full/val2017
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyu_normals/test
+      - nyuv2/dev_train
+      - nyuv2/test
+      - odinw13/eval
+      - probe/D20
+      - refcoco/eval
+      required_eval_sets:
+      - ade20k/val
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyu_normals/test
+      - nyuv2/test
+      - odinw13/eval
+      - refcoco/eval
