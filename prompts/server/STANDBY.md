@@ -61,3 +61,4 @@ WAIT=$REPO/.claude/skills/exp-triad-flow/scripts/server_standby_wait.sh
 - 超过 30 分钟的驱动脚本一律与 CC 的进程脱钩：`setsid nohup bash <驱动> > <日志> 2>&1 &`，或者放进 tmux 的独立会话。
 - CC 自己的后台任务（run_in_background）只用来等待和轮询（`$WAIT`、看日志），不要用它直接跑实验。CC 的会话一结束，挂在它下面的进程会被一起杀掉。RUN-0032 的驱动就是这样在下载 InternVL-4B 时断掉的，GPU 空了 12 小时。
 - 驱动脚本自己负责每个模型完成后推送结果、更新心跳，CC 重连之后照样能接上。
+- 心跳在单个长运行里也要定期更新（每 30 分钟一次，写当前在跑什么），不要只在模型之间更新：RUN-0032 的 InternVL-4B 一个模型跑了 9.4 小时，心跳一直不动，管理员误以为驱动断了。
