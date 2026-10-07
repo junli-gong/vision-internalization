@@ -8,6 +8,9 @@
 - 坏检查点（病态的 LoRA：合并前后的两条计算路径数值上分家）：合并核对不通过，评测拒绝运行，不写任何任务目录。
 - DEV-0032：评测前的核对按用途分开（eval.merge_check.checks）：网格评测是 merge 加 restricted，T 文本评测只有 merge；过拟合小检查点
   的 restricted（检查点自己的网格 token、E3b 单轮评测的设置）通过。
+- DEV-0039（D72-4 (c)）：eval_e3b --k-values 只跑配置 K 那一列的前缀：取值规则（不是前缀是用法错误）；--k-values 1 的单轮输出
+  （predictions.jsonl、单轮指标）与不给时逐字节相同、没有任何采样；不给时整套输出与改动前（ffbdbf7 的快照）逐字节相同；续跑换了一组 K
+  拒绝混写。
 """
 
 from __future__ import annotations
@@ -611,3 +614,139 @@ def test_eval_config_passed_to_merge_check(tiny_ckpt, tmp_path):
               dtype="fp32", criteria_version=load_cti().CRITERIA_VERSION)
     assert _reusable(mc, **kw, e3b_config_sha=sha) and _reusable(mc, **kw)
     assert not _reusable(mc, **kw, e3b_config_sha=CFG.sha256)  # 换回默认配置：不复用，重跑
+
+
+# ---------------------------------------------------------------------------
+# DEV-0039（D72-4 (c)）：eval_e3b --k-values（只跑配置 K 那一列的前缀；多轮与匹配计算量每个尺寸只做 1 个种子）
+# ---------------------------------------------------------------------------
+
+SNAP_EV = REPO / "tests" / "fixtures" / "e3" / "evaluate_ffbdbf7.py"  # ffbdbf7 的 src/e3/evaluate.py 原样（DEV-0039 之前）
+SNAP_EV_SHA256 = "397ff54a3d693206fb5280007f05b5f553995d91e65854303addbd725afd8d95"
+SNAP_SCRIPT = REPO / "tests" / "fixtures" / "e3" / "eval_e3b_ffbdbf7.py"  # ffbdbf7 的 scripts/eval_e3b.py 原样
+SNAP_SCRIPT_SHA256 = "ac9b207dc8ddc72a092bd27d2894380ff1704bf018b00ca50a63d711c52c7898"
+
+
+def _load_path(path: Path, name: str):
+    """按文件加载模块（登记进 sys.modules：快照里有 dataclass），sys.path 原样恢复。"""
+    saved = list(sys.path)
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    sys.path[:] = saved
+    return mod
+
+
+def _cli_args(ck: Path) -> list[str]:
+    return ["--tiny", "--checkpoint", str(ck), "--model", FAMILIES[0], "--seed", "0"]
+
+
+def _mdir(out: Path) -> Path:
+    return out / "eval" / "e3b" / FAMILIES[0] / "seed0"
+
+
+def test_k_values_prefix_rules(tmp_path):
+    ks = EV.config_k_values(CFG)
+    assert ks == [1, 2, 4] == CFG.doc["eval"]["multi_turn"]["k_values"]
+    for good in ([1], [1, 2], [1, 2, 4]):
+        assert EV.k_values_prefix(ks, good) == good
+    for bad in ([], [2], [4], [1, 4], [2, 1], [1, 1], [1, 2, 4, 8], [0, 1]):
+        with pytest.raises(ValueError, match="前缀"):
+            EV.k_values_prefix(ks, bad)
+    base = EV.resolve_eval(CFG, tiny=True)
+    assert "k_values_override" not in base
+    assert EV.resolve_eval(CFG, tiny=True, k_values=[1, 2, 4]) == base  # 给的就是配置那一列：不算覆盖，设置逐项相同
+    s1 = EV.resolve_eval(CFG, tiny=True, k_values=[1])
+    assert (s1["k_values"], s1["n_rounds"], s1["n_samples"]) == ([1], 1, 0)
+    assert EV.stage_names(s1) == ["round1"] and EV.procedures(s1) == ["single"]  # 只有第 1 轮，没有任何采样
+    assert EV.compute_procs(s1) == ["single", "multi_K1", "matched_K1"]
+    assert s1["k_values_override"] == {"config_k_values": [1, 2, 4], "k_values": [1], "basis": EV.K_VALUES_OVERRIDE_BASIS}
+    rest = ("k_values", "n_rounds", "n_samples", "k_values_override")
+    assert {k: v for k, v in s1.items() if k not in rest} == {k: v for k, v in base.items() if k not in rest}
+    s12 = EV.resolve_eval(CFG, tiny=True, k_values=[1, 2])
+    assert (s12["n_rounds"], s12["n_samples"]) == (2, 1) and EV.stage_names(s12) == ["round1", "round2", "sample1"]
+    assert EV.procedures(s12) == ["single", "round2", "matched_K2"]
+    with pytest.raises(ValueError, match="前缀"):
+        EV.resolve_eval(CFG, tiny=True, k_values=[1, 4])
+    # 命令行：不是前缀 → 用法错误（退出码 2）；是前缀照收
+    ev = _load_script("eval_e3b")
+    args = _cli_args(REPO) + ["--out", str(tmp_path / "x")]  # --checkpoint 只核对是目录（parse_args 不读它）
+    for bad in (["2"], ["1", "4"], ["1", "2", "4", "8"], ["2", "1"], ["1", "1"]):
+        with pytest.raises(SystemExit) as e:
+            ev.parse_args(args + ["--k-values", *bad])
+        assert e.value.code == 2, bad
+    assert ev.parse_args(args + ["--k-values", "1"]).k_values == [1]
+    assert ev.parse_args(args + ["--k-values", "1", "2"]).k_values == [1, 2]
+    assert ev.parse_args(args).k_values is None
+
+
+def test_cli_k_values_1_single_identical_and_resume_rules(tiny_ckpt, tmp_path):
+    """--k-values 1：只有第 1 轮、没有采样；predictions.jsonl 与单轮指标与跑全部 K 时逐字节相同；运行身份记下生效的 K 与覆盖；
+    续跑换了一组 K（两个方向）拒绝混写，同一组 K 续跑照常。"""
+    ev = _load_script("eval_e3b")
+    full, one = tmp_path / "full", tmp_path / "k1"
+    assert ev.main(_cli_args(tiny_ckpt) + ["--out", str(full)]) == 0
+    assert ev.main(_cli_args(tiny_ckpt) + ["--out", str(one), "--k-values", "1"]) == 0
+    for task in ("refseg", "depth"):
+        lf, l1 = _mdir(full) / task, _mdir(one) / task
+        assert (l1 / "predictions.jsonl").read_bytes() == (lf / "predictions.jsonl").read_bytes(), task
+        assert sorted(p.name for p in l1.glob("predictions*.jsonl")) == ["predictions.jsonl"]  # 没有第 2 轮以后，也没有采样
+        assert sorted(p.name for p in l1.glob("compute*.json")) == ["compute.json", "compute_by_stage.json",
+                                                                    "compute_matched_K1.json", "compute_multi_K1.json"]
+        mf, m1 = (json.loads((d / "metrics.json").read_text()) for d in (lf, l1))
+        assert list(m1) == list(mf)  # metrics.json 的结构不变
+        for k in ("headline", "single", "groups", "n", "config_sha256", "checkpoint_manifest_sha256"):
+            assert json.dumps(m1[k], ensure_ascii=False) == json.dumps(mf[k], ensure_ascii=False), (task, k)
+        for sect in ("multi_turn", "matched_compute"):
+            assert list(m1[sect]["by_K"]) == ["1"] and m1[sect]["by_K"]["1"] == mf[sect]["by_K"]["1"], (task, sect)
+        assert m1["multi_turn"]["k_values"] == [1] and list(m1["multi_turn"]["by_round"]) == ["1"]
+        assert set(m1["compute"]) == {"single", "multi_K1", "matched_K1"}
+        assert m1["compute"]["single"] == mf["compute"]["single"]
+        assert set(m1["comparisons"]) == {"upsample", "definition"}  # K ≥ 2 才有配对比较
+        assert list(m1["stages"]) == ["round1"] and m1["stages"]["round1"] == mf["stages"]["round1"]
+        sf = [json.loads(x) for x in (lf / "scores.jsonl").read_text().splitlines()]
+        s1 = [json.loads(x) for x in (l1 / "scores.jsonl").read_text().splitlines()]
+        assert [(r["id"], r["gt"], r["procs"]["single"]) for r in s1] == [(r["id"], r["gt"], r["procs"]["single"]) for r in sf]
+        assert all(set(r["procs"]) == {"single"} for r in s1)
+        i1, i_f = (yaml.safe_load((d / "config.yaml").read_text()) for d in (l1, lf))
+        assert (i1["eval"]["k_values"], i1["eval"]["n_rounds"], i1["eval"]["n_samples"]) == ([1], 1, 0)
+        assert i1["eval"]["k_values_override"]["config_k_values"] == [1, 2, 4] and "k_values_override" not in i_f["eval"]
+        assert {k: v for k, v in i1.items() if k != "eval"} == {k: v for k, v in i_f.items() if k != "eval"}
+        assert "本次只跑 K = [1]" in (l1 / "README.md").read_text() and "本次只跑" not in (lf / "README.md").read_text()
+    before = {t: {f: (_mdir(one) / t / f).read_bytes() for f in DETERMINISTIC} for t in ("refseg", "depth")}
+    # 续跑换了一组 K：拒绝混写（K = 1 的目录配全部 K、配 1 2；全部 K 的目录配 1），已有的输出不动
+    for out, extra in ((one, []), (one, ["--k-values", "1", "2"]), (full, ["--k-values", "1"])):
+        err_dir = _mdir(out) / "errors"
+        n_err = len(list(err_dir.glob("*.json"))) if err_dir.exists() else 0
+        assert ev.main(_cli_args(tiny_ckpt) + ["--out", str(out), "--resume", *extra]) == 2, (out.name, extra)
+        errs = sorted(err_dir.glob("*.json"))
+        assert len(errs) == n_err + 1 and "运行身份" in json.loads(errs[-1].read_text())["error"]
+    assert {t: {f: (_mdir(one) / t / f).read_bytes() for f in DETERMINISTIC} for t in ("refseg", "depth")} == before
+    # 同一组 K 续跑照常；全部 K 的目录显式给 1 2 4（= 配置那一列，不算覆盖）也照常
+    assert ev.main(_cli_args(tiny_ckpt) + ["--out", str(one), "--resume", "--k-values", "1"]) == 0
+    assert {t: {f: (_mdir(one) / t / f).read_bytes() for f in DETERMINISTIC} for t in ("refseg", "depth")} == before
+    assert ev.main(_cli_args(tiny_ckpt) + ["--out", str(full), "--resume", "--k-values", "1", "2", "4"]) == 0
+
+
+def test_default_outputs_identical_to_ffbdbf7(tiny_ckpt, tmp_path):
+    """不给 --k-values：新脚本与改动前（ffbdbf7）的脚本加模块，在同一进程、同一组参数下，确定的输出（README、config.yaml、metrics.json、
+    scores.jsonl 与各阶段的 predictions）逐字节相同。"""
+    assert hashlib.sha256(SNAP_EV.read_bytes()).hexdigest() == SNAP_EV_SHA256
+    assert hashlib.sha256(SNAP_SCRIPT.read_bytes()).hexdigest() == SNAP_SCRIPT_SHA256
+    old_ev = _load_path(SNAP_EV, "_e3_evaluate_ffbdbf7")
+    # 快照放在 tests/fixtures/e3/ 下，按自己的位置推出的仓库根不对：换成真的（只影响 fixture 数据的路径与 meta.json 里配置文件的路径）
+    for k in ("REPO_ROOT", "FIXTURE_REFSEG_ROOT", "FIXTURE_REFSEG_DEV", "FIXTURE_DEPTH_ROOT"):
+        setattr(old_ev, k, getattr(EV, k))
+    old_script = _load_path(SNAP_SCRIPT, "_eval_e3b_ffbdbf7")
+    old_script.EV = old_ev
+    assert old_ev.resolve_eval(CFG, tiny=True) == EV.resolve_eval(CFG, tiny=True)
+    new_script = _load_script("eval_e3b")
+    outs = []
+    for k, mod in enumerate((old_script, new_script)):
+        out = tmp_path / f"o{k}"
+        assert mod.main(_cli_args(tiny_ckpt) + ["--out", str(out)]) == 0
+        outs.append(_mdir(out))
+    stages = tuple(EV.stage_file(s) for s in EV.stage_names(EV.resolve_eval(CFG, tiny=True)))
+    for task in ("refseg", "depth"):
+        for f in DETERMINISTIC + stages:
+            assert (outs[0] / task / f).read_bytes() == (outs[1] / task / f).read_bytes(), (task, f)

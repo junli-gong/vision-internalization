@@ -16,6 +16,12 @@
 - 固定轮数，不早停；一次跑到 max(k_values) 轮，每轮单独记录（predictions_round<r>.jsonl）与评分；K 轮流程的输出 = 第 K 轮之后的状态。
 - 记账（每轮、每条）：prompt token、生成 token、视觉 token、像素、GPU 墙钟（generate 的整批墙钟按行等分，CUDA 前后同步）与
   准备输入的 CPU 墙钟（读图、渲染叠加图、处理器）；compute_multi_K<K>.json = 第 1..K 轮的调用之和（src/accounting）。
+- **只跑一部分 K**（DEV-0039，D72-4 (c)：多轮与匹配计算量的评测每个尺寸只做 1 个种子，单轮的主读数保留全部种子）：resolve_eval 的
+  k_values（scripts/eval_e3b.py --k-values）覆盖配置的 eval.multi_turn.k_values，必须是那一列从 1 开始的前缀（k_values_prefix），
+  如 [1] 或 [1, 2]；匹配计算量的单轮随之只做这些 K，[1] 时只有第 1 轮、没有任何采样。第 1 轮（= 单轮）的调用与批组成与 K 无关，
+  所以 predictions.jsonl 与单轮指标与跑全部 K 时逐字节相同（tests 钉住）。生效的 K 进运行身份（config.yaml 的 eval.k_values、
+  n_rounds、n_samples），覆盖时另记 eval.k_values_override（配置的那一列与依据）；不给或给的就是配置那一列时没有这个键，设置与运行身份
+  与原来逐字节相同。续跑时 K 不同就是运行身份不同，拒绝混写（同下面的续跑规则）。metrics.json 的结构不变，只是 by_K 里的 K 变少。
 
 **匹配计算量的单轮**（eval.matched_compute；简报 §12"多轮的增益必须和匹配计算量的单轮对比"）。可行的方案：
 1. 多次采样取多数（采用）：与 K 轮同样的 K 次单轮调用（同样的调用次数、约同样的生成 token 数）。第 1 次就是贪心的单轮，其余 K − 1 次
@@ -149,14 +155,35 @@ def load_eval_set(task: str, paths: EvalPaths) -> LoadResult:
     raise ValueError(f"任务 {task!r} 没有网格评测（有：{GRID_TASKS}）")
 
 
-def resolve_eval(cfg: E3Config, *, tiny: bool, batch_size: int | None = None, score_workers: int | None = None,
-                 merge_check_n: int | None = None) -> dict[str, Any]:
-    """configs/e3b_train.json 的 eval 节 → 本次生效的设置（--tiny 时按 eval.tiny 覆盖规模；命令行可再覆盖批大小、评分进程数、
-    合并核对的 n）。结构不合规就报错。"""
-    e = cfg.doc["eval"]
-    ks = [int(k) for k in e["multi_turn"]["k_values"]]
+K_VALUES_OVERRIDE_BASIS = ("D72-4 (c)：多轮与匹配计算量的评测每个尺寸只做 1 个种子，单轮的主读数保留全部种子；其余种子用 "
+                           "scripts/eval_e3b.py --k-values 只跑配置那一列的前缀（第 1 轮 = 单轮与跑全部 K 时逐字节相同）")
+
+
+def config_k_values(cfg: E3Config) -> list[int]:
+    """配置的 eval.multi_turn.k_values（必须从 1 开始、严格递增）。"""
+    ks = [int(k) for k in cfg.doc["eval"]["multi_turn"]["k_values"]]
     if not ks or ks[0] != 1 or any(b <= a for a, b in zip(ks, ks[1:])):
         raise ValueError(f"eval.multi_turn.k_values 必须从 1 开始、严格递增，收到 {ks}")
+    return ks
+
+
+def k_values_prefix(config_ks: Sequence[int], requested: Sequence[int]) -> list[int]:
+    """--k-values 的取值规则（DEV-0039）：必须是配置那一列从 1 开始的前缀（[1]、[1, 2]……），否则 ValueError。返回生效的 K。"""
+    req = [int(k) for k in requested]
+    cks = [int(k) for k in config_ks]
+    if not req or req != cks[: len(req)]:
+        raise ValueError(f"--k-values 必须是配置的 eval.multi_turn.k_values {cks} 从 1 开始的前缀（如 {cks[:1]} 或 {cks[:2]}），"
+                         f"收到 {req}")
+    return req
+
+
+def resolve_eval(cfg: E3Config, *, tiny: bool, batch_size: int | None = None, score_workers: int | None = None,
+                 merge_check_n: int | None = None, k_values: Sequence[int] | None = None) -> dict[str, Any]:
+    """configs/e3b_train.json 的 eval 节 → 本次生效的设置（--tiny 时按 eval.tiny 覆盖规模；命令行可再覆盖批大小、评分进程数、
+    合并核对的 n，以及只跑配置 K 那一列的前缀：k_values，规则见模块说明）。结构不合规就报错。"""
+    e = cfg.doc["eval"]
+    config_ks = config_k_values(cfg)
+    ks = config_ks if k_values is None else k_values_prefix(config_ks, k_values)
     up = e["upsample"]
     methods = [str(m) for m in up["methods"]]
     if up["primary"] not in methods or methods[0] != up["primary"] or set(methods) - set(ES.UPSAMPLE_METHODS):
@@ -181,6 +208,8 @@ def resolve_eval(cfg: E3Config, *, tiny: bool, batch_size: int | None = None, sc
     }
     if out["batch_size"] < 1 or out["score_workers"] < 0:
         raise ValueError(f"批大小、合并核对的 n 必须 ≥ 1，评分进程数 ≥ 0：{out}")
+    if ks != config_ks:  # 只在真的覆盖时加这个键：不给 --k-values（或给的就是配置那一列）时设置与运行身份逐字节不变
+        out["k_values_override"] = {"config_k_values": list(config_ks), "k_values": list(ks), "basis": K_VALUES_OVERRIDE_BASIS}
     return out
 
 
@@ -802,6 +831,9 @@ def readme_text(spec: EvalSpec, ident: Mapping[str, Any], metrics: Mapping[str, 
     for k, v in metrics["matched_compute"]["by_K"].items():
         if k != "1":
             lines.append(row(f"匹配的单轮 K = {k}", v["metrics"], v["compute"]))
+    ov = ident["eval"].get("k_values_override")
+    if ov:  # DEV-0039：只跑了配置 K 那一列的前缀（不覆盖时没有这一行，README 与原来逐字节相同）
+        lines += ["", f"- 本次只跑 K = {ov['k_values']}（--k-values 覆盖配置的 {ov['config_k_values']}；{ov['basis']}）"]
     lines += ["", "- K = 1 的多轮与单轮是同一次调用（逐个相同）；匹配的单轮 = 贪心 + K − 1 次受限采样，逐格合成（规则见 src/e3/evaluate.py）",
               "- GPU 墙钟（call_time_s）与端到端墙钟（wall_time_s）在记账文件里（compute*.json）；本表只列由输出决定的计数",
               "", "## 文件", "",
@@ -910,7 +942,9 @@ __all__ = [
     "chunk_plan",
     "compute_of",
     "compute_procs",
+    "config_k_values",
     "finalize",
+    "k_values_prefix",
     "leaf_dir",
     "load_eval_set",
     "make_context",

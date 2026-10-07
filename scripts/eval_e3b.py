@@ -6,6 +6,9 @@
     python scripts/eval_e3b.py --checkpoint <训练叶目录>/ckpt/final/model --model qwen3.5-0.8b --variant e3b --seed 0 \\
         --data-root $PROJ/data --out experiments/E3/00NN_e3b_eval [--task refseg depth] [--resume] [--limit N]
     # 结果写进 <out>/eval/<变体>/<模型>/seed<k>/<任务>/；评测前的合并核对写进 <out>/eval/<变体>/<模型>/seed<k>/merge_check.json
+    # 只跑单轮（DEV-0039，D72-4 (c)：多轮与匹配计算量每个尺寸只做 1 个种子）：加 --k-values 1（只有第 1 轮，不做任何采样）；
+    # --k-values 必须是配置 eval.multi_turn.k_values（1 2 4）从 1 开始的前缀（1 或 1 2），否则用法错误。单轮的 predictions.jsonl 与
+    # 单轮指标与不给时逐字节相同；config.yaml 的 eval.k_values 记生效的 K，覆盖时另记 eval.k_values_override。续跑时 K 不同拒绝混写。
 开发机彩排（小型随机模型、CPU fp32；检查点用 scripts/train_e3b.py --tiny 训出来的；分割用 tests/fixtures/e3/eval_root，
 深度用 tests/fixtures/e1/root 的 NYU 测试图）：
     python scripts/train_e3b.py --tiny --model qwen3.5-0.8b --supervision grid --seed 0 --out /tmp/t
@@ -67,6 +70,9 @@ def parse_args(argv=None):
     p.add_argument("--config", default=str(CONFIG_PATH), help="E3b 配置（默认 configs/e3b_train.json，读其中的 eval 节）")
     p.add_argument("--batch-size", type=int, help="批大小（默认取配置的 eval.batch_size；--tiny 取 eval.tiny.batch_size）")
     p.add_argument("--allow-unfrozen-batch", action="store_true", help="真模型允许配置以外的批大小（运行身份里照记）")
+    p.add_argument("--k-values", type=int, nargs="+",
+                   help="只跑这些 K（DEV-0039，D72-4 (c)）：必须是配置 eval.multi_turn.k_values 从 1 开始的前缀，如 1 或 1 2；"
+                        "匹配计算量的单轮随之只做这些 K（1 = 只跑单轮、不采样）。不给时取配置的全部 K")
     p.add_argument("--merge-check-n", type=int, help="合并核对的开发样本数（默认取配置的 eval.merge_check.n）")
     p.add_argument("--score-workers", type=int, help="评分的进程数（默认取配置的 eval.score_workers；0 = 串行）")
     p.add_argument("--device", help="默认：真模型 cuda，--tiny 时 cpu")
@@ -92,6 +98,15 @@ def parse_args(argv=None):
         p.error("真模型运行要给 --data-root（或设 VISINT_DATA_ROOT）")
     if not a.tiny and not RUN_DIR_NAME.fullmatch(Path(a.out).name):
         p.error(f"--out 的目录名必须带运行编号，形如 0050_e3b_eval（CLAUDE.md：experiments/<phase>/<NNNN_slug>/），收到 {a.out!r}")
+    if a.k_values is not None:  # DEV-0039：取值规则与 resolve_eval 同一个函数（EV.k_values_prefix），不合规是用法错误
+        try:
+            config_ks = EV.config_k_values(load_config(a.config))
+        except Exception as e:  # noqa: BLE001 — 读不了配置就没法核对前缀
+            p.error(f"--k-values 要按 --config 的 eval.multi_turn.k_values 核对，读配置失败：{e!r}")
+        try:
+            EV.k_values_prefix(config_ks, a.k_values)
+        except ValueError as e:
+            p.error(str(e))
     return a
 
 
@@ -112,7 +127,7 @@ def checkpoint_block(ck_dir: Path, man: dict) -> dict:
 def cmd_run(a, argv) -> int:
     cfg = load_config(a.config)
     settings = EV.resolve_eval(cfg, tiny=a.tiny, batch_size=a.batch_size, score_workers=a.score_workers,
-                               merge_check_n=a.merge_check_n)
+                               merge_check_n=a.merge_check_n, k_values=a.k_values)
     if not a.tiny and settings["batch_size"] != settings["batch_size_config"] and not a.allow_unfrozen_batch:
         raise ValueError(f"--batch-size {settings['batch_size']} 不是配置的 eval.batch_size {settings['batch_size_config']}；"
                          "确要换就加 --allow-unfrozen-batch")
