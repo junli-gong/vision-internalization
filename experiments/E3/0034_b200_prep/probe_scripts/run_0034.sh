@@ -1,5 +1,7 @@
 #!/bin/bash
 # RUN-0034 driver (B200 E3 prep), worktree pinned at the task's start commit (/dev/shm/visint/tmp/wt0034); launched detached (setsid nohup).
+# 2026-10-07 04:3x: --out renamed to $OUT/0034_e3_consistency, $OUT/0034_e3_throughput (train scripts require a run-numbered basename;
+# the first pass with $OUT/consistency exited rc=2); landing/dedupe guarded by done_land/done_dedupe markers.
 # Phases: mem before -> land all (land_train.py) -> mem after -> manifest compare with A800 -> link E1 data -> dedupe -> exclusions compare
 # (stop if not identical) -> push -> qwen3.5-2b: download+verify, consistency e3b/e3a (50 steps), throughput 6 variants (20 steps) ->
 # delete -> push -> qwen3.5-9b: download+verify, throughput 6 variants -> delete -> push -> rm checkpoints -> push.
@@ -60,6 +62,7 @@ if [ ! -f $L/done_land ]; then
   { date -u; free -g; df -h /dev/shm; } > $L/mem_after_land.txt; cat $L/mem_after_land.txt >> $L/driver.log
   touch $L/done_land
 fi
+if [ ! -f $L/done_dedupe ]; then
 step manifest_compare 0 python $OUT/probe_scripts/p33_manifest_compare.py $TRAIN $WT $OUT/land_compare
 [ -e $TRAIN/refcoco ] || ln -s $PROJ/data/refcoco $TRAIN/refcoco
 [ -e $TRAIN/nyuv2 ] || ln -s $PROJ/data/nyuv2 $TRAIN/nyuv2
@@ -71,14 +74,16 @@ EXC=$RC
 for s in refcoco_train nyu_depth_train nyu_normals ade20k; do [ -f $TRAIN/$s/MANIFEST.json ] && { mkdir -p $OUT/land_manifests; gzip -9 -n -c $TRAIN/$s/MANIFEST.json > $OUT/land_manifests/MANIFEST_$s.json.gz; }; done
 push land_dedupe "land rc=$(cat $L/land_rc.txt), manifest compare, dedupe, exclusions compare rc=$EXC"
 if [ $EXC -ne 0 ]; then echo "=== exclusions differ from A800; stopping before §5 (task book §4)" | tee -a $L/driver.log; echo "$(date -u +%FT%TZ) blocked dedupe-mismatch" > $ST; exit 0; fi
+touch $L/done_dedupe
+fi
 
 # --- §5: consistency and throughput ---
 M=qwen3.5-2b; fetch $M
-trn consistency_e3b_$M scripts/train_e3b.py --model $M --supervision grid --seed 0 --out $OUT/consistency --ckpt-root $CK/consistency --stop-after-steps 50
-trn consistency_e3a_$M scripts/train_e3a.py --model $M --variant full --seed 0 --out $OUT/consistency --ckpt-root $CK/consistency --stop-after-steps 50
+trn consistency_e3b_$M scripts/train_e3b.py --model $M --supervision grid --seed 0 --out $OUT/0034_e3_consistency --ckpt-root $CK/consistency --stop-after-steps 50
+trn consistency_e3a_$M scripts/train_e3a.py --model $M --variant full --seed 0 --out $OUT/0034_e3_consistency --ckpt-root $CK/consistency --stop-after-steps 50
 for M in qwen3.5-2b qwen3.5-9b; do
   [ $M = qwen3.5-9b ] && fetch $M
-  T=$OUT/throughput; TC=$CK/throughput
+  T=$OUT/0034_e3_throughput; TC=$CK/throughput
   trn tput_e3a_full_$M scripts/train_e3a.py --model $M --variant full --seed 0 --out $T --ckpt-root $TC --stop-after-steps 20
   trn tput_e3a_c1_$M   scripts/train_e3a.py --model $M --variant c1   --seed 0 --out $T --ckpt-root $TC --stop-after-steps 20
   trn tput_e3a_c2_$M   scripts/train_e3a.py --model $M --variant c2   --seed 0 --out $T --ckpt-root $TC --stop-after-steps 20
@@ -87,7 +92,8 @@ for M in qwen3.5-2b qwen3.5-9b; do
   trn tput_c3_$M       scripts/train_e3b.py --model $M --supervision text --seed 0 --out $T --ckpt-root $TC --stop-after-steps 20
   du -sb $CK 2>/dev/null | tee -a $L/driver.log
   drop $M
-  push $M "consistency/throughput steps done for $M"
+  RCS=$(grep -oE "=== (consistency|tput)_[a-z0-9_]+_$M rc=[0-9]+" $L/driver.log | tail -8 | sed -E "s/=== //; s/_$M//" | paste -sd' ')
+  push $M "$M steps: $RCS"
 done
 echo "checkpoints before delete: $(du -sb $CK 2>/dev/null | cut -f1) B, $(find $CK -type f 2>/dev/null | wc -l) files" | tee -a $L/driver.log
 rm -rf $CK; disk "after delete checkpoints"
