@@ -62,3 +62,24 @@ WAIT=$REPO/.claude/skills/exp-triad-flow/scripts/server_standby_wait.sh
 - CC 自己的后台任务（run_in_background）只用来等待和轮询（`$WAIT`、看日志），不要用它直接跑实验。CC 的会话一结束，挂在它下面的进程会被一起杀掉。RUN-0032 的驱动就是这样在下载 InternVL-4B 时断掉的，GPU 空了 12 小时。
 - 驱动脚本自己负责每个模型完成后推送结果、更新心跳，CC 重连之后照样能接上。
 - 心跳在单个长运行里也要定期更新（每 30 分钟一次，写当前在跑什么），不要只在模型之间更新：RUN-0032 的 InternVL-4B 一个模型跑了 9.4 小时，心跳一直不动，管理员误以为驱动断了。
+
+## 后台训练队列（2026-10-07 加，D72-4：评测独占，训练只在评测的间隙里跑）
+
+训练 RUN（第一个是 RUN-0036）用驱动 `scripts/server/train_queue.sh` 加该 RUN 的队列脚本 `prompts/server/NNNN-*/queue.sh`，一跑几天，期间你照常值守、接评测任务。
+
+- **启动**：按任务书在固定 commit 的工作树里 `setsid nohup bash <工作树>/prompts/server/NNNN-*/queue.sh > $PROJ/logs/train_NNNN.driver.log 2>&1 < /dev/null &`。
+  - 看到第一条运行的第一段正常结束（日志里出现"按 --stop-after-steps 停下"，或者第一条已完成），推送启动报告，把任务书文件名追加进 `$DONE`，回到值守。
+  - 队列在跑时，它的工作树不要删。任务书的收尾 addendum 会说什么时候删。
+- **队列自己做的事**：
+  - 每段 CHUNK 步一停。两段之间检查：暂停文件、origin 上的 HOLD、GPU 上有没有别人的进程、内存与磁盘的停止线。
+  - 一条跑完就把 final/ 从内存盘搬到根盘并核对 sha256，然后推送结果。
+  - 心跳写在 `$PROJ/logs/train_NNNN.status`：running、paused、waiting、blocked、done。
+- **新任务要用 GPU 时**，例如评测：
+  1. `echo "<任务书文件名>" > $PROJ/logs/train.pause`；
+  2. 用后台 until 循环等，直到 `train_NNNN.status` 以 `paused` 开头，并且 `nvidia-smi` 上没有训练进程。最多等一段：2B 约 40 分钟，9B 更久。
+  3. 照常执行该任务；
+  4. 推送完，`rm $PROJ/logs/train.pause`，队列一分钟内自己接着跑。
+  - 不要为了腾卡杀训练进程，等它到段的边界停下。不用 GPU 的任务（纯 CPU 汇总）不需要暂停。
+- **git 锁**：队列也从主 checkout 提交，所以主 checkout 上的 pull、add、commit、push 一律放进锁里：`flock $PROJ/logs/git.lock -c '<git 命令>'`。commit 时只提交自己的路径：`git commit -m … -- <路径>`。
+- **队列停了**（status 是 `blocked …`）：驱动已经自己推送了"driver stopped"，管理员会处理。不要自己重启，除非 addendum 让你重启。
+- **服务器重启**会清空 /dev/shm，工作树、训练数据、权重、内存盘上的续跑状态都会丢，驱动也会断。重连后先写 `blocked reboot` 到 `$STATUS`，等管理员的 addendum。
