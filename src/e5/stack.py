@@ -33,6 +33,12 @@ extra.safetensors 里存起点 manifest 的 sha256（EXTRA_KEY，uint8[32]）；
 merge_start_lora(起点) → 核对起点 manifest 的 sha256 与 extra 里的相同（必须）、权重指纹与训练时相同（CPU 同平台时必须相同；GPU 上
 跨进程的 GEMM 不保证逐位相同，只记录）→ load_trained(E5 检查点, merge=False)（restore_tokens 恢复 E5 训练后的网格 token 行，挂上 E5 LoRA；评测前的合并核对之后
 再 merge_lora）。
+
+**只评起点**（DEV-0040，D81-1；N = 0；load_start_only）：起点检查点不经 E5 训练，直接评。加载拆成与上面相同的前两步：make_base（按起点
+manifest 的构造方式建 base，load_stacked 用的同一个函数）→ setup_start（合并起点 LoRA、restore_tokens 恢复起点训练过的网格 token 行；训练
+开头用的同一个函数）。与 load_stacked 的差别只在没有 E5 检查点这一步：不挂 E5 LoRA，网格 token 行取起点的（load_stacked 取 E5 检查点的；
+E5 LoRA 为恒等、网格 token 行没动过时两者逐位相同，测试钉住）。只接受带检查点、网格 token 行训练过的起点（grid_tokens = from_checkpoint：
+base_warmup、e3b）。
 """
 
 from __future__ import annotations
@@ -384,6 +390,28 @@ def read_stack_file(final_dir: str | Path) -> dict[str, Any]:
     return doc
 
 
+def make_base(spec: Mapping[str, Any], *, device: str, dtype: torch.dtype) -> Any:
+    """按检查点 manifest 的构造方式（build_spec）建 base：E5 检查点的评测（load_stacked）与只评起点（load_start_only）共用这一处。"""
+    return factory.make_adapter(spec["key"], device=device, dtype=dtype, image_policy=parse_policy(spec["image_policy"]),
+                                tiny=bool(spec["tiny"]), **dict(spec["family_kw"]))
+
+
+def load_start_only(start: StartRef, cfg: E5TrainConfig, *, device: str, dtype: torch.dtype) -> tuple[Any, GridTokens, dict[str, Any]]:
+    """只评起点的加载（模块说明）：make_base(起点 manifest 的构造方式) → setup_start。返回 (适配器, 网格 token 布局, setup_start 的摘要：
+    含合并起点 LoRA 之后的权重指纹)；返回时没有任何 LoRA（lora_state = none）。"""
+    if not start.has_checkpoint or start.grid_tokens != "from_checkpoint":
+        raise StartError(f"只评起点要带检查点、网格 token 行训练过的起点（grid_tokens = from_checkpoint），起点 {start.kind} 不是"
+                         f"（检查点 {start.checkpoint}，grid_tokens {start.grid_tokens}）")
+    spec = (start.manifest or {}).get("build_spec") or {}
+    if not spec:
+        raise StartError(f"{start.checkpoint} 的 manifest 没有构造方式")
+    ad = make_base(spec, device=device, dtype=dtype)
+    tokens, info = setup_start(ad, start, cfg)
+    if ad.lora_state != "none":
+        raise StartError(f"只评起点的加载之后 LoRA 状态是 {ad.lora_state}（应为 none：起点 LoRA 已合并，没有 E5 LoRA）")
+    return ad, tokens, info
+
+
 @dataclass
 class Stacked:
     adapter: Any
@@ -405,8 +433,7 @@ def load_stacked(final_dir: str | Path, *, device: str, dtype: torch.dtype, star
     spec = man.get("build_spec") or {}
     if not spec:
         raise StartError(f"{model_dir} 的 manifest 没有构造方式")
-    ad = factory.make_adapter(spec["key"], device=device, dtype=dtype, image_policy=parse_policy(spec["image_policy"]),
-                              tiny=bool(spec["tiny"]), **dict(spec["family_kw"]))
+    ad = make_base(spec, device=device, dtype=dtype)
     st = doc["start"]
     marker = read_marker(model_dir)
     start_ck = None
@@ -439,5 +466,5 @@ def load_stacked(final_dir: str | Path, *, device: str, dtype: torch.dtype, star
 
 __all__ = ["EXTRA_KEY", "SEED_PAIRING_RULE", "STACK_FILE", "STACK_FORMAT", "StartError", "StartRef", "Stacked", "check_same_base",
            "check_seed_pairing", "device_key",
-           "load_stacked", "marker_extra", "merge_start_lora", "read_marker", "read_stack_file", "reference_fingerprint",
-           "resolve_start", "setup_start", "stack_fingerprint", "start_checks_dir", "start_merge_check", "write_stack_file"]
+           "load_stacked", "load_start_only", "make_base", "marker_extra", "merge_start_lora", "read_marker", "read_stack_file",
+           "reference_fingerprint", "resolve_start", "setup_start", "stack_fingerprint", "start_checks_dir", "start_merge_check", "write_stack_file"]

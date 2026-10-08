@@ -29,6 +29,19 @@ max_new_tokens = n(n + 1) + 1 = 1057，停止 token = 本家族的回合结束 t
 config.yaml（运行身份）、meta.json、README.md、logs/timing.jsonl、logs/run_<k>.json。
 **续跑**（--resume）：config.yaml 必须相同；已完成的 id 必须是样本顺序的前缀，退回到整批的边界接着跑；metrics 只由 predictions 与生成器算出，
 续跑后逐字节相同。
+
+**只评起点**（DEV-0040，D81-1；E5 预注册 §8 第 2 项：N = 0 的读数，区分截距与斜率，不单独参与 H5 判定；scripts/eval_e5_trained.py
+--start-only）：起点检查点不经 E5 训练，直接在同一个评测集上评。
+- 起点只收 START_ONLY_KINDS（base_warmup、e3b）：e3a 的网格 token 行是新加的、没训练过，base 没有起点检查点。
+- 加载：src/e5/stack.load_start_only（make_base → setup_start：合并起点 LoRA、恢复起点的网格 token 行），与上面的加载只差没有 E5 LoRA。
+- 评测前的核对：起点检查点自己的合并核对（src/e5/stack.start_merge_check，即 scripts/train_e5.py 开训前做的那一项；结果放在
+  <out>/train/<起点>/<模型>/start_checks/，与训练同一个位置，已通过的复用）与权重指纹（合并起点 LoRA 之后 = factory.load_trained(起点,
+  merge=True) 的，src/e5/stack.reference_fingerprint，同训练开头）。上面的"E5 LoRA 合并前后"一项不适用（没有 E5 LoRA），跳过，理由写进
+  运行身份（START_ONLY_SKIPPED）、README 与运行记录；不写 merge_check.json。
+- 评测本身（样本清单、提示、允许集合、max_new_tokens、停止 token、批组成、解析、评分、汇总与门槛）就是 run_task，一行不另写。
+- 输出：<out>/trained/<起点>/<模型>/n0/seed<k>/<任务>[__dev]/（START_ONLY_TAG：数据量档的标记，与 n<数据量> 同一层），文件同上；运行身份另记
+  start_only: true、n_train: 0，checkpoint 一节记起点（manifest 的 sha256 等）、权重指纹、配种子与核对（start_only_checkpoint）；
+  metrics.json 另记 start_only、n_train。不用 --start-only 时输出与改动前逐字节相同（测试钉住）。
 """
 
 from __future__ import annotations
@@ -67,6 +80,13 @@ TIMING = "logs/timing.jsonl"
 MERGE_CHECK = "merge_check.json"
 MERGE_CHECK_FORMAT = "visint-e5-stacked-merge-check/1"
 SYSTEM = "trained"
+START_ONLY_KINDS: tuple[str, ...] = ("base_warmup", "e3b")  # D81-1：只评起点的起点（模块说明）
+START_ONLY_N_TRAIN = 0
+START_ONLY_TAG = f"n{START_ONLY_N_TRAIN}"  # 数据量档的标记（同 src/e5/train_data.TrainSet.tag 的 n<数据量>）
+START_ONLY_RULE = ("DEV-0040（D81-1；E5 预注册 §8 第 2 项）：只评起点，N = 0——起点检查点不经 E5 训练，加载 = src/e5/stack.load_start_only"
+                   "（与训练后评测只差没有 E5 LoRA），评测与训练后评测同一套函数；用于区分截距与斜率，不单独参与 H5 判定")
+START_ONLY_SKIPPED = {"e5_lora_merge": "训练后评测的“E5 LoRA 合并前后”核对（stacked_merge_check）不适用：只评起点没有 E5 LoRA，"
+                                       "起点 LoRA 已合并，评测的模型就是起点合并评测时的权重（由起点检查点的合并核对与权重指纹核对）"}
 
 
 def model_dir(out: str | Path, start: str, model_key: str, tag: str, seed: int, data_seed: int | None = None) -> Path:
@@ -91,6 +111,14 @@ class EvalSpec:
     dtype: str
     limit: int | None = None
     data_seed: int | None = None
+    start_only: bool = False  # DEV-0040：只评起点（tag 必须是 START_ONLY_TAG）
+
+    def __post_init__(self) -> None:
+        if self.start_only and (self.tag != START_ONLY_TAG or self.start not in START_ONLY_KINDS or self.data_seed is not None):
+            raise ValueError(f"只评起点：tag 必须是 {START_ONLY_TAG}、起点是 {START_ONLY_KINDS} 之一、没有数据种子，收到 "
+                             f"{self.tag!r}、{self.start!r}、{self.data_seed!r}")
+        if not self.start_only and self.tag == START_ONLY_TAG:
+            raise ValueError(f"{START_ONLY_TAG} 是只评起点的标记，E5 检查点的评测不能用")
 
     def items(self) -> list[Any]:
         its = eval_items(self.task, self.subset, self.n_per_bin)
@@ -271,10 +299,12 @@ def run_identity(spec: EvalSpec, items: Sequence[Any], e5tok: E5Tokens, prompt: 
     ids = [it.id for it in items]
     from src.synth.constants import SYNTH_GENERATOR_VERSION, TASK_GENERATOR_VERSIONS
 
+    head: dict[str, Any] = {"experiment": "E5", "framework": "src/e5（DEV-0037：训练后系统的评测）", "system": SYSTEM}
+    if spec.start_only:  # DEV-0040（模块说明）；不是只评起点时运行身份与改动前逐字节相同
+        head.update(framework="src/e5（DEV-0040：只评起点，N = 0）", start_only=True, n_train=START_ONLY_N_TRAIN,
+                    start_only_rule=START_ONLY_RULE)
     return {
-        "experiment": "E5",
-        "framework": "src/e5（DEV-0037：训练后系统的评测）",
-        "system": SYSTEM,
+        **head,
         "task": t,
         "task_letter": TASK_LETTER[t],
         "subset": spec.subset,
@@ -295,6 +325,21 @@ def run_identity(spec: EvalSpec, items: Sequence[Any], e5tok: E5Tokens, prompt: 
         "prompt": prompt.as_dict(),
         "config": cfg.identity(),
     }
+
+
+def start_only_checkpoint(start: Any, *, seed: int, seed_pairing: Mapping[str, Any], fingerprint: str,
+                          device_key: Mapping[str, Any], start_check: Mapping[str, Any]) -> dict[str, Any]:
+    """只评起点的运行身份里 checkpoint 一节（模块说明）：起点（src/e5/stack.StartRef.identity：种类、manifest 的 sha256、LoRA、构造方式、
+    叶目录的变体与种子；不含路径）、合并起点 LoRA 之后的权重指纹（与 factory.load_trained(起点, merge=True) 的相同才评测）、配种子、
+    做了与跳过的核对。只放确定的字段（续跑时整份比较）；核对的文件与是否复用进运行记录 logs/run_<k>.json。"""
+    return {"start_only": True, "n_train": START_ONLY_N_TRAIN, "start": dict(start.identity()),
+            "fingerprint": {"value": fingerprint, "device_key": dict(device_key),
+                            "rule": "src/e5/stack.stack_fingerprint：合并起点 LoRA 之后、加网格 token 之前；必须等于 "
+                                    "factory.load_trained(起点, merge=True) 的（src/e5/stack.reference_fingerprint）"},
+            "seed": int(seed), "seed_pairing": dict(seed_pairing),
+            "checks": {"done": {"start_merge_check": {k: start_check.get(k) for k in ("purpose", "checks", "n", "criteria_version")},
+                                "start_fingerprint": "合并起点 LoRA 之后的权重指纹 = factory.load_trained(起点, merge=True) 的"},
+                       "skipped": dict(START_ONLY_SKIPPED)}}
 
 
 def _prepare(leaf: Path, ident: Mapping[str, Any], resume: bool, cfg: E5TrainConfig) -> None:
@@ -358,12 +403,26 @@ def readme_text(spec: EvalSpec, ident: Mapping[str, Any], m: Mapping[str, Any]) 
     from src.e5.runner import _block_lines, _ci_text, _fmt
 
     ck = ident["checkpoint"]
-    lines = [f"# E5 · 训练后（{spec.start} → E5）· {spec.model_key} · {spec.tag} · seed {spec.seed} · {m['task']}"
+    if spec.start_only:  # DEV-0040（模块说明）
+        sp, ch = ck["seed_pairing"], ck["checks"]
+        mc = ch["done"]["start_merge_check"]
+        title = f"# E5 · 只评起点（{spec.start}，N = 0，不经 E5 训练）"
+        ck_lines = [f"- 起点：{ck['start']['kind']}（manifest {str(ck['start']['manifest_sha256'])[:16]}…；合并起点 LoRA 之后的权重指纹 "
+                    f"{str(ck['fingerprint']['value'])[:16]}…）；配种子 {sp.get('status')}（起点的种子 {sp.get('start_seed')}，"
+                    f"--allow-seed-mismatch {sp.get('allow_mismatch')}）",
+                    f"- 评测前的核对：起点检查点的合并核对（{mc.get('purpose')}：{'、'.join(mc.get('checks') or [])}，判据 "
+                    f"{mc.get('criteria_version')}）与权重指纹（= factory.load_trained(起点, merge=True) 的）；跳过："
+                    + "；".join(f"{k}（{v}）" for k, v in ch["skipped"].items()),
+                    "- 用途：N = 0 的读数，区分截距与斜率（E5 预注册 §8 第 2 项），不单独参与 H5 判定"]
+    else:
+        title = f"# E5 · 训练后（{spec.start} → E5）"
+        ck_lines = [f"- 检查点：E5 manifest {str(ck.get('manifest_sha256'))[:16]}…；起点 {ck.get('start', {}).get('kind')}（manifest "
+                    f"{str(ck.get('start', {}).get('manifest_sha256'))[:16]}…）；训练运行身份 {str(ck.get('train_identity_sha256'))[:16]}…"]
+    lines = [f"{title}· {spec.model_key} · {spec.tag} · seed {spec.seed} · {m['task']}"
              f"（{TASK_LETTER[m['task']]}）· {spec.subset}", "",
              f"- 样本：{ident['data']['split']} 划分，每档 {spec.n_per_bin} 条，n = {m['n']}（id 指纹 "
              f"{ident['data']['sample_ids_sha256'][:16]}…，与零样本相同的清单）；生成器任务版本 {ident['data']['task_generator_version']}",
-             f"- 检查点：E5 manifest {str(ck.get('manifest_sha256'))[:16]}…；起点 {ck.get('start', {}).get('kind')}（manifest "
-             f"{str(ck.get('start', {}).get('manifest_sha256'))[:16]}…）；训练运行身份 {str(ck.get('train_identity_sha256'))[:16]}…",
+             *ck_lines,
              f"- 解码：受限（{ident['decoding']['format']}，{len(ident['decoding']['allowed_ids'])} 个允许 token），单轮，"
              f"max_new_tokens = {ident['decoding']['max_new_tokens']}，关思考，贪心，批大小 {spec.batch_size}",
              f"- 标题口径：{m['headline_scope']}", "", "## 标题（严格 / 有效率 / 条件读数）", ""]
@@ -400,8 +459,10 @@ def finalize(leaf: Path, spec: EvalSpec, items: Sequence[Any], ident: Mapping[st
     body["baseline_roles"] = dict(sorted(roles.items()))
     body["complete"] = len(recs) == len(ids)
     body["n_expected"] = len(ids)
-    metrics = {"system": SYSTEM, "start": spec.start, "model": spec.model_key, "tag": spec.tag, "seed": spec.seed,
-               "subset": spec.subset, **body}
+    head: dict[str, Any] = {"system": SYSTEM, "start": spec.start, "model": spec.model_key, "tag": spec.tag}
+    if spec.start_only:  # DEV-0040；不是只评起点时 metrics.json 与改动前逐字节相同
+        head.update(start_only=True, n_train=START_ONLY_N_TRAIN)
+    metrics = {**head, "seed": spec.seed, "subset": spec.subset, **body}
     (leaf / METRICS).write_text(json.dumps(metrics, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     timing = {t["id"]: t for t in read_jsonl_tolerant(leaf / TIMING, repair=False)}
     comp = []
@@ -477,5 +538,6 @@ def run_task(ad: Any, e5tok: E5Tokens, prompt: PromptFormat, cfg: E5TrainConfig,
     return metrics
 
 
-__all__ = ["EVAL_SUB", "EvalSpec", "MERGE_CHECK", "MERGE_CHECK_FORMAT", "finalize", "merge_check_items", "model_dir", "record",
-           "run_task", "stacked_merge_check"]
+__all__ = ["EVAL_SUB", "EvalSpec", "MERGE_CHECK", "MERGE_CHECK_FORMAT", "START_ONLY_KINDS", "START_ONLY_N_TRAIN", "START_ONLY_RULE",
+           "START_ONLY_SKIPPED", "START_ONLY_TAG", "finalize", "merge_check_items", "model_dir", "record", "run_task",
+           "stacked_merge_check", "start_only_checkpoint"]

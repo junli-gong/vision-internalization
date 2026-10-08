@@ -17,6 +17,20 @@
 config.yaml 的 checkpoint.selection。test 只在这个检查点上评一次。
 每档条数默认取配置的 eval.n_per_bin（test：每档 100 条，b 200 条，与零样本相同）；--n-per-bin 统一覆盖。批大小默认取配置的 eval.batch_size（64）；
 真模型给别的值要加 --allow-unfrozen-batch。
+
+只评起点（DEV-0040，D81-1；N = 0：起点检查点不经 E5 训练，直接评；与 --checkpoint 二选一；规则见 src/e5/trained_eval.py 的模块说明）：
+    python scripts/eval_e5_trained.py --start-only --init {base_warmup,e3b} --start-checkpoint <起点训练叶目录>/ckpt/final/model \\
+        --model qwen3.5-2b --seed <k> --data-root $PROJ/data --out experiments/E5/<NNNN_slug> [--task all] [--subset eval|dev] [--resume] [--limit N]
+    # 结果写进 <out>/trained/<起点>/<模型>/n0/seed<k>/<任务>[__dev]/；起点检查点的合并核对与权重指纹写进 <out>/train/<起点>/<模型>/start_checks/
+    #（与 scripts/train_e5.py 开训前的核对同一个位置，已通过的复用）
+    # --init 只收 base_warmup、e3b（e3a 的网格 token 行没训练过，base 没有起点检查点）；--seed 必须等于起点训练叶目录 config.yaml 的 seed
+    #（同 train_e5 的配种子；--allow-seed-mismatch 放开，记进运行身份）。B200 的训练队列把最终检查点按叶目录结构搬到 $CK_FINAL/<叶>/ckpt/final，
+    # 旁边放 config.yaml，给 <新位置>/ckpt/final/model 即可
+    # --data-root：起点检查点的合并核对用 E1 的 grid16 开发子集（默认环境变量 VISINT_DATA_ROOT；--tiny 时取 fixture）
+顺序：resolve_start 与核对（构造方式、manifest、网格 token、变体）→ 配种子 → 起点检查点的合并核对 → 权重指纹的参照 → 建 base、合并起点 LoRA、
+恢复起点的网格 token 行（src/e5/stack.load_start_only）→ 权重指纹必须等于参照 → 逐任务评测（与 E5 检查点的评测同一个 run_task）。
+没有 E5 LoRA，"E5 LoRA 合并前后"的核对跳过（写进运行身份与 README）。
+
 退出码：0 = 跑完；1 = 合并核对没有通过，拒绝评测；2 = 出错（报错先写进 <out>/trained/errors/；argparse 用法错误也是 2）。
 """
 
@@ -25,6 +39,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import sys
 import traceback
@@ -44,7 +59,7 @@ from src.e5 import stack as STK  # noqa: E402
 from src.e5 import trained_eval as TE  # noqa: E402
 from src.e5.protocol import E5_TASKS, SUBSETS  # noqa: E402
 from src.e5.token_grid import E5Tokens  # noqa: E402
-from src.e5.train_config import CONFIG_PATH, load_train_config  # noqa: E402
+from src.e5.train_config import CONFIG_PATH, STARTS, load_train_config  # noqa: E402
 from src.runlog import sha256_file  # noqa: E402
 from src.synth.seeding import canonical_task  # noqa: E402
 
@@ -54,7 +69,15 @@ RUN_DIR_NAME = re.compile(r"[0-9]{4}_[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--checkpoint", required=True, help="E5 检查点（<训练叶目录>/ckpt/final：含 model/ 与 e5_stack.json）")
+    p.add_argument("--checkpoint", help="E5 检查点（<训练叶目录>/ckpt/final：含 model/ 与 e5_stack.json）；与 --start-only 二选一")
+    p.add_argument("--start-only", action="store_true",
+                   help="只评起点（N = 0，DEV-0040）：--start-checkpoint 给的起点检查点不经 E5 训练，直接评；与 --checkpoint 二选一")
+    p.add_argument("--init", choices=STARTS,
+                   help=f"--start-only 的起点，只收 {TE.START_ONLY_KINDS}（e3a 的网格 token 行没训练过，base 没有起点检查点）")
+    p.add_argument("--seed", type=int, help="--start-only：种子（在配置的 training.seeds 里，且等于起点训练叶目录 config.yaml 的 seed）")
+    p.add_argument("--allow-seed-mismatch", action="store_true",
+                   help="--start-only：起点检查点的种子与 --seed 不同（或核对不了）时也评（配种子放开，记进运行身份）")
+    p.add_argument("--data-root", help="--start-only：E1 的落地根（起点检查点的合并核对用；默认环境变量 VISINT_DATA_ROOT；--tiny 时取 fixture）")
     p.add_argument("--model", required=True, help="注册键（必须与检查点 manifest 的构造方式相同）")
     p.add_argument("--out", required=True, help="本次运行的目录（experiments/E5/<NNNN_slug>）")
     p.add_argument("--task", nargs="+", default=["all"], help=f"任务名、字母（a–e）或 all：{list(E5_TASKS)}")
@@ -62,7 +85,8 @@ def parse_args(argv=None):
     p.add_argument("--n-per-bin", type=int, help="每档条数（统一覆盖配置的 eval.n_per_bin）")
     p.add_argument("--limit", type=int, help="只取每个任务评测清单的前 N 条（彩排、调试）")
     p.add_argument("--resume", action="store_true")
-    p.add_argument("--start-checkpoint", help="起点检查点的新路径（默认取 e5_stack.json 记下的；manifest 的 sha256 必须相同）")
+    p.add_argument("--start-checkpoint", help="--checkpoint：起点检查点的新路径（默认取 e5_stack.json 记下的；manifest 的 sha256 必须相同）；"
+                                              "--start-only：要评的起点检查点（<起点训练叶目录>/ckpt/final/model，必须给）")
     p.add_argument("--batch-size", type=int, help="批大小（默认配置的 eval.batch_size；--tiny 取 eval.tiny.batch_size）")
     p.add_argument("--allow-unfrozen-batch", action="store_true", help="真模型允许配置以外的批大小（运行身份里照记）")
     p.add_argument("--merge-check-n-per-task", type=int, help="合并核对每类的 val 样本数（默认配置的 eval.merge_check.n_per_task）")
@@ -85,15 +109,37 @@ def parse_args(argv=None):
         p.error("--task 有重复")
     a.device = a.device or ("cpu" if a.tiny else "cuda")
     a.dtype = a.dtype or ("fp32" if a.tiny else "bf16")
-    if not Path(a.checkpoint).is_dir():
-        p.error(f"--checkpoint {a.checkpoint!r} 不是目录")
+    if a.start_only == (a.checkpoint is not None):
+        p.error("--checkpoint（E5 检查点的评测）与 --start-only（只评起点，N = 0）二选一，必须且只能给一个")
+    if a.start_only:  # DEV-0040
+        if a.init is None:
+            p.error(f"--start-only 要给 --init（{' / '.join(TE.START_ONLY_KINDS)}）")
+        if a.init not in TE.START_ONLY_KINDS:
+            why = {"e3a": "e3a 的网格 token 行是 E5 开训时新加的、没训练过", "base": "base 没有起点检查点"}.get(a.init, "")
+            p.error(f"--start-only 只收 --init {' / '.join(TE.START_ONLY_KINDS)}（D81-1），收到 {a.init!r}" + (f"：{why}" if why else ""))
+        if a.start_checkpoint is None or not Path(a.start_checkpoint).is_dir():
+            p.error(f"--start-only 要给起点检查点目录 --start-checkpoint（<起点训练叶目录>/ckpt/final/model），收到 {a.start_checkpoint!r}")
+        if a.seed is None:
+            p.error("--start-only 要给 --seed（起点训练叶目录 config.yaml 的 seed）")
+        if a.merge_check_n_per_task is not None:
+            p.error("--merge-check-n-per-task 只用于 --checkpoint：只评起点没有 E5 LoRA，不做 E5 LoRA 合并前后的核对")
+        a.data_root = a.data_root or os.environ.get("VISINT_DATA_ROOT")
+        if not a.tiny and not a.data_root:
+            p.error("--start-only 要给 --data-root（或设 VISINT_DATA_ROOT）：起点检查点的合并核对用 E1 的 grid16 开发子集")
+    else:
+        for flag, given in (("--init", a.init is not None), ("--seed", a.seed is not None), ("--data-root", a.data_root is not None),
+                            ("--allow-seed-mismatch", a.allow_seed_mismatch)):
+            if given:
+                p.error(f"{flag} 只用于 --start-only（E5 检查点的起点、种子取 e5_stack.json）")
+        if not Path(a.checkpoint).is_dir():
+            p.error(f"--checkpoint {a.checkpoint!r} 不是目录")
     if not a.tiny and not RUN_DIR_NAME.fullmatch(Path(a.out).name):
         p.error(f"--out 的目录名必须带运行编号，形如 0046_e5_main_eval（CLAUDE.md：experiments/<phase>/<NNNN_slug>/），收到 {a.out!r}")
     return a
 
 
-def cmd_run(a, argv) -> int:
-    cfg = load_train_config(a.config)
+def eval_settings(a, cfg):
+    """配置的 eval 节、--tiny 的覆盖、批大小、子集、bootstrap 次数（E5 检查点的评测与只评起点同一套取法）。"""
     e = cfg.doc["eval"]
     t = e["tiny"] if a.tiny else {}
     bs = int(a.batch_size or t.get("batch_size", e["batch_size"]))
@@ -101,6 +147,22 @@ def cmd_run(a, argv) -> int:
         raise ValueError(f"--batch-size {bs} 不是配置的 eval.batch_size {e['batch_size']}；确要换就加 --allow-unfrozen-batch")
     subset = a.subset or e["subset"]
     n_resamples = a.n_resamples if a.n_resamples is not None else int(t.get("n_resamples", BOOTSTRAP_N_RESAMPLES))
+    return e, t, bs, subset, n_resamples
+
+
+def report(prefix: str, task: str, subset: str, m) -> None:
+    """一个任务跑完后打印的一行（标题读数、解析失败率、imagining）。"""
+    h = m["headline"]
+    parts = [f"iou_grid={h['mask_iou_grid']['strict']}"]
+    if "relief_error" in h:
+        parts.append(f"relief={h['relief_error']['strict']}")
+    print(f"{prefix} {task}/{subset} n={m['n']} {' '.join(parts)} "
+          f"parse_fail={m['parse']['failure_rate']} imagining={(m.get('gate') or {}).get('imagining')}")
+
+
+def cmd_run(a, argv) -> int:
+    cfg = load_train_config(a.config)
+    e, t, bs, subset, n_resamples = eval_settings(a, cfg)
     mc_n = int(a.merge_check_n_per_task or t.get("merge_check_n_per_task", e["merge_check"]["n_per_task"]))
     mc_bs = int(t.get("merge_check_batch_size", e["merge_check"]["batch_size"]))
     fd = Path(a.checkpoint)
@@ -155,12 +217,56 @@ def cmd_run(a, argv) -> int:
                            data_seed=data_seed)
         m = TE.run_task(ad, e5tok, prompt, cfg, spec, a.out, checkpoint=checkpoint, n=n, resume=a.resume, argv=argv,
                         run_extra=extra)
-        h = m["headline"]
-        parts = [f"iou_grid={h['mask_iou_grid']['strict']}"]
-        if "relief_error" in h:
-            parts.append(f"relief={h['relief_error']['strict']}")
-        print(f"trained {start_kind} {a.model} {tag} seed{seed} {task}/{subset} n={m['n']} {' '.join(parts)} "
-              f"parse_fail={m['parse']['failure_rate']} imagining={(m.get('gate') or {}).get('imagining')}")
+        report(f"trained {start_kind} {a.model} {tag} seed{seed}", task, subset, m)
+    return 0
+
+
+def cmd_start_only(a, argv) -> int:
+    """只评起点（DEV-0040；模块说明）。批大小、子集、bootstrap 次数、每档条数的取法与 cmd_run 相同。"""
+    log = lambda m: print(m, file=sys.stderr, flush=True)  # noqa: E731
+    cfg = load_train_config(a.config)
+    e, _, bs, subset, n_resamples = eval_settings(a, cfg)
+    seed = int(a.seed)
+    if seed not in cfg.seeds:  # 同 scripts/train_e5.py：n0 与各数据量档同一组种子
+        raise ValueError(f"--seed {seed} 不在配置的 training.seeds {list(cfg.seeds)} 里")
+    start = STK.resolve_start(cfg, a.init, Path(a.start_checkpoint).resolve(), model_key=a.model, tiny=a.tiny)
+    pairing = STK.check_seed_pairing(start, seed, allow_mismatch=a.allow_seed_mismatch)
+    if pairing["status"] != "match":
+        log(f"注意：配种子放开（{pairing['status']}：起点的种子 {pairing['start_seed']}，--seed {seed}），已记进运行身份")
+    # 评测前的核对（同 src/e5/train.run_e5_training 开训前的两项；结果放在训练的同一个位置，已通过的复用）
+    checks_dir = STK.start_checks_dir(a.out, start.kind, a.model)
+    checks_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        start_check = STK.start_merge_check(start, cfg, model_key=a.model, tiny=a.tiny, device=a.device, dtype=a.dtype,
+                                            out_dir=checks_dir, data_root=a.data_root, log=log)
+    except MergeCheckFailed as err:
+        print(f"拒绝评测：起点检查点的合并核对没有通过：{err}", file=sys.stderr)
+        return 1
+    reference = STK.reference_fingerprint(start, device=a.device, dtype=DTYPES[a.dtype], out_dir=checks_dir, log=log)
+    ad, tokens, info = STK.load_start_only(start, cfg, device=a.device, dtype=DTYPES[a.dtype])
+    fp = info["fingerprint"]
+    if fp != reference["fingerprint"]:
+        raise STK.StartError(f"合并起点 LoRA 之后的权重指纹 {fp[:16]}… 与 factory.load_trained(起点, merge=True) 的 "
+                             f"{reference['fingerprint'][:16]}… 不同：评测的模型与起点检查点合并评测时的不一致")
+    e5tok = E5Tokens(tokens, cfg.e3b.allowed_scope)
+    prompt = cfg.prompt_format()
+    n = cfg.grid_n
+    log(f"[只评起点] 跳过的核对：{TE.START_ONLY_SKIPPED}")
+    checkpoint = TE.start_only_checkpoint(start, seed=seed, seed_pairing=pairing, fingerprint=fp, device_key=STK.device_key(ad),
+                                          start_check=start_check)
+    extra = {"mode": "start_only", "start_checkpoint": str(start.checkpoint), "start_leaf_config": start.leaf_config,
+             "start_merge_check": start_check,
+             "reference_fingerprint": {k: reference[k] for k in ("fingerprint", "device_key", "manifest_sha256")},
+             "setup": info, "skipped_checks": dict(TE.START_ONLY_SKIPPED),
+             "gpu": torch.cuda.get_device_name(0) if a.device.startswith("cuda") and torch.cuda.is_available() else None}
+    for task in a.task:
+        npb = int(a.n_per_bin or e["n_per_bin"][task])
+        spec = TE.EvalSpec(start=start.kind, model_key=a.model, tag=TE.START_ONLY_TAG, seed=seed, task=task, subset=subset,
+                           n_per_bin=npb, n_resamples=n_resamples, batch_size=bs, tiny=a.tiny, dtype=a.dtype, limit=a.limit,
+                           start_only=True)
+        m = TE.run_task(ad, e5tok, prompt, cfg, spec, a.out, checkpoint=checkpoint, n=n, resume=a.resume, argv=argv,
+                        run_extra=extra)
+        report(f"start-only {start.kind} {a.model} {TE.START_ONLY_TAG} seed{seed}", task, subset, m)
     return 0
 
 
@@ -168,7 +274,7 @@ def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     a = parse_args(argv)
     try:
-        return cmd_run(a, argv)
+        return cmd_start_only(a, argv) if a.start_only else cmd_run(a, argv)
     except Exception as e:  # noqa: BLE001 — 证据先落盘，再以非零码退出
         err_dir = Path(a.out) / TE.EVAL_SUB / "errors"
         err_dir.mkdir(parents=True, exist_ok=True)

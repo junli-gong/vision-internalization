@@ -1991,7 +1991,10 @@
 
 ## D82 — DEV-0040（E5 的 N = 0 读数："只评起点"）合入；E5 主比较的队列（RUN-0037）（2026-10-08）
 
-1. **合入**，无返工。普通与 server-parity 条件都是 2628 passed + 18 skipped，比 D80 多 9 条，都是新增测试。
+1. **合入**，无返工。
+   - 开发 agent 报普通与 server-parity 都是 2628 passed + 18 skipped，比 D80 多 9 条，都是新增测试。
+   - 管理员复跑：头一回两套同时用 `conda run`，输出互相覆盖，作废。第二回直接调用环境里的 python，两套都是 2626 passed + 2 failed + 18 skipped。
+   - 失败的 2 条都是合成数据生成器的单核速度下限测试（`test_synth_3d_tasks::test_speed_floor_single_core[viewpoint]`、`test_synth_occlusion::test_speed_at_least_50_per_second_single_core`），当时 CPU 同时被两套测试和两个开发 agent 占着。单独重跑，两种条件都通过（3 passed）。与本次改动无关，`src/synth` 没动过。
    - `eval_e5_trained.py --start-only --init {base_warmup,e3b} --start-checkpoint … --seed k`：
      - 加载：建 base → `setup_start`（合并起点 LoRA、恢复起点训练过的网格 token 行），与训练开头同一个函数；
      - 评测：样本、提示、受限解码、评分全部与训练后评测同一套函数；
@@ -2003,7 +2006,7 @@
    - 起点的合并核对放在训练用的同一个位置。所以 RUN-0037 让 N = 0 与 E5 训练用同一个 `--out`，核对结果互相复用。
    - `--seed` 必须在 `training.seeds` 里；真模型必须给 `--data-root`。
    - 运行身份的 `system` 仍是 `trained`，另记 `start_only: true` 与 `n_train: 0`。
-3. **RUN-0037 的队列**（管理员写，`prompts/server/0037-b200-e5-main/queue.sh`）：
+3. **RUN-0037 的队列**（管理员写，`prompts/server/0037-b200-e5-main/queue.sh`；**写于 D83 之前，起点与解码要按 E5 §8a v3 改，RUN-0037 暂缓，任务书草稿在 `prompts/server/0037-b200-e5-main/taskbook_draft.md`**）：
    - 顺序：N = 0（6 个）→ 训练（41 个），每个训完紧接着评 test（a–d 迁移只评 e），共 88 条命令。
    - 预估约 67 GPU 小时，上限 80。驱动累计跑命令的墙钟，每条开始前按"已用 + 这一条的预估"判断，会超就先停（D81-2）。
    - 公共脚本 `train_queue.sh` 新增 `run_cmd`（跑一条不分段的命令）、`ckpt_of`（从账本取检查点）与用量上限。

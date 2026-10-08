@@ -9,6 +9,8 @@
 #   - 一条跑完：final/ 从内存盘拷到根盘（按训练叶目录的结构，见 finalize），逐文件 sha256 核对，删掉内存盘上的那份，
 #     记账（ckpt_ledger.tsv 的 checkpoint 列 = 训练脚本打印的那一层，可以直接给评测或 E5 的 --start-checkpoint），推结果；
 #   - 一条失败就从检查点重试一次；还失败就记进 failed.txt、跳到下一条；连续两条失败就停。
+#   - 用量上限（可选，D81-2）：给了 QUEUE_CAP_H 时，累计各段的墙钟（只算跑命令的时间，不算暂停与等待）记在 $DRV/gpu_seconds；
+#     每条运行开始前，已用 + 这一条的预估（run/run_cmd 前设 EST_H，没设按 0）超过上限就停，写 blocked 并推送，不等跑完再停。
 #
 # 队列脚本先设好下面的变量，再 source 本文件，然后逐条调用  run <名字> <脚本> <参数…>，最后调用 finish。
 #   RUN_ID    运行编号，例如 0036
@@ -34,6 +36,8 @@ TQ_TRAIN_DATA=${TQ_TRAIN_DATA:-}
 POLL_S=${POLL_S:-60}; WATCH_S=${WATCH_S:-30}; BEAT_S=${BEAT_S:-300}
 MEM_STOP_GB=${MEM_STOP_GB:-60}; DISK_STOP_GB=${DISK_STOP_GB:-3}; SHARE_STOP_GB=${SHARE_STOP_GB:-15}
 MAX_CHUNKS=${MAX_CHUNKS:-200}
+QUEUE_CAP_H=${QUEUE_CAP_H:-}
+EST_H=${EST_H:-0}
 TQ_STATUS=$LOGS/train_${RUN_ID}.status
 TQ_PAUSE=$LOGS/train.pause
 GITLOCK=$LOGS/git.lock
@@ -80,6 +84,16 @@ mem_stop() {
   die "memory ${1}GB<${MEM_STOP_GB}GB (D77-5), training data removed"
 }
 
+used_s() { [ -f "$DRV/gpu_seconds" ] && cat "$DRV/gpu_seconds" || echo 0; }
+add_used() { echo $(( $(used_s) + $1 )) > "$DRV/gpu_seconds"; }
+cap_check() {  # $1 = 名字；已用 + 预估（EST_H，小时，可带小数）超过 QUEUE_CAP_H 就停
+  [ -n "$QUEUE_CAP_H" ] || return 0
+  local u; u=$(used_s)
+  if awk -v u="$u" -v e="${EST_H:-0}" -v c="$QUEUE_CAP_H" 'BEGIN{exit !((u/3600 + e) > c)}'; then
+    die "cap: used $(awk -v u="$u" 'BEGIN{printf "%.2f", u/3600}') h + estimate ${EST_H:-0} h for $1 > cap $QUEUE_CAP_H h (D81-2)"
+  fi
+}
+
 gate() {  # 不满足就等；触到停止线就停
   local why last="" m d s g
   while :; do
@@ -113,6 +127,7 @@ chunk() {  # $1 = 名字，其余 = 命令；输出写进 $DRV/logs/<名字>.cur
     fi
   done
   wait "$pid"; rc=$?
+  add_used $(( $(date +%s) - t0 ))
   { echo "=== $(now) chunk rc=$rc wall_s=$(( $(date +%s) - t0 ))"; cat "$cur"; } >> "$DRV/logs/$name.log"
   return $rc
 }
@@ -157,6 +172,7 @@ run() {  # $1 = 名字（队列内唯一），$2 = 脚本，其余 = 参数（�
   local name=$1; shift
   local tries=0 n=0 rc cur ck
   if grep -qxF "$name" "$DRV/done.txt"; then note "$name 已完成（driver 记录），跳过"; return 0; fi
+  cap_check "$name"
   cur="$DRV/logs/$name.cur"
   while :; do
     gate
@@ -181,6 +197,33 @@ run() {  # $1 = 名字（队列内唯一），$2 = 脚本，其余 = 参数（�
       return 1
     fi
   done
+}
+
+run_cmd() {  # 一条不分段的命令（例如评测）：$1 = 名字（队列内唯一），其余 = 完整命令。过闸后跑一次，rc = 0 记完成并推送；
+  # 否则重试一次，还失败就记进 failed.txt、跳到下一条（连续失败的计数与 run 共用）。输出追加进 $DRV/logs/<名字>.log。
+  local name=$1; shift
+  local tries=0 rc
+  if grep -qxF "$name" "$DRV/done.txt"; then note "$name 已完成（driver 记录），跳过"; return 0; fi
+  cap_check "$name"
+  while :; do
+    gate
+    beat "running $name"
+    chunk "$name" "$@"
+    rc=$?
+    rm -f "$DRV/logs/$name.cur"
+    if [ $rc -eq 0 ]; then echo "$name" >> "$DRV/done.txt"; note "$name 完成"; FAILS_IN_ROW=0; push_results "$name complete"; return 0; fi
+    tries=$((tries + 1)); note "$name rc=$rc（第 $tries 次）"
+    if [ $tries -ge 2 ]; then
+      echo "$(now) $name rc=$rc" >> "$DRV/failed.txt"
+      FAILS_IN_ROW=$((FAILS_IN_ROW + 1)); push_results "$name FAILED rc=$rc"
+      [ $FAILS_IN_ROW -ge 2 ] && die "连续两条失败（最后一条 $name）"
+      return 1
+    fi
+  done
+}
+
+ckpt_of() {  # 已完成的运行的检查点（ckpt_ledger.tsv 的 checkpoint 列，最后一条记录）
+  awk -F'\t' -v n="$1" '$1 == n {c = $2} END {print c}' "$OUT/ckpt_ledger.tsv"
 }
 
 wait_for_queue() {  # 等另一个队列跑完（$LOGS/train_<编号>.done）
