@@ -1,0 +1,145 @@
+experiment: E1
+framework: src/e1（DEV-0014；协议 v2：DEV-0017）
+model:
+  key: qwen3.5-2b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-2B
+  revision: 15852e8c16360a2fea060d615a32b45270f8a8fc
+  adapter_model_key: qwen3.5-2b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+task: ovd
+subset: eval
+generation:
+  enable_thinking: false
+  max_new_tokens: 2048
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  readout:
+    kind: text
+    parse: boxes
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+  entry:
+    template: 'Locate every instance that belongs to the following categories: "{categories}".
+      Report bbox coordinates in JSON format.'
+    native: true
+    provenance: predecessor_cookbook
+    source_url: https://github.com/QwenLM/Qwen3-VL/blob/0dcc180d854f4b132f8059b10bbf0b5fd5dae9ed/cookbooks/2d_grounding.ipynb
+    parse: boxes
+    max_new_tokens: 2048
+data:
+  n_samples: 192
+  sample_ids_sha256: d04498546dadd3e0bdf45aa1dc8c1563cf513a37031f30fd24ac7ee8f45cfd99
+  has_gt: true
+  selection_stats:
+    coco_val2017:
+      n_total: 500
+      n_kept: 500
+      excluded_by_reason: {}
+    odinw13/AerialMaritimeDrone_large:
+      n_total: 15
+      n_kept: 15
+      excluded_by_reason: {}
+    odinw13/Aquarium_Aquarium_Combined.v2-raw-1024.coco:
+      n_total: 50
+      n_kept: 50
+      excluded_by_reason: {}
+    odinw13/CottontailRabbits:
+      n_total: 19
+      n_kept: 19
+      excluded_by_reason: {}
+    odinw13/EgoHands_generic:
+      n_total: 50
+      n_kept: 50
+      excluded_by_reason: {}
+    odinw13/NorthAmericaMushrooms_North_American_Mushrooms.v1-416x416.coco:
+      n_total: 5
+      n_kept: 5
+      excluded_by_reason: {}
+    odinw13/Packages_Raw:
+      n_total: 4
+      n_kept: 4
+      excluded_by_reason: {}
+    odinw13/PascalVOC:
+      n_total: 50
+      n_kept: 50
+      excluded_by_reason: {}
+    odinw13/Raccoon_Raccoon.v2-raw.coco:
+      n_total: 29
+      n_kept: 29
+      excluded_by_reason: {}
+    odinw13/ShellfishOpenImages_raw:
+      n_total: 50
+      n_kept: 50
+      excluded_by_reason: {}
+    odinw13/VehiclesOpenImages_416x416:
+      n_total: 50
+      n_kept: 50
+      excluded_by_reason: {}
+    odinw13/pistols_export:
+      n_total: 50
+      n_kept: 50
+      excluded_by_reason: {}
+    odinw13/pothole:
+      n_total: 50
+      n_kept: 50
+      excluded_by_reason: {}
+    odinw13/thermalDogsAndPeople:
+      n_total: 41
+      n_kept: 41
+      excluded_by_reason: {}
+    n: 192
+    limit: 192
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: 192
+map_ci_resamples: 0
+batch_size: 64
+batch_protocol:
+  protocol_version: 1
+  batch_size: 64
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: true
+  frozen_batch_size: 64
+checkpoint:
+  manifest_sha256: 087cf5ac50e5cdf298b5e5aa0b72ed8562ac3838e94500899a461c216a22b9ab
+  label: t_text_spot/c1prime/seed0
+  build_spec:
+    family_kw: {}
+    image_policy: pixel_budget:300
+    key: qwen3.5-2b
+    tiny: false
+  image_policy: pixel_budget:300
+  dtype: bfloat16
+  lora: null
+  trainable_token_rows: null
+  n_grid_tokens: 67
+  merge_check:
+    criteria_version: v1
+    n: 200
+    checks: []
+mask_grid_tokens:
+  enabled: true
+  n_ids: 67
+  ids_sha256: 2f44eb633e9e878db303fc0c0618453d470e290684b08c44559934f06952223b
+  rule: 自由生成（text 读法）的每一步把检查点登记的网格 token（adapter.grid_token_ids）的 logits 置为 −inf，其余
+    logits 不变（HF 的 logits 处理器，排在 greedy 的 argmax 之前）；受限字母读数不挂；检查点没有网格 token 时不挂（输出与不加选项逐字节相同）
+  basis: D72-4（DEV-0036）
+  applied: true
