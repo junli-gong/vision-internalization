@@ -1,0 +1,150 @@
+{
+ "task": "semseg",
+ "model": "qwen3.5-2b",
+ "variant": "c2",
+ "seed": 0,
+ "checkpoint": {
+  "model_manifest_sha256": "23696c4de83fc38d57db3903d2e9f7f93d55796f525d638ca01b8a9edb997e04",
+  "readout_manifest_sha256": "b63c271e030ed75c724b14a1c0a62e4ace8f79abe26ba22298f3784d514038e8",
+  "build_spec": {
+   "family_kw": {},
+   "image_policy": "pixel_budget:300",
+   "key": "qwen3.5-2b",
+   "tiny": false
+  },
+  "image_policy": "pixel_budget:300",
+  "dtype": "bfloat16",
+  "lora": null,
+  "readout_params": {
+   "basis": "decoder_budget_total = mix + decoder + class_proj（class_proj 只用于类别头，保守地计入解码器的预算）；每个线性头单独 ≤ each_head",
+   "class_proj": 135232,
+   "decoder": 3671232,
+   "decoder_budget_total": 3806464,
+   "heads": {
+    "depth": 65,
+    "normals": 195,
+    "refseg": 65
+   },
+   "limits": {
+    "decoder_budget_total": 50000000,
+    "each_head": 1000
+   },
+   "mix": 0,
+   "readout_total": 3806789
+  }
+ },
+ "n": 2000,
+ "complete": true,
+ "config_sha256": "28be66e52fd3e9e5b45c5b04e299342bda469c9c2f9d20e3b2de022b0c790067",
+ "headline": {
+  "upsample": "guided",
+  "miou": {
+   "value": 0.1735439286605652,
+   "ci": {
+    "low": 0.16814587083003918,
+    "high": 0.17948767667828722,
+    "level": 0.95,
+    "n_resamples": 1000
+   }
+  },
+  "pixel_acc": {
+   "value": 0.7119024471843347,
+   "ci": {
+    "low": 0.7034352565015844,
+    "high": 0.7202278842607158,
+    "level": 0.95,
+    "n_resamples": 1000
+   }
+  }
+ },
+ "by_upsample": {
+  "guided": {
+   "n": 2000,
+   "miou": 0.1735439286605652,
+   "pixel_acc": 0.7119024471843347,
+   "n_classes_present": 150,
+   "miou_ci": {
+    "low": 0.16814587083003918,
+    "high": 0.17948767667828722,
+    "level": 0.95,
+    "n_resamples": 1000
+   },
+   "pixel_acc_ci": {
+    "low": 0.7034352565015844,
+    "high": 0.7202278842607158,
+    "level": 0.95,
+    "n_resamples": 1000
+   }
+  },
+  "bilinear": {
+   "n": 2000,
+   "miou": 0.17276010997205005,
+   "pixel_acc": 0.7092210914110918,
+   "n_classes_present": 150,
+   "miou_ci": {
+    "low": 0.16742216163287818,
+    "high": 0.178557821487244,
+    "level": 0.95,
+    "n_resamples": 1000
+   },
+   "pixel_acc_ci": {
+    "low": 0.7007852024957261,
+    "high": 0.7175531777210773,
+    "level": 0.95,
+    "n_resamples": 1000
+   }
+  }
+ },
+ "leak_checks": {
+  "shuffle": {
+   "upsample": "guided",
+   "metrics": {
+    "n": 2000,
+    "miou": 0.02119843796715163,
+    "pixel_acc": 0.23474641913203687,
+    "n_classes_present": 150,
+    "miou_ci": {
+     "low": 0.01969012426169514,
+     "high": 0.022513146460608004,
+     "level": 0.95,
+     "n_resamples": 1000
+    },
+    "pixel_acc_ci": {
+     "low": 0.2256149341354307,
+     "high": 0.2438840606536365,
+     "level": 0.95,
+     "n_resamples": 1000
+    }
+   },
+   "paired_normal_minus_check": {
+    "miou": {
+     "estimate": 0.15234549069341358,
+     "low": 0.14698563003644732,
+     "high": 0.15825036757567357,
+     "level": 0.95,
+     "n_resamples": 1000,
+     "n": 2000
+    },
+    "pixel_acc": {
+     "estimate": 0.47715602805229784,
+     "low": 0.46728516562377487,
+     "high": 0.4879259748324501,
+     "level": 0.95,
+     "n_resamples": 1000,
+     "n": 2000
+    }
+   },
+   "n_same_image_fallback": 0,
+   "definition": "同一批里每条样本的读出输入换成批内循环顺序里下一条不同图的样本的；类别名的表示与 GT 不动"
+  }
+ },
+ "groups": {},
+ "compute": {
+  "n_calls": 2000,
+  "prompt_tokens": 0,
+  "visual_tokens": 601163,
+  "image_pixels": 615590912,
+  "n_calls_no_instruction": 0,
+  "note": "一条样本一次前向（没有生成）；打乱检查复用同一次前向的隐藏状态，只多跑一遍读出；去掉指令另跑一次前向（compute_no_instruction.json）。墙钟在 compute*.json"
+ }
+}

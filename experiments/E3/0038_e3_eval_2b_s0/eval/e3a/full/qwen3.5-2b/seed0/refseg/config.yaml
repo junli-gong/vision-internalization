@@ -1,0 +1,747 @@
+experiment: E3a-eval
+framework: src/readout/evaluate.py（DEV-0034）
+variant: full
+seed: 0
+task: refseg
+model:
+  key: qwen3.5-2b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-2B
+  revision: 15852e8c16360a2fea060d615a32b45270f8a8fc
+  adapter_model_key: qwen3.5-2b
+  tiny: false
+  dtype: bf16
+checkpoint:
+  model_manifest_sha256: 7fa48b7d1e5f5e9c049e702d32c2513db466189f105291448ff6a0d39593bf37
+  readout_manifest_sha256: 3d1085d774ba978eb62cd10c024a0faf457ee47b37f4d6ed56873a60e4933ab4
+  build_spec:
+    family_kw: {}
+    image_policy: pixel_budget:300
+    key: qwen3.5-2b
+    tiny: false
+  image_policy: pixel_budget:300
+  dtype: bfloat16
+  lora:
+    lora_alpha: 64.0
+    lora_dropout: 0.05
+    n_parameters: 33638400
+    n_targets: 186
+    n_tensors: 372
+    r: 32
+    targets_sha256: d993d0cbcc93630509dd4c28bee72f41f9cea5a455c5fae42b831780bf8c061c
+  readout_params:
+    basis: decoder_budget_total = mix + decoder + class_proj（class_proj 只用于类别头，保守地计入解码器的预算）；每个线性头单独
+      ≤ each_head
+    class_proj: 135232
+    decoder: 3671232
+    decoder_budget_total: 3806490
+    heads:
+      depth: 65
+      normals: 195
+      refseg: 65
+    limits:
+      decoder_budget_total: 50000000
+      each_head: 1000
+    mix: 26
+    readout_total: 3806815
+readout:
+  spec:
+    variant: full
+    hidden_size: 2048
+    n_sources: 25
+    grid: 16
+    widths:
+    - 256
+    - 128
+    - 64
+    - 64
+    res_blocks:
+    - 2
+    - 1
+    - 1
+    - 0
+    embed_dim: 64
+    out_size: 128
+    head_channels:
+      depth: 1
+      normals: 3
+      refseg: 1
+    norm_eps: 1.0e-06
+  sources:
+  - llm_hidden:query
+  - llm_hidden:class_names
+  layers:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+  - 16
+  - 17
+  - 18
+  - 19
+  - 20
+  - 21
+  - 22
+  - 23
+  - 24
+instruction:
+  order: instruction_first
+  instruction_template: Segment {expression} in the image.
+eval:
+  version: e3a-eval-v1
+  batch_size: 32
+  batch_size_config: 32
+  upsample:
+    primary: guided
+    methods:
+    - guided
+    - bilinear
+    guided_filter:
+      radius: 8
+      eps: 0.001
+  semseg_channel_chunk: 16
+  leak_checks:
+    shuffle:
+      upsample: guided
+    no_instruction:
+      tasks:
+      - refseg
+      instruction: ''
+      upsample: guided
+  bootstrap:
+    n_resamples: 1000
+    seed: 20260929
+config:
+  path: configs/e3a_train.json
+  sha256: 28be66e52fd3e9e5b45c5b04e299342bda469c9c2f9d20e3b2de022b0c790067
+  version: e3a-train-v1
+data:
+  n: 10634
+  ids_sha256: 5297041f81e4ac69247a14e05a8a382603fe51064388689a73d761503ab63cd9
+  limit: null
+  stats:
+    n_total: 10834
+    n_missing_image: 0
+    exclusion:
+      n_in: 10834
+      n_kept: 10634
+      excluded_by_reason:
+        开发子集: 200
+      excluded:
+      - id: refcoco_unc/val/251
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/616
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/791
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/1732
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/2723
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/2952
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/3433
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/4177
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/4718
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/5161
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/5166
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/7639
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/8022
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/8956
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/9619
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/9925
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/11334
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/11784
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/12738
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/13744
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/14328
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/14581
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/15341
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/15480
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/16795
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/16930
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/17185
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/17630
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/17705
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/18177
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/18179
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/18421
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/20681
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/21095
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/22349
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/22351
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/22460
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/22715
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/22843
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/22850
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/23254
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/23957
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/24064
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/24567
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/26538
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/27275
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/27541
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/27799
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/27802
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/28350
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/29387
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/30994
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/31253
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/31458
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/31799
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/31862
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/32276
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/33640
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/34684
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/35372
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/35830
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/36331
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/37032
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/37475
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/37887
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/37967
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/38851
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/39664
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/39803
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/40961
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/41661
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/42084
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/44070
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/44933
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/45270
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/46187
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/46723
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/47125
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/47995
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/49653
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/49884
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/50602
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/50870
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/51998
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/52053
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/53012
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/53081
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/54422
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/54827
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/59208
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/59236
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/59725
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/59952
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/61148
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/61289
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/62129
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/62333
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/62974
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/63323
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/63386
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/63400
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/64051
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/65397
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/65609
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/66171
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/67805
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/68877
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/69067
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/69312
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/70192
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/72104
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/72253
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/72638
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/75586
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/76231
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/79025
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/79935
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/80189
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/81082
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/81085
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/81093
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/82276
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/83330
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/83331
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/83551
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/83962
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/83963
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/84157
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/85039
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/85738
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/87032
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/87352
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/88592
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/89534
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/90020
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/91007
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/91036
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/92690
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/92886
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/94015
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/94605
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/96429
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/97414
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/97487
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/98057
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/100555
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/102614
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/102689
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/103765
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/103880
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/105612
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/107888
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/107894
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/110476
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/110479
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/111134
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/111459
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/112358
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/113890
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/114067
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/115642
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/116351
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/116365
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/116434
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/116543
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/116641
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/117688
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/117930
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/117931
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/118405
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/119055
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/119207
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/119792
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/120282
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/120874
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/121164
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/121918
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/122968
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/123530
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/124134
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/125536
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/125920
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/126057
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/127778
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/128060
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/129539
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/132045
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/132440
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/132525
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/132848
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/133146
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/133552
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/136032
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/136108
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/136452
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/136701
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/137635
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/137938
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/139675
+        reason: 开发子集
+        by: sample_id
+      - id: refcoco_unc/val/140960
+        reason: 开发子集
+        by: sample_id
+      n_without_phash: 0
+    n_dev_excluded: 200
+    n_probe_excluded: 0
+    n_kept: 10634
+    subset: eval
