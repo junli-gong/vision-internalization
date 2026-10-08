@@ -39,5 +39,5 @@ OMP_NUM_THREADS=16
 MKL_NUM_THREADS=16
 ```
 
-- 续跑后驱动日志里的第一行进度：`第 1010/4000 步 loss 1.0355（1.16 s/步）`。
+- 续跑后训练日志（`experiments/E3/0036_e3_train_2b/driver/logs/e3a_full_s1.cur`）的第一行进度：`第 1010/4000 步 loss 1.0355（1.16 s/步）`。
 - 本 addendum 列的 RUN-0036 种子 0 的 E3a full 每步中位是 2.146 s。
