@@ -27,6 +27,9 @@ set -uo pipefail
 case "$OUT" in "$REPO"/*) ;; *) echo "OUT 必须在 REPO 里：$OUT" >&2; exit 2;; esac
 TINY=${TINY:-0}
 PROJ=${PROJ:-}
+# CPU 线程（RUN-0036 的教训）：不设时 torch 与 numpy 按全部核开线程，B200 只有 30 核、多人共用，E3a 的 build_inputs 每步从 0.22 s
+# 慢到 0.8–1.6 s。与 RUN-0034、A800 的 common.sh 相同，取 16；调用方已设的照用。
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} MKL_NUM_THREADS=${MKL_NUM_THREADS:-16}
 TQ_TRAIN_DATA=${TQ_TRAIN_DATA:-}
 POLL_S=${POLL_S:-60}; WATCH_S=${WATCH_S:-30}; BEAT_S=${BEAT_S:-300}
 MEM_STOP_GB=${MEM_STOP_GB:-60}; DISK_STOP_GB=${DISK_STOP_GB:-3}; SHARE_STOP_GB=${SHARE_STOP_GB:-15}
