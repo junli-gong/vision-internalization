@@ -83,3 +83,10 @@ WAIT=$REPO/.claude/skills/exp-triad-flow/scripts/server_standby_wait.sh
 - **git 锁**：队列也从主 checkout 提交，所以主 checkout 上的 pull、add、commit、push 一律放进锁里：`flock $PROJ/logs/git.lock -c '<git 命令>'`。commit 时只提交自己的路径：`git commit -m … -- <路径>`。
 - **队列停了**（status 是 `blocked …`）：驱动已经自己推送了"driver stopped"，管理员会处理。不要自己重启，除非 addendum 让你重启。
 - **服务器重启**会清空 /dev/shm，工作树、训练数据、权重、内存盘上的续跑状态都会丢，驱动也会断。重连后先写 `blocked reboot` 到 `$STATUS`，等管理员的 addendum。
+
+## 批了上限的运行（2026-10-07 加，D81-2）
+
+- 凡是任务书给了用量上限的运行，**开跑前按模型（或按命令）逐个预估**：用任务书里的预估表，再按你手上最近的实测吞吐复核。
+  - 预计合计超出上限：先不跑，推送一份短报告，写清逐项预估与依据，`blocked over-cap-estimate` 写进 `$STATUS`，等管理员。
+  - 运行当中，每个模型开始之前再预估一次"跑完它会不会超"。会超就在它之前停下报告，不要等跑完再停。
+- 来历：RUN-0032 的停止判定只在每个模型之后做，InternVL-4B 一个模型就跑了 9.4 小时，合计超出上限 55%。

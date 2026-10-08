@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# RUN-0037 的训练队列（B200）：E5 主比较（2B；E5 预注册 §5、§8；D77-3、D78；N30 待批准，顺序与范围按批准结果改）。
+# RUN-0037 的训练队列（B200）：E5 主比较（2B；E5 预注册 §5、§8 已批准 v2；D77-3、D78、D81）。N = 0 的读数是评测，不在这个队列里，开训前另跑。
 # 起点都是 RUN-0036 的最终检查点（$PROJ/ckpt/0036）：base_warmup = 预热，e3b = E3b，e3a = E3a full。配种子：E5 的种子 i 用起点的种子 i。
-# 顺序：1K、4K 的三个种子（H5 的主信号）→ 16K 的三个种子 → 64K 的种子 0 → a–d 迁移（4K，E3b 与预热）→ 诊断起点 base（1K、4K，种子 0）。
+# 顺序：1K、4K 的三个种子（H5 的主信号）→ 16K 的三个种子 → 64K 的种子 0 → a–d 迁移（4K，E3b、E3a、预热；D81-1 (c)）→ 诊断起点 base（1K、4K，种子 0）。
 # 驱动的规则见 scripts/server/train_queue.sh；RUN-0036 的队列跑完才开始（wait_for_queue 0036）。
 #
 # 用法（B200）：setsid nohup bash /dev/shm/visint/tmp/wt0037/prompts/server/0037-b200-e5-main/queue.sh \
@@ -61,6 +61,6 @@ note "队列开始：commit $(git -C "$WT" rev-parse HEAD)，起点根 $START_RO
 for n in "${SMALL[@]}"; do for s in "${SEEDS[@]}"; do for init in base_warmup e3b e3a; do e5 "$init" "$n" "$s"; done; done; done
 for n in ${MID[@]+"${MID[@]}"}; do for s in "${SEEDS[@]}"; do for init in base_warmup e3b e3a; do e5 "$init" "$n" "$s"; done; done; done
 for n in ${BIG[@]+"${BIG[@]}"}; do for init in base_warmup e3b e3a; do e5 "$init" "$n" 0; done; done
-for s in "${SEEDS[@]}"; do for init in e3b base_warmup; do e5 "$init" "$TIER_AD" "$s" --tasks a b c d; done; done
+for s in "${SEEDS[@]}"; do for init in e3b e3a base_warmup; do e5 "$init" "$TIER_AD" "$s" --tasks a b c d; done; done
 for n in "${SMALL[@]}"; do e5 base "$n" 0; done
 finish
