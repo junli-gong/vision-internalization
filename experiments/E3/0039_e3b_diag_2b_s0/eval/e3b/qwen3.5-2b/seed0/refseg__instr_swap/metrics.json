@@ -1,0 +1,259 @@
+{
+ "task": "refseg",
+ "model": "qwen3.5-2b",
+ "variant": "e3b",
+ "seed": 0,
+ "checkpoint_manifest_sha256": "acb7f58d1ae3aa0c66ed7ba3c57b03d45131b6a3476b5f87b5211f451ceded30",
+ "n": 2048,
+ "complete": true,
+ "config_sha256": "35e69b56324281356aba22419391fe8d092e3c0f0413ee1af4ed8ea74b60f457",
+ "instruction_check": {
+  "kind": "swap",
+  "n_eval": 2048,
+  "rule": "候选 = 评测总体（load_eval_set 的全部样本，不受 --limit 影响）里同一张图（fields.image_id）、不同标注 id（fields.ann_id）的全部指代句，按评测总体的顺序排列；取第 k 个，k = sha256('visint-e3b-instr-swap|<SWAP_SEED>|<样本 id>') 的前 8 字节（大端整数）mod 候选数；没有候选的样本跳过并计数。指令 = 同一模板（tasks.refseg.grid_template）填候选的指代句",
+  "seed": 20261008,
+  "n_called": 2014,
+  "n_skipped": 34
+ },
+ "upsample": "guided",
+ "definition": "配对差 = 正常 − 检查（同一组 id、同一套评分，配对 bootstrap）。original：两侧都对原来的物体评分（模型跟着指令走时差为正）；swapped（只有 swap）：两侧都对换上去的物体评分（跟着指令走时检查一侧更高，差为负）。只用默认上采样",
+ "normal": {
+  "config_sha256": "7c4ca1ffa42be2135f86405464986a1e714b640bddcefcfdddca9483bd0e3f31",
+  "predictions_file": "predictions.jsonl",
+  "predictions_sha256": "66cdc017c3a0f6d457f70517fe6db8e1f55371133619d407691822f4979deebe",
+  "n": 10634,
+  "decode": "restricted",
+  "n_paired": 2014,
+  "n_verified_against_scores": 2014,
+  "pairing": "按 id；正常一侧取已有结果的前 N 条（同一检查点、同一批配置），不重跑。批组成：none 与正常评测逐批同一组样本；swap 跳过样本后按剩下的样本连续成批，与正常评测的批不再一一对应，跳过的不进配对"
+ },
+ "targets": {
+  "original": {
+   "check": {
+    "cIoU": {
+     "value": 0.01992602939806778,
+     "ci": {
+      "low": 0.015714260897557203,
+      "high": 0.02451582970572825,
+      "level": 0.95,
+      "n_resamples": 1000
+     },
+     "n": 2014
+    },
+    "gIoU": {
+     "value": 0.02495026424661275,
+     "ci": {
+      "low": 0.01957487678279369,
+      "high": 0.030643918704805224,
+      "level": 0.95,
+      "n_resamples": 1000
+     },
+     "n": 2014
+    },
+    "BIoU": {
+     "value": 0.017303188462211454,
+     "ci": {
+      "low": 0.01401923865452002,
+      "high": 0.020789332092051655,
+      "level": 0.95,
+      "n_resamples": 1000
+     },
+     "n": 2014
+    },
+    "n": 2014,
+    "n_valid": 2010,
+    "valid_rate": 0.9980139026812314
+   },
+   "normal": {
+    "cIoU": {
+     "value": 0.5340041410597116,
+     "ci": {
+      "low": 0.5147613434442742,
+      "high": 0.5538409265971347,
+      "level": 0.95,
+      "n_resamples": 1000
+     },
+     "n": 2014
+    },
+    "gIoU": {
+     "value": 0.5222464674581996,
+     "ci": {
+      "low": 0.5064829429508506,
+      "high": 0.53714494417984,
+      "level": 0.95,
+      "n_resamples": 1000
+     },
+     "n": 2014
+    },
+    "BIoU": {
+     "value": 0.3146924102280766,
+     "ci": {
+      "low": 0.3047650253555718,
+      "high": 0.3240627683895521,
+      "level": 0.95,
+      "n_resamples": 1000
+     },
+     "n": 2014
+    },
+    "n": 2014,
+    "n_valid": 2011,
+    "valid_rate": 0.9985104270109235
+   },
+   "paired_normal_minus_check": {
+    "gIoU": {
+     "estimate": 0.49729620321158685,
+     "low": 0.48133260654626014,
+     "high": 0.5138400797135239,
+     "level": 0.95,
+     "n_resamples": 1000,
+     "n": 2014
+    },
+    "cIoU": {
+     "estimate": 0.5140781116616439,
+     "low": 0.4943879971206964,
+     "high": 0.5347445891561416,
+     "level": 0.95,
+     "n_resamples": 1000,
+     "n": 2014
+    },
+    "BIoU": {
+     "estimate": 0.29738922176586513,
+     "low": 0.28796730091263056,
+     "high": 0.3077182407009201,
+     "level": 0.95,
+     "n_resamples": 1000,
+     "n": 2014
+    }
+   }
+  },
+  "swapped": {
+   "check": {
+    "cIoU": {
+     "value": 0.533442901074625,
+     "ci": {
+      "low": 0.5138138892097134,
+      "high": 0.5530183880391806,
+      "level": 0.95,
+      "n_resamples": 1000
+     },
+     "n": 2014
+    },
+    "gIoU": {
+     "value": 0.5216714975079548,
+     "ci": {
+      "low": 0.5071121243729533,
+      "high": 0.5378007411270302,
+      "level": 0.95,
+      "n_resamples": 1000
+     },
+     "n": 2014
+    },
+    "BIoU": {
+     "value": 0.3126748828090565,
+     "ci": {
+      "low": 0.30328974808307185,
+      "high": 0.3228023435525658,
+      "level": 0.95,
+      "n_resamples": 1000
+     },
+     "n": 2014
+    },
+    "n": 2014,
+    "n_valid": 2010,
+    "valid_rate": 0.9980139026812314
+   },
+   "normal": {
+    "cIoU": {
+     "value": 0.019343872126400152,
+     "ci": {
+      "low": 0.015721574088850478,
+      "high": 0.02377934943512487,
+      "level": 0.95,
+      "n_resamples": 1000
+     },
+     "n": 2014
+    },
+    "gIoU": {
+     "value": 0.025056956461791922,
+     "ci": {
+      "low": 0.02001166209609348,
+      "high": 0.030624097663749187,
+      "level": 0.95,
+      "n_resamples": 1000
+     },
+     "n": 2014
+    },
+    "BIoU": {
+     "value": 0.017258357890408384,
+     "ci": {
+      "low": 0.014073480363403019,
+      "high": 0.020788555167085148,
+      "level": 0.95,
+      "n_resamples": 1000
+     },
+     "n": 2014
+    },
+    "n": 2014,
+    "n_valid": 2011,
+    "valid_rate": 0.9985104270109235
+   },
+   "paired_normal_minus_check": {
+    "gIoU": {
+     "estimate": -0.4966145410461629,
+     "low": -0.5137668574333745,
+     "high": -0.4815903604808175,
+     "level": 0.95,
+     "n_resamples": 1000,
+     "n": 2014
+    },
+    "cIoU": {
+     "estimate": -0.5140990289482248,
+     "low": -0.5341880361842186,
+     "high": -0.4948205585062145,
+     "level": 0.95,
+     "n_resamples": 1000,
+     "n": 2014
+    },
+    "BIoU": {
+     "estimate": -0.2954165249186481,
+     "low": -0.30565239917601333,
+     "high": -0.2852495338918333,
+     "level": 0.95,
+     "n_resamples": 1000,
+     "n": 2014
+    }
+   }
+  }
+ },
+ "stages": {
+  "round1": {
+   "n": 2014,
+   "n_called": 2014,
+   "n_skipped": 0,
+   "n_valid": 2010,
+   "parse_failures": {
+    "truncated": 4
+   },
+   "parse_failure_rate": 0.0019860973187686196,
+   "n_stopped": 2010,
+   "generated_tokens": {
+    "n": 2014,
+    "mean": 1057.0,
+    "p05": 1057.0,
+    "p50": 1057.0,
+    "p95": 1057.0,
+    "min": 1057.0,
+    "max": 1057.0
+   }
+  }
+ },
+ "compute": {
+  "n_samples": 2014,
+  "n_calls": 2014,
+  "n_rounds": 2014,
+  "generated_tokens": 2128798,
+  "prompt_tokens": 697376,
+  "visual_tokens": 629373,
+  "image_pixels": 644477952
+ }
+}
