@@ -16,6 +16,17 @@ all 时 = 全部 67 个网格 token + 停止 token（同 E3b 的 tokens.allowed_
 **解析与评分**：token 序列 → src/e3/targets.parse_grid_ids（严格：不补齐、不截断、不猜）→ 值网格 → E5 的 Pred（二值：scoring.from_grid；
 起伏：scoring.from_relief）→ src/e5/scoring.score，与零样本同一套评分。解析失败的原因：截断（没有以停止 token 结尾）记 ParseFailure.TRUNCATED
 （同零样本的 truncated），其余三种记 scoring.E5Failure 里同名的取值。
+
+**解码方式**（DEV-0043；configs/e5_train.json 的 decode 一节，v3 的正式值是 structured，D83-3；decode_grids 是 N = 0、val 选择、test 评测
+共用的唯一一处生成调用）：
+- restricted：adapter.generate_restricted(允许集合 = allowed_ids_of(格式)，max_new_tokens = n(n + 1) + 1，停止 token，关思考，贪心)，
+  与改动前同一个调用、同一组参数（诊断用；改动前的输出逐字节不变，tests 用 36bcbbf 的快照钉住）；
+- structured：结构强制（src/grid/structured_decode，DEV-0041 的模块，这里不另写）：GridStructure.uniform(本格式的值 token，行分隔，
+  停止 token，n)——二值 c、d、e 每格 2 个值 token，起伏 a、b 每格 33 个（背景 + 32 档）；行末只允许行分隔，最后只允许停止 token，
+  长度恒为 n(n + 1) + 1。经 adapter.generate_batch(allowed_token_ids = 同一允许集合, logits_processor = [StructuredGridProcessor],
+  do_sample = False，关思考) 实现；每批之后逐行核对结构（check_structured_ids：处理器没生效就报错，不当成模型的输出）。结构强制下的
+  输出必然解析成功。与 restricted 的关系（CPU fp32 上"不收窄"时逐 token 相同、bf16 上两条计算路径可能在近似平局处分岔）见
+  src/grid/structured_decode 的模块说明；新旧运行之间的比较一律用同一种解码（D83-3）。
 """
 
 from __future__ import annotations
@@ -31,6 +42,7 @@ from src.e3.targets import GridIdsFailure, grid_to_ids, parse_grid_ids, seq_len
 from src.e3.tokens import ALLOWED_SCOPES, GridTokens
 from src.e5 import scoring as SC
 from src.grid.codec import RELIEF_NUM_LEVELS
+from src.grid.structured_decode import STRUCTURED_RULE, GridStructure, StructuredGridProcessor, check_structured_ids
 from src.parsing import ParseFailure
 from src.synth.relief import RELIEF_TARGET_KEY, RELIEF_TASKS
 from src.synth.sample import Sample
@@ -43,6 +55,8 @@ if RELIEF_DEPTH_OFFSET < 0 or 2 * RELIEF_DEPTH_OFFSET + RELIEF_NUM_LEVELS != DEP
     raise ImportError("起伏档放不进深度 token 的正中间（DEPTH_NUM_BINS − RELIEF_NUM_LEVELS 必须是非负偶数）")
 RELIEF_DEPTH_BINS: tuple[int, ...] = tuple(RELIEF_DEPTH_OFFSET + k for k in range(RELIEF_NUM_LEVELS))
 RELIEF_MAPPINGS: tuple[str, ...] = ("centered",)  # configs/e5_train.json 的 format.relief_depth_bins 只认这一种
+RESTRICTED, STRUCTURED = "restricted", "structured"
+DECODE_MODES: tuple[str, ...] = (RESTRICTED, STRUCTURED)  # configs/e5_train.json 的 decode.mode（模块说明）
 
 # 网格 token 序列的解析失败 → E5 评分的失败原因（取值都在 scoring 的 _FAILURES 里）
 FAILURE_OF: Mapping[GridIdsFailure, str] = {
@@ -199,14 +213,81 @@ class E5Tokens:
                            "depth_bins": [RELIEF_DEPTH_BINS[0], RELIEF_DEPTH_BINS[-1]], "offset": RELIEF_DEPTH_OFFSET,
                            "values": "起伏代码 0（背景）→ mask token 0；代码 k + 1（起伏档 k）→ depth token 第 offset + k 档"}}
 
+    def structure_of(self, fmt: str, n: int) -> GridStructure:
+        """结构强制的网格形状（模块说明）：各行的值 token = 本格式的值 token（二值 2 个、起伏 33 个），行分隔、停止 token 同受限解码；
+        结构里的 token 必须都在本格式的允许集合里，长度必须是 max_new_tokens(n)。"""
+        st = GridStructure.uniform(self.value_ids_of(fmt), self.row_id, self.stop_id, int(n))
+        if st.length != max_new_tokens(n):
+            raise TokenGridError(f"结构的长度 {st.length} 不是 max_new_tokens({n}) = {max_new_tokens(n)}")
+        missing = sorted(set(st.all_ids()) - set(self.allowed_ids_of(fmt)))
+        if missing:
+            raise TokenGridError(f"结构里的 token {missing[:4]} 不在 {fmt} 的允许集合里")
+        return st
+
 
 def max_new_tokens(n: int) -> int:
     """恰好写满一个合格网格（含停止 token）。"""
     return seq_len(n)
 
 
+def check_decode(decode: str) -> str:
+    if decode not in DECODE_MODES:
+        raise TokenGridError(f"解码方式必须是 {DECODE_MODES} 之一，收到 {decode!r}")
+    return str(decode)
+
+
+def decode_grids(ad: Any, e5tok: E5Tokens, inputs: Sequence[Any], fmt: str, n: int, *, decode: str,
+                 where: str = "") -> list[Any]:
+    """一批网格的生成（模块说明）：同一批同一种格式（同一个允许集合）。restricted = generate_restricted（与改动前同一个调用）；
+    structured = generate_batch + StructuredGridProcessor，之后逐行核对结构。返回与 inputs 等长、同顺序的 GenerationResult。"""
+    allowed = e5tok.allowed_ids_of(fmt)
+    mnt = max_new_tokens(n)
+    if check_decode(decode) == RESTRICTED:
+        res = ad.generate_restricted(list(inputs), allowed, max_new_tokens=mnt, stop_ids=[e5tok.stop_id], enable_thinking=False)
+        if len(res) != len(inputs):
+            raise RuntimeError("generate_restricted 返回的行数与输入不同")
+        return res
+    st = e5tok.structure_of(fmt, n)
+    proc = StructuredGridProcessor(st)
+    res = ad.generate_batch(list(inputs), enable_thinking=False, max_new_tokens=mnt, allowed_token_ids=list(allowed),
+                            logits_processor=[proc], do_sample=False)
+    if len(res) != len(inputs):
+        raise RuntimeError(f"{where}：generate_batch 返回 {len(res)} 行，输入 {len(inputs)} 行")
+    if inputs and proc.n_calls != st.length:
+        raise RuntimeError(f"{where}：结构强制的处理器被调用了 {proc.n_calls} 次，应为 {st.length}")
+    for k, r in enumerate(res):
+        check_structured_ids(r.token_ids, st, stopped=r.stopped, where=f"{where} 第 {k} 行")
+    return res
+
+
+DECODE_BASIS = ("D83-3（E5 预注册 §8a 第 5 项）：E5 的全部网格任务（二值 c、d、e 与 33 个符号的起伏 a、b）在 N = 0、val 选择与 test 评测里"
+                "都以结构强制解码为正式口径；网格形状固定，强制结构不注入任务知识")
+
+
+def decoding_identity(e5tok: E5Tokens, task: str, n: int, decode: str) -> dict[str, Any]:
+    """运行身份里的 decoding 一节。restricted 与改动前逐字节相同（没有 mode 键）；structured 另记方式、结构（GridStructure.as_dict，
+    含规则）与依据。"""
+    fmt = task_format(task)
+    body: dict[str, Any] = {"path": "generate_restricted", "allowed_ids": e5tok.allowed_ids(task), "value_ids": list(e5tok.value_ids(task)),
+                            "format": fmt, "max_new_tokens": max_new_tokens(n), "stop_ids": [e5tok.stop_id],
+                            "enable_thinking": False, "greedy": True, "grid_size": int(n)}
+    if check_decode(decode) == RESTRICTED:
+        return body
+    return {**body, "path": "generate_batch", "mode": STRUCTURED, "logits_processor": "StructuredGridProcessor",
+            "structure": e5tok.structure_of(fmt, n).as_dict(), "basis": DECODE_BASIS}
+
+
+def decode_record(decode: str) -> dict[str, Any] | None:
+    """metrics.json 与选择记录里的 decode 一节：structured 时 {mode, rule, basis}，restricted 时 None（不写这个键，与改动前相同）。"""
+    if check_decode(decode) == RESTRICTED:
+        return None
+    return {"mode": STRUCTURED, "rule": STRUCTURED_RULE, "basis": DECODE_BASIS}
+
+
 __all__ = [
     "BINARY",
+    "DECODE_BASIS",
+    "DECODE_MODES",
     "E5Tokens",
     "FAILURE_OF",
     "FORMATS",
@@ -214,7 +295,13 @@ __all__ = [
     "RELIEF",
     "RELIEF_DEPTH_BINS",
     "RELIEF_DEPTH_OFFSET",
+    "RESTRICTED",
+    "STRUCTURED",
     "TokenGridError",
+    "check_decode",
+    "decode_grids",
+    "decode_record",
+    "decoding_identity",
     "ending_of",
     "max_new_tokens",
     "sample_images",

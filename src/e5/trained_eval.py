@@ -18,8 +18,15 @@ grid_criteria_block 与累计器 GenAgg、TfAgg）：起点 LoRA 合并之后，
   E5 检查点、同一起点、同一组设置已通过的结果直接复用（只做 merge_lora）。
 
 **单轮**（唯一的流程；多轮在 E5 不做）：样本 = src/e5/protocol.eval_items(任务, 子集, 每档条数)（与零样本完全相同的清单）；提示 = 指令原文 +
-E3b 网格指令的结尾句（src/e5/token_grid.PromptFormat），指令在前；adapter.generate_restricted(允许集合 = E5Tokens.allowed_ids(任务)，
+E3b 网格指令的结尾句（src/e5/token_grid.PromptFormat），指令在前；src/e5/token_grid.decode_grids(允许集合 = E5Tokens.allowed_ids(任务)，
 max_new_tokens = n(n + 1) + 1 = 1057，停止 token = 本家族的回合结束 token，关思考，贪心)；按样本顺序连续成批（批大小进运行身份）。
+**解码方式**（DEV-0043；EvalSpec.decode，scripts/eval_e5_trained.py 默认取 configs/e5_train.json 的 decode 一节，v3 是 structured，D83-3；
+--decode restricted 作诊断）：
+- structured（结构强制，规则见 src/e5/token_grid 的模块说明）：叶目录 <任务>[__dev]__structured（同 E3b 的约定，D84）；运行身份的 decoding
+  另记 mode、logits_processor、structure（GridStructure.as_dict，含规则）与依据，metrics.json 另记 decode，README 写明；
+- restricted（generate_restricted）：叶目录、运行身份、metrics.json、README 与改动前逐字节相同（tests 用 36bcbbf 的快照钉住）。
+续跑时解码方式不同就拒绝混写（运行身份不同）。下面的合并核对与解码方式无关（它核对的是 E5 LoRA 合并前后；结构强制只是在合并后同一份
+logits 上逐位置收窄，合并前后的 logits 由教师强制在全词表与允许集合上比较），两种解码共用同一份 merge_check.json，不另加结构强制下的核对。
 解析与评分：token 序列 → E5 的格子表示 → src/e5/scoring.score（与零样本同一套评分）；汇总 scoring.aggregate、门槛 scoring.gate（三条基线的
 逐样本配对 bootstrap CI，D59-4）；标题口径与判定的统计范围就是 src/e5/protocol.in_headline（与零样本同一个函数；D72-1 / D73：b 统计
 环绕的 [20,180] 三档），这里不另写。
@@ -32,7 +39,8 @@ config.yaml（运行身份）、meta.json、README.md、logs/timing.jsonl、logs
 
 **只评起点**（DEV-0040，D81-1；E5 预注册 §8 第 2 项：N = 0 的读数，区分截距与斜率，不单独参与 H5 判定；scripts/eval_e5_trained.py
 --start-only）：起点检查点不经 E5 训练，直接在同一个评测集上评。
-- 起点只收 START_ONLY_KINDS（base_warmup、e3b）：e3a 的网格 token 行是新加的、没训练过，base 没有起点检查点。
+- 起点只收 START_ONLY_KINDS（网格 token 行训练过的起点：v3 的 base_warmup、e3b_c3、c3_warmup，DEV-0043；另保留 e3b，不属于 v3 主比较）：
+  e3a 的网格 token 行是新加的、没训练过，base 没有起点检查点。
 - 加载：src/e5/stack.load_start_only（make_base → setup_start：合并起点 LoRA、恢复起点的网格 token 行），与上面的加载只差没有 E5 LoRA。
 - 评测前的核对：起点检查点自己的合并核对（src/e5/stack.start_merge_check，即 scripts/train_e5.py 开训前做的那一项；结果放在
   <out>/train/<起点>/<模型>/start_checks/，与训练同一个位置，已通过的复用）与权重指纹（合并起点 LoRA 之后 = factory.load_trained(起点,
@@ -64,7 +72,19 @@ from src.e3.merge_check import MergeCheckFailed, load_cti
 from src.e5 import scoring as SC
 from src.e5.protocol import TASK_LETTER, eval_items, headline_scope_text, num_bins
 from src.e5.runner import check_platform, make_sample, read_jsonl_tolerant
-from src.e5.token_grid import E5Tokens, PromptFormat, max_new_tokens, sample_images, task_format
+from src.e5.token_grid import (
+    RESTRICTED,
+    STRUCTURED,
+    E5Tokens,
+    PromptFormat,
+    check_decode,
+    decode_grids,
+    decode_record,
+    decoding_identity,
+    max_new_tokens,
+    sample_images,
+    task_format,
+)
 from src.e5.train_config import E5TrainConfig
 from src.runlog import write_run_metadata
 from src.synth.seeding import canonical_task
@@ -80,7 +100,10 @@ TIMING = "logs/timing.jsonl"
 MERGE_CHECK = "merge_check.json"
 MERGE_CHECK_FORMAT = "visint-e5-stacked-merge-check/1"
 SYSTEM = "trained"
-START_ONLY_KINDS: tuple[str, ...] = ("base_warmup", "e3b")  # D81-1：只评起点的起点（模块说明）
+# 只评起点的起点（模块说明）：D81-1 的 base_warmup、e3b，加 v3 的 e3b_c3、c3_warmup（D83-5，DEV-0043）。= 配置里带检查点、网格 token 行
+# 来自检查点（训练过）的起点（tests 钉住）；e3b 不属于 v3 主比较，保留作消融的 N = 0 读数（D83-2：原有各臂照实报告）
+START_ONLY_KINDS: tuple[str, ...] = ("base_warmup", "e3b_c3", "c3_warmup", "e3b")
+STRUCTURED_SUFFIX = "__structured"  # DEV-0043：结构强制的叶目录后缀（同 src/e3/evaluate.STRUCTURED_SUFFIX 的约定，D84）
 START_ONLY_N_TRAIN = 0
 START_ONLY_TAG = f"n{START_ONLY_N_TRAIN}"  # 数据量档的标记（同 src/e5/train_data.TrainSet.tag 的 n<数据量>）
 START_ONLY_RULE = ("DEV-0040（D81-1；E5 预注册 §8 第 2 项）：只评起点，N = 0——起点检查点不经 E5 训练，加载 = src/e5/stack.load_start_only"
@@ -112,8 +135,10 @@ class EvalSpec:
     limit: int | None = None
     data_seed: int | None = None
     start_only: bool = False  # DEV-0040：只评起点（tag 必须是 START_ONLY_TAG）
+    decode: str = RESTRICTED  # DEV-0043：解码方式（模块说明）
 
     def __post_init__(self) -> None:
+        check_decode(self.decode)
         if self.start_only and (self.tag != START_ONLY_TAG or self.start not in START_ONLY_KINDS or self.data_seed is not None):
             raise ValueError(f"只评起点：tag 必须是 {START_ONLY_TAG}、起点是 {START_ONLY_KINDS} 之一、没有数据种子，收到 "
                              f"{self.tag!r}、{self.start!r}、{self.data_seed!r}")
@@ -125,7 +150,8 @@ class EvalSpec:
         return its if self.limit is None else its[: self.limit]
 
     def leaf(self, out: str | Path) -> Path:
-        name = canonical_task(self.task) + ("" if self.subset == "eval" else f"__{self.subset}")
+        name = canonical_task(self.task) + ("" if self.subset == "eval" else f"__{self.subset}") + \
+            (STRUCTURED_SUFFIX if self.decode == STRUCTURED else "")
         return model_dir(out, self.start, self.model_key, self.tag, self.seed, self.data_seed) / name
 
 
@@ -318,9 +344,7 @@ def run_identity(spec: EvalSpec, items: Sequence[Any], e5tok: E5Tokens, prompt: 
         "headline_scope": headline_scope_text(t),
         "gate": {"rule": "D59-4：配对 bootstrap 95% CI，判定条件同时胜过 " + "、".join(SC.JUDGMENT_BASELINES)},
         "checkpoint": dict(checkpoint),
-        "decoding": {"path": "generate_restricted", "allowed_ids": e5tok.allowed_ids(t), "value_ids": list(e5tok.value_ids(t)),
-                     "format": task_format(t), "max_new_tokens": max_new_tokens(n), "stop_ids": [e5tok.stop_id],
-                     "enable_thinking": False, "greedy": True, "grid_size": int(n)},
+        "decoding": decoding_identity(e5tok, t, n, spec.decode),  # restricted 与改动前逐字节相同（DEV-0043）
         "batching": {"batch_size": spec.batch_size, "order": "样本顺序，连续成批，左填充（适配器）"},
         "prompt": prompt.as_dict(),
         "config": cfg.identity(),
@@ -399,6 +423,18 @@ def record(sample: Any, prompt_text: str, res: Any, e5tok: E5Tokens, n: int) -> 
     return rec
 
 
+def decode_line(spec: EvalSpec, ident: Mapping[str, Any]) -> str:
+    """README 的解码一行：restricted 与改动前逐字节相同；structured 写明结构强制（DEV-0043）。"""
+    d = ident["decoding"]
+    if spec.decode == RESTRICTED:
+        return (f"- 解码：受限（{d['format']}，{len(d['allowed_ids'])} 个允许 token），单轮，"
+                f"max_new_tokens = {d['max_new_tokens']}，关思考，贪心，批大小 {spec.batch_size}")
+    st = d["structure"]
+    n_val = len(st["value_ids"]) if not st["value_ids_per_row"] else len(st["value_ids"][0])
+    return (f"- 解码：结构强制（D83-3，v3 的正式口径；{d['format']}，每个格子位置只允许 {n_val} 个值 token，行末只允许行分隔，最后只允许"
+            f"停止 token，长度恒为 {st['length']}；generate_batch + StructuredGridProcessor），单轮，关思考，贪心，批大小 {spec.batch_size}")
+
+
 def readme_text(spec: EvalSpec, ident: Mapping[str, Any], m: Mapping[str, Any]) -> str:
     from src.e5.runner import _block_lines, _ci_text, _fmt
 
@@ -423,8 +459,7 @@ def readme_text(spec: EvalSpec, ident: Mapping[str, Any], m: Mapping[str, Any]) 
              f"- 样本：{ident['data']['split']} 划分，每档 {spec.n_per_bin} 条，n = {m['n']}（id 指纹 "
              f"{ident['data']['sample_ids_sha256'][:16]}…，与零样本相同的清单）；生成器任务版本 {ident['data']['task_generator_version']}",
              *ck_lines,
-             f"- 解码：受限（{ident['decoding']['format']}，{len(ident['decoding']['allowed_ids'])} 个允许 token），单轮，"
-             f"max_new_tokens = {ident['decoding']['max_new_tokens']}，关思考，贪心，批大小 {spec.batch_size}",
+             decode_line(spec, ident),
              f"- 标题口径：{m['headline_scope']}", "", "## 标题（严格 / 有效率 / 条件读数）", ""]
     lines += _block_lines(m["headline"])
     g = m.get("gate") or {}
@@ -462,6 +497,9 @@ def finalize(leaf: Path, spec: EvalSpec, items: Sequence[Any], ident: Mapping[st
     head: dict[str, Any] = {"system": SYSTEM, "start": spec.start, "model": spec.model_key, "tag": spec.tag}
     if spec.start_only:  # DEV-0040；不是只评起点时 metrics.json 与改动前逐字节相同
         head.update(start_only=True, n_train=START_ONLY_N_TRAIN)
+    dec = decode_record(spec.decode)
+    if dec is not None:  # DEV-0043：只在结构强制时加（restricted 的 metrics.json 与改动前逐字节相同）
+        head["decode"] = dec
     metrics = {**head, "seed": spec.seed, "subset": spec.subset, **body}
     (leaf / METRICS).write_text(json.dumps(metrics, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     timing = {t["id"]: t for t in read_jsonl_tolerant(leaf / TIMING, repair=False)}
@@ -506,8 +544,7 @@ def run_task(ad: Any, e5tok: E5Tokens, prompt: PromptFormat, cfg: E5TrainConfig,
                **dict(run_extra or {})}
     run_path.write_text(json.dumps(run_log, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     t_all = time.perf_counter()
-    allowed = e5tok.allowed_ids(t)
-    mnt = max_new_tokens(n)
+    fmt = task_format(t)
     n_batches = 0
     for lo in range(keep, len(items), bs):
         batch = [make_sample(it) for it in items[lo: lo + bs]]
@@ -515,9 +552,7 @@ def run_task(ad: Any, e5tok: E5Tokens, prompt: PromptFormat, cfg: E5TrainConfig,
         texts = [prompt.render(s, n) for s in batch]
         inputs = [ad.build_inputs(sample_images(s), txt, prompt.order) for s, txt in zip(batch, texts)]
         prep = time.perf_counter() - t0
-        results = ad.generate_restricted(inputs, allowed, max_new_tokens=mnt, stop_ids=[e5tok.stop_id], enable_thinking=False)
-        if len(results) != len(batch):
-            raise RuntimeError("generate_restricted 返回的行数与输入不同")
+        results = decode_grids(ad, e5tok, inputs, fmt, n, decode=spec.decode, where=f"[{t} 第 {lo // bs} 批]")
         lines, tlines = [], []
         for s, txt, res in zip(batch, texts, results):
             rec = record(s, txt, res, e5tok, n)
@@ -539,5 +574,5 @@ def run_task(ad: Any, e5tok: E5Tokens, prompt: PromptFormat, cfg: E5TrainConfig,
 
 
 __all__ = ["EVAL_SUB", "EvalSpec", "MERGE_CHECK", "MERGE_CHECK_FORMAT", "START_ONLY_KINDS", "START_ONLY_N_TRAIN", "START_ONLY_RULE",
-           "START_ONLY_SKIPPED", "START_ONLY_TAG", "finalize", "merge_check_items", "model_dir", "record", "run_task",
-           "stacked_merge_check", "start_only_checkpoint"]
+           "START_ONLY_SKIPPED", "START_ONLY_TAG", "STRUCTURED_SUFFIX", "decode_line", "finalize", "merge_check_items", "model_dir",
+           "record", "run_task", "stacked_merge_check", "start_only_checkpoint"]

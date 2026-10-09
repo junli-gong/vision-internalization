@@ -1,7 +1,12 @@
 """E5 主比较的起点与"起点 + E5 LoRA"的叠加（DEV-0037 §3、§4；configs/e5_train.json 的 starts 与 start_lora）。
 
-**起点**（StartRef；--init）：
+**起点**（StartRef；--init；v3 主比较是 base_warmup、e3b_c3、c3_warmup，D83-5，其余三个保留、不属于 v3 主比较）：
 - base_warmup：DEV-0035 的网格格式预热检查点（scripts/train_e3b.py --supervision warmup；LoRA + 67 个网格 token 行）；
+- e3b_c3：E3b+C3 检查点（DEV-0042；--supervision grid+text；LoRA r 32 + 67 个网格 token 行，结构同 e3b）；
+- c3_warmup：C3+预热检查点（DEV-0042；--supervision warmup --start-checkpoint <C3>；C3 与预热的 LoRA 按秩拼接成一个 r 64、alpha 128 的
+  LoRA + 预热之后的 67 个网格 token 行）。它在这里与别的起点走同一串合并调用（merge_start_lora 读检查点自己的 LoraConfig，秩不写死）：
+  合并后的权重与 factory.load_trained(起点, merge=True) 逐位相同（下面开训前的第 2 项核对照常把关）；与"先合并 C3、再合并预热"两次合并
+  只差末位舍入，不逐位相同（D85-2；tests/test_e5_v3.py 钉住两者）；
 - e3b：E3b 检查点（--supervision grid；LoRA + 67 个网格 token 行）；
 - e3a：E3a 检查点（scripts/train_e3a.py --variant full 的 ckpt/final/model；LoRA，没有网格 token，表里只有查询占位符的行）；
 - base：基座，没有检查点（诊断）。
@@ -38,7 +43,7 @@ merge_start_lora(起点) → 核对起点 manifest 的 sha256 与 extra 里的�
 manifest 的构造方式建 base，load_stacked 用的同一个函数）→ setup_start（合并起点 LoRA、restore_tokens 恢复起点训练过的网格 token 行；训练
 开头用的同一个函数）。与 load_stacked 的差别只在没有 E5 检查点这一步：不挂 E5 LoRA，网格 token 行取起点的（load_stacked 取 E5 检查点的；
 E5 LoRA 为恒等、网格 token 行没动过时两者逐位相同，测试钉住）。只接受带检查点、网格 token 行训练过的起点（grid_tokens = from_checkpoint：
-base_warmup、e3b）。
+base_warmup、e3b_c3、c3_warmup、e3b）。
 """
 
 from __future__ import annotations

@@ -1,0 +1,182 @@
+{
+ "schema": 1,
+ "version": "e3a-train-v1",
+ "framework": "src/readout（DEV-0034 第一部分：查询 token、逐层加权混合、共享薄解码器、开放词汇与线性头、C1/C2、泄漏检查、训练与评测）；规则见 src/readout/__init__.py",
+ "status": "草稿，未冻结。结构与超参取简报的默认值或 E3b / E2 的同类取值（各节 basis）；按简报 §9，读出结构（在'薄'的约束内）、查询数、混合方式、数据混合与损失加权属于自由探索，正式取值由 E3 预注册冻结（D66-4）",
+ "variants": {
+  "full": "完整方法：LoRA（lora 节）+ 查询嵌入 + 混合权重 + 解码器与各头",
+  "c1": "C1（简报 §8.4）：冻结 LLM，没有 LoRA，只训练查询嵌入、混合权重、解码器与各头",
+  "c2": "C2（简报 §8.4）：解码器直接读 vision_features（投影之后、进入 LLM 之前的图像 token 网格），无学习插值缩放到 query.grid × query.grid 后接同一个解码器；没有 LoRA、没有查询 token、没有混合权重（单一来源）。类别名的表示取 LLM 的输入嵌入（c2 节）"
+ },
+ "query": {
+  "n": 256,
+  "grid": 16,
+  "position_mode": {"qwen3.5": "grid2d", "gemma4": "seq1d", "internvl3.5": "seq1d"},
+  "init_noise_ratio": 0.1,
+  "basis": "简报 §8.4、§12：16 × 16 = 256 个可学习查询 token，指令在前，追加在指令与图像之后（适配器的 inject_query_tokens）。位置模式按家族：M-RoPE 的 Qwen 取 grid2d（二维网格位置、文本之后的新时间索引），Gemma 与 InternVL 是一维位置（它们的适配器只接受 seq1d）。初始化：每个查询 = 查询占位符行经输入嵌入查表的值（Gemma 含 embed_scale；占位符行是基础词表行的均值，D9-3）+ N(0, (init_noise_ratio · s)²)，s = 输入嵌入矩阵基础词表部分逐元素的标准差（查表空间）；噪声只为打破 256 个查询的对称（位置编码之外）。fp32 主副本，前向时转成模型 dtype（bf16 下小更新不被舍掉，同 E3b 的 fp32_master_rows）"
+ },
+ "layer_mix": {
+  "norm_eps": 1e-06,
+  "basis": "简报 §8.4：全部 LLM 层（层号 0..num_layers()，D19：含第 0 层，最后一层是最终归一化之后）的可学习 softmax 加权混合。每层先做无参数的 LayerNorm（逐 token，fp32），再按 softmax(logits) 加权求和、乘标量 gamma（Peters et al. 2018 的 scalar mix；不同层的幅度差几个数量级，不归一化时权重反映的是幅度而不是贡献）。logits 初始化为 0（均匀）、gamma 为 1；训练前后的权重写进 train_summary.json，每步写进 train_log.jsonl"
+ },
+ "decoder": {
+  "widths": [256, 128, 64, 64],
+  "res_blocks": [2, 1, 1, 0],
+  "embed_dim": 64,
+  "out_size": 128,
+  "basis": "简报 §4 第 3 条、§8.4：共享薄解码器，[16, 16, hidden] → 128 × 128 × 64 的逐像素嵌入场。结构（src/readout/model.py）：LayerNorm(H) + Linear(H → widths[0])，16 × 16 上 res_blocks[0] 个残差块（3×3 卷积 + GroupNorm + GELU，各两层）；之后每级固定的 2× 双线性上采样（无参数）→ 3×3 卷积到 widths[i] → GN → GELU → res_blocks[i] 个残差块，16 → 32 → 64 → 128；最后 1×1 卷积到 embed_dim。实际参数量（mix + decoder + class_proj，model.param_report）：约 3.14M + 324·H（hidden 1024 → 3.47M，2048 → 3.81M，2560 → 3.97M，4096 → 4.47M），远低于 50M 的上限（DECODER_MAX_PARAMS，构造时断言；tests 对 8 个登记模型的 hidden 逐个核对）；每样本前向约 2.1 GMAC，相对 LLM 可以忽略。理由：读出是'训练仪器'，越薄越能把能力归到 LLM；16 × 16 上的两个残差块给查询网格一点空间混合，128 分辨率上只留一层卷积"
+ },
+ "heads": {
+  "channels": {"refseg": 1, "depth": 1, "normals": 3},
+  "basis": "简报 §8.4、§4 第 3 条：标量（深度，log 米）、向量（法向，未归一化，损失与评测时逐像素单位化）、二值（指代分割，logit）各一个 1×1 线性适配（64 → 1 / 1 / 3：65、65、195 个参数，≤ HEAD_MAX_PARAMS = 1K，构造时断言）。类别（语义分割）：类别名在同一条提示里列出（tasks.semseg.instruction_template），类别名 token 在同一逐层混合下的隐藏状态取平均（适配器的 class_name_spans 取区间），经 class_proj（LayerNorm(H) + Linear(H → 64)）投影到 64 维，与像素嵌入做点积得到开放词汇的 logits；class_proj 的 66·H + 64 个参数（LayerNorm 2H + 线性 64H + 64；hidden 1024 → 67,648，4096 → 270,400）只用于类别头，超过每个任务专用输出适配 1K 的上限，这里把它计入解码器的预算（它是开放词汇点积的文本一侧），是否接受待裁（DEV-0034 完成总结）"
+ },
+ "c2": {
+  "resize": "bilinear_antialias",
+  "class_text": "input_embeddings",
+  "basis": "C2（简报 §8.4、任务书 §2）：vision_features（[gh·gw, H]，行主序）排成 [H, gh, gw]，F.interpolate(mode=bilinear, align_corners=False, antialias=True) 缩放到 grid × grid（无学习；InternVL 单 tile 本来就是 16 × 16，原样不变）。冻结（no_grad）。语义分割的类别名表示：同一条提示里类别名 token 的 LLM 输入嵌入（第 0 层，不经过任何 decoder 层）取平均，即绕过 LLM 的文本侧对照；指代句进不了解码器，C2 的指代分割只能靠图像本身（这正是它要量的东西）"
+ },
+ "enable_thinking": false,
+ "enable_thinking_basis": "D1：每次显式设置。查询 token 在 user 轮里，助手头（含思考前缀）在它们之后，因果注意力下不影响查询位置的隐藏状态；固定为关",
+ "tasks": {
+  "refseg": {
+   "train": "refcoco_train 的 RefCOCO、RefCOCO+、RefCOCOg train 句子（D11-1；与 E3b 同一个训练池：src/e3/data.load_pool，必须有去重清单）",
+   "datasets": ["refcoco", "refcoco+", "refcocog"],
+   "order": "instruction_first",
+   "instruction_template": "Segment {expression} in the image.",
+   "gt": "src/e1/scoring.gt_mask（与 E1、E3b 同一套解码）→ 最近邻到 128 × 128（0/1）",
+   "loss": {"kind": "bce_dice", "bce_weight": 1.0, "dice_weight": 1.0, "dice_smooth": 1.0},
+   "basis": "指令在前（简报 §8.4）；{expression} 是 RefCOCO 的 sent（去首尾空白）；与 E3b 的 grid_template 只差去掉网格那半句。损失同 E2（configs/e2_probes.json 的 tasks.refseg.loss，tests 钉住相同）：逐像素 BCE（logit）+ Dice（sigmoid 概率），在 128 × 128 上"
+  },
+  "depth": {
+   "train": "nyu_depth_train（BTS 清单按场景过滤，D11-2；src/e3/data.load_pool，必须有去重清单）",
+   "order": "instruction_first",
+   "instruction_template": "Estimate the depth of the image.",
+   "gt": "有效像素（NYU_DEPTH_MIN < d < NYU_DEPTH_MAX，与 E2 的 depth_train_valid 相同）上 log 深度的面积平均（即几何平均）到 128 × 128；有效面积不足 min_valid_fraction 的格子不监督",
+   "min_valid_fraction": 0.5,
+   "loss": {"kind": "silog", "variance_focus": 0.85, "scale": 10.0},
+   "basis": "深度头输出 log 深度（米）。损失同 E2（tasks.depth.loss）：SILog = sqrt(mean(d²) − 0.85·mean(d)²)·10，d = log 预测 − log GT，只在有效格子上。min_valid_fraction 0.5 与 E3b 的 tasks.depth.cell 同一口径（'过半'）"
+  },
+  "semseg": {
+   "train": "ade20k/train（src/data/train_loaders.load_ade20k，必须有去重清单）",
+   "order": "instruction_first",
+   "instruction_template": "Segment the image into these classes: {classes}.",
+   "class_names": ["wall", "building", "sky", "floor", "tree", "ceiling", "road", "bed", "windowpane", "grass", "cabinet", "sidewalk", "person", "earth", "door", "table", "mountain", "plant", "curtain", "chair", "car", "water", "painting", "sofa", "shelf", "house", "sea", "mirror", "rug", "field", "armchair", "seat", "fence", "desk", "rock", "wardrobe", "lamp", "bathtub", "railing", "cushion", "base", "box", "column", "signboard", "chest of drawers", "counter", "sand", "sink", "skyscraper", "fireplace", "refrigerator", "grandstand", "path", "stairs", "runway", "case", "pool table", "pillow", "screen door", "stairway", "river", "bridge", "bookcase", "blind", "coffee table", "toilet", "flower", "book", "hill", "bench", "countertop", "stove", "palm", "kitchen island", "computer", "swivel chair", "boat", "bar", "arcade machine", "hovel", "bus", "towel", "light", "truck", "tower", "chandelier", "awning", "streetlight", "booth", "television receiver", "airplane", "dirt track", "apparel", "pole", "land", "bannister", "escalator", "ottoman", "bottle", "buffet", "poster", "stage", "van", "ship", "fountain", "conveyer belt", "canopy", "washer", "plaything", "swimming pool", "stool", "barrel", "basket", "waterfall", "tent", "bag", "minibike", "cradle", "oven", "ball", "food", "step", "tank", "trade name", "microwave", "pot", "animal", "bicycle", "lake", "dishwasher", "screen", "blanket", "sculpture", "hood", "sconce", "vase", "traffic light", "tray", "ashcan", "fan", "pier", "crt screen", "plate", "monitor", "bulletin board", "shower", "radiator", "glass", "clock", "flag"],
+   "class_names_basis": "ADE20K（SceneParse150）objectInfo150 每类的第一个名字，按标签 1–150 的顺序（与 mmseg ADE20KDataset 的类名相同；第 i 个名字对应 reduce_zero_label 之后的类 i − 1）。数据根里有 ade20k/objectInfo150.txt 时，训练开跑前逐个核对（src/readout/data.check_class_names），不一致就报错",
+   "gt": "标签最近邻到 128 × 128，再 reduce_zero_label（0 → ADE_IGNORE_INDEX 忽略，其余减 1；与 E2 相同）",
+   "loss": {"kind": "cross_entropy"},
+   "basis": "类别名在同一条提示里列出（拼法：适配器 training.CLASS_NAME_SEPARATOR，', '；class_name_spans 取区间），不另做前向。代价：每条语义分割样本多约 340 个提示 token（三个家族的 tokenizer 实测：Qwen 346、Gemma 333、InternVL 347 个指令 token，其中类别名 189 / 176 / 190 个）。按 E1 口径实测的提示长度（含 256 个查询 token）：Qwen 语义分割 896（ADE 512×683 → 280 个视觉 token），深度 578、法向 579、指代分割 610，即这类样本 +52%，等权混合下全部样本平均 +13%；好处是查询 token 能看到类别列表（任务调制），类别名的表示与查询在同一次前向里、同一组混合权重下得到。另一种做法（类别名单独前向，每步一次）见完成总结。损失同 E2（tasks.semseg.loss）：交叉熵，忽略 0"
+  },
+  "normals": {
+   "train": "nyu_normals/train（Bae 2021 / GeoNet，795 张；D59-6 许可已确认；src/data/train_loaders.load_nyu_normals，必须有去重清单）",
+   "order": "instruction_first",
+   "instruction_template": "Estimate the surface normals of the image.",
+   "gt": "有效像素（GT 非 (0,0,0)）上单位法向的面积平均，再单位化，到 128 × 128；有效面积不足 min_valid_fraction 或平均向量的范数 < 1e-6 的格子不监督",
+   "min_valid_fraction": 0.5,
+   "loss": {"kind": "cosine"},
+   "basis": "法向头输出 3 维向量。损失同 E2（tasks.normals.loss）：预测逐像素单位化后 1 − cos 在有效格子上的平均"
+  }
+ },
+ "mix": {
+  "weights": {"refseg": 1, "depth": 1, "semseg": 1, "normals": 1},
+  "basis": "暂定：四个稠密任务等权交替（简报 §9：数据混合属于自由探索，E3 预注册冻结）。日程与 E3b 同一规则（src/readout/data：平滑加权轮转 + 每个 epoch 一个置换，任务号 refseg 0、depth 1 与 E3b 相同），所以只给 {refseg: 1, depth: 1} 时每一步的样本 id 与 E3b（同一种子）逐个相同——简报 §8.5 的同预算对照（tests 钉住）"
+ },
+ "loss": {
+  "task_weights": {"refseg": 1.0, "depth": 1.0, "semseg": 1.0, "normals": 1.0},
+  "reduction": "sample_mean",
+  "basis": "每条样本的损失是它自己的任务损失（在 128 × 128 的有效像素上平均）× task_weights[任务]；一步的损失 = 全部样本的和 ÷ 这一步的样本数（各微批分别反传，梯度累积与一次大批等价）。各任务的初始量级：交叉熵约 ln 150 ≈ 5，SILog 约 3–8，BCE + Dice 约 1.5，1 − cos 约 1；暂定等权（不按量级调），留给预注册定"
+ },
+ "lora": {
+  "r": 32,
+  "alpha": 64,
+  "dropout": 0.05,
+  "basis": "同 E3b（configs/e3b_train.json 的 lora，tests 钉住相同）：简报 §8.4 rank 32，作用于 LLM 全部线性层（adapter.lora_target_modules()），视觉塔冻结；只用于 full"
+ },
+ "optim": {
+  "optimizer": "adamw",
+  "betas": [0.9, 0.999],
+  "eps": 1e-08,
+  "groups": {
+   "lora": {"lr": 0.0002, "weight_decay": 0.0},
+   "query": {"lr": 0.0002, "weight_decay": 0.0},
+   "mix": {"lr": 0.001, "weight_decay": 0.0},
+   "readout": {"lr": 0.0005, "weight_decay": 0.0001}
+  },
+  "max_grad_norm": 1.0,
+  "schedule": "warmup_cosine",
+  "warmup_ratio": 0.03,
+  "min_lr_ratio": 0.0,
+  "basis": "AdamW 四个参数组（没有的组不建：c1 没有 lora，c2 只有 readout）。lora：同 E3b（lr 2e-4、wd 0）；query：查询嵌入是新的输入嵌入，取 E3b 网格 token 行的 lr 2e-4、wd 0（D45-3 的口径）；mix：逐层混合的 logits 与 gamma（标量），取 E2 线性探针的 lr 1e-3，不做 weight decay；readout：解码器、类别投影与各头（从头训练的卷积网络），取 E2 两层卷积探针的 lr 5e-4、wd 1e-4（Probe3D 的稠密探针设置）。warmup_ratio、余弦、max_grad_norm 同 E3b。没有在任何数据上调过"
+ },
+ "batch": {
+  "micro_batch_size": 4,
+  "grad_accum_steps": 4,
+  "basis": "同 E3b（每步 16 条 = 4 × 4 累积），同预算对照（简报 §8.5）就是同样的步数 × 批大小。一步之内语义分割的样本与其余样本分开成微批（类别名区间只在语义分割的行上取；HiddenRequest 要求各行同名）"
+ },
+ "model": {
+  "dtype": "bf16",
+  "image_policy": "E1 冻结的口径（D28-3；factory.make_adapter 不给 image_policy 时取它），与 E2、E3b 相同",
+  "gradient_checkpointing": true,
+  "basis": "bf16 权重；LoRA 由 peft 升到 fp32；查询嵌入、混合权重、解码器与各头都是 fp32（LLM 的隐藏状态转成 fp32 再进混合）。梯度检查点 use_reentrant=False，full 与 c1 都开（c1 也要反传穿过冻结的 LLM 到查询嵌入）"
+ },
+ "data": {
+  "workers": 4,
+  "basis": "同 E3b：下一步的样本（读图、解码 GT、降到 128 × 128）由这么多个线程在本步的计算期间构造；每条样本由 (种子, k) 唯一决定，线程数不改变结果（tests 钉住）"
+ },
+ "steps": 4000,
+ "steps_basis": "暂定：同 E3b（4000 步 × 16 = 64,000 条；等权四个任务各约 16,000 条：RefCOCO 家族约 0.1 个 epoch、NYU 深度约 0.7 个、ADE 约 0.8 个、NYU 法向约 20 个）。正式值由 E3 预注册冻结",
+ "ckpt_every": 500,
+ "ckpt_basis": "每 ckpt_every 步写 <ckpt>/latest/（model/ = save_trained：LoRA 与 token 表，不含查询登记、不存合并后的权重，D34；readout/ = 查询嵌入、混合权重、解码器、各头分别存；resume_state.pt = 优化器、调度器、随机数状态），只留最新一份；训练完成后写 <ckpt>/final/（model/ + readout/），续跑状态默认删掉",
+ "seeds": [0, 1, 2],
+ "seeds_basis": "简报 §8.4：每个配置 3 个种子，由命令行给出（--seed，必须在这里）。种子决定 LoRA 初始化、dropout、查询嵌入的噪声、读出的初始化与样本顺序",
+ "dedupe": {
+  "required_eval_sets": {
+   "refseg": ["ade20k/val", "blink_reldepth/val", "coco_val2017/e1sub500", "countbench/eval", "cvbench/test", "embspatial/test", "nyu_normals/test", "nyuv2/test", "odinw13/eval", "refcoco/eval"],
+   "depth": ["ade20k/val", "blink_reldepth/val", "coco_val2017/e1sub500", "countbench/eval", "cvbench/test", "embspatial/test", "nyu_normals/test", "nyuv2/test", "odinw13/eval", "refcoco/eval"],
+   "semseg": ["ade20k/val", "blink_reldepth/val", "coco_val2017/e1sub500", "countbench/eval", "cvbench/test", "embspatial/test", "nyu_normals/test", "nyuv2/test", "odinw13/eval", "refcoco/eval"],
+   "normals": ["ade20k/val", "blink_reldepth/val", "coco_val2017/e1sub500", "countbench/eval", "cvbench/test", "embspatial/test", "nyu_normals/test", "nyuv2/test", "odinw13/eval", "refcoco/eval"]
+  },
+  "basis": "开跑前核对（src/e3/data.check_dedupe 的同一规则）：训练池用的剔除清单（schema 2）比较过这些评测集。= E3b 的名单（configs/e3b_train.json 的 dedupe.required_eval_sets：T 文本评测的全部集合加 nyuv2/test）+ E3a 的两个稠密评测集 ade20k/val、nyu_normals/test（任务书 §2）。训练出来的是一个模型，这些评测集它都要评，所以四个训练池要求同一份名单（tests 钉住）。RUN-0026 的剔除清单含四个训练集与这 10 个评测集"
+ },
+ "eval": {
+  "version": "e3a-eval-v1",
+  "basis": "DEV-0034 §3；规则写在 src/readout/evaluate.py 的模块说明。草稿，未冻结：E3 预注册冻结。可比的评测一律在 B200 上做（D55、D59-10）",
+  "sets": {
+   "refseg": {"dataset": "refcoco", "split": "val", "subset": "eval", "basis": "E1 的 RefCOCO（unc）val 评测总体（src/data/loaders.load_refcoco(根, refcoco, val, subset = eval)，剔除 E1 开发子集与 D20 探针图，一句一条），与 E2、E3b 同一个加载调用；按被指代物体是不是 person 分列"},
+   "depth": {"source": "nyuv2/test", "basis": "NYUv2 官方 654（src/e2/data.load_nyu_test），Eigen crop，AbsRel、δ1（另报 RMSE 与尺度-平移对齐的读数作诊断）"},
+   "semseg": {"source": "ade20k/val", "basis": "ADE20K val 2,000（src/data/train_loaders.load_ade20k(根, val)），mIoU（150 类，逐类在全集上累计交并）、像素准确率；mmseg 口径，与 E2 相同"},
+   "normals": {"source": "nyu_normals/test", "basis": "NYU 法向 test 654（src/data/train_loaders.load_nyu_normals(根, test)），平均角误差、中位角误差、11.25°/22.5°/30° 以内的比例（逐像素汇总，与 E2 相同）"}
+  },
+  "batch_size": 32,
+  "batch_basis": "按样本顺序连续成批，左填充（training_forward，no_grad）。批配置是运行身份的一部分（D36-7：配对比较同机器、同批配置）。32 而不是 E1 的 64：一次前向要留全部层的隐藏状态（output_hidden_states），9B 下 64 条约 17 GB",
+  "upsample": {
+   "primary": "guided",
+   "methods": ["guided", "bilinear"],
+   "basis": "简报 §8.4：128 × 128 的输出（logit / log 深度 / 法向向量 / 类别 logits）用无学习的引导上采样对齐原分辨率（src/executors/upsample.guided_upsample：先双线性放大，再以原图为引导做引导滤波，半径与 eps 取 src/constants），同时报告只用双线性（bilinear_upsample）。原图某一边小于 128 时，先沿那一边做面积平均降到原图尺寸（无学习），再上采样。分割：logit > 0 记前景；深度：在 log 空间上采样再取 exp；法向：上采样后逐像素单位化（normal_angular_errors）；语义分割：逐类 logits 上采样后取 argmax（按 semseg_channel_chunk 分块，与一次算全部通道逐位相同）"
+  },
+  "semseg_channel_chunk": 16,
+  "leak_checks": {
+   "shuffle": {"upsample": "guided", "basis": "简报 §8.4（必须做）：同一批里，每条样本的读出输入（full / c1：LLM 在查询位置的各层隐藏状态；c2：视觉特征）换成批内循环顺序里下一条与它不同图的样本的（找不到不同图时退回下一条，计数 n_same_image_fallback）；类别名的表示不动（它在图像之前，与图无关）。GT 不动。读出若没有像素旁路，指标应当崩溃。报告打乱后的指标与配对差（正常 − 打乱）的 bootstrap CI"},
+   "no_instruction": {"tasks": ["refseg"], "instruction": "", "upsample": "guided", "basis": "简报 §8.4（必须做）：去掉指令（指令为空串：user 轮里只有图像与查询 token），指代分割应当崩溃（读出不知道指的是哪个物体）。C2 的解码器本来就看不到指令，这一项对它恒为零差，照报"},
+   "rule_basis": "崩溃的判定（例如配对差的 95% CI 下界 > 0、打乱后的标题指标低于某个比例）留给 E3 预注册；这里只输出读数"
+  },
+  "merge_check": {
+   "n": 200,
+   "checks": ["merge"],
+   "basis": "简报 §12：评测前合并 LoRA，并在开发子集上核对合并前后一致。复用 src/e3/merge_check（scripts/check_training_interfaces.py --checkpoint 的 merge 一项，判据 v1 = D50-3）作用于 <检查点>/model；不通过就不评测（退出码 1）。E3a 的检查点没有网格 token，restricted 不适用。c1、c2 没有 LoRA，跳过。结果写进 <评测目录>/eval/e3a/<变体>/<模型>/seed<k>/merge_check.json，同一检查点、同一设置已通过的直接复用"
+  },
+  "score_workers": 16,
+  "score_workers_basis": "评分（上采样、Boundary IoU、指标）在 CPU 上，用这么多个进程并行（spawn）；0 = 在主进程里串行。逐样本的结果与进程数无关（tests 钉住），所以不进运行身份",
+  "tiny": {"batch_size": 2, "merge_check_n": 3, "score_workers": 0}
+ },
+ "tiny": {
+  "basis": "--tiny：小型随机模型 + CPU + fp32 + tests/fixtures 的小数据。只改下面这些规模参数（解码器的通道与残差块数也在其中，嵌入维度与输出分辨率不变），其余同正式配置",
+  "steps": 4,
+  "micro_batch_size": 2,
+  "grad_accum_steps": 2,
+  "ckpt_every": 2,
+  "warmup_steps": 1,
+  "decoder": {"widths": [16, 16, 16, 16], "res_blocks": [1, 0, 0, 0]},
+  "image_policies": {"qwen3.5": "pixel_budget:64", "gemma4": "soft_tokens:70", "internvl3.5": "tiles:false:1"},
+  "init_std": 0.05
+ }
+}

@@ -7,6 +7,8 @@
 - 坏起点（病态的 LoRA：合并前后分家）：起点的合并核对不通过，拒绝训练（不建叶目录）；坏的 E5 LoRA：评测前的合并核对不通过，拒绝评测；
 - 过拟合：每类 1 条样本（8×8 网格），训练后在训练样本上受限解码，网格 IoU 满分、起伏误差为 0；
 - 续跑：训练中断后 --resume，train_log 与最终检查点逐字节相同；评测中断在一批中间后 --resume，确定的输出逐字节相同。
+DEV-0043 起评测与 val 选择默认用结构强制解码；本文件的评测与带 val 选择的训练一律加 --decode restricted（快；本文件测的是起点、叠加与续跑）。
+新起点 E3b+C3、C3+预热与结构强制见 tests/test_e5_v3.py。
 """
 
 from __future__ import annotations
@@ -41,7 +43,8 @@ from src.synth import generate
 REPO = Path(__file__).resolve().parents[1]
 FAMILIES = ("qwen3.5-0.8b", "gemma-4-e2b-it", "internvl3.5-2b-hf")
 CFG = load_train_config()
-STARTS = ("base_warmup", "e3b", "e3a", "base")
+STARTS = ("base_warmup", "e3b", "e3a", "base")  # v3 的 e3b_c3、c3_warmup 见 tests/test_e5_v3.py
+RESTRICTED = ("--decode", "restricted")
 _SCRIPTS: dict[str, object] = {}
 
 
@@ -132,7 +135,7 @@ def test_four_starts_train_and_eval(starts, tmp_path):
         tokens = json.loads((final / "model" / "tokens.json").read_text())
         assert tokens["n_grid_tokens"] == 67 and tokens["query"]["n"] is None  # e3a 起点的查询 token 不带进 E5
         tasks = ("rotation3d", "imagery") if init == "e3b" else ("rotation3d",)  # 二值路径另由合并核对与续跑测试覆盖（省时间）
-        assert ev.main(["--tiny", "--checkpoint", str(final), "--model", key, "--out", str(out), "--limit", "1",
+        assert ev.main(["--tiny", "--checkpoint", str(final), "--model", key, "--out", str(out), "--limit", "1", *RESTRICTED,
                         "--task", *tasks]) == 0, init
         mdir = out / "trained" / init / key / "n20" / "seed0"
         mc = json.loads((mdir / "merge_check.json").read_text())
@@ -386,10 +389,10 @@ def test_eval_resume_bytewise(tmp_path):
     key = FAMILIES[0]
     out = tmp_path / "o"
     assert _script("train_e5").main(["--tiny", "--init", "base", "--model", key, "--n-train", "10", "--seed", "0",
-                                     "--out", str(out)]) == 0
+                                     "--out", str(out), *RESTRICTED]) == 0
     final = out / "train" / "base" / key / "n10" / "seed0" / "ckpt" / "final"
     ev = _script("eval_e5_trained")
-    args = ["--tiny", "--checkpoint", str(final), "--model", key, "--out", str(out), "--task", "c", "--limit", "3",
+    args = ["--tiny", "--checkpoint", str(final), "--model", key, "--out", str(out), *RESTRICTED, "--task", "c", "--limit", "3",
             "--batch-size", "2"]
     assert ev.main(args) == 0
     leaf = out / "trained" / "base" / key / "n10" / "seed0" / "occlusion"

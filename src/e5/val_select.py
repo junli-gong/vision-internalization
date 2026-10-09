@@ -11,10 +11,12 @@ ValSelector.evaluate，按规则算分数，留下分数最高那一步的检查
 不全平，起伏误差才有定义）。清单 = val 序号升序（档的轮转同评测集，protocol.eval_items 的 dev）里前 n_per_task 条合格的；口径外的样本
 不进分数，所以不解码。只用本次训练的任务。清单的 id 指纹进运行身份。
 
-**一次评测**（ValSelector.evaluate）：与 test 评测同一条路径（src/e5/trained_eval）：提示 = PromptFormat.render、指令在前；单轮受限解码
-generate_restricted（允许集合 = E5Tokens.allowed_ids、max_new_tokens = n(n + 1) + 1、本家族的停止 token、关思考、贪心）；按格式
-（二值 c、d、e / 起伏 a、b）连续成批（同一批同一个允许集合），批大小 batch_size；逐条记录 trained_eval.record，汇总
+**一次评测**（ValSelector.evaluate）：与 test 评测同一条路径（src/e5/trained_eval）：提示 = PromptFormat.render、指令在前；单轮解码
+src/e5/token_grid.decode_grids（允许集合 = E5Tokens.allowed_ids_of(格式)、max_new_tokens = n(n + 1) + 1、本家族的停止 token、关思考、
+贪心）；按格式（二值 c、d、e / 起伏 a、b）连续成批（同一批同一个允许集合），批大小 batch_size；逐条记录 trained_eval.record，汇总
 scoring.aggregate（n_resamples = 0），取标题口径（headline）的读数。调用方负责 eval 模式、no_grad 与随机数状态（src/e5/train.py）。
+**解码方式**（DEV-0043；selection.decode，来自 configs/e5_train.json 的 decode 一节或 scripts/train_e5.py --decode）：structured = 结构强制
+（v3 的正式口径，D83-3），restricted = 受限解码（没有 decode 键时；与改动前逐字节相同）。identity() 只在 structured 时记 decode。
 
 **规则 mean_headline_v1**（selection_score）：分数 = 训练任务各类标题指标 h_t 的平均，越高越好。
 - b、c、d、e：h = 标题口径的网格 mask IoU，严格读数（解析失败记 0）——b 的标题指标就是环绕上的 mask IoU（E5 预注册 §2 的表）；
@@ -33,7 +35,18 @@ from typing import Any, Callable, Mapping, Sequence
 from src.e5 import scoring as SC
 from src.e5.protocol import E5_TASKS, SUBSETS, EvalItem, eval_items, num_bins
 from src.e5.runner import check_platform, make_sample
-from src.e5.token_grid import BINARY, RELIEF, E5Tokens, PromptFormat, max_new_tokens, sample_images, task_format
+from src.e5.token_grid import (
+    BINARY,
+    RELIEF,
+    RESTRICTED,
+    STRUCTURED,
+    E5Tokens,
+    PromptFormat,
+    check_decode,
+    decode_grids,
+    sample_images,
+    task_format,
+)
 from src.synth.relief import RELIEF_TARGET_KEY, relief_score
 from src.synth.sample import Sample
 from src.synth.seeding import canonical_task
@@ -138,6 +151,7 @@ class ValSelector:
     val_every: int
     batch_size: int
     n_per_task: int
+    decode: str = RESTRICTED  # DEV-0043（模块说明）
 
     @classmethod
     def build(cls, sel: Mapping[str, Any], tasks: Sequence[str], *, tiny: bool) -> "ValSelector":
@@ -145,9 +159,10 @@ class ValSelector:
             raise SplitGuardError(f"selection.split 必须是 {VAL_SPLIT}，收到 {sel.get('split')!r}")
         if sel["rule"] != RULE:
             raise ValueError(f"只实现了 {RULE}，收到 {sel['rule']!r}")
+        decode = check_decode(str(sel.get("decode", RESTRICTED)))
         items = selection_items(tasks, int(sel["n_per_task"]), tiny=tiny)
         return cls(items=items, rule=str(sel["rule"]), val_every=int(sel["val_every"]), batch_size=int(sel["batch_size"]),
-                   n_per_task=int(sel["n_per_task"]))
+                   n_per_task=int(sel["n_per_task"]), decode=decode)
 
     def is_eval_step(self, step_done: int, steps: int) -> bool:
         """完成第 step_done 步之后是否评一次：val_every 的倍数，以及最后一步。"""
@@ -157,28 +172,27 @@ class ValSelector:
         return [s for s in range(1, steps + 1) if self.is_eval_step(s, steps)]
 
     def identity(self) -> dict[str, Any]:
-        return {"rule": self.rule, "rule_text": RULE_TEXT, "split": VAL_SPLIT, "val_every": self.val_every,
-                "n_per_task": self.n_per_task, "batch_size": self.batch_size, "headline_metric": {t: HEADLINE_METRIC[t] for t in self.items},
-                "items": {t: {"n": len(v), "ids_sha256": ids_digest(v), "first": v[0].id, "last": v[-1].id} for t, v in self.items.items()},
-                "rule_source": "src/e5/val_select.py（configs/e5_train.json 的 selection.basis）"}
+        out = {"rule": self.rule, "rule_text": RULE_TEXT, "split": VAL_SPLIT, "val_every": self.val_every,
+               "n_per_task": self.n_per_task, "batch_size": self.batch_size, "headline_metric": {t: HEADLINE_METRIC[t] for t in self.items},
+               "items": {t: {"n": len(v), "ids_sha256": ids_digest(v), "first": v[0].id, "last": v[-1].id} for t, v in self.items.items()},
+               "rule_source": "src/e5/val_select.py（configs/e5_train.json 的 selection.basis）"}
+        if self.decode == STRUCTURED:  # DEV-0043：只在结构强制时加（restricted 的运行身份与改动前逐字节相同）
+            out["decode"] = STRUCTURED
+        return out
 
     def evaluate(self, ad: Any, e5tok: E5Tokens, prompt: PromptFormat, n: int, *,
                  log: Callable[[str], None] | None = None) -> dict[str, Any]:
         """一次评测（模块说明）。返回 {score, by_task}；只含由模型输出决定的量。"""
         from src.e5.trained_eval import record
 
-        mnt = max_new_tokens(n)
         recs: dict[str, list[dict[str, Any]]] = {t: [] for t in self.items}
         for fmt in (BINARY, RELIEF):
             group = [it for t in E5_TASKS if t in self.items and task_format(t) == fmt for it in self.items[t]]
-            allowed = e5tok.allowed_ids_of(fmt)
             for lo in range(0, len(group), self.batch_size):
                 batch = [val_sample(it) for it in group[lo: lo + self.batch_size]]
                 texts = [prompt.render(s, n) for s in batch]
                 inputs = [ad.build_inputs(sample_images(s), txt, prompt.order) for s, txt in zip(batch, texts)]
-                res = ad.generate_restricted(inputs, allowed, max_new_tokens=mnt, stop_ids=[e5tok.stop_id], enable_thinking=False)
-                if len(res) != len(batch):
-                    raise RuntimeError("generate_restricted 返回的行数与输入不同")
+                res = decode_grids(ad, e5tok, inputs, fmt, n, decode=self.decode, where=f"[val 选择 {fmt} 第 {lo // self.batch_size} 批]")
                 for s, txt, r in zip(batch, texts, res):
                     rec = record(s, txt, r, e5tok, n)
                     if rec["split"] != VAL_SPLIT or not rec["headline"]:

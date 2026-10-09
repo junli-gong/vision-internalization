@@ -27,6 +27,22 @@ inject_lora（full）→ 冻结 LLM 的其余参数（c1、c2：全部；full：
 逐字节相同）；logs/run_<k>.json、logs/timing_run_<k>.jsonl（每步的 data_s、build_inputs_s、fwd_s、bwd_s、opt_s、step_s 与显存峰值）；
 accounting.json、compute.json（src/accounting：每条样本一次调用，generated_tokens = 0，prompt_tokens = 送进 LLM 的提示长度（c2 不跑 LLM，
 记 0），visual_tokens、image_pixels 按图）。
+
+**E3a+C3**（DEV-0044；运行变体 e3a_c3，run_cfg 的 mixed 一节；配置的 mixed 节）：搭建、检查点、续跑都同 full（Trainer 的读出变体是
+full：LoRA、查询嵌入、混合、解码器与各头，四个参数组）；样本来自 data.MixedSchedule（每步 = C3 同一种子的文本流 per_step.text 条 +
+E3a full 同一种子的稠密流 per_step.dense 条，与两者单独训练逐个相同），文本样本由 C3 的构造（src/e3/data.ExampleBuilder，原样调用）给出。
+一步之内按流分开切微批（每个微批只含一种监督，流的先后按 mixed.order，文本在前）：
+- 文本微批：build_inputs 之前临时取消查询登记（clear_query_tokens，之后登记回来），所以输入里没有查询 token，与 C3 的输入逐个相同
+  （入口断言：每一行的 query_span 都是 None）；adapter.training_forward（不给 query_embeds）→ C3 的文本损失（src/e3/train.Trainer
+  的 _task_loss 文本分支，原样调用：逐个任务 chunked_lm_loss 全词表求和）。不经过读出。
+- 稠密微批：照 E3a 原样（语义分割单独成批；llm_inputs → 读出 → 各任务的头与损失）。
+每种监督各自归一（文本 ÷ 这一步的文本监督 token 总数，同 C3 的 token_mean；稠密 ÷ 这一步的稠密样本数，同 E3a 的 sample_mean），
+再乘 loss_weights（1 : 1）相加：loss = 1 · L_text + 1 · L_dense。train_log 的 loss 是这个和；loss_by_task 的 text、dense 两项是 L_text、
+L_dense，text/<任务> 是分任务的逐 token 平均，dense/<任务> 是分任务的逐样本平均（同 E3a）；n_by_task 是分流、分任务的样本数；
+n_supervised_by_task 是文本分任务的监督 token 数；by_supervision 记两种监督各自的样本数与 token 数（accounting.json、train_summary.json
+另有合计）。compute.json 里文本样本的 generated_tokens 是教师强制的目标 token 数（同 C3），稠密样本为 0。学习率的 warmup 与余弦按
+mixed.steps 排：日程长度是 E3a full、C3 的 2 倍（运行身份 training.mixed 与 README 写明）。运行身份另有 text_stream 一节（C3 的配置、
+指令、C3 节、停止 token）。
 """
 
 from __future__ import annotations
@@ -49,11 +65,24 @@ import yaml
 
 from src.accounting import Compute, merge, write_compute_json
 from src.adapters.checkpoint import base_fingerprint, file_sha256, read_manifest
+from src.e3 import config as E3C
+from src.e3 import train as E3T
 from src.e3.data import check_dedupe, ids_digest
+from src.e3.targets import NoSupervision as TextNoSupervision
 from src.e3.train import identity_sha256, lr_factor
 from src.readout import data as D
 from src.readout import losses as LS
-from src.readout.config import E3aConfig, groups_for, readout_spec
+from src.readout.config import (
+    E3A_C3,
+    MIXED_STREAMS,
+    TEXT_SUPERVISION,
+    E3aConfig,
+    groups_for,
+    micro_batch_groups,
+    readout_spec,
+    readout_variant,
+    text_stream_config,
+)
 from src.readout.features import ClassSpans, ReadoutInputs, c2_class_side, llm_inputs, vision_inputs
 from src.readout.model import Readout, check_no_pixel_path
 from src.readout.targets import NoSupervision
@@ -314,16 +343,35 @@ def task_losses(task: str, out: torch.Tensor, tgt: Mapping[str, torch.Tensor], l
 
 
 class Trainer:
-    """持有适配器、读出模块、查询嵌入、优化器与调度器；optimize(examples) 做一步（含微批与梯度累积）。"""
+    """持有适配器、读出模块、查询嵌入、优化器与调度器；optimize(examples) 做一步（含微批与梯度累积）。
+    variant 是运行变体：e3a_c3 时读出变体（self.variant）是 full，另持有文本流的配置（text_cfg）与 C3 的训练器（self.c3，只用它的
+    文本损失与 build_inputs，不搭建、不训练）。"""
 
     def __init__(self, adapter: Any, cfg: E3aConfig, run_cfg: Mapping[str, Any], *, variant: str, seed: int,
-                 tiny: bool = False) -> None:
+                 tiny: bool = False, text_cfg: E3C.E3Config | None = None) -> None:
         self.ad = adapter
         self.cfg = cfg
         self.rc = dict(run_cfg)
-        self.variant = variant
+        self.run_variant = variant
+        self.variant = readout_variant(variant)
         self.seed = int(seed)
         self.tiny = bool(tiny)
+        self.mixed = variant == E3A_C3  # E3a+C3（模块说明）
+        if (self.rc.get("variant") == E3A_C3) != self.mixed or self.mixed != ("mixed" in self.rc):
+            raise ValueError(f"run_cfg（variant {self.rc.get('variant')!r}，mixed 一节 {'有' if 'mixed' in self.rc else '没有'}）"
+                             f"与训练器的变体 {variant!r} 不符")
+        self.text_cfg = text_cfg
+        self.c3: E3T.Trainer | None = None
+        self.c3_rc: dict[str, Any] | None = None
+        if self.mixed:
+            ref = self.rc["mixed"]["reference"]["text"]["config"]
+            if text_cfg is None or text_cfg.sha256 != ref["sha256"]:
+                raise ValueError(f"E3a+C3 要给文本流的配置，sha256 必须是 run_cfg 记下的 {ref['sha256'][:16]}…，收到 "
+                                 f"{None if text_cfg is None else text_cfg.sha256[:16]}")
+            self.c3_rc = E3C.resolve_run(text_cfg, supervision=TEXT_SUPERVISION, tiny=self.tiny)
+            self.c3 = E3T.Trainer(adapter, text_cfg, self.c3_rc, supervision=TEXT_SUPERVISION, seed=self.seed)
+        elif text_cfg is not None:
+            raise ValueError(f"{variant} 没有文本流，不该给 text_cfg")
         self.readout: Readout | None = None
         self.query_embeds: torch.nn.Parameter | None = None
         self.layers: list[int] | None = None
@@ -430,12 +478,15 @@ class Trainer:
         if not32:
             raise RuntimeError(f"LoRA 参数的 dtype 是 {not32}，应为 torch.float32")
         pix = check_no_pixel_path(self.readout, adapter_model=ad.model)
-        return {"variant": self.variant, "n_lora_params": int(sum(p.numel() for p in lora)),
-                "lora_dtypes": sorted({str(p.dtype) for p in lora}),
-                "query": None if self.query_embeds is None else {**dict(self.query), "shape": list(self.query_embeds.shape),
-                                                                 "dtype": str(self.query_embeds.dtype)},
-                "layers": self.layers, "readout_params": self.readout.params, "pixel_path_check": pix,
-                "gradient_checkpointing": bool(self.rc["gradient_checkpointing"])}
+        out = {"variant": self.run_variant, "n_lora_params": int(sum(p.numel() for p in lora)),
+               "lora_dtypes": sorted({str(p.dtype) for p in lora}),
+               "query": None if self.query_embeds is None else {**dict(self.query), "shape": list(self.query_embeds.shape),
+                                                                "dtype": str(self.query_embeds.dtype)},
+               "layers": self.layers, "readout_params": self.readout.params, "pixel_path_check": pix,
+               "gradient_checkpointing": bool(self.rc["gradient_checkpointing"])}
+        if self.mixed:
+            out["readout_variant"] = self.variant
+        return out
 
     def check_base_unchanged(self) -> None:
         """base 权重（LoRA 以外的参数）的指纹与开训时相同（存检查点前调用）。"""
@@ -457,15 +508,30 @@ class Trainer:
         return {g.get("name", str(k)): float(g["lr"]) for k, g in enumerate(self.opt.param_groups)}
 
     def micro_batches(self, examples: Sequence[D.Example]) -> list[list[D.Example]]:
-        """语义分割的样本与其余样本分开、各自按原顺序切成微批（语义分割在前）。"""
-        m = int(self.rc["micro_batch_size"])
-        out = []
-        for part in ([e for e in examples if e.task == "semseg"], [e for e in examples if e.task != "semseg"]):
-            out += [part[s: s + m] for s in range(0, len(part), m)]
-        return out
+        """语义分割的样本与其余样本分开、各自按原顺序切成微批（语义分割在前；config.micro_batch_groups）。"""
+        groups = micro_batch_groups([e.task for e in examples], int(self.rc["micro_batch_size"]))
+        return [[examples[i] for i in g] for g in groups]
+
+    def text_inputs(self, group: Sequence[Any]) -> list[Any]:
+        """E3a+C3 的文本微批的输入（模块说明）：临时取消查询登记，用 C3 的 build_inputs 构造，再把查询登记回来（只改个数与模式，
+        不碰任何行）。入口断言：每一行都没有查询 token。"""
+        q = self.query
+        if q is None or self.c3 is None:
+            raise RuntimeError("文本微批只在 E3a+C3 里有")
+        self.ad.clear_query_tokens()
+        try:
+            inputs = [self.c3.build_inputs(e) for e in group]
+        finally:
+            self.ad.inject_query_tokens(int(q["n"]), str(q["position_mode"]))
+        bad = [i for i, x in enumerate(inputs) if x.query_span is not None]
+        if bad:
+            raise RuntimeError(f"文本样本 {bad} 的输入里有查询 token（C3 没有）")
+        return inputs
 
     def optimize(self, examples: Sequence[D.Example], *, device: Any = None) -> tuple[dict[str, Any], dict[str, Any], list[Compute]]:
         """一步优化（规则见模块说明）。返回 (确定性的记录, 计时, 每条样本的 Compute，按 examples 的顺序)。"""
+        if self.mixed:
+            return self._optimize_mixed(examples, device=device)
         if not examples:
             raise ValueError("这一步没有样本")
         dev = device if device is not None else self.ad.device
@@ -537,6 +603,139 @@ class Trainer:
                "mix": self.readout.mix.snapshot() if self.readout.mix.learnable else None}
         return rec, times, [comp_of[e.plan.k] for e in examples]
 
+    def _optimize_mixed(self, examples: Sequence[Any], *, device: Any = None) -> tuple[dict[str, Any], dict[str, Any], list[Compute]]:
+        """E3a+C3 的一步（模块说明）：按流切微批（文本每 micro_batch_size 条一批，稠密按 E3a 的 micro_batches），文本微批的损失
+        ÷ 这一步的文本监督 token 总数、稠密微批的损失 ÷ 这一步的稠密样本数，各乘 loss_weights 后反传；然后一次裁剪与 step。"""
+        if not examples:
+            raise ValueError("这一步没有样本")
+        dev = device if device is not None else self.ad.device
+        mcfg = self.rc["mixed"]
+        by = {s: [e for e in examples if D.stream_of(e.plan) == s] for s in MIXED_STREAMS}
+        n_text = int(sum(e.n_supervised for e in by["text"]))
+        n_dense = len(by["dense"])
+        weights = {s: float(mcfg["loss_weights"][s]) for s in MIXED_STREAMS}
+        micro = int(self.rc["micro_batch_size"])
+        chunks: list[tuple[str, list[Any]]] = []
+        for s in mcfg["order"]:
+            if s == "text":
+                chunks += [("text", by["text"][i: i + micro]) for i in range(0, len(by["text"]), micro)]
+            else:
+                chunks += [("dense", g) for g in self.micro_batches(by["dense"])]
+        tw = self.rc["loss"]["task_weights"]
+        self.opt.zero_grad(set_to_none=True)
+        self.readout.train()
+        sums = {s: 0.0 for s in MIXED_STREAMS}
+        per: dict[str, list[float]] = {}
+        counts = {"n_prompt_tokens": 0, "n_visual_tokens": 0, "n_image_pixels": 0, "n_query_tokens": 0, "n_class_rows": 0}
+        cnt_by = {"text": {"n_samples": len(by["text"]), "n_supervised_tokens": n_text, "n_target_tokens": 0, "n_prompt_tokens": 0,
+                           "n_visual_tokens": 0, "n_image_pixels": 0},
+                  "dense": {"n_samples": n_dense, "n_prompt_tokens": 0, "n_visual_tokens": 0, "n_image_pixels": 0,
+                            "n_query_tokens": 0, "n_class_rows": 0}}
+        times = {"build_inputs_s": 0.0, "fwd_s": 0.0, "bwd_s": 0.0, "opt_s": 0.0}
+        comp_of: dict[int, Compute] = {}
+        for key, group in chunks:
+            t0 = time.perf_counter()
+            if key == "text":  # C3：没有查询 token、全词表语言损失、不经过读出
+                inputs = self.text_inputs(group)
+                _sync(dev)
+                t1 = time.perf_counter()
+                out = self.ad.training_forward(inputs, [e.target_ids for e in group], enable_thinking=bool(self.c3_rc["enable_thinking"]))
+                ls, p, _ = self.c3._task_loss(out, group, grid=False)
+                _sync(dev)
+                t2 = time.perf_counter()
+                (ls / float(max(n_text, 1)) * weights["text"]).backward()
+                _sync(dev)
+                t3 = time.perf_counter()
+                sums["text"] += float(ls.detach())
+                for k, v in p.items():
+                    acc = per.setdefault(f"text/{k}", [0.0, 0.0])
+                    acc[0] += v[0]
+                    acc[1] += v[1]
+                share = (t3 - t1) / len(group)
+                for b, (e, inp) in enumerate(zip(group, inputs)):
+                    nv = sum(len(i.span) for i in inp.images)
+                    npx = sum(int(i.n_pixels or 0) for i in inp.images)
+                    tl, pl = int(out.target_lengths[b]), int(out.prompt_lengths[b])
+                    counts["n_prompt_tokens"] += pl
+                    counts["n_visual_tokens"] += nv
+                    counts["n_image_pixels"] += npx
+                    c = cnt_by["text"]
+                    c["n_target_tokens"] += tl
+                    c["n_prompt_tokens"] += pl
+                    c["n_visual_tokens"] += nv
+                    c["n_image_pixels"] += npx
+                    comp_of[id(e)] = Compute.call(generated_tokens=tl, prompt_tokens=pl, visual_tokens=int(nv), image_pixels=int(npx),
+                                                  call_time_s=share, new_round=True)
+                del out, ls
+            else:  # E3a 原样
+                inputs = [self.build_inputs(e) for e in group]
+                _sync(dev)
+                t1 = time.perf_counter()
+                semseg = group[0].task == "semseg"
+                feats = self.features(inputs, semseg=semseg)
+                ro = self.readout(*feats.args())
+                total = ro.embed.new_zeros((), dtype=torch.float32)
+                for task in dict.fromkeys(e.task for e in group):
+                    rows = [b for b, e in enumerate(group) if e.task == task]
+                    idx = torch.tensor(rows, dtype=torch.long, device=ro.embed.device)
+                    o = self.readout.task_output(task, ro.embed.index_select(0, idx),
+                                                 None if ro.class_emb is None else ro.class_emb.index_select(0, idx))
+                    ls = task_losses(task, o, stack_targets(task, [group[b] for b in rows], ro.embed.device),
+                                     self.cfg.task(task)["loss"])
+                    total = total + float(tw[task]) * ls.sum()
+                    acc = per.setdefault(f"dense/{task}", [0.0, 0])
+                    acc[0] += float(ls.detach().sum())
+                    acc[1] += len(rows)
+                _sync(dev)
+                t2 = time.perf_counter()
+                (total / float(max(n_dense, 1)) * weights["dense"]).backward()
+                _sync(dev)
+                t3 = time.perf_counter()
+                sums["dense"] += float(total.detach())
+                share = (t3 - t1) / len(group)
+                c = cnt_by["dense"]
+                for b, (e, inp) in enumerate(zip(group, inputs)):
+                    nv = sum(len(i.span) for i in inp.images)
+                    npx = sum(int(i.n_pixels or 0) for i in inp.images)
+                    nq = 0 if inp.query_span is None else len(inp.query_span)
+                    pl = int(feats.prompt_lengths[b])
+                    for d in (counts, c):
+                        d["n_prompt_tokens"] += pl
+                        d["n_visual_tokens"] += nv
+                        d["n_image_pixels"] += npx
+                        d["n_query_tokens"] += nq
+                        d["n_class_rows"] += int(semseg)
+                    comp_of[id(e)] = Compute.call(generated_tokens=0, prompt_tokens=pl, visual_tokens=int(nv), image_pixels=int(npx),
+                                                  call_time_s=share, new_round=True)
+                del feats, ro, total
+            times["build_inputs_s"] += t1 - t0
+            times["fwd_s"] += t2 - t1
+            times["bwd_s"] += t3 - t2
+        t4 = time.perf_counter()
+        params = [p for g in self.opt.param_groups for p in g["params"]]
+        mx = self.rc["optim"]["max_grad_norm"]
+        gn = torch.nn.utils.clip_grad_norm_(params, float("inf") if mx is None else float(mx))
+        lr = self.lr_now()
+        self.opt.step()
+        self.sched.step()
+        self.opt.zero_grad(set_to_none=True)
+        _sync(dev)
+        times["opt_s"] = time.perf_counter() - t4
+        loss_by = {"text": sums["text"] / n_text if n_text else None, "dense": sums["dense"] / n_dense if n_dense else None}
+        loss = sum(weights[s] * loss_by[s] for s in mcfg["order"] if loss_by[s] is not None)
+        n_by: dict[str, int] = {}
+        for e in examples:
+            k = f"{D.stream_of(e.plan)}/{e.plan.task}"
+            n_by[k] = n_by.get(k, 0) + 1
+        rec = {"lr": lr, "loss": loss,
+               "loss_by_task": dict(sorted({**{k: v[0] / v[1] for k, v in per.items()}, **loss_by}.items())),
+               "n_by_task": dict(sorted(n_by.items())),
+               "n_samples": len(examples), **{k: int(v) for k, v in counts.items()}, "grad_norm": float(gn),
+               "mix": self.readout.mix.snapshot() if self.readout.mix.learnable else None,
+               "n_supervised_by_task": {k: int(v[1]) for k, v in sorted(per.items()) if k.startswith("text/")},
+               "by_supervision": cnt_by}
+        return rec, times, [comp_of[id(e)] for e in examples]
+
     # ----- 检查点与续跑状态 -----
     def save(self, directory: Path) -> Path:
         self.check_base_unchanged()
@@ -574,13 +773,37 @@ def _scalars(d: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+TEXT_BOX_FORMAT = "adapter.format_boxes（本家族原生格式，label = 指代句；DEV-0030 §3）"  # 与 C3 的运行身份同一句（tests 钉住）
+
+
+def text_stream_identity(trainer: Trainer, builder: Any) -> dict[str, Any]:
+    """E3a+C3 的运行身份里文本流的一节：C3 的配置（路径、sha256、版本）、决定样本流与损失的 C3 训练参数、指令与 C3 节（含实际用的
+    E1 提示与出处）、停止 token。各项与同一种子的 C3 运行身份（src/e3/train.run_identity）的对应项相同（tests 钉住）。"""
+    tc = trainer.text_cfg
+    d = tc.doc
+    c3 = {k: v for k, v in d["c3"].items() if k != "basis"}
+    c3["polygon_template"] = builder.polygon_template
+    c3["polygon_template_source"] = builder.polygon_source
+    c3["box_template"] = builder.box_template
+    c3["box_template_source"] = builder.box_source
+    c3["box_format"] = TEXT_BOX_FORMAT
+    return {"variant": E3C.VARIANT_OF[TEXT_SUPERVISION], "supervision": TEXT_SUPERVISION,
+            "config": {"path": tc.path, "sha256": tc.sha256, "version": d["version"]},
+            "training": {k: trainer.c3_rc[k] for k in ("steps", "batch_size", "micro_batch_size", "mix", "loss_reduction",
+                                                        "enable_thinking")},
+            "instructions": {t: {k: v for k, v in d["tasks"][t].items() if k.endswith(("template", "instruction")) or k == "order"}
+                             for t in tc.tasks},
+            "c3": c3, "stop_id": trainer.c3.stop_id}
+
+
 def run_identity(spec: RunSpec, cfg: E3aConfig, run_cfg: Mapping[str, Any], trainer: Trainer, pools: Mapping[str, Any],
-                 dedupe: Mapping[str, Any], class_check: Mapping[str, Any]) -> dict[str, Any]:
+                 dedupe: Mapping[str, Any], class_check: Mapping[str, Any], *, text_builder: Any = None) -> dict[str, Any]:
+    """运行身份（config.yaml）。E3a+C3 另加 text_stream 一节（text_stream_identity；要给 text_builder），其余变体不加键。"""
     d = cfg.doc
     instr = {t: {"order": cfg.order(t), "instruction_template": d["tasks"][t]["instruction_template"]} for t in pools}
     if "semseg" in pools:
         instr["semseg"]["class_names_sha256"] = hashlib.sha256("\n".join(cfg.class_names).encode("utf-8")).hexdigest()
-    return {
+    out = {
         "experiment": "E3a",
         "framework": "src/readout（DEV-0034）",
         "model": {"key": spec.model_key, "family": spec.family, "repo": spec.repo, "revision": spec.revision,
@@ -599,6 +822,11 @@ def run_identity(spec: RunSpec, cfg: E3aConfig, run_cfg: Mapping[str, Any], trai
         "data": {t: {"pool": _scalars(pools[t].stats), "n": len(pools[t]), "ids_sha256": ids_digest([s.id for s in pools[t].records]),
                      "dedupe": dict(dedupe[t])} for t in pools},
     }
+    if trainer.mixed:
+        if text_builder is None:
+            raise ValueError("E3a+C3 的运行身份要给 text_builder")
+        out["text_stream"] = text_stream_identity(trainer, text_builder)
+    return out
 
 
 def accounting_doc(leaf: Path) -> tuple[dict[str, Any], Compute]:
@@ -622,14 +850,26 @@ def accounting_doc(leaf: Path) -> tuple[dict[str, Any], Compute]:
                                                      "n_query_tokens", "n_class_rows")}
     wall = sum(float(r.get("wall_s") or 0.0) for r in runs)
     step_s = [float(r["step_s"]) for p in sorted((leaf / "logs").glob("timing_run_*.jsonl")) for r in _read_log(p)]
-    return ({"n_runs": len(runs), "n_steps_timed": n_steps, "n_steps_logged": len(log), **sums, "phases_s": tot,
-             "step_s_last": step_s[-1] if step_s else None,
-             "step_s_median": float(sorted(step_s)[len(step_s) // 2]) if step_s else None,
-             "wall_s": wall, "gpu_hours": wall / 3600.0, "peak_mem_bytes": max(peaks) if peaks else None,
-             "device": runs[-1].get("device") if runs else None, "gpu": runs[-1].get("gpu") if runs else None,
-             "note": "phases_s 按步相加：data_s = 主线程等样本（读图、解码 GT、降到 128）；build_inputs_s = 处理器；fwd_s、bwd_s = 前向"
-                     "（LLM、读出与损失）与反向（CUDA 前后同步）；opt_s = 裁剪、step；step_s = 整步。compute.json 的 generated_tokens 恒为 0"
-                     "（没有生成），prompt_tokens 是送进 LLM 的提示长度（c2 不跑 LLM，记 0）"}, comp)
+    doc = {"n_runs": len(runs), "n_steps_timed": n_steps, "n_steps_logged": len(log), **sums, "phases_s": tot,
+           "step_s_last": step_s[-1] if step_s else None,
+           "step_s_median": float(sorted(step_s)[len(step_s) // 2]) if step_s else None,
+           "wall_s": wall, "gpu_hours": wall / 3600.0, "peak_mem_bytes": max(peaks) if peaks else None,
+           "device": runs[-1].get("device") if runs else None, "gpu": runs[-1].get("gpu") if runs else None,
+           "note": "phases_s 按步相加：data_s = 主线程等样本（读图、解码 GT、降到 128）；build_inputs_s = 处理器；fwd_s、bwd_s = 前向"
+                   "（LLM、读出与损失）与反向（CUDA 前后同步）；opt_s = 裁剪、step；step_s = 整步。compute.json 的 generated_tokens 恒为 0"
+                   "（没有生成），prompt_tokens 是送进 LLM 的提示长度（c2 不跑 LLM，记 0）"}
+    if any("by_supervision" in r for r in log):  # E3a+C3：两种监督各自的样本数与 token 数（每步的 by_supervision 相加）
+        doc["by_supervision"] = by_supervision_totals(log)
+        doc["note"] += ("。E3a+C3：文本样本（C3）的 generated_tokens 是教师强制的目标 token 数（同 C3），稠密样本为 0；"
+                        "by_supervision 是两种监督各自的合计")
+    return doc, comp
+
+
+def by_supervision_totals(log: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, int]] | None:
+    """E3a+C3：train_log 每步的 by_supervision 相加。"""
+    if not log:
+        return None
+    return {s: {k: int(sum(r["by_supervision"][s][k] for r in log)) for k in log[0]["by_supervision"][s]} for s in MIXED_STREAMS}
 
 
 def readme_text(spec: RunSpec, ident: Mapping[str, Any], summary: Mapping[str, Any], log: Sequence[Mapping[str, Any]]) -> str:
@@ -645,10 +885,27 @@ def readme_text(spec: RunSpec, ident: Mapping[str, Any], summary: Mapping[str, A
              f"线性头 {p['heads']}（每个上限 {p['limits']['each_head']}）；来源 {ident['readout']['sources']}",
              f"- 第一步损失 {first.get('loss')}，最后一步损失 {last.get('loss')}（{len(log)} 步）",
              f"- 混合权重：训练前 {summary.get('layer_mix_init')}；训练后 {summary.get('layer_mix_final')}",
-             f"- 检查点：{summary.get('final_checkpoint')}（{summary.get('final_checkpoint_bytes')} 字节；model/ + readout/）", "",
-             "## 文件", "",
-             "- train_log.jsonl：每步的确定性记录；logs/：每次调用的记录与逐步计时；accounting.json、compute.json：记账；",
-             "- config.yaml：运行身份；meta.json：git、主机、包版本。", ""]
+             f"- 检查点：{summary.get('final_checkpoint')}（{summary.get('final_checkpoint_bytes')} 字节；model/ + readout/）", ""]
+    if "mixed" in tr:  # E3a+C3
+        m = tr["mixed"]
+        ref = m["reference"]
+        ts = ident["text_stream"]
+        lines += ["## E3a+C3 的两条样本流", "",
+                  f"- 文本：{m['streams']['text']}；稠密：{m['streams']['dense']}。先后 {m['order']}，每个微批只含一种监督"
+                  f"（文本 {m['micro_batches']['text']} 个微批；稠密 {m['micro_batches']['dense']['per_step'] or m['micro_batches']['dense']['rule']}）",
+                  f"- 全程两条流各 {ref['text']['samples']}、{ref['dense']['samples']} 条 = C3、E3a full 单独训练的全部样本，顺序相同；文本流的"
+                  f"配置 {ts['config']['path']}（{ts['config']['version']}，sha256 {ts['config']['sha256']}）",
+                  "- 两条流的槽位与样本的对应只由种子与 k 决定：同一条样本会以两种监督各出现一次（第 0 步在同一步里，之后文本流在前、"
+                  "稠密流约 2 倍步数之后），不另换数据种子",
+                  f"- 损失：每步 = {m['loss_weights']['text']:g} × 文本的逐 token 平均（同 C3）+ {m['loss_weights']['dense']:g} × "
+                  "稠密的逐样本平均（同 E3a）（事先固定，D83-2）；train_log 的 loss 是这个和，loss_by_task 的 text、dense 两项是两种各自的平均",
+                  f"- 学习率：warmup {tr['warmup_steps']} 步 + 余弦，按 {tr['steps']} 步排，日程长度是 C3（{ref['text']['steps']} 步）的 "
+                  f"{m['schedule_length_ratio']['text']:g} 倍、E3a full（{ref['dense']['steps']} 步）的 {m['schedule_length_ratio']['dense']:g} 倍",
+                  "- 文本样本不插查询 token、不经过读出；检查点同 E3a full（eval_e3a --variant full、run_e1 --checkpoint <final/model>）",
+                  f"- 本次合计（train_log 的 by_supervision）：{summary.get('by_supervision')}", ""]
+    lines += ["## 文件", "",
+              "- train_log.jsonl：每步的确定性记录；logs/：每次调用的记录与逐步计时；accounting.json、compute.json：记账；",
+              "- config.yaml：运行身份；meta.json：git、主机、包版本。", ""]
     return "\n".join(lines)
 
 
@@ -661,9 +918,13 @@ def run_training(adapter: Any, cfg: E3aConfig, spec: RunSpec, run_cfg: Mapping[s
                  out_dir: str | Path, *, resume: bool = False, argv: Sequence[str] = (), ckpt_root: str | Path | None = None,
                  stop_after_steps: int | None = None, keep_optimizer_state: bool = False,
                  log: Callable[[str], None] | None = None, _fail_after_step: int | None = None) -> dict[str, Any] | None:
-    """跑一次训练；返回 train_summary（stop_after_steps 到了时返回 None）。adapter 必须是刚挂好的 base（规则见模块说明）。"""
+    """跑一次训练；返回 train_summary（stop_after_steps 到了时返回 None）。adapter 必须是刚挂好的 base（规则见模块说明）。
+    spec.variant 是运行变体（e3a_c3 时 run_cfg 要有 mixed 一节，文本流的配置按配置的 mixed.text_stream 读取）。"""
     log = log or (lambda m: print(m, file=sys.stderr, flush=True))
     rc = dict(run_cfg)
+    mixed = spec.variant == E3A_C3
+    if mixed and rc.get("variant") != E3A_C3:
+        raise ValueError(f"run_cfg 的变体 {rc.get('variant')!r} 与 RunSpec 的 {spec.variant!r} 不符")
     tag = f"[e3a {spec.variant} {spec.model_key} seed{spec.seed}]"
     leaf = leaf_dir(out_dir, spec.variant, spec.model_key, spec.seed)
     ckpt = (Path(ckpt_root) / spec.variant / spec.model_key / f"seed{spec.seed}") if ckpt_root else leaf / "ckpt"
@@ -687,16 +948,29 @@ def run_training(adapter: Any, cfg: E3aConfig, spec: RunSpec, run_cfg: Mapping[s
             log(f"{tag} 已完成，跳过（{leaf / SUMMARY}）")
             return s
 
-    trainer = Trainer(adapter, cfg, rc, variant=spec.variant, seed=spec.seed, tiny=spec.tiny)
+    text_cfg = text_stream_config(cfg.doc) if mixed else None
+    if text_cfg is not None and int(spec.seed) not in text_cfg.seeds:
+        raise ValueError(f"种子 {spec.seed} 不在文本流配置的 seeds {list(text_cfg.seeds)} 里")
+    trainer = Trainer(adapter, cfg, rc, variant=spec.variant, seed=spec.seed, tiny=spec.tiny, text_cfg=text_cfg)
     st = None
     if exists and (latest / RESUME_STATE).exists():
         trainer.setup_resume(latest)
         st = torch.load(latest / RESUME_STATE, map_location="cpu", weights_only=False)
     else:
         trainer.setup_fresh()
-    builder = D.ExampleBuilder(cfg, {t: p.records for t, p in pools.items()}, out_size=trainer.readout.spec.out_size)
-    schedule = D.Schedule({t: p.records for t, p in pools.items()}, cfg, seed=spec.seed, batch_size=int(rc["batch_size"]))
-    ident = run_identity(spec, cfg, rc, trainer, pools, dedupe, class_check)
+    records = {t: p.records for t, p in pools.items()}
+    builder: Any = D.ExampleBuilder(cfg, records, out_size=trainer.readout.spec.out_size)
+    text_builder = None
+    if mixed:  # E3a+C3：C3 的文本流 + E3a full 的稠密流（data.MixedSchedule、MixedBuilder）
+        text_builder = D.c3_text_builder(text_cfg, records, seed=spec.seed, adapter=adapter, family=spec.family)
+        builder = D.MixedBuilder(builder, text_builder)
+        schedule: Any = D.MixedSchedule(records, cfg, text_cfg, seed=spec.seed, per_step=rc["mixed"]["per_step"],
+                                        order=rc["mixed"]["order"])
+        if schedule.batch_size != int(rc["batch_size"]):
+            raise ValueError(f"E3a+C3 每步 {schedule.batch_size} 条，与 run_cfg 的 batch_size {rc['batch_size']} 不同")
+    else:
+        schedule = D.Schedule(records, cfg, seed=spec.seed, batch_size=int(rc["batch_size"]))
+    ident = run_identity(spec, cfg, rc, trainer, pools, dedupe, class_check, text_builder=text_builder)
     ident_sha = identity_sha256(ident)
     if exists:
         if not (leaf / CONFIG).exists():
@@ -708,6 +982,8 @@ def run_training(adapter: Any, cfg: E3aConfig, spec: RunSpec, run_cfg: Mapping[s
     else:
         leaf.mkdir(parents=True, exist_ok=True)
         files = [REPO_ROOT / cfg.path if not Path(cfg.path).is_absolute() else Path(cfg.path)]
+        if text_cfg is not None:
+            files.append(REPO_ROOT / text_cfg.path if not Path(text_cfg.path).is_absolute() else Path(text_cfg.path))
         files += sorted({Path(p.stats["dedupe_file"]) for p in pools.values() if p.stats.get("dedupe_file")})
         write_run_metadata(leaf, config=ident, seed=spec.seed, data_files=files, repo_root=REPO_ROOT)
     start = 0
@@ -765,11 +1041,12 @@ def run_training(adapter: Any, cfg: E3aConfig, spec: RunSpec, run_cfg: Mapping[s
     workers = int(rc["data_workers"])
     pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="e3a-data") if workers > 0 else None
 
-    def build_one(plan: D.SlotPlan) -> tuple[D.Example | None, dict[str, Any] | None]:
+    def build_one(plan: Any) -> tuple[Any, dict[str, Any] | None]:
         try:
             return builder.build(plan), None
-        except NoSupervision as e:
-            return None, {"k": plan.k, "id": plan.sample_id, "reason": str(e)}
+        except (NoSupervision, TextNoSupervision) as e:  # 后者只来自 C3 的构造（E3a+C3 的文本流：抽不到点对）
+            rec = {"k": plan.k, "id": plan.sample_id, "reason": str(e)}
+            return None, ({"stream": D.stream_of(plan), **rec} if mixed else rec)
 
     def submit(step: int) -> list[Any]:
         plans = schedule.step_plans(step)
@@ -793,9 +1070,15 @@ def run_training(adapter: Any, cfg: E3aConfig, spec: RunSpec, run_cfg: Mapping[s
             rec, times, comps = trainer.optimize(examples, device=dev)
             step_s = time.perf_counter() - t0
             comps = [c.as_sample(wall_time_s=step_s / len(examples)) for c in comps]
-            if step == start:
+            if step == start and not mixed:
                 trainer.audit["first_step_examples"] = [{"id": e.plan.sample_id, "task": e.task, "image_hw": list(e.image.shape[:2]),
                                                          "instruction_chars": len(e.instruction)} for e in examples[:4]]
+            elif step == start:  # E3a+C3：两条流各前 4 条
+                shown = [e for s in MIXED_STREAMS for e in [x for x in examples if D.stream_of(x.plan) == s][:4]]
+                trainer.audit["first_step_examples"] = [
+                    {"stream": D.stream_of(e.plan), "id": e.plan.sample_id, "task": e.plan.task,
+                     "image_hw": list((e.images[0] if D.stream_of(e.plan) == "text" else e.image).shape[:2]),
+                     "instruction_chars": len(e.instruction)} for e in shown]
             line = {"step": step, **rec, "n_skipped": len(skipped), "skipped": skipped}
             _append(leaf / TRAIN_LOG, [_jsonl(line)])
             _append(timing_path, [_jsonl({"step": step, "data_s": t_data, **times, "step_s": step_s,
@@ -836,6 +1119,8 @@ def run_training(adapter: Any, cfg: E3aConfig, spec: RunSpec, run_cfg: Mapping[s
                    "layer_mix_init": trainer.mix_init,
                    "layer_mix_final": trainer.readout.mix.snapshot() if trainer.readout.mix.learnable else None,
                    "layers": trainer.layers}
+        if mixed:  # E3a+C3：两种监督各自的合计（每步的 by_supervision 相加）
+            summary["by_supervision"] = by_supervision_totals(tlog)
         (leaf / README).write_text(readme_text(spec, ident, summary, tlog), encoding="utf-8")
         _atomic_write_text(leaf / SUMMARY, json.dumps(summary, indent=1, ensure_ascii=False) + "\n")
         finish_log("complete")
@@ -862,8 +1147,10 @@ __all__ = [
     "READOUT_SUB",
     "RunSpec",
     "StopRequested",
+    "TEXT_BOX_FORMAT",
     "Trainer",
     "accounting_doc",
+    "by_supervision_totals",
     "init_query_embeds",
     "layers_for",
     "leaf_dir",
@@ -874,4 +1161,5 @@ __all__ = [
     "run_training",
     "save_checkpoint",
     "save_readout",
+    "text_stream_identity",
 ]

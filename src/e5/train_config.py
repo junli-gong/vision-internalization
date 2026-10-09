@@ -10,6 +10,11 @@
   warmup 与余弦按实际步数排。下限按数据量档（--n-train）判，不按条数：--tasks 子集的同一档同样受下限。
 - val 选检查点（DEV-0038；selection 一节，规则见 src/e5/val_select.py）：只对下限所列的档（applies_to = min_steps）；run_cfg 的
   selection 记生效的设置，其余档为 null（取最后一步）。
+- 解码方式（DEV-0043；decode 一节，D83-3：v3 的正式值是 structured；规则见 src/e5/token_grid.py 的模块说明）：N = 0、val 选择与 test
+  评测都读这一节，命令行 --decode 可另给（restricted 作诊断）。val 选择的 selection 里另记 decode = structured；restricted 时没有这个键，
+  run_cfg 与改动前逐字节相同。
+- 起点（DEV-0043，D83-5）：v3 主比较的三个起点是 base_warmup、e3b_c3、c3_warmup（starts.<起点>.in_v3 = true）；e3b、e3a、base 保留在
+  配置里，不属于 v3 主比较（in_v3 = false；脚本运行时提示）。
 """
 
 from __future__ import annotations
@@ -27,12 +32,13 @@ from src.e3.config import E3Config
 from src.e3.config import load_config as load_e3b_config
 from src.e3.config import resolve_run as resolve_e3b_run
 from src.e5.protocol import E5_TASKS
-from src.e5.token_grid import PromptFormat
+from src.e5.token_grid import DECODE_MODES, STRUCTURED, PromptFormat, check_decode
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / "configs" / "e5_train.json"
 SCHEMA = 1
-STARTS: tuple[str, ...] = ("base_warmup", "e3b", "e3a", "base")
+# v3 主比较的三个起点在前（D83-5；E5 预注册 §8a 第 1 项）；e3b、e3a、base 保留，不属于 v3 主比较（configs/e5_train.json 的 in_v3）
+STARTS: tuple[str, ...] = ("base_warmup", "e3b_c3", "c3_warmup", "e3b", "e3a", "base")
 GRID_TOKEN_SOURCES = ("from_checkpoint", "add")
 START_LORA_MODES = ("merge_then_new_lora",)
 SELECTION_RULES: tuple[str, ...] = ("mean_headline_v1",)  # 规则的定义在 src/e5/val_select.py（selection_score）
@@ -74,14 +80,26 @@ class E5TrainConfig:
         ms = ms["tiny"] if tiny else ms
         return int(ms["steps"]) if int(n_train) in {int(x) for x in ms["tiers"]} else None
 
-    def selection(self, n_train: int, tiny: bool) -> dict[str, Any] | None:
-        """数据量档 n_train 的 val 选检查点设置（selection 一节；只对下限所列的档，其余为 None）。"""
+    def selection(self, n_train: int, tiny: bool, decode: str | None = None) -> dict[str, Any] | None:
+        """数据量档 n_train 的 val 选检查点设置（selection 一节；只对下限所列的档，其余为 None）。decode：val 评测的解码方式（None = 配置的
+        decode.mode）；structured 时另加 decode 键，restricted 时没有（与改动前逐字节相同）。"""
         if self.min_steps(n_train, tiny) is None:
             return None
         s = self.doc["selection"]
         over = dict(s["tiny"]) if tiny else {}
-        return {"rule": str(s["rule"]), "split": str(s["split"]), "applies_to": str(s["applies_to"]),
-                **{k: int(over.get(k, s[k])) for k in ("val_every", "n_per_task", "batch_size")}}
+        out = {"rule": str(s["rule"]), "split": str(s["split"]), "applies_to": str(s["applies_to"]),
+               **{k: int(over.get(k, s[k])) for k in ("val_every", "n_per_task", "batch_size")}}
+        if self.decode_mode(decode) == STRUCTURED:
+            out["decode"] = STRUCTURED
+        return out
+
+    def decode_mode(self, override: str | None = None) -> str:
+        """本次的解码方式（模块说明）：override（命令行 --decode）不给时取配置的 decode.mode。"""
+        return check_decode(str(self.doc["decode"]["mode"]) if override is None else override)
+
+    def in_v3(self, kind: str) -> bool:
+        """起点是否属于 E5 v3 主比较（D83-5；starts.<起点>.in_v3）。"""
+        return bool(self.start(kind)["in_v3"])
 
     def start(self, kind: str) -> Mapping[str, Any]:
         if kind not in STARTS:
@@ -123,6 +141,8 @@ def load_train_config(path: str | Path = CONFIG_PATH, e3b_path: str | Path | Non
             bad.append(f"starts.{k}：grid_tokens 必须是 {GRID_TOKEN_SOURCES} 之一，checkpoint 必须是 bool")
         if s.get("checkpoint") and not s.get("variant"):
             bad.append(f"starts.{k}：有检查点的起点要写 variant")
+        if not isinstance(s.get("in_v3"), bool):
+            bad.append(f"starts.{k}：in_v3（是否属于 v3 主比较）必须是 bool")
     if not starts.get("base", {}).get("checkpoint") is False:
         bad.append("starts.base 不能有检查点")
     if doc.get("start_lora", {}).get("mode") not in START_LORA_MODES:
@@ -173,6 +193,9 @@ def load_train_config(path: str | Path = CONFIG_PATH, e3b_path: str | Path | Non
         for k in ("val_every", "n_per_task", "batch_size"):
             if not _posint(sel.get(k)) or not _posint((sel.get("tiny") or {}).get(k)):
                 bad.append(f"selection.{k}（与 tiny 里的同名项）必须是正整数")
+    dec = doc.get("decode")
+    if not isinstance(dec, dict) or dec.get("mode") not in DECODE_MODES:
+        bad.append(f"缺少 decode 一节，或 decode.mode 不是 {DECODE_MODES} 之一（DEV-0043）")
     e = doc.get("eval", {})
     npb = e.get("n_per_bin", {})
     if set(npb) != set(E5_TASKS) or any(not _posint(v) for v in npb.values()):
@@ -216,9 +239,9 @@ def plan_steps(n_examples: int, epochs: int, batch_size: int, min_steps: int | N
     return {"steps_by_epochs": by_ep, "steps": by_ep, "n_samples": int(epochs) * int(n_examples), "floor_binding": 0}
 
 
-def resolve_run(cfg: E5TrainConfig, *, n_train: int, n_examples: int, tiny: bool) -> dict[str, Any]:
+def resolve_run(cfg: E5TrainConfig, *, n_train: int, n_examples: int, tiny: bool, decode: str | None = None) -> dict[str, Any]:
     """本次运行实际生效的训练参数（写进 config.yaml；规则见模块说明）。n_train = 数据量档（--n-train，下限与 val 选择按它判），
-    n_examples = 训练集条数（每类 × 任务数）。"""
+    n_examples = 训练集条数（每类 × 任务数），decode = val 选择的解码方式（None = 配置的 decode.mode；只在有 val 选择的档生效）。"""
     base = resolve_e3b_run(cfg.e3b, supervision="grid", tiny=tiny)
     t = cfg.doc["training"]
     over = dict(t["tiny"]) if tiny else {}
@@ -239,7 +262,7 @@ def resolve_run(cfg: E5TrainConfig, *, n_train: int, n_examples: int, tiny: bool
     rc["steps"] = plan["steps"]
     rc["n_samples"] = plan["n_samples"]
     rc["min_steps_binding"] = bool(plan["floor_binding"])
-    rc["selection"] = cfg.selection(n_train, tiny)
+    rc["selection"] = cfg.selection(n_train, tiny, decode)
     rc["optim"]["lora"]["lr"] = float(t["lr"]["lora"])
     rc["optim"]["token_rows"]["lr"] = float(t["lr"]["token_rows"])
     rc["optim"]["warmup_ratio"] = float(t["warmup_ratio"])

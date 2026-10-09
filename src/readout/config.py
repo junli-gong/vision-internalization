@@ -2,6 +2,10 @@
 
 配置是运行身份的一部分：它的 sha256 与本次实际生效的各项一起写进 config.yaml，续跑时必须完全相同。数字只写在配置里；硬约束的上限
 （DECODER_MAX_PARAMS、HEAD_MAX_PARAMS）在 src/readout/model.py；与 E2、E3b 共用的取值（损失参数、LoRA、去重名单）由 tests 钉住。
+
+**E3a+C3**（DEV-0044；运行变体 e3a_c3，配置的 mixed 节）：读出、LoRA、查询、优化器都同 full（readout_variant），另有两条样本流：
+C3 的文本流（mixed.text_stream.config 指向的 E3b 配置，src/e3 原样读取）与 E3a full 的稠密流。mixed_spec 一次核对条数、步数的来历、
+1 : 1 的权重与两份配置的相容（同一个训练池、同一组种子、同一个思考开关、C3 的去重名单是 E3a 的子集）。
 """
 
 from __future__ import annotations
@@ -12,10 +16,11 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from src.adapters import registry
 from src.adapters.training import join_class_names
+from src.e3 import config as E3C
 from src.readout.model import LINEAR_HEAD_TASKS, TASKS, VARIANTS, ReadoutSpec
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -25,20 +30,36 @@ OPTIM_GROUPS: tuple[str, ...] = ("lora", "query", "mix", "readout")
 _TINY_KEYS = ("steps", "micro_batch_size", "grad_accum_steps", "ckpt_every")
 LOSS_KINDS = {"refseg": "bce_dice", "depth": "silog", "semseg": "cross_entropy", "normals": "cosine"}
 
+# E3a+C3（DEV-0044）：运行变体名（输出目录、config.yaml 的 variant）；它的读出结构、LoRA、查询与优化器同 MIXED_BASE（readout.json 的
+# 结构变体也是它，所以 eval_e3a --variant full 直接能读）。两条样本流：text = C3 的文本流，dense = E3a full 的稠密流
+E3A_C3 = "e3a_c3"
+MIXED_BASE = "full"
+MIXED_STREAMS: tuple[str, ...] = ("text", "dense")
+TEXT_SUPERVISION = "text"  # 文本流在 src/e3 里的监督名（C3）
+RUN_VARIANTS: tuple[str, ...] = VARIANTS + (E3A_C3,)
+
 
 class ConfigError(ValueError):
     pass
 
 
+def readout_variant(variant: str) -> str:
+    """运行变体 → 读出结构的变体（model.VARIANTS 之一）：e3a_c3 → full，其余原样。"""
+    if variant == E3A_C3:
+        return MIXED_BASE
+    if variant not in VARIANTS:
+        raise ConfigError(f"variant 必须是 {RUN_VARIANTS} 之一，收到 {variant!r}")
+    return variant
+
+
 def groups_for(variant: str) -> tuple[str, ...]:
-    """各变体的参数组（没有的组不建）：full 四组；c1 没有 lora；c2 只有 readout。"""
+    """各变体的参数组（没有的组不建）：full 四组；c1 没有 lora；c2 只有 readout；e3a_c3 同 full。"""
+    variant = readout_variant(variant)
     if variant == "full":
         return OPTIM_GROUPS
     if variant == "c1":
         return ("query", "mix", "readout")
-    if variant == "c2":
-        return ("readout",)
-    raise ConfigError(f"variant 必须是 {VARIANTS} 之一，收到 {variant!r}")
+    return ("readout",)
 
 
 @dataclass(frozen=True)
@@ -165,8 +186,123 @@ def load_config(path: str | Path = CONFIG_PATH) -> E3aConfig:
             raise ConfigError(f"eval.sets 缺 {t}")
     readout_spec(doc, variant="full", hidden_size=64, n_layers=4, tiny=False)  # 结构能展开
     readout_spec(doc, variant="full", hidden_size=64, n_layers=4, tiny=True)
+    if "mixed" in doc:  # E3a+C3（DEV-0044）：两条流的条数、权重、步数的来历与两份配置的相容一次核对
+        for tiny in (False, True):
+            mixed_spec(doc, tiny=tiny)
     rel = str(p.relative_to(REPO_ROOT)) if p.resolve().is_relative_to(REPO_ROOT) else str(p)
     return E3aConfig(path=rel, sha256=hashlib.sha256(raw).hexdigest(), doc=doc)
+
+
+# ---------------------------------------------------------------------------
+# E3a+C3 的两条样本流（配置的 mixed 节）
+# ---------------------------------------------------------------------------
+
+
+def text_stream_config(doc: Mapping[str, Any]) -> E3C.E3Config:
+    """mixed.text_stream.config 指向的 E3b 配置（C3 的样本流、样本构造与损失都按它；src/e3/config.load_config 原样读取）。"""
+    ts = doc["mixed"]["text_stream"]
+    try:
+        return E3C.load_config(REPO_ROOT / str(ts["config"]))
+    except (OSError, ValueError, KeyError) as e:
+        raise ConfigError(f"mixed.text_stream.config {ts.get('config')!r} 读不了：{e!r}") from None
+
+
+def micro_batch_groups(tasks: Sequence[str], micro: int) -> list[list[int]]:
+    """E3a 的微批规则（Trainer.micro_batches 用的就是它）：一步的样本按任务名分成语义分割与其余两部分（语义分割在前；类别名区间
+    只在语义分割的行上取），各自按原顺序每 micro 条切一批。返回每个微批里样本的下标。"""
+    m = int(micro)
+    out: list[list[int]] = []
+    for part in ([i for i, t in enumerate(tasks) if t == "semseg"], [i for i, t in enumerate(tasks) if t != "semseg"]):
+        out += [part[s: s + m] for s in range(0, len(part), m)]
+    return out
+
+
+def _check_mixed_compat(doc: Mapping[str, Any], tc: E3C.E3Config) -> None:
+    """E3a 与 C3 两份配置的相容（文本流的样本要与 C3 逐个相同、又用 E3a 已加载的训练池）。"""
+    ts = doc["mixed"]["text_stream"]
+    if ts.get("supervision") != TEXT_SUPERVISION or ts.get("variant") != E3C.VARIANT_OF[TEXT_SUPERVISION]:
+        raise ConfigError(f"mixed.text_stream 必须是 supervision {TEXT_SUPERVISION!r}、variant "
+                          f"{E3C.VARIANT_OF[TEXT_SUPERVISION]!r}（C3），收到 {dict(ts)}")
+    w = doc["mix"]["weights"]
+    missing = [t for t in tc.tasks if int(w.get(t, 0)) < 1]
+    if missing:
+        raise ConfigError(f"C3 的任务 {missing} 不在 E3a 的 mix.weights 里（文本流用 E3a 加载的训练池）")
+    if list(tc.task("refseg")["datasets"]) != list(doc["tasks"]["refseg"]["datasets"]):
+        raise ConfigError(f"两份配置的 tasks.refseg.datasets 不同（C3 {tc.task('refseg')['datasets']}，E3a "
+                          f"{doc['tasks']['refseg']['datasets']}）：文本流与稠密流必须是同一个训练池")
+    for t in tc.tasks:
+        extra = sorted(set(tc.doc["dedupe"]["required_eval_sets"].get(t, [])) - set(doc["dedupe"]["required_eval_sets"][t]))
+        if extra:
+            raise ConfigError(f"C3 的 {t} 去重名单多出 {extra}：E3a 的开跑核对必须覆盖 C3 的")
+    if not set(int(s) for s in doc["seeds"]) <= set(tc.seeds):
+        raise ConfigError(f"E3a 的 seeds {doc['seeds']} 不全在 C3 的 seeds {list(tc.seeds)} 里（两条流用同一个种子）")
+    if bool(tc.enable_thinking) != bool(doc["enable_thinking"]):
+        raise ConfigError("两份配置的 enable_thinking 不同")
+
+
+def mixed_spec(doc: Mapping[str, Any], *, tiny: bool) -> dict[str, Any]:
+    """配置的 mixed 节（E3a+C3）→ 本次生效的两条流（规则见配置的 mixed.basis）。核对：
+    - per_step 恰好是 text、dense 两项，正整数；两项之和 = 每步条数（batch.micro_batch_size × batch.grad_accum_steps，tiny 取 tiny 节），
+      且各自是微批大小的整数倍；
+    - steps × per_step.dense = E3a 的 steps × 每步条数，steps × per_step.text = C3 的 steps × 每步条数（C3 = text_stream.config 按
+      src/e3/config.resolve_run(supervision = text) 展开；全程的稠密样本恰好是 E3a full 的、文本样本恰好是 C3 的，一条不多一条不少）；
+    - loss_weights 恰好是 text 1、dense 1（D83-2：1 : 1 事先固定，不调）；order 是两条流的一个排列；
+    - 两份配置相容（_check_mixed_compat）。"""
+    m = doc["mixed"]
+    sec = m["tiny"] if tiny else m
+    t = doc["tiny"]
+    micro = int(t["micro_batch_size"] if tiny else doc["batch"]["micro_batch_size"])
+    batch = micro * int(t["grad_accum_steps"] if tiny else doc["batch"]["grad_accum_steps"])
+    ref_steps = int(t["steps"] if tiny else doc["steps"])
+    where = "mixed.tiny" if tiny else "mixed"
+    per = sec["per_step"]
+    if set(per) != set(MIXED_STREAMS) or any(isinstance(v, bool) or int(v) != v or int(v) < 1 for v in per.values()):
+        raise ConfigError(f"{where}.per_step 必须恰好是 {list(MIXED_STREAMS)} 的正整数条数，收到 {per}")
+    per = {s: int(per[s]) for s in MIXED_STREAMS}
+    if sum(per.values()) != batch or any(v % micro for v in per.values()):
+        raise ConfigError(f"{where}.per_step {per}：两项之和必须是每步条数 {batch}，且各自是微批大小 {micro} 的整数倍")
+    tc = text_stream_config(doc)
+    _check_mixed_compat(doc, tc)
+    c3 = E3C.resolve_run(tc, supervision=TEXT_SUPERVISION, tiny=tiny)
+    steps = sec["steps"]
+    want = {"text": int(c3["steps"]) * int(c3["batch_size"]), "dense": ref_steps * batch}
+    if isinstance(steps, bool) or int(steps) != steps or any(int(steps) * per[s] != want[s] for s in MIXED_STREAMS):
+        raise ConfigError(f"{where}.steps = {steps}：steps × per_step.<流> 必须等于 C3、E3a full 各自的样本数 {want}"
+                          "（逐样本相同，D83-2）")
+    w = m["loss_weights"]
+    if set(w) != set(MIXED_STREAMS) or any(isinstance(v, bool) or float(v) != 1.0 for v in w.values()):
+        raise ConfigError(f"mixed.loss_weights 必须恰好是 text 1、dense 1（D83-2：两种损失 1 : 1，事先固定，不调），收到 {w}")
+    order = [str(x) for x in m["order"]]
+    if sorted(order) != sorted(MIXED_STREAMS):
+        raise ConfigError(f"mixed.order 必须是 {list(MIXED_STREAMS)} 的一个排列，收到 {order}")
+    steps = int(steps)
+    variants = {"text": E3C.VARIANT_OF[TEXT_SUPERVISION], "dense": MIXED_BASE}
+    labels = {"text": f"C3（变体 {variants['text']}）", "dense": f"E3a {variants['dense']} "}
+    return {"version": str(m["version"]), "per_step": per, "order": order,
+            "loss_weights": {s: float(w[s]) for s in MIXED_STREAMS}, "steps": steps,
+            "micro_batches": {"text": per["text"] // micro, "dense": _dense_composition(doc, per["dense"], micro)},
+            "reference": {
+                "text": {"variant": variants["text"], "config": {"path": tc.path, "sha256": tc.sha256, "version": tc.doc["version"]},
+                         "steps": int(c3["steps"]), "batch_size": int(c3["batch_size"]),
+                         "micro_batch_size": int(c3["micro_batch_size"]), "samples": want["text"]},
+                "dense": {"variant": variants["dense"], "steps": ref_steps, "batch_size": batch, "micro_batch_size": micro,
+                          "samples": want["dense"]}},
+            "schedule_length_ratio": {"text": steps / int(c3["steps"]), "dense": steps / ref_steps},
+            "streams": {s: f"第 t 步取 {labels[s]}同一种子的样本流第 {per[s]}t … {per[s]}t + {per[s] - 1} 个槽位"
+                        for s in MIXED_STREAMS}}
+
+
+def _dense_composition(doc: Mapping[str, Any], per_dense: int, micro: int) -> dict[str, Any]:
+    """稠密流每步的微批组成（E3a 的规则，micro_batch_groups）。混合循环的长度整除每步条数时每一步都相同，记下各微批的任务；
+    否则随步变化，只记规则。"""
+    from src.readout.data import mix_cycle  # 延迟 import：data 依赖本模块
+
+    cycle = mix_cycle({k: int(v) for k, v in doc["mix"]["weights"].items()})
+    rule = "E3a 的规则：语义分割的样本单独成批，其余按原顺序每 micro_batch_size 条一批（语义分割在前）"
+    if per_dense % len(cycle):
+        return {"rule": rule, "per_step": None}
+    tasks = [cycle[i % len(cycle)] for i in range(per_dense)]
+    return {"rule": rule, "per_step": [[tasks[i] for i in g] for g in micro_batch_groups(tasks, micro)]}
 
 
 def decoder_block(doc: Mapping[str, Any], *, tiny: bool) -> dict[str, Any]:
@@ -193,8 +329,11 @@ def readout_spec(doc: Mapping[str, Any], *, variant: str, hidden_size: int, n_la
 
 
 def resolve_run(cfg: E3aConfig, *, variant: str, tiny: bool) -> dict[str, Any]:
-    """本次运行实际生效的训练参数（写进 config.yaml）：--tiny 时按 cfg.tiny 覆盖规模参数。"""
+    """本次运行实际生效的训练参数（写进 config.yaml）：--tiny 时按 cfg.tiny 覆盖规模参数。
+    变体 e3a_c3（DEV-0044）：其余同 full，steps = mixed.steps（--tiny 取 mixed.tiny.steps），warmup_steps 按它算；另记 mixed 一节
+    （mixed_spec）。full、c1、c2 的结果与原来逐项相同（不加键）。"""
     d = cfg.doc
+    rv = readout_variant(variant)
     groups = groups_for(variant)
     out = {
         "variant": variant,
@@ -202,25 +341,31 @@ def resolve_run(cfg: E3aConfig, *, variant: str, tiny: bool) -> dict[str, Any]:
         "micro_batch_size": int(d["batch"]["micro_batch_size"]),
         "grad_accum_steps": int(d["batch"]["grad_accum_steps"]),
         "ckpt_every": int(d["ckpt_every"]),
-        "lora": {k: d["lora"][k] for k in ("r", "alpha", "dropout")} if variant == "full" else None,
+        "lora": {k: d["lora"][k] for k in ("r", "alpha", "dropout")} if rv == "full" else None,
         "optim": {"optimizer": d["optim"]["optimizer"], "betas": list(d["optim"]["betas"]), "eps": float(d["optim"]["eps"]),
                   "groups": {g: dict(d["optim"]["groups"][g]) for g in groups},
                   "max_grad_norm": d["optim"]["max_grad_norm"], "schedule": d["optim"]["schedule"],
                   "warmup_ratio": float(d["optim"]["warmup_ratio"]), "min_lr_ratio": float(d["optim"]["min_lr_ratio"])},
         "loss": {"task_weights": {t: float(v) for t, v in d["loss"]["task_weights"].items()},
                  "reduction": d["loss"]["reduction"]},
-        "gradient_checkpointing": bool(d["model"]["gradient_checkpointing"]) and variant != "c2",
+        "gradient_checkpointing": bool(d["model"]["gradient_checkpointing"]) and rv != "c2",
         "enable_thinking": cfg.enable_thinking,
         "mix": cfg.mix_weights,
         "data_workers": int(d["data"]["workers"]),
-        "query": None if variant == "c2" else {"n": cfg.query_n, "grid": cfg.query_grid,
-                                               "init_noise_ratio": float(d["query"]["init_noise_ratio"])},
+        "query": None if rv == "c2" else {"n": cfg.query_n, "grid": cfg.query_grid,
+                                          "init_noise_ratio": float(d["query"]["init_noise_ratio"])},
         "decoder": decoder_block(d, tiny=tiny),
     }
     if tiny:
         t = d["tiny"]
         for k in _TINY_KEYS:
             out[k] = int(t[k])
+    if variant == E3A_C3:
+        if "mixed" not in d:
+            raise ConfigError("配置里没有 mixed 节")
+        ms = mixed_spec(d, tiny=tiny)
+        out["steps"] = ms["steps"]
+        out["mixed"] = ms
     for k in ("steps", "micro_batch_size", "grad_accum_steps", "ckpt_every"):
         if out[k] < 1:
             raise ConfigError(f"{k} 必须 ≥ 1，收到 {out[k]}")
@@ -231,5 +376,6 @@ def resolve_run(cfg: E3aConfig, *, variant: str, tiny: bool) -> dict[str, Any]:
     return out
 
 
-__all__ = ["CONFIG_PATH", "ConfigError", "E3aConfig", "OPTIM_GROUPS", "decoder_block", "groups_for", "load_config",
-           "readout_spec", "resolve_run"]
+__all__ = ["CONFIG_PATH", "ConfigError", "E3A_C3", "E3aConfig", "MIXED_BASE", "MIXED_STREAMS", "OPTIM_GROUPS", "RUN_VARIANTS",
+           "TEXT_SUPERVISION", "decoder_block", "groups_for", "load_config", "micro_batch_groups", "mixed_spec", "readout_spec",
+           "readout_variant", "resolve_run", "text_stream_config"]

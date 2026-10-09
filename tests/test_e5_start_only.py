@@ -11,6 +11,8 @@
 - 不用 --start-only 时，训练后评测的确定输出与改动前（a8b0e12 的脚本与模块，原样存在 tests/fixtures/e5/）逐字节相同；
 - 训练叶目录的两种布局（默认；按叶目录结构搬到别处、旁边放 config.yaml，同 scripts/server/train_queue.sh 的 finalize）结果逐字节相同；
 - 续跑逐字节相同。
+DEV-0043 起 eval_e5_trained 默认用结构强制解码（configs/e5_train.json 的 decode 一节）；本文件测的是 N = 0 的入口与改动前的一致，读数一律加
+--decode restricted（RESTRICTED；受限解码的输出与改动前逐字节相同）。结构强制下的同一组性质见 tests/test_e5_v3.py。
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ KEY = "qwen3.5-0.8b"
 FAMILIES = ("qwen3.5-0.8b", "gemma-4-e2b-it", "internvl3.5-2b-hf")
 DET = ("predictions.jsonl", "metrics.json", "README.md", "config.yaml")  # 确定的输出（compute.json、meta.json、logs/ 含墙钟与主机）
 SNAP = REPO / "tests" / "fixtures" / "e5"
+RESTRICTED = ("--decode", "restricted")  # DEV-0043：受限解码（诊断口径；见模块说明）
 SNAP_SHA256 = {  # a8b0e12（DEV-0040 之前）的文件原样
     "eval_e5_trained_a8b0e12.py": "bd4866758e30780cf7bca84c77c79499df16aad9a6dc86066793506f614a650e",
     "trained_eval_a8b0e12.py": "db56c2680c5d919a4d7dee6590397f0f98939c515b5f087da3323f45501c0c91",
@@ -90,7 +93,7 @@ def _mdir(out: Path, init: str = "e3b", key: str = KEY, tag: str = TE.START_ONLY
 
 def _so_args(ck: Path, out: Path, *, init: str = "e3b", key: str = KEY, seed: int = 0, extra: tuple[str, ...] = ()) -> list[str]:
     return ["--tiny", "--start-only", "--init", init, "--start-checkpoint", str(ck), "--model", key, "--seed", str(seed),
-            "--out", str(out), *extra]
+            "--out", str(out), *RESTRICTED, *extra]
 
 
 def _sharp_start(root: Path, key: str) -> Path:
@@ -172,7 +175,7 @@ def sharp(tmp_path_factory):
 
 def test_rules_and_usage(tmp_path, monkeypatch):
     # 只评起点的起点 = 配置里带检查点、网格 token 行来自检查点（训练过）的起点
-    assert TE.START_ONLY_KINDS == ("base_warmup", "e3b") == tuple(
+    assert TE.START_ONLY_KINDS == ("base_warmup", "e3b_c3", "c3_warmup", "e3b") == tuple(  # DEV-0043：v3 的两个新起点
         k for k in STARTS if CFG.start(k)["checkpoint"] and CFG.start(k)["grid_tokens"] == "from_checkpoint")
     assert TE.START_ONLY_TAG == "n0" and TrainSet.build(CFG, 10, None, 0).tag == f"n{10}"  # 与数据量档同一种标记、同一层
     assert TE.model_dir(tmp_path, "e3b", KEY, TE.START_ONLY_TAG, 2) == tmp_path / "trained" / "e3b" / KEY / "n0" / "seed2"
@@ -241,7 +244,7 @@ def test_start_only_equals_identity_e5_lora(sharp, key, tmp_path):
     ev = _script("eval_e5_trained")
     a, b = tmp_path / "a", tmp_path / "b"
     common = ["--task", "a", "b", "c", "e", "--limit", "2"]
-    assert ev.main(["--tiny", "--checkpoint", str(final), "--model", key, "--out", str(a), *common]) == 0
+    assert ev.main(["--tiny", "--checkpoint", str(final), "--model", key, "--out", str(a), *RESTRICTED, *common]) == 0
     assert ev.main(_so_args(ck, b, key=key, extra=tuple(common))) == 0
     ma, mb = _mdir(a, key=key, tag="n20"), _mdir(b, key=key)
     assert json.loads((ma / "merge_check.json").read_text())["pass"] is True  # 训练后评测：E5 LoRA 合并前后的核对照做
@@ -272,7 +275,8 @@ def test_start_only_equals_identity_e5_lora(sharp, key, tmp_path):
         pert = tmp_path / "e5p" / "ckpt" / "final"
         _identity_e5_checkpoint(ck, key, pert, perturb=0.02)
         c = tmp_path / "c"
-        assert ev.main(["--tiny", "--checkpoint", str(pert), "--model", key, "--out", str(c), "--task", "a", "c", "--limit", "2"]) == 0
+        assert ev.main(["--tiny", "--checkpoint", str(pert), "--model", key, "--out", str(c), *RESTRICTED, "--task", "a", "c",
+                        "--limit", "2"]) == 0
         assert any((_mdir(c, key=key, tag="n20") / task / "predictions.jsonl").read_bytes() !=
                    (mb / task / "predictions.jsonl").read_bytes() for task in ("rotation3d", "occlusion"))
 
@@ -284,7 +288,7 @@ def test_start_only_equals_identity_e5_lora(sharp, key, tmp_path):
 
 def test_real_starts_outputs_and_layouts(real_starts, tmp_path):
     ev = _script("eval_e5_trained")
-    for init in TE.START_ONLY_KINDS:
+    for init in ("base_warmup", "e3b"):  # v3 的 e3b_c3、c3_warmup 见 tests/test_e5_v3.py
         ck = real_starts[init]
         out, moved = tmp_path / f"o_{init}", tmp_path / f"m_{init}"
         assert ev.main(_so_args(ck, out, init=init, extra=("--limit", "2"))) == 0
@@ -326,7 +330,7 @@ def test_real_starts_outputs_and_layouts(real_starts, tmp_path):
         # 两个真起点也与 E5 LoRA 为恒等的训练后评测一致：权重逐位相同，predictions 逐字节相同
         final = tmp_path / f"e5_{init}" / "ckpt" / "final"
         _identity_e5_checkpoint(ck, KEY, final, kind=init)
-        assert ev.main(["--tiny", "--checkpoint", str(final), "--model", KEY, "--out", str(out), "--task", "a", "c",
+        assert ev.main(["--tiny", "--checkpoint", str(final), "--model", KEY, "--out", str(out), *RESTRICTED, "--task", "a", "c",
                         "--limit", "2"]) == 0
         for task in ("rotation3d", "occlusion"):
             assert (_mdir(out, init, tag="n20") / task / "predictions.jsonl").read_bytes() == \
@@ -437,14 +441,14 @@ def test_checkpoint_mode_identical_to_a8b0e12(sharp, tmp_path, capsys):
     old_script.STK, old_script.TE = old_stack, old_te
     out = tmp_path / "t"
     assert _script("train_e5").main(["--tiny", "--init", "e3b", "--start-checkpoint", str(sharp[KEY]), "--model", KEY,
-                                     "--n-train", "10", "--seed", "0", "--out", str(out)]) == 0
+                                     "--n-train", "10", "--seed", "0", "--out", str(out), *RESTRICTED]) == 0
     final = out / "train" / "e3b" / KEY / "n10" / "seed0" / "ckpt" / "final"
     assert json.loads((final / "e5_stack.json").read_text())["selection"]["selected_step"] in (2, 4, 6)
     capsys.readouterr()
     outs, printed = [], []
-    for k, mod in enumerate((old_script, _script("eval_e5_trained"))):
+    for k, (mod, extra) in enumerate(((old_script, ()), (_script("eval_e5_trained"), RESTRICTED))):
         o = tmp_path / f"o{k}"
-        assert mod.main(["--tiny", "--checkpoint", str(final), "--model", KEY, "--out", str(o), "--limit", "2"]) == 0
+        assert mod.main(["--tiny", "--checkpoint", str(final), "--model", KEY, "--out", str(o), "--limit", "2", *extra]) == 0
         printed.append(capsys.readouterr().out)
         outs.append(_mdir(o, tag="n10"))
     assert printed[0] == printed[1] and printed[0].count("\n") == len(E5_TASKS)

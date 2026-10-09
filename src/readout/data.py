@@ -15,6 +15,13 @@ GRID_TASKS 相同）、semseg 2、normals 3。所以 mix.weights = {refseg: 1, d
 
 **一条样本**：原图（RGB uint8）+ 指令（configs 的 tasks.<任务>.instruction_template；指令在前）+ 128 × 128 的目标（src/readout/targets）。
 E3a 不做数据增强，样本只由 (种子, k) 决定。
+
+**E3a+C3 的两条流**（MixedSchedule、MixedBuilder；DEV-0044，配置的 mixed 节）：第 t 步 = C3 种子 s 的样本流
+（src/e3/data.Schedule(text_cfg, supervision = text, batch_size = per_step.text)）的 step_plans(t)，接着 E3a full 种子 s 的样本流
+（本模块的 Schedule(batch_size = per_step.dense)）的 step_plans(t)。两者的 plan(k) 都只由 (种子, k) 决定、与 batch_size 无关，所以文本流
+第 t 步就是 C3 运行的第 8t … 8t + 7 个槽位，稠密流就是 E3a full 运行的第 8t … 8t + 7 个槽位。文本样本由 src/e3/data.ExampleBuilder
+（supervision = text，C3 的构造，原样调用）构造，训练池是本模块加载的 refseg、depth 两个池（与 C3 同一个加载函数）；稠密样本由本模块的
+ExampleBuilder 构造。样本属于哪条流由 stream_of(plan) 判定：src/e3/data.SlotPlan（kind = text）是文本流，本模块的 SlotPlan 是稠密流。
 """
 
 from __future__ import annotations
@@ -28,7 +35,8 @@ import numpy as np
 from src.data import train_loaders as TL
 from src.data.records import LoadResult, Sample
 from src.e3 import data as E3D
-from src.readout.config import E3aConfig
+from src.e3.config import E3Config
+from src.readout.config import MIXED_STREAMS, TEXT_SUPERVISION, E3aConfig
 from src.readout.model import TASKS
 from src.readout.targets import DenseTarget, depth_target, normals_target, refseg_target, semseg_target
 
@@ -258,18 +266,91 @@ class ExampleBuilder:
                        sample.image_keys[0] if sample.image_keys else sample.id, info=dict(target.info))
 
 
+# ---------------------------------------------------------------------------
+# E3a+C3 的两条流（模块说明）
+# ---------------------------------------------------------------------------
+
+
+def stream_of(plan: Any) -> str:
+    """E3a+C3 里样本属于哪条流：src/e3/data.SlotPlan（C3，kind = text）是 text，本模块的 SlotPlan 是 dense。"""
+    if isinstance(plan, E3D.SlotPlan):
+        if plan.kind != TEXT_SUPERVISION:
+            raise ValueError(f"文本流的样本 kind 应为 {TEXT_SUPERVISION!r}，收到 {plan.kind!r}")
+        return "text"
+    if isinstance(plan, SlotPlan):
+        return "dense"
+    raise TypeError(f"不认识的样本计划 {type(plan).__name__}")
+
+
+def text_pools(pools: Mapping[str, Sequence[Sample]], text_cfg: E3Config) -> dict[str, list[Sample]]:
+    """文本流（C3）用的训练池：E3a 已加载的、C3 混合里的那几个任务（refseg、depth；与 C3 同一个加载函数，配置核对见
+    src/readout/config._check_mixed_compat）。"""
+    missing = [t for t in text_cfg.tasks if t not in pools]
+    if missing:
+        raise ValueError(f"文本流要的训练池 {missing} 没有加载")
+    return {t: list(pools[t]) for t in text_cfg.tasks}
+
+
+class MixedSchedule:
+    """E3a+C3 的样本日程（模块说明）：第 t 步 = 各条流（按 order）的 step_plans(t) 依次拼接。"""
+
+    def __init__(self, pools: Mapping[str, Sequence[Sample]], cfg: E3aConfig, text_cfg: E3Config, *, seed: int,
+                 per_step: Mapping[str, int], order: Sequence[str] = MIXED_STREAMS) -> None:
+        if sorted(order) != sorted(MIXED_STREAMS) or set(per_step) != set(MIXED_STREAMS):
+            raise ValueError(f"E3a+C3 的样本流必须恰好是 {MIXED_STREAMS}，收到 order {list(order)}、per_step {dict(per_step)}")
+        self.order = tuple(order)
+        self.per_step = {s: int(per_step[s]) for s in MIXED_STREAMS}
+        self.streams: dict[str, Any] = {
+            "text": E3D.Schedule(text_pools(pools, text_cfg), text_cfg, seed=seed, supervision=TEXT_SUPERVISION,
+                                 batch_size=self.per_step["text"]),
+            "dense": Schedule(pools, cfg, seed=seed, batch_size=self.per_step["dense"]),
+        }
+        self.batch_size = sum(self.per_step.values())
+
+    def step_plans(self, step: int) -> list[Any]:
+        return [p for s in self.order for p in self.streams[s].step_plans(step)]
+
+
+def c3_text_builder(text_cfg: E3Config, pools: Mapping[str, Sequence[Sample]], *, seed: int, adapter: Any,
+                    family: str) -> E3D.ExampleBuilder:
+    """文本流的样本构造：src/e3/data.ExampleBuilder(supervision = text)，参数与 C3 的训练（src/e3/train.run_training）逐项相同：
+    encode = 适配器 tokenizer 的无特殊 token 编码，停止 token = 本家族的回合结束 token，框用适配器的 format_boxes。"""
+    from src.e3.tokens import family_stop_id
+
+    return E3D.ExampleBuilder(text_cfg, text_pools(pools, text_cfg), seed=seed, supervision=TEXT_SUPERVISION,
+                              stop_id=family_stop_id(adapter),
+                              encode=lambda s: list(adapter.tokenizer(s, add_special_tokens=False)["input_ids"]),
+                              family=family, format_boxes=adapter.format_boxes)
+
+
+class MixedBuilder:
+    """plan → 样本：文本流交给 C3 的构造（E3D.Example），稠密流交给 E3a 的构造（本模块的 Example）。"""
+
+    def __init__(self, dense: ExampleBuilder, text: E3D.ExampleBuilder) -> None:
+        self.dense = dense
+        self.text = text
+
+    def build(self, plan: Any) -> Any:
+        return self.text.build(plan) if stream_of(plan) == "text" else self.dense.build(plan)
+
+
 __all__ = [
     "E3aPaths",
     "Example",
     "ExampleBuilder",
     "FIXTURE_EXCLUSIONS",
+    "MixedBuilder",
+    "MixedSchedule",
     "Schedule",
     "SlotPlan",
     "TASK_INDEX",
+    "c3_text_builder",
     "check_class_names",
     "load_pool",
     "mix_cycle",
     "parse_object_info",
     "pool_position",
     "sample_target",
+    "stream_of",
+    "text_pools",
 ]

@@ -26,6 +26,9 @@ manifest，起点有检查点时 extra.safetensors 里存起点 manifest 的 sha
   latest（评测步一律存 latest，续跑状态里带全部 val 历史），再删掉别的候选。续跑时历史以 latest 的续跑状态为准，之后的候选作废。
   训练完成后选中的候选原样拷成 <ckpt>/final/model/；train_summary.json 与 e5_stack.json 记 selection（规则、选中的步、分数、val 曲线）。
   其余档照旧取最后一步。
+- val 评测的解码方式（DEV-0043；run_cfg 的 selection.decode，来自配置的 decode 一节或 scripts/train_e5.py --decode）：structured =
+  结构强制（v3 的正式口径，D83-3），selection 的记录（train_summary.json、e5_stack.json）另记 decode；restricted 时没有这个键，输出与
+  改动前逐字节相同。解码方式在运行身份里（training.selection 与 selection 两处），续跑时不同就拒绝混写。
 - 配种子：起点检查点训练叶目录 config.yaml 的 seed 必须等于 --seed（src/e5/stack.check_seed_pairing；scripts/train_e5.py
   --allow-seed-mismatch 放开），记录进运行身份的 seed_pairing。
 
@@ -74,7 +77,7 @@ from src.e3.train import (
 from src.e3.train import _append, _atomic_write_text, _dir_bytes, _identity, _jsonl, _read_log, _sync
 from src.e5 import stack as STK
 from src.e5.protocol import E5_TASKS, TASK_LETTER
-from src.e5.token_grid import E5Tokens, PromptFormat
+from src.e5.token_grid import E5Tokens, PromptFormat, decode_record
 from src.e5.train_config import E5TrainConfig
 from src.e5 import val_select as VS
 from src.e5.train_data import ExampleBuilder, Schedule, TrainSet
@@ -204,7 +207,8 @@ def selection_text(sel: Mapping[str, Any] | None) -> str:
     if not sel:
         return "- 检查点的选择：取最后一步（这一档不做 val 选择）"
     curve = "，".join(f"{h['step']}: {h['score']:.4f}" for h in sel["history"])
-    return (f"- 检查点的选择（val 划分，每类 {sel['n_per_task']} 条，每 {sel['val_every']} 步一次；规则 {sel['rule']}）：选中第 "
+    dec = "；结构强制解码（D83-3）" if (sel.get("decode") or {}).get("mode") == "structured" else ""  # DEV-0043
+    return (f"- 检查点的选择（val 划分，每类 {sel['n_per_task']} 条，每 {sel['val_every']} 步一次；规则 {sel['rule']}{dec}）：选中第 "
             f"{sel['selected_step']} 步（分数 {sel['selected_score']:.4f}）；val 曲线 {curve}（全部读数在 {sel['val_log']}）")
 
 
@@ -498,6 +502,9 @@ def run_e5_training(adapter: Any, cfg: E5TrainConfig, spec: RunSpec, run_cfg: Ma
                          "n_per_task": selector.n_per_task, "n_evals": len(history), "val_log": VS.VAL_LOG,
                          "history": [{"step": int(h["step"]), "score": float(h["score"]),
                                       "by_task": {t: v["h"] for t, v in h["by_task"].items()}} for h in history]}
+            dec = decode_record(selector.decode)
+            if dec is not None:  # DEV-0043：只在结构强制时加（restricted 与改动前逐字节相同）
+                selection["decode"] = dec
         tlog = _read_log(leaf / TRAIN_LOG)
         stack_doc = {"model_dir": MODEL_SUB, "start": spec.start.record(), "fingerprint": stack_rec["fingerprint"],
                      "model": ident["model"], "seed": spec.seed, "tag": spec.trainset.tag, "data": spec.trainset.identity(),

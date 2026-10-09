@@ -1,12 +1,20 @@
 #!/usr/bin/env python
-"""E5 训练后系统的评测入口（DEV-0037 §4；简报 §8.8）：一个 E5 检查点（起点 + E5 LoRA）→ E5 的 test 划分上单轮受限解码，用零样本的
+"""E5 训练后系统的评测入口（DEV-0037 §4；简报 §8.8）：一个 E5 检查点（起点 + E5 LoRA）→ E5 的 test 划分上单轮解码，用零样本的
 同一套评分与判据（D59-4、D72-1）。规则见 src/e5/trained_eval.py。
+
+解码（DEV-0043；E5 预注册 §8a 第 5 项，D83-3）：默认取 configs/e5_train.json 的 decode 一节，v3 的正式值是结构强制（structured：每个格子
+位置只允许本任务的值 token，行末只允许行分隔，最后只允许停止 token）；结果写进 <任务>[__dev]__structured/，运行身份与 metrics 记 decode。
+--decode restricted 作诊断（单轮受限解码，v2 的口径）：结果写进 <任务>[__dev]/，输出与改动前逐字节相同。E5 LoRA 合并前后的核对与解码
+方式无关，两种解码共用 <…>/seed<k>/merge_check.json。
+v3 主比较的起点（D83-5）：base_warmup、e3b_c3、c3_warmup。e3b、e3a、base 的起点（以及从它们训练的 E5 检查点）照常能评，不属于 v3 主比较，
+运行时在 stderr 提示。
 
 服务器（B200；可比的评测一律在 B200 上做）：
     python scripts/eval_e5_trained.py --checkpoint <E5 训练叶目录>/ckpt/final --model qwen3.5-2b \\
         --out experiments/E5/0046_e5_main_eval [--task all] [--subset eval|dev] [--resume] [--limit N]
     # 结果写进 <out>/trained/<起点>/<模型>/<n 标记>/seed<k>/<任务>[__dev]/；评测前的合并核对写进 <…>/seed<k>/merge_check.json
     # 起点检查点按 <ckpt>/final/e5_stack.json 记下的路径读；搬过家时用 --start-checkpoint 指新路径（manifest 的 sha256 必须相同）
+    # 结构强制（默认）的结果在 <任务>[__dev]__structured/；--decode restricted 的在 <任务>[__dev]/
 开发机彩排（小型随机模型、CPU fp32；d 的数据只在规范平台上生成，非规范平台上只允许 --tiny）：
     python scripts/eval_e5_trained.py --tiny --checkpoint <dir>/train/base/qwen3.5-0.8b/n10/seed0/ckpt/final --model qwen3.5-0.8b \\
         --out <dir> --limit 2
@@ -19,11 +27,12 @@ config.yaml 的 checkpoint.selection。test 只在这个检查点上评一次。
 真模型给别的值要加 --allow-unfrozen-batch。
 
 只评起点（DEV-0040，D81-1；N = 0：起点检查点不经 E5 训练，直接评；与 --checkpoint 二选一；规则见 src/e5/trained_eval.py 的模块说明）：
-    python scripts/eval_e5_trained.py --start-only --init {base_warmup,e3b} --start-checkpoint <起点训练叶目录>/ckpt/final/model \\
+    python scripts/eval_e5_trained.py --start-only --init {base_warmup,e3b_c3,c3_warmup} --start-checkpoint <起点训练叶目录>/ckpt/final/model \\
         --model qwen3.5-2b --seed <k> --data-root $PROJ/data --out experiments/E5/<NNNN_slug> [--task all] [--subset eval|dev] [--resume] [--limit N]
-    # 结果写进 <out>/trained/<起点>/<模型>/n0/seed<k>/<任务>[__dev]/；起点检查点的合并核对与权重指纹写进 <out>/train/<起点>/<模型>/start_checks/
-    #（与 scripts/train_e5.py 开训前的核对同一个位置，已通过的复用）
-    # --init 只收 base_warmup、e3b（e3a 的网格 token 行没训练过，base 没有起点检查点）；--seed 必须等于起点训练叶目录 config.yaml 的 seed
+    # 结果写进 <out>/trained/<起点>/<模型>/n0/seed<k>/<任务>[__dev]__structured/（--decode restricted：<任务>[__dev]/）；起点检查点的合并
+    # 核对与权重指纹写进 <out>/train/<起点>/<模型>/start_checks/（与 scripts/train_e5.py 开训前的核对同一个位置，已通过的复用）
+    # --init 只收网格 token 行训练过的起点：v3 的 base_warmup、e3b_c3、c3_warmup（DEV-0043），另保留 e3b（不属于 v3 主比较，消融的 N = 0
+    # 读数）；e3a 的网格 token 行没训练过，base 没有起点检查点。--seed 必须等于起点训练叶目录 config.yaml 的 seed
     #（同 train_e5 的配种子；--allow-seed-mismatch 放开，记进运行身份）。B200 的训练队列把最终检查点按叶目录结构搬到 $CK_FINAL/<叶>/ckpt/final，
     # 旁边放 config.yaml，给 <新位置>/ckpt/final/model 即可
     # --data-root：起点检查点的合并核对用 E1 的 grid16 开发子集（默认环境变量 VISINT_DATA_ROOT；--tiny 时取 fixture）
@@ -58,7 +67,7 @@ from src.e3.tokens import attach_vocab  # noqa: E402
 from src.e5 import stack as STK  # noqa: E402
 from src.e5 import trained_eval as TE  # noqa: E402
 from src.e5.protocol import E5_TASKS, SUBSETS  # noqa: E402
-from src.e5.token_grid import E5Tokens  # noqa: E402
+from src.e5.token_grid import DECODE_MODES, STRUCTURED, E5Tokens  # noqa: E402
 from src.e5.train_config import CONFIG_PATH, STARTS, load_train_config  # noqa: E402
 from src.runlog import sha256_file  # noqa: E402
 from src.synth.seeding import canonical_task  # noqa: E402
@@ -73,7 +82,8 @@ def parse_args(argv=None):
     p.add_argument("--start-only", action="store_true",
                    help="只评起点（N = 0，DEV-0040）：--start-checkpoint 给的起点检查点不经 E5 训练，直接评；与 --checkpoint 二选一")
     p.add_argument("--init", choices=STARTS,
-                   help=f"--start-only 的起点，只收 {TE.START_ONLY_KINDS}（e3a 的网格 token 行没训练过，base 没有起点检查点）")
+                   help=f"--start-only 的起点，只收 {TE.START_ONLY_KINDS}（v3 主比较是 base_warmup、e3b_c3、c3_warmup；e3a 的网格 token "
+                        "行没训练过，base 没有起点检查点）")
     p.add_argument("--seed", type=int, help="--start-only：种子（在配置的 training.seeds 里，且等于起点训练叶目录 config.yaml 的 seed）")
     p.add_argument("--allow-seed-mismatch", action="store_true",
                    help="--start-only：起点检查点的种子与 --seed 不同（或核对不了）时也评（配种子放开，记进运行身份）")
@@ -91,6 +101,8 @@ def parse_args(argv=None):
     p.add_argument("--allow-unfrozen-batch", action="store_true", help="真模型允许配置以外的批大小（运行身份里照记）")
     p.add_argument("--merge-check-n-per-task", type=int, help="合并核对每类的 val 样本数（默认配置的 eval.merge_check.n_per_task）")
     p.add_argument("--n-resamples", type=int, help="bootstrap 次数（默认 src.constants.BOOTSTRAP_N_RESAMPLES；--tiny 取配置的 eval.tiny）")
+    p.add_argument("--decode", choices=DECODE_MODES,
+                   help="解码方式（默认取配置的 decode.mode：v3 是 structured，D83-3）；restricted 作诊断（与改动前逐字节相同）")
     p.add_argument("--tiny", action="store_true", help="小型随机模型 + CPU fp32（开发机彩排）")
     p.add_argument("--config", default=str(CONFIG_PATH), help="E5 训练配置（默认 configs/e5_train.json，读其中的 eval 节）")
     p.add_argument("--device", help="默认：真模型 cuda，--tiny 时 cpu")
@@ -150,6 +162,18 @@ def eval_settings(a, cfg):
     return e, t, bs, subset, n_resamples
 
 
+def decode_prefix(prefix: str, decode: str) -> str:
+    """打印行的前缀：结构强制时加 decode=structured；restricted 与改动前相同。"""
+    return prefix + (f" decode={decode}" if decode == STRUCTURED else "")
+
+
+def v3_note(cfg, kind: str) -> None:
+    """起点不属于 E5 v3 主比较时在 stderr 提示（D83-5；配置的 starts.<起点>.in_v3）。"""
+    if not cfg.in_v3(kind):
+        print(f"注意：起点 {kind} 不属于 E5 v3 主比较（D83-5；E5 预注册 §8a：v3 的起点是 "
+              f"{'、'.join(k for k in STARTS if cfg.in_v3(k))}）", file=sys.stderr)
+
+
 def report(prefix: str, task: str, subset: str, m) -> None:
     """一个任务跑完后打印的一行（标题读数、解析失败率、imagining）。"""
     h = m["headline"]
@@ -176,6 +200,8 @@ def cmd_run(a, argv) -> int:
         raise ValueError(f"E5 检查点训练时的 E3b 配置 sha256 {stack['config']['e3b_config']['sha256'][:16]}… 与本次的 "
                          f"{cfg.e3b.sha256[:16]}… 不同：词表与允许集合要与训练时相同")
     start_kind = stack["start"]["kind"]
+    decode = cfg.decode_mode(a.decode)
+    v3_note(cfg, start_kind)
     tag = str(stack["tag"])
     seed = int(stack["seed"])
     data_seed = int(stack["data"]["data_seed"])
@@ -207,6 +233,8 @@ def cmd_run(a, argv) -> int:
         sel = stack["selection"]
         checkpoint["selection"] = {k: sel[k] for k in ("rule", "split", "selected_step", "selected_score", "steps", "val_every",
                                                        "n_per_task")}
+        if sel.get("decode") is not None:  # DEV-0043：val 选择用结构强制时记下（restricted 选的检查点与原来相同）
+            checkpoint["selection"]["decode"] = sel["decode"]
     extra = {"checkpoint_dir": str(fd), "start_checkpoint": None if st.start_checkpoint is None else str(st.start_checkpoint),
              "merge_check": mc, "fingerprint": st.fingerprint,
              "gpu": torch.cuda.get_device_name(0) if a.device.startswith("cuda") and torch.cuda.is_available() else None}
@@ -214,10 +242,10 @@ def cmd_run(a, argv) -> int:
         npb = int(a.n_per_bin or e["n_per_bin"][task])
         spec = TE.EvalSpec(start=start_kind, model_key=a.model, tag=tag, seed=seed, task=task, subset=subset, n_per_bin=npb,
                            n_resamples=n_resamples, batch_size=bs, tiny=a.tiny, dtype=a.dtype, limit=a.limit,
-                           data_seed=data_seed)
+                           data_seed=data_seed, decode=decode)
         m = TE.run_task(ad, e5tok, prompt, cfg, spec, a.out, checkpoint=checkpoint, n=n, resume=a.resume, argv=argv,
                         run_extra=extra)
-        report(f"trained {start_kind} {a.model} {tag} seed{seed}", task, subset, m)
+        report(decode_prefix(f"trained {start_kind} {a.model} {tag} seed{seed}", decode), task, subset, m)
     return 0
 
 
@@ -227,6 +255,8 @@ def cmd_start_only(a, argv) -> int:
     cfg = load_train_config(a.config)
     e, _, bs, subset, n_resamples = eval_settings(a, cfg)
     seed = int(a.seed)
+    decode = cfg.decode_mode(a.decode)
+    v3_note(cfg, a.init)
     if seed not in cfg.seeds:  # 同 scripts/train_e5.py：n0 与各数据量档同一组种子
         raise ValueError(f"--seed {seed} 不在配置的 training.seeds {list(cfg.seeds)} 里")
     start = STK.resolve_start(cfg, a.init, Path(a.start_checkpoint).resolve(), model_key=a.model, tiny=a.tiny)
@@ -263,10 +293,10 @@ def cmd_start_only(a, argv) -> int:
         npb = int(a.n_per_bin or e["n_per_bin"][task])
         spec = TE.EvalSpec(start=start.kind, model_key=a.model, tag=TE.START_ONLY_TAG, seed=seed, task=task, subset=subset,
                            n_per_bin=npb, n_resamples=n_resamples, batch_size=bs, tiny=a.tiny, dtype=a.dtype, limit=a.limit,
-                           start_only=True)
+                           start_only=True, decode=decode)
         m = TE.run_task(ad, e5tok, prompt, cfg, spec, a.out, checkpoint=checkpoint, n=n, resume=a.resume, argv=argv,
                         run_extra=extra)
-        report(f"start-only {start.kind} {a.model} {TE.START_ONLY_TAG} seed{seed}", task, subset, m)
+        report(decode_prefix(f"start-only {start.kind} {a.model} {TE.START_ONLY_TAG} seed{seed}", decode), task, subset, m)
     return 0
 
 

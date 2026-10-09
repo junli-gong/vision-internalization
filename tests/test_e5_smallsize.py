@@ -6,6 +6,8 @@
   划分核对处记下全部调用），val 的入口断言拒绝 test；规则 mean_headline_v1 的算法；
 - 配种子：起点检查点的种子与 --seed 不同时拒绝训练，--allow-seed-mismatch 放开并记进运行身份；核对不了（不在训练叶目录下）也拒绝；
 - 续跑：带 val 选择的训练中断（停在两次评测之间、停在评测那一步、残留一个没被 latest 记下的候选）后 --resume，输出与一次跑完逐字节相同。
+DEV-0043 起 val 选择默认用结构强制解码；本文件测的是选择与续跑的流程，带 val 选择的档一律加 --decode restricted（快；受限解码的输出与改动前
+逐字节相同）。结构强制下的 val 选择见 tests/test_e5_v3.py。
 """
 
 from __future__ import annotations
@@ -49,8 +51,9 @@ def _leaf(out: Path, tag: str = "n10", seed: int = 0, init: str = "base") -> Pat
 
 
 def _train(out: Path, *extra: str, n: int = 10, seed: int = 0, init: str = "base") -> int:
+    dec = ("--decode", "restricted") if CFG.selection(n, True) is not None else ()  # DEV-0043（模块说明）；没有 val 选择的档不能给
     return _script("train_e5").main(["--tiny", "--init", init, "--model", KEY, "--n-train", str(n), "--seed", str(seed),
-                                     "--out", str(out), *extra])
+                                     "--out", str(out), *dec, *extra])
 
 
 # ---------------------------------------------------------------------------

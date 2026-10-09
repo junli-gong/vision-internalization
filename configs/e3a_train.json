@@ -1,6 +1,7 @@
 {
  "schema": 1,
- "version": "e3a-train-v1",
+ "version": "e3a-train-v2",
+ "version_note": "v2（DEV-0044）：加 mixed 节（E3a+C3 混合训练，D83-2；与 E3b+C3 的 mixed 节对称，D85），其余条目逐项同 v1（sha256 28be66e5…，D71；E3 预注册 §9 的正式取值；tests 钉住）",
  "framework": "src/readout（DEV-0034 第一部分：查询 token、逐层加权混合、共享薄解码器、开放词汇与线性头、C1/C2、泄漏检查、训练与评测）；规则见 src/readout/__init__.py",
  "status": "草稿，未冻结。结构与超参取简报的默认值或 E3b / E2 的同类取值（各节 basis）；按简报 §9，读出结构（在'薄'的约束内）、查询数、混合方式、数据混合与损失加权属于自由探索，正式取值由 E3 预注册冻结（D66-4）",
  "variants": {
@@ -167,6 +168,16 @@
   "score_workers": 16,
   "score_workers_basis": "评分（上采样、Boundary IoU、指标）在 CPU 上，用这么多个进程并行（spawn）；0 = 在主进程里串行。逐样本的结果与进程数无关（tests 钉住），所以不进运行身份",
   "tiny": {"batch_size": 2, "merge_check_n": 3, "score_workers": 0}
+ },
+ "mixed": {
+  "version": "e3a-mixed-v1",
+  "text_stream": {"config": "configs/e3b_train.json", "supervision": "text", "variant": "c3"},
+  "per_step": {"text": 8, "dense": 8},
+  "order": ["text", "dense"],
+  "loss_weights": {"text": 1, "dense": 1},
+  "steps": 8000,
+  "tiny": {"per_step": {"text": 2, "dense": 2}, "steps": 8},
+  "basis": "E3a+C3（D83-2，负责人 2026-10-08 的答复；D84、D85；DEV-0044）：scripts/train_e3a.py --variant full --with-text，输出变体 e3a_c3；只在 2B 上做 3 个种子，用于 E3 预注册 §10a、§12 的机制比较（E3b+C3 相对 C3 的提升是否大于 E3a+C3 相对 C3 的）。做法与 E3b+C3（configs/e3b_train.json 的 mixed 节）对称。两条样本流，第 t 步（t = 0 … steps − 1）取：文本 per_step.text 条 = C3 种子 s 的样本流（text_stream.config 按 src/e3/data.Schedule(supervision = text) 原样展开，与 E3b+C3 的文本流同一个函数）第 8t … 8t + 7 个槽位；稠密 per_step.dense 条 = E3a full 种子 s 的样本流（src/readout/data.Schedule，四个任务照 mix.weights）第 8t … 8t + 7 个槽位。steps = 8000 的来历：E3a full、C3 各自 steps（4000）× 每步 16 条 = 64,000 条 = 8000 × 8，所以全程的稠密样本恰好是 E3a full 种子 s 运行的 64,000 条、文本样本恰好是 C3 种子 s 运行的 64,000 条，顺序相同（load_config 核对 steps × per_step.<流> = 各自的 steps × 每步条数，tiny 节同理）。文本样本的构造原样调用 src/e3/data.ExampleBuilder(supervision = text)（C3 的构造，只读复用，不另写）；训练池用 E3a 加载的 refseg、depth 两个池：与 C3 同一个加载函数（src/e3/data.load_pool）、同一个根与剔除清单，load_config 核对两份配置的 tasks.refseg.datasets 相同、C3 的去重名单是 E3a 的子集、种子与思考开关相容。同一条样本会以两种监督各出现一次：两条流用同一个训练池、同一个置换（任务号 refseg 0、depth 1 两边相同），但 C3 是两个任务交替、E3a 是四个任务交替，任务内的序号每步分别前进 4 与 2，所以第 0 步里同一批样本（refseg、depth 各前 2 条）以两种监督各出现一次；之后同一条样本先在文本流里出现，约 2 倍步数之后在稠密流里再出现（跨 epoch、同图的不同指代句另有巧合）。不另换数据种子去避开它（换了就不再与 C3、E3a full 逐个相同）。微批：每步 16 条 = per_step.text + per_step.dense = batch.micro_batch_size × batch.grad_accum_steps；每个微批只含一种监督，order：文本在前（每 micro_batch_size 条一批，2 个微批；与 C3 的微批逐个相同：C3 每步 16 条，微批边界 16t′、16t′ + 4、… 也落在 4 的倍数上），稠密在后（E3a 的规则：语义分割单独成批，其余按原顺序每 micro_batch_size 条一批；四个任务等权时每步恒为 [语义分割 × 2]、[指代分割、深度、法向、指代分割]、[深度、法向] 3 个微批，运行身份的 training.mixed.micro_batches）。理由：两种前向不同（文本前向没有查询 token、只取最后一层目标位置的隐藏状态；稠密前向带查询 token、取全部层查询位置的隐藏状态），损失各自归一，每次 backward 只对应一种归一化。损失：每步 = loss_weights.text × L_text + loss_weights.dense × L_dense，即 1 : 1，事先固定（D83-2：不调；load_config 只认 1 : 1）。L_dense 同 E3a（loss 节：Σ task_weights[任务] × 逐样本损失 ÷ 这一步的稠密样本数；各任务的权重同 E3a）；L_text 同 C3（configs/e3b_train.json 的 loss 节：一步之内全部文本监督 token 的平均；逐个任务的 chunked_lm_loss 全词表求和，原样调用 src/e3/train.Trainer._task_loss 的文本分支）。文本样本不插查询 token（build_inputs 之前临时取消查询登记、之后登记回来，与 C3 的输入张量逐个相同），只经过语言损失、不经过读出；稠密样本照 E3a 原样（读出结构不改，D84）。LoRA、查询嵌入、逐层混合、解码器与各头、优化器的四个参数组与学习率都同 E3a full（optim 节），warmup_ratio 3% 加余弦按 8000 步排（warmup 240 步）：日程长度是 E3a full、C3 的 2 倍，照实写进运行身份（training.mixed.schedule_length_ratio）与 README。检查点同 E3a full（final/model + final/readout；readout.json 的结构变体是 full）：eval_e3a --variant full --checkpoint <final> 与 run_e1 --checkpoint <final/model> 都能直接读。与 C3 的模型结构差别只在 E3a 的查询占位符：它占一个嵌入行（不共享时连同 lm_head 的同一行），注入时按基础词表行的均值初始化、不训练（前向时查询位置的输入一律由查询嵌入替换），所以文本损失的全词表 softmax 里这一行是均值，C3 里是 base 的原值；此外没有新增 token（tests 钉住）。训练日志：loss = 两项之和（已乘权重）；loss_by_task 的 text、dense 两项是 L_text、L_dense，text/<任务> 是分任务的逐 token 平均、dense/<任务> 是分任务的逐样本平均（同 E3a 的 loss_by_task）；n_by_task 的键同样分流；by_supervision 记两种监督各自的样本数与 token 数（accounting.json 另有合计）"
  },
  "tiny": {
   "basis": "--tiny：小型随机模型 + CPU + fp32 + tests/fixtures 的小数据。只改下面这些规模参数（解码器的通道与残差块数也在其中，嵌入维度与输出分辨率不变），其余同正式配置",

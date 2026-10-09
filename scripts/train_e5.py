@@ -2,9 +2,14 @@
 """E5 主比较的训练入口（DEV-0037 §3；简报 §8.8）：一个起点 × 一个模型 × 一个数据量档（× 任务子集）× 一个种子。规则见 src/e5/train.py。
 
 运行（B200；--out 是本次运行的目录 experiments/E5/<NNNN_slug>；结果写进 <out>/train/<起点>/<模型>/<n 标记>/seed<k>/）：
-    python scripts/train_e5.py --init e3b --start-checkpoint <E3b 训练叶目录>/ckpt/final/model --model qwen3.5-2b \\
+    python scripts/train_e5.py --init e3b_c3 --start-checkpoint <E3b+C3 训练叶目录>/ckpt/final/model --model qwen3.5-2b \\
         --n-train 1000 --seed 0 --data-root $PROJ/data --out experiments/E5/0045_e5_main [--resume] [--stop-after-steps N]
-    # --init base_warmup：DEV-0035 的预热检查点（scripts/train_e3b.py --supervision warmup 的 ckpt/final/model）
+    # v3 主比较的三个起点（D83-5；E5 预注册 §8a）：
+    # --init e3b_c3：E3b+C3（scripts/train_e3b.py --supervision grid+text 的 ckpt/final/model；DEV-0042）
+    # --init c3_warmup：C3+预热（scripts/train_e3b.py --supervision warmup --start-checkpoint <C3> 的 ckpt/final/model；秩 64 的拼接 LoRA）
+    # --init base_warmup：DEV-0035 的预热检查点（scripts/train_e3b.py --supervision warmup 的 ckpt/final/model；参照）
+    # 不属于 v3 主比较、保留可用的起点（运行时在 stderr 提示）：
+    # --init e3b：E3b 检查点（scripts/train_e3b.py --supervision grid；v2 的主比较起点）
     # --init e3a：E3a 检查点（scripts/train_e3a.py --variant full 的 ckpt/final/model；先加上与 E3b 同一套网格 token 行）
     # --init base：基座，加网格 token 行，不预热（只作诊断；不给 --start-checkpoint）
     # --tasks a b c d：只用 a–d 训练（图像到文本的迁移，在 e 上测；每类条数与五类全训相同，叶目录 n<数据量>_abcd）
@@ -16,6 +21,9 @@ data.tiny.tiers；d 的数据只在规范平台上生成，非规范平台上只
 --n-train 必须是配置的数据量档之一（--tiny 时是 data.tiny.tiers 之一）；--seed 必须在配置的 training.seeds 里；--data-seed 默认等于 --seed。
 小档（DEV-0038，D77-3）：training.min_steps 所列的档（1K、4K；--tiny 时 10 条的档）步数 = max(按 epoch 的步数, 下限)，并在 val 划分上
 选检查点（selection 一节；src/e5/val_select.py），final/ 就是 val 上最好的那一步；16K、64K 照旧固定 epoch、取最后一步。
+val 评测的解码（DEV-0043，D83-3）：默认取配置的 decode 一节（v3 是结构强制，structured）；--decode restricted 作诊断（与改动前逐字节相同）。
+解码方式记进运行身份（training.selection.decode 与 selection.decode；restricted 时没有这个键），续跑时不同就拒绝混写。没有 val 选择的档
+（16K、64K、tiny 的 20 条）不解码，给 --decode 是用法错误（退出码 2）。
 配种子（D77-3）：起点检查点必须来自 E3 的同一个种子（它训练叶目录 config.yaml 的 seed = --seed），不符或核对不了就拒绝训练（退出码 2）；
 --allow-seed-mismatch 放开，记进运行身份（config.yaml 的 seed_pairing）。
 评测：scripts/eval_e5_trained.py --checkpoint <叶目录>/ckpt/final。
@@ -45,6 +53,7 @@ from src.adapters.factory import make_adapter  # noqa: E402
 from src.adapters.image_policy import parse_policy  # noqa: E402
 from src.e3.merge_check import MergeCheckFailed  # noqa: E402
 from src.e5 import stack as STK  # noqa: E402
+from src.e5.token_grid import DECODE_MODES  # noqa: E402
 from src.e5.train import RunSpec, run_e5_training  # noqa: E402
 from src.e5.train_config import CONFIG_PATH, STARTS, load_train_config, resolve_run  # noqa: E402
 from src.e5.train_data import TrainSet  # noqa: E402
@@ -55,7 +64,8 @@ RUN_DIR_NAME = re.compile(r"[0-9]{4}_[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--init", required=True, choices=STARTS, help="起点：base_warmup / e3b / e3a / base（诊断）")
+    p.add_argument("--init", required=True, choices=STARTS,
+                   help="起点：v3 主比较是 base_warmup / e3b_c3 / c3_warmup；e3b / e3a / base（诊断）保留，不属于 v3 主比较")
     p.add_argument("--start-checkpoint", help="起点检查点目录（<训练叶目录>/ckpt/final/model）；base 不给")
     p.add_argument("--model", required=True, help="注册键（必须与起点检查点 manifest 的构造方式相同）")
     p.add_argument("--n-train", type=int, required=True, help="数据量档（五类合计；配置的 data.tiers 之一）")
@@ -69,6 +79,8 @@ def parse_args(argv=None):
     p.add_argument("--ckpt-root", help="检查点的根目录（默认 <叶目录>/ckpt；检查点不入库）")
     p.add_argument("--stop-after-steps", type=int, help="本次只跑 N 步，写检查点后退出（下次 --resume）")
     p.add_argument("--keep-optimizer-state", action="store_true", help="训练完成后保留 <ckpt>/latest（默认删掉）")
+    p.add_argument("--decode", choices=DECODE_MODES,
+                   help="val 选择的解码方式（默认取配置的 decode.mode：v3 是 structured，D83-3）；restricted 作诊断。只用于有 val 选择的档")
     p.add_argument("--tiny", action="store_true", help="小型随机模型 + CPU + fp32（开发机彩排）")
     p.add_argument("--data-root", help="E1 的落地根（起点检查点的合并核对用；默认环境变量 VISINT_DATA_ROOT；--tiny 时取 fixture）")
     p.add_argument("--config", default=str(CONFIG_PATH), help="E5 训练配置（默认 configs/e5_train.json）")
@@ -120,6 +132,11 @@ def cmd_run(a, argv) -> int:
     tiers = cfg.tiers(a.tiny)
     if int(a.n_train) not in tiers:
         raise ValueError(f"--n-train {a.n_train} 不是配置的数据量档 {list(tiers)}" + ("（--tiny 用 data.tiny.tiers）" if a.tiny else ""))
+    if a.decode is not None and cfg.selection(int(a.n_train), a.tiny) is None:
+        raise UsageError(f"--decode 只用于有 val 选择的档（training.min_steps 所列）；--n-train {a.n_train} 不做 val 选择，不解码")
+    if not cfg.in_v3(a.init):
+        print(f"注意：起点 {a.init} 不属于 E5 v3 主比较（D83-5；E5 预注册 §8a：v3 的起点是 "
+              f"{'、'.join(k for k in STARTS if cfg.in_v3(k))}）", file=sys.stderr)
     ts = TrainSet.build(cfg, a.n_train, a.tasks, a.data_seed)
     start = STK.resolve_start(cfg, a.init, a.start_checkpoint and Path(a.start_checkpoint).resolve(), model_key=a.model,
                               tiny=a.tiny)
@@ -127,7 +144,7 @@ def cmd_run(a, argv) -> int:
     if pairing["status"] not in ("match", "not_applicable"):
         print(f"注意：配种子放开（{pairing['status']}：起点的种子 {pairing['start_seed']}，--seed {a.seed}），已记进运行身份",
               file=sys.stderr)
-    rc = resolve_run(cfg, n_train=int(a.n_train), n_examples=len(ts), tiny=a.tiny)
+    rc = resolve_run(cfg, n_train=int(a.n_train), n_examples=len(ts), tiny=a.tiny, decode=a.decode)
     entry, ad, dtype = build_adapter(a, cfg)
     spec = RunSpec(model_key=entry.key, family=entry.family, repo=entry.repo, revision=entry.revision,
                    adapter_model_key=str(getattr(ad, "model_key", entry.key)), tiny=a.tiny, image_policy=policy_spec(ad.image_policy),
@@ -147,11 +164,18 @@ def cmd_run(a, argv) -> int:
     return 0
 
 
+class UsageError(ValueError):
+    """命令行的组合不对，要读配置才判得出（退出码 2，不写 errors/）。"""
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     a = parse_args(argv)
     try:
         return cmd_run(a, argv)
+    except UsageError as e:
+        print(f"用法错误：{e}", file=sys.stderr)
+        return 2
     except Exception as e:  # noqa: BLE001 — 证据先落盘，再以非零码退出
         err_dir = Path(a.out) / "train" / a.init / a.model / "errors"
         err_dir.mkdir(parents=True, exist_ok=True)
