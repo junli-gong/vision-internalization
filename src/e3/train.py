@@ -52,6 +52,23 @@ src/e3/warmup.WarmupSource（纯文字，不给图像；不读训练池、没有
 （warmup.evaluate_heldout），读数逐行写进 warmup_eval.jsonl（只含由模型输出决定的量，CPU 上续跑与一次跑完逐字节相同；墙钟在
 logs/run_<k>.json 的 warmup_evals 与 accounting.json 的 warmup_eval_s）；格式错误率连续 consecutive 次低于阈值（warmup.StopRule）就
 停在这一步，直接存 final；steps（= warmup.stop.max_steps）是上限。train_summary.json 另有 warmup 一节（是否满足、停在第几步、读数）。
+
+**E3b+C3**（DEV-0042 §1；监督 grid+text，变体 e3b_c3；配置的 mixed 节）：搭建同 E3b（网格 token + LoRA + token 行）；样本来自
+src/e3/data.MixedSchedule（每步 = C3 同一种子的文本流 per_step.text 条 + E3b 同一种子的网格流 per_step.grid 条，与两者单独训练逐个相同）。
+一步之内按流分开切微批（每个微批只含一种监督，文本在前），文本微批用 chunked_lm_loss（全词表）、网格微批用受限交叉熵；每种监督各自
+除以这一步里它自己的监督 token 总数（与 C3、E3b 单独训练的 token_mean 同一个定义），再乘 loss_weights（1 : 1）相加：
+loss = 1 · L_text + 1 · L_grid。train_log 的 loss 是这个和；loss_by_task 的 text、grid 两项是 L_text、L_grid，text/<任务>、grid/<任务>
+是分任务的逐 token 平均；n_supervised_by_task 同样的键（不含两项合计）；by_supervision 记两种监督各自的样本数与 token 数（accounting.json
+另有合计）。学习率的 warmup 与余弦按 mixed.steps（8000）排：日程长度是 C3、E3b 的 2 倍（运行身份 training.mixed 与 README 写明）。
+
+**C3+预热**（DEV-0042 §2；监督 warmup，变体 c3_warmup；RunSpec.parent_checkpoint = C3 的 ckpt/final/model）：开训前核对起点（resolve_parent：
+构造方式同本次、有 LoRA、没有新增 token 行与查询、叶目录 config.yaml 的 variant 是 c3、seed 等于本次的种子），把它的 LoRA 合并进 base
+（src/e5/stack.merge_start_lora，与 E5 合并起点同一串调用，不改适配器的 LoRA 状态），再 torch.manual_seed → 加网格 token → 注入预热的
+LoRA（与基座上的预热同一个种子、同一份初始值），之后的预热（数据、留出集、停止规则）与基座上的完全相同。续跑时先同样合并起点，再
+load_trained(latest, merge=False)。检查点：latest/model 只有预热的 LoRA（相对"base + C3"，extra 里记起点 manifest 的 sha256，只为续跑）；
+final/model = src/adapters/checkpoint.write_rank_concat(C3, 预热)：秩 32 + 32 = 64 的一个 LoRA（alpha / r 不变）加预热之后的网格 token
+行，对原 base 独立可读（eval_e3b、run_e1 --checkpoint、E5 的起点）；写完用 check_rank_concat 逐位核对两半。起点检查点的 manifest sha256
+进运行身份：续跑时起点换了（sha256 不同）就拒绝。
 """
 
 from __future__ import annotations
@@ -75,16 +92,28 @@ import torch.nn.functional as F
 import yaml
 
 from src.accounting import Compute, merge, write_compute_json
+from src.adapters.checkpoint import (
+    EXTRA,
+    MANIFEST,
+    TOKENS_JSON,
+    CheckpointError,
+    check_rank_concat,
+    file_sha256,
+    read_manifest,
+    write_rank_concat,
+)
 from src.adapters.training import restricted_targets
 from src.e3 import data as D
 from src.e3 import warmup as W
-from src.e3.config import C1PRIME, E3Config, VARIANT_OF
+from src.e3.config import C1PRIME, C3_WARMUP, C3_WARMUP_PARENT, MIXED, STREAMS, E3Config, VARIANT_OF
 from src.e3.targets import NoSupervision
 from src.e3.tokens import GRID_TASKS, GridTokens, add_vocab, attach_vocab, family_stop_id
 from src.runlog import write_run_metadata
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GRID_LIKE: tuple[str, ...] = ("grid", "warmup")  # 有网格 token、用受限交叉熵的监督
+GRID_LIKE: tuple[str, ...] = ("grid", "warmup")  # 有网格 token、全部样本都用受限交叉熵的监督
+WITH_GRID_TOKENS: tuple[str, ...] = GRID_LIKE + (MIXED,)  # 加网格 token 的监督（E3b+C3 的文本微批用全词表损失）
+PARENT_MARKER = "c3_warmup_parent_manifest_sha256"  # C3+预热的 latest/model 的 extra：起点 manifest 的 sha256（uint8[32]）
 CONFIG = "config.yaml"
 TRAIN_LOG = "train_log.jsonl"
 WARMUP_EVAL = "warmup_eval.jsonl"
@@ -116,18 +145,118 @@ class RunSpec:
     supervision: str
     seed: int
     frozen_llm: bool = False  # C1′（DEV-0035 §1）：变体 c1prime
+    parent_checkpoint: str | None = None  # C3+预热（DEV-0042 §2）：起点 C3 的 ckpt/final/model；变体 c3_warmup（路径不进运行身份）
 
     @property
     def variant(self) -> str:
         if self.frozen_llm:
-            if self.supervision != "grid":
-                raise ValueError("C1′（冻结 LLM）只配网格监督")
+            if self.supervision != "grid" or self.parent_checkpoint is not None:
+                raise ValueError("C1′（冻结 LLM）只配网格监督、没有起点")
             return C1PRIME
+        if self.parent_checkpoint is not None:
+            if self.supervision != "warmup":
+                raise ValueError(f"起点检查点（{C3_WARMUP}）只配预热监督，收到 {self.supervision!r}")
+            return C3_WARMUP
         return VARIANT_OF[self.supervision]
 
 
 def leaf_dir(out: str | Path, variant: str, model_key: str, seed: int) -> Path:
     return Path(out) / variant / model_key / f"seed{int(seed)}"
+
+
+# ---------------------------------------------------------------------------
+# C3+预热的起点（模块说明）
+# ---------------------------------------------------------------------------
+
+
+class ParentError(ValueError):
+    """C3+预热的起点检查点不合规：构造方式不同、没有 LoRA、带新增 token、不是 C3、种子不符、manifest sha256 变了。"""
+
+
+@dataclass(frozen=True)
+class ParentRef:
+    checkpoint: Path
+    manifest_sha256: str
+    manifest: Mapping[str, Any]
+    leaf_config: str
+    variant: str
+    seed: int
+    leaf_identity_sha256: str
+
+    def identity(self) -> dict[str, Any]:
+        """进运行身份的部分（不含路径：路径与机器有关，只进运行记录与 train_summary）。"""
+        m = self.manifest
+        return {"variant": self.variant, "seed": self.seed, "manifest_sha256": self.manifest_sha256, "lora": m.get("lora"),
+                "build_spec": m.get("build_spec"), "dtype": m.get("dtype"), "image_policy": m.get("image_policy"),
+                "base_fingerprint": m.get("base_fingerprint"), "leaf_identity_sha256": self.leaf_identity_sha256}
+
+    def record(self) -> dict[str, Any]:
+        return {**self.identity(), "checkpoint": str(self.checkpoint), "leaf_config": self.leaf_config}
+
+
+def checkpoint_leaf(ckpt: str | Path) -> Path | None:
+    """检查点在 <叶>/ckpt/final/model 下（run_training 的布局）时返回 <叶>，否则 None。"""
+    p = Path(ckpt).resolve()
+    if p.name != MODEL_SUB or p.parent.name != FINAL or p.parent.parent.name != "ckpt":
+        return None
+    return p.parents[2]
+
+
+def resolve_parent(checkpoint: str | Path, *, model_key: str, tiny: bool, seed: int) -> ParentRef:
+    """C3+预热的起点核对（模块说明）：manifest 与文件逐个核对；构造方式与本次相同；有 LoRA；没有新增 token 行、查询与 extra；
+    叶目录 config.yaml 的 variant 是 c3、seed 等于本次的种子（找不到叶目录的 config.yaml 也拒绝：核对不了）。"""
+    d = Path(checkpoint)
+    try:
+        man = read_manifest(d)
+    except (CheckpointError, OSError, ValueError) as e:
+        raise ParentError(f"起点检查点 {d} 读不了：{e}") from None
+    bs = man.get("build_spec") or {}
+    if bs.get("key") != model_key or bool(bs.get("tiny")) != bool(tiny):
+        raise ParentError(f"起点检查点的构造方式（key {bs.get('key')!r}，tiny {bs.get('tiny')}）与本次（{model_key!r}，tiny {tiny}）不符")
+    if man.get("lora") is None:
+        raise ParentError(f"起点检查点 {d} 没有 LoRA（C1′ 之类不能作起点）")
+    table = json.loads((d / TOKENS_JSON).read_text(encoding="utf-8"))
+    if table.get("grid_tokens") or table.get("row_ids") or (table.get("query") or {}).get("n") is not None or man.get("extra_keys"):
+        raise ParentError(f"起点检查点 {d} 带新增 token 行、查询占位符或 extra：{C3_WARMUP} 的起点必须是 C3（只有 LoRA）")
+    leaf = checkpoint_leaf(d)
+    if leaf is None or not (leaf / CONFIG).is_file():
+        raise ParentError(f"起点检查点 {d} 不在 <训练叶目录>/ckpt/final/model 下，或叶目录没有 {CONFIG}：核对不了它的变体与种子")
+    doc = yaml.safe_load((leaf / CONFIG).read_text(encoding="utf-8")) or {}
+    if doc.get("variant") != C3_WARMUP_PARENT:
+        raise ParentError(f"起点检查点来自变体 {doc.get('variant')!r}（{leaf / CONFIG}），{C3_WARMUP} 的起点必须是 {C3_WARMUP_PARENT!r}")
+    s = doc.get("seed")
+    if isinstance(s, bool) or not isinstance(s, int) or s != int(seed):
+        raise ParentError(f"起点检查点来自种子 {s!r}（{leaf / CONFIG}），本次是 {seed}：{C3_WARMUP} 的种子 i 用 C3 的种子 i")
+    return ParentRef(checkpoint=d, manifest_sha256=file_sha256(d / MANIFEST), manifest=man, leaf_config=str(leaf / CONFIG),
+                     variant=str(doc["variant"]), seed=int(s), leaf_identity_sha256=identity_sha256(doc))
+
+
+def merge_parent(ad: Any, parent: ParentRef) -> dict[str, Any]:
+    """起点 C3 的 LoRA 合并进适配器的 base（src/e5/stack.merge_start_lora：与 E5 合并起点同一串调用，不改适配器的 LoRA 状态）。
+    合并时读到的 manifest sha256 必须与 resolve_parent 时相同。"""
+    from src.e5.stack import StartError, merge_start_lora  # 延迟 import：只有 C3+预热用到
+
+    try:
+        info = merge_start_lora(ad, parent.checkpoint)
+    except StartError as e:
+        raise ParentError(f"合并起点 LoRA 失败：{e}") from None
+    if info["manifest_sha256"] != parent.manifest_sha256:
+        raise ParentError(f"起点检查点的 manifest sha256 在核对之后变了（{parent.manifest_sha256[:16]}… → {info['manifest_sha256'][:16]}…）")
+    return info
+
+
+def parent_marker(parent: ParentRef) -> dict[str, torch.Tensor]:
+    return {PARENT_MARKER: torch.tensor(list(bytes.fromhex(parent.manifest_sha256)), dtype=torch.uint8)}
+
+
+def read_parent_marker(model_dir: str | Path) -> str | None:
+    from safetensors.torch import load_file
+
+    p = Path(model_dir) / EXTRA
+    if not p.is_file():
+        return None
+    t = load_file(str(p)).get(PARENT_MARKER)
+    return None if t is None else bytes(t.to(torch.uint8).tolist()).hex()
 
 
 def _sync(device: Any) -> None:
@@ -262,7 +391,8 @@ class FrozenRowsProbe:
 class Trainer:
     """持有适配器、网格 token 布局、优化器与调度器；optimize(examples) 做一步（含微批与梯度累积）。"""
 
-    def __init__(self, adapter: Any, cfg: E3Config, run_cfg: Mapping[str, Any], *, supervision: str, seed: int) -> None:
+    def __init__(self, adapter: Any, cfg: E3Config, run_cfg: Mapping[str, Any], *, supervision: str, seed: int,
+                 parent: ParentRef | None = None) -> None:
         self.ad = adapter
         self.cfg = cfg
         self.rc = dict(run_cfg)
@@ -275,15 +405,28 @@ class Trainer:
         self.stop_id = family_stop_id(adapter)
         self.audit: dict[str, Any] = {}
         self.grid_like = supervision in GRID_LIKE
+        self.mixed = supervision == MIXED  # E3b+C3（模块说明）：按流切微批、两种损失各自归一后相加
+        self.with_grid_tokens = supervision in WITH_GRID_TOKENS
         self.frozen_llm = bool(self.rc.get("frozen_llm", False))  # C1′（模块说明）
         if self.frozen_llm and supervision != "grid":
             raise ValueError("C1′（冻结 LLM）只配网格监督")
+        if self.mixed and "mixed" not in self.rc:
+            raise ValueError("E3b+C3 的 run_cfg 没有 mixed 一节（resolve_run(supervision = grid+text)）")
+        self.parent = parent  # C3+预热（模块说明）：搭建之前先把起点的 LoRA 合并进 base
+        if parent is not None and supervision != "warmup":
+            raise ValueError("起点检查点只配预热监督")
+        self.parent_merge: dict[str, Any] | None = None
         self.frozen_probe: FrozenRowsProbe | None = None
 
     # ----- 搭建 -----
+    def _merge_parent(self) -> None:
+        if self.parent is not None:  # 在 torch.manual_seed 之前：peft 建起点的 LoRA 层时会用随机数
+            self.parent_merge = merge_parent(self.ad, self.parent)
+
     def setup_fresh(self) -> None:
+        self._merge_parent()
         torch.manual_seed(self.seed)
-        if self.grid_like:
+        if self.with_grid_tokens:
             self.tokens = add_vocab(self.ad, self.cfg.vocab)
         if not self.frozen_llm:
             lo = self.rc["lora"]
@@ -291,11 +434,17 @@ class Trainer:
         self._finish_setup()
 
     def setup_resume(self, model_dir: Path) -> None:
+        if self.parent is not None:  # C3+预热：latest/model 是相对"base + C3"的预热 LoRA，先合并同一个起点
+            mark = read_parent_marker(model_dir)
+            if mark != self.parent.manifest_sha256:
+                raise ParentError(f"续跑：{model_dir} 记下的起点 manifest sha256 {str(mark)[:16]}… 与本次的起点 "
+                                  f"{self.parent.manifest_sha256[:16]}… 不符")
+        self._merge_parent()
         self.ad.load_trained(model_dir, merge=False)
         want = "none" if self.frozen_llm else "injected"
         if self.ad.lora_state != want:
             raise RuntimeError(f"续跑：检查点载入后 LoRA 状态是 {self.ad.lora_state}，应为 {want}")
-        if self.grid_like:
+        if self.with_grid_tokens:
             self.tokens = attach_vocab(self.ad, self.cfg.vocab)
         elif self.ad.grid_token_ids:
             raise RuntimeError("续跑：C3 的检查点里不该有 grid token")
@@ -366,12 +515,20 @@ class Trainer:
         if self.frozen_probe is not None:
             self.frozen_probe.check()
 
+    def latest_extra(self) -> dict[str, torch.Tensor] | None:
+        """续跑检查点（latest/model）的 extra：C3+预热记起点 manifest 的 sha256（模块说明），其余没有。"""
+        return None if self.parent is None else parent_marker(self.parent)
+
     # ----- 一步 -----
     def lr_now(self) -> dict[str, float]:
         return {g.get("name", str(k)): float(g["lr"]) for k, g in enumerate(self.opt.param_groups)}
 
     def _loss(self, out: Any, group: Sequence[D.Example]) -> tuple[torch.Tensor, dict[str, list[float]], list[int]]:
-        """一个微批的损失和（未归一化）、各任务的 [损失和, 监督 token 数]、网格 token 的 [对的个数, 计入的个数]。"""
+        """一个微批的损失和（未归一化）、各任务的 [损失和, 监督 token 数]、网格 token 的 [对的个数, 计入的个数]。
+        grid、warmup 用受限交叉熵，text 用 chunked_lm_loss（E3b+C3 按微批所属的流调 _task_loss）。"""
+        return self._task_loss(out, group, grid=self.grid_like)
+
+    def _task_loss(self, out: Any, group: Sequence[D.Example], *, grid: bool) -> tuple[torch.Tensor, dict[str, list[float]], list[int]]:
         ad = self.ad
         th, tid, trow = out.target_hidden, out.target_ids, out.target_rows
         w = torch.tensor([x for e in group for x in e.weights], dtype=torch.float32, device=th.device)
@@ -384,7 +541,7 @@ class Trainer:
                 continue
             sel = torch.isin(trow, torch.tensor(rows, dtype=torch.long, device=trow.device)).nonzero().flatten()
             h, t, ws = th.index_select(0, sel), tid.index_select(0, sel), w.index_select(0, sel)
-            if self.grid_like:
+            if grid:
                 allowed = self.tokens.allowed_ids(task, self.rc["allowed_scope"])
                 lg = ad.restricted_logits(h, allowed)
                 tt = restricted_targets(t, allowed)
@@ -405,7 +562,8 @@ class Trainer:
 
     def optimize(self, examples: Sequence[D.Example], *, device: Any = None) -> tuple[dict[str, Any], dict[str, Any], list[Compute]]:
         """一步优化：examples 按 micro_batch_size 切成微批，各自前向、反向（损失 / 整步监督 token 总数），然后一次 step。
-        返回 (确定性的记录, 计时, 每条样本的 Compute)。"""
+        E3b+C3（模块说明）：按流分开切微批（每个微批只含一种监督，流的先后按 mixed.order），每个微批的损失除以这一步里它那种监督的
+        监督 token 总数、再乘损失权重（1 : 1），即一步的损失 = L_text + L_grid。返回 (确定性的记录, 计时, 每条样本的 Compute)。"""
         if not examples:
             raise ValueError("这一步没有样本")
         dev = device if device is not None else self.ad.device
@@ -413,34 +571,52 @@ class Trainer:
         if n_sup <= 0:
             raise ValueError("这一步没有监督 token")
         micro = int(self.rc["micro_batch_size"])
+        n_by: dict[str, int] = {}
+        weights: dict[str, float] = {}
+        if self.mixed:
+            mcfg = self.rc["mixed"]
+            by = {s: [e for e in examples if D.stream_of(e.plan) == s] for s in STREAMS}
+            n_by = {s: sum(e.n_supervised for e in by[s]) for s in STREAMS}
+            weights = {s: float(mcfg["loss_weights"][s]) for s in STREAMS}
+            chunks: list[tuple[str | None, Sequence[D.Example]]] = [
+                (s, by[s][i: i + micro]) for s in mcfg["order"] for i in range(0, len(by[s]), micro)]
+            cnt_by = {s: {"n_samples": len(by[s]), "n_supervised_tokens": int(n_by[s]), "n_target_tokens": 0, "n_prompt_tokens": 0,
+                          "n_visual_tokens": 0, "n_image_pixels": 0} for s in STREAMS}
+        else:
+            chunks = [(None, examples[i: i + micro]) for i in range(0, len(examples), micro)]
         self.opt.zero_grad(set_to_none=True)
         if self.rows is not None:
             self.rows.zero_dense_grads()
         loss_sum = 0.0
+        sums = {s: 0.0 for s in STREAMS}
         per: dict[str, list[float]] = {}
         acc = [0, 0]
         counts = {"n_target_tokens": 0, "n_prompt_tokens": 0, "n_visual_tokens": 0, "n_image_pixels": 0}
         times = {"build_inputs_s": 0.0, "fwd_s": 0.0, "bwd_s": 0.0, "opt_s": 0.0}
         computes: list[Compute] = []
-        for s in range(0, len(examples), micro):
-            group = examples[s: s + micro]
+        for key, group in chunks:
             t0 = time.perf_counter()
             inputs = [self.build_inputs(e) for e in group]
             _sync(dev)
             t1 = time.perf_counter()
             out = self.ad.training_forward(inputs, [e.target_ids for e in group], enable_thinking=bool(self.rc["enable_thinking"]))
-            ls, p, a = self._loss(out, group)
+            ls, p, a = self._loss(out, group) if key is None else self._task_loss(out, group, grid=key == "grid")
             _sync(dev)
             t2 = time.perf_counter()
-            (ls / float(n_sup)).backward()
+            if key is None:
+                (ls / float(n_sup)).backward()
+            else:  # 这种监督没有监督 token 时（网格的权重全 0）ls 恰为 0，分母取 1 只为不除以 0
+                (ls / float(max(n_by[key], 1)) * weights[key]).backward()
             _sync(dev)
             t3 = time.perf_counter()
             times["build_inputs_s"] += t1 - t0
             times["fwd_s"] += t2 - t1
             times["bwd_s"] += t3 - t2
             loss_sum += float(ls.detach())
+            if key is not None:
+                sums[key] += float(ls.detach())
             for k, v in p.items():
-                acc_k = per.setdefault(k, [0.0, 0.0])
+                acc_k = per.setdefault(k if key is None else f"{key}/{k}", [0.0, 0.0])
                 acc_k[0] += v[0]
                 acc_k[1] += v[1]
             acc[0] += a[0]
@@ -453,6 +629,12 @@ class Trainer:
                 counts["n_prompt_tokens"] += out.prompt_lengths[b]
                 counts["n_visual_tokens"] += nv
                 counts["n_image_pixels"] += npx
+                if key is not None:
+                    c = cnt_by[key]
+                    c["n_target_tokens"] += int(out.target_lengths[b])
+                    c["n_prompt_tokens"] += int(out.prompt_lengths[b])
+                    c["n_visual_tokens"] += int(nv)
+                    c["n_image_pixels"] += int(npx)
                 computes.append(Compute.call(generated_tokens=int(out.target_lengths[b]), prompt_tokens=int(out.prompt_lengths[b]),
                                              visual_tokens=int(nv), image_pixels=int(npx), call_time_s=share, new_round=True))
             del out, ls
@@ -474,13 +656,22 @@ class Trainer:
         for e in examples:
             kinds[e.plan.kind] = kinds.get(e.plan.kind, 0) + 1
         n_empty = sum(1 for e in examples if e.info.get("n_fg_cells") == 0)  # 分割目标全 0（物体小于半格时会这样）
-        rec = {"lr": lr, "loss": loss_sum / float(n_sup),
-               "loss_by_task": {k: (v[0] / v[1] if v[1] else None) for k, v in sorted(per.items())},
+        by_task = {k: (v[0] / v[1] if v[1] else None) for k, v in sorted(per.items())}
+        if self.mixed:  # 两种监督各自的逐 token 平均（loss_by_task 的 text、grid 两项），loss = 按权重相加
+            loss_by = {s: (sums[s] / n_by[s] if n_by[s] else None) for s in STREAMS}
+            loss = sum(weights[s] * loss_by[s] for s in self.rc["mixed"]["order"] if loss_by[s] is not None)
+            by_task = dict(sorted({**by_task, **loss_by}.items()))
+        else:
+            loss = loss_sum / float(n_sup)
+        rec = {"lr": lr, "loss": loss,
+               "loss_by_task": by_task,
                "n_supervised_by_task": {k: int(v[1]) for k, v in sorted(per.items())},
                "n_samples": len(examples), "n_by_kind": dict(sorted(kinds.items())), "n_empty_seg_grid": n_empty,
                "n_supervised_tokens": int(n_sup),
                **{k: int(v) for k, v in counts.items()}, "grad_norm": float(gn),
                "grid_token_acc": (acc[0] / acc[1]) if acc[1] else None}
+        if self.mixed:
+            rec["by_supervision"] = cnt_by
         return rec, times, computes
 
     # ----- 续跑状态 -----
@@ -534,7 +725,7 @@ def warmup_identity(spec: RunSpec, cfg: E3Config, run_cfg: Mapping[str, Any], tr
                     source: W.WarmupSource) -> dict[str, Any]:
     """网格格式预热的运行身份（键与 E3b 的相同；数据一节换成生成器与留出集的指纹，没有训练池、去重与加噪）。"""
     held = source.heldout
-    return {
+    out = {
         "experiment": "E3b",
         "framework": "src/e3（DEV-0025；网格格式预热 src/e3/warmup.py，DEV-0035）",
         "model": {"key": spec.model_key, "family": spec.family, "repo": spec.repo, "revision": spec.revision,
@@ -556,6 +747,9 @@ def warmup_identity(spec: RunSpec, cfg: E3Config, run_cfg: Mapping[str, Any], tr
                  "heldout": {"n": len(held), "sha256": W.items_digest(held),
                              "by_task": {t: sum(1 for it in held if it.task == t) for t in GRID_TASKS}}},
     }
+    if trainer.parent is not None:  # C3+预热：起点（不含路径）；基座上的预热不加这个键（运行身份逐字节不变）
+        out["parent"] = trainer.parent.identity()
+    return out
 
 
 def run_identity(spec: RunSpec, cfg: E3Config, run_cfg: Mapping[str, Any], trainer: Trainer,
@@ -566,7 +760,7 @@ def run_identity(spec: RunSpec, cfg: E3Config, run_cfg: Mapping[str, Any], train
     instr = {t: {k: v for k, v in d["tasks"][t].items() if k.endswith(("template", "instruction")) or k == "order"}
              for t in pools}
     c3 = None
-    if spec.supervision == "text":
+    if spec.supervision in ("text", MIXED):
         c3 = {k: v for k, v in d["c3"].items() if k != "basis"}
         c3["polygon_template"] = builder.polygon_template
         c3["polygon_template_source"] = builder.polygon_source
@@ -589,7 +783,8 @@ def run_identity(spec: RunSpec, cfg: E3Config, run_cfg: Mapping[str, Any], train
         "instructions": instr,
         "c3": c3,
         "noise": {"correction": {k: v for k, v in d["correction"].items() if k != "basis"},
-                  "depth_noise": {k: v for k, v in d["depth_noise"].items() if k != "basis"}} if spec.supervision == "grid" else None,
+                  "depth_noise": {k: v for k, v in d["depth_noise"].items() if k != "basis"}}
+        if spec.supervision in ("grid", MIXED) else None,
         "config": {"path": cfg.path, "sha256": cfg.sha256, "version": d["version"]},
         "data": {t: {"pool": _scalars(pools[t].stats), "n": len(pools[t]),
                      "ids_sha256": D.ids_digest([s.id for s in pools[t].records]), "dedupe": dict(dedupe[t])}
@@ -643,6 +838,9 @@ def accounting_doc(leaf: Path) -> tuple[dict[str, Any], Compute]:
                    "（含损失）与反向（CUDA 前后同步）；opt_s = 取主副本梯度、裁剪、step、写回；step_s = 整步。计入 n_steps_timed 的步可能"
                    "多于 n_steps_logged（被中断的步的计时也记了，但没有写进 train_log）。compute.json 的 generated_tokens 是教师强制的"
                    "目标 token 数"}
+    if any("by_supervision" in r for r in log):  # E3b+C3：两种监督各自的样本数与 token 数（每步的 by_supervision 相加）
+        doc["by_supervision"] = {s: {k: int(sum(r["by_supervision"][s][k] for r in log)) for k in log[0]["by_supervision"][s]}
+                                 for s in STREAMS}
     if any("warmup_evals" in r for r in runs):  # 网格格式预热：留出集的受限解码（不在 phases_s 里，含在 wall_s 里）
         evs = [e for r in runs for e in r.get("warmup_evals") or []]
         doc["warmup_eval_s"] = sum(float(e["wall_s"]) for e in evs)
@@ -653,7 +851,8 @@ def accounting_doc(leaf: Path) -> tuple[dict[str, Any], Compute]:
 def readme_text(spec: RunSpec, ident: Mapping[str, Any], summary: Mapping[str, Any], log: Sequence[Mapping[str, Any]]) -> str:
     tr = ident["training"]
     first, last = (log[0], log[-1]) if log else ({}, {})
-    sup = {"grid": "GT 网格 + 修正对", "text": "C3：稀疏文本", "warmup": "网格格式预热：纯文字给坐标 → 网格，不给图像"}[spec.supervision]
+    sup = {"grid": "GT 网格 + 修正对", "text": "C3：稀疏文本", "warmup": "网格格式预热：纯文字给坐标 → 网格，不给图像",
+           MIXED: "E3b+C3：C3 的文本样本流 + E3b 的网格样本流（GT 网格 + 修正对）"}[spec.supervision]
     if tr.get("frozen_llm"):  # C1′
         sup += "；C1′：冻结 LLM，只训练网格 token 的行"
         opt = (f"不注入 LoRA，AdamW 只有 token 行一组：lr {tr['optim']['token_rows']['lr']}（{tr['optim']['token_rows']['mode']}），"
@@ -664,10 +863,20 @@ def readme_text(spec: RunSpec, ident: Mapping[str, Any], summary: Mapping[str, A
                f"AdamW lr {tr['optim']['lora']['lr']}（token 行 {tr['optim']['token_rows']['lr']}，{tr['optim']['token_rows']['mode']}），"
                f"warmup {tr['warmup_steps']} 步 + 余弦")
         ck = "只有 LoRA、token 行、manifest"
-    steps_line = (f"- 训练：{tr['steps']} 步 × {tr['batch_size']} 条（微批 {tr['micro_batch_size']} × 累积 {tr['grad_accum_steps']}），"
-                  if spec.supervision != "warmup" else
-                  f"- 训练：至多 {tr['steps']} 步 × {tr['batch_size']} 条（微批 {tr['micro_batch_size']} × 累积 {tr['grad_accum_steps']}；"
-                  f"实际 {summary.get('steps')} 步），")
+    if spec.variant == C3_WARMUP:
+        sup += "；C3+预热：先把起点 C3 的 LoRA 合并进 base，再在其上预热"
+        lo = summary.get("lora") or {}
+        ck = f"C3 与预热的 LoRA 按秩拼接成一个（r {lo.get('r')}、alpha {lo.get('lora_alpha')}）、预热之后的 token 行、manifest"
+    if spec.supervision == MIXED:
+        m = tr["mixed"]
+        steps_line = (f"- 训练：{tr['steps']} 步 × {tr['batch_size']} 条（文本 {m['per_step']['text']} + 网格 {m['per_step']['grid']}；"
+                      f"微批 {tr['micro_batch_size']} × 累积 {tr['grad_accum_steps']}，每个微批只含一种监督：{m['micro_batches']}，"
+                      f"先后 {m['order']}；日程长度是 C3、E3b 的 {m['schedule_length_ratio']:g} 倍），")
+    elif spec.supervision != "warmup":
+        steps_line = f"- 训练：{tr['steps']} 步 × {tr['batch_size']} 条（微批 {tr['micro_batch_size']} × 累积 {tr['grad_accum_steps']}），"
+    else:
+        steps_line = (f"- 训练：至多 {tr['steps']} 步 × {tr['batch_size']} 条（微批 {tr['micro_batch_size']} × 累积 {tr['grad_accum_steps']}；"
+                      f"实际 {summary.get('steps')} 步），")
     lines = [f"# E3b 训练 · {spec.variant} · {spec.model_key} · seed {spec.seed}", "",
              f"- 模型：{spec.repo}@{spec.revision}（{spec.family}；适配器 {spec.adapter_model_key}；{spec.model_dtype}）",
              f"- 监督：{spec.supervision}（{sup}）；图像口径 {spec.image_policy}",
@@ -675,6 +884,29 @@ def readme_text(spec: RunSpec, ident: Mapping[str, Any], summary: Mapping[str, A
              f"- 混合：{tr['mix']}；修正对比例：{tr['correction_fraction']}",
              f"- 第一步损失 {first.get('loss')}，最后一步损失 {last.get('loss')}（{len(log)} 步）",
              f"- 检查点：{summary.get('final_checkpoint')}（{summary.get('final_checkpoint_bytes')} 字节；{ck}）", ""]
+    if spec.supervision == MIXED:
+        m = tr["mixed"]
+        ref = m["reference"]
+        tot = {s: {k: int(sum(r["by_supervision"][s][k] for r in log)) for k in ("n_samples", "n_supervised_tokens")}
+               for s in STREAMS} if log else {}
+        lines += ["## E3b+C3 的两条样本流", "",
+                  f"- 第 t 步：文本 = {ref['variants']['text']} 同一种子的样本流第 {m['per_step']['text']}t … "
+                  f"{m['per_step']['text']}t + {m['per_step']['text'] - 1} 个槽位；网格 = {ref['variants']['grid']} 同一种子的样本流第 "
+                  f"{m['per_step']['grid']}t … {m['per_step']['grid']}t + {m['per_step']['grid'] - 1} 个槽位（含修正对）。全程两条流各 "
+                  f"{ref['samples_per_stream']} 条 = {ref['variants']['text']}、{ref['variants']['grid']} 单独训练的全部样本，顺序相同",
+                  "- 两条流的槽位与样本的对应只由种子与 k 决定，所以同一步里同一张图以两种监督各出现一次（不另换数据种子）",
+                  f"- 损失：每步 = {m['loss_weights']['text']:g} × 文本的逐 token 平均 + {m['loss_weights']['grid']:g} × 网格的逐 token 平均"
+                  "（事先固定，D83-2）；train_log 的 loss 是这个和，loss_by_task 的 text、grid 两项是两种各自的平均",
+                  f"- 学习率：warmup {tr['warmup_steps']} 步 + 余弦，按 {tr['steps']} 步排，日程长度是 {ref['variants']['text']}、"
+                  f"{ref['variants']['grid']}（{ref['steps']} 步）的 {m['schedule_length_ratio']:g} 倍",
+                  f"- 本次合计（train_log 的 by_supervision）：{tot}", ""]
+    par = summary.get("parent")
+    if par:
+        lc = summary.get("lora_concat") or {}
+        lines += ["## C3+预热的起点", "",
+                  f"- 起点：变体 {par['variant']}、种子 {par['seed']}，manifest sha256 {par['manifest_sha256']}",
+                  f"- 起点的 LoRA 在 torch.manual_seed 之前合并进 base，再加网格 token、注入预热的 LoRA；预热的数据、留出集、停止规则与基座上的相同",
+                  f"- 存法：{lc.get('rule')}；拼接后核对：{lc.get('check')}", ""]
     wsum = summary.get("warmup")
     if wsum:
         r = wsum["rule"]
@@ -732,7 +964,12 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
             log(f"[{spec.variant} {spec.model_key} seed{spec.seed}] 已完成，跳过（{leaf / SUMMARY}）")
             return s
 
-    trainer = Trainer(adapter, cfg, rc, supervision=spec.supervision, seed=spec.seed)
+    parent = None
+    if spec.parent_checkpoint is not None:  # C3+预热：起点核对（模块说明）
+        if "parent" not in rc:
+            raise ValueError(f"run_cfg 没有 parent 一节（resolve_run(variant = {C3_WARMUP})）")
+        parent = resolve_parent(spec.parent_checkpoint, model_key=spec.model_key, tiny=spec.tiny, seed=spec.seed)
+    trainer = Trainer(adapter, cfg, rc, supervision=spec.supervision, seed=spec.seed, parent=parent)
     st = None
     if exists and (latest / RESUME_STATE).exists():
         trainer.setup_resume(latest / MODEL_SUB)
@@ -751,8 +988,14 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
                                    stop_id=trainer.stop_id, tokens=trainer.tokens,
                                    encode=lambda s: list(adapter.tokenizer(s, add_special_tokens=False)["input_ids"]),
                                    family=spec.family, format_boxes=adapter.format_boxes)
-        schedule = D.Schedule({t: p.records for t, p in pools.items()}, cfg, seed=spec.seed, supervision=spec.supervision,
-                              batch_size=int(rc["batch_size"]))
+        if spec.supervision == MIXED:  # E3b+C3：C3 的文本流 + E3b 的网格流（src/e3/data.MixedSchedule）
+            schedule = D.MixedSchedule({t: p.records for t, p in pools.items()}, cfg, seed=spec.seed,
+                                       per_step=rc["mixed"]["per_step"], order=rc["mixed"]["order"])
+            if schedule.batch_size != int(rc["batch_size"]):
+                raise ValueError(f"E3b+C3 每步 {schedule.batch_size} 条，与 run_cfg 的 batch_size {rc['batch_size']} 不同")
+        else:
+            schedule = D.Schedule({t: p.records for t, p in pools.items()}, cfg, seed=spec.seed, supervision=spec.supervision,
+                                  batch_size=int(rc["batch_size"]))
     ident = run_identity(spec, cfg, rc, trainer, pools, dedupe, builder)
     ident_sha = identity_sha256(ident)
     if exists:
@@ -766,6 +1009,8 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
         leaf.mkdir(parents=True, exist_ok=True)
         files = [REPO_ROOT / cfg.path if not Path(cfg.path).is_absolute() else Path(cfg.path)]
         files += sorted({Path(p.stats["dedupe_file"]) for p in pools.values() if p.stats.get("dedupe_file")})
+        if parent is not None:
+            files.append(parent.checkpoint / MANIFEST)
         write_run_metadata(leaf, config=ident, seed=spec.seed, data_files=files, repo_root=REPO_ROOT)
         if trainer.tokens is not None:
             (leaf / TOKENS_INIT).write_text(json.dumps(adapter.token_table(), ensure_ascii=False, indent=1) + "\n",
@@ -804,6 +1049,8 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
                                "device": str(dev), "gpu": torch.cuda.get_device_name(dev) if dev.type == "cuda" else None,
                                "paths": paths.as_dict(), "ckpt_dir": str(ckpt), "start_step": start, "finished_utc": None,
                                "audit": trainer.audit}
+    if parent is not None:
+        run_log["parent"] = {**parent.record(), "merge": trainer.parent_merge}
     run_path.write_text(json.dumps(run_log, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     t_all = time.perf_counter()
     done_box = [0]
@@ -823,7 +1070,7 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
         if tmp.exists():
             shutil.rmtree(tmp)
         tmp.mkdir(parents=True)
-        adapter.save_trained(tmp / MODEL_SUB)
+        adapter.save_trained(tmp / MODEL_SUB, extra=trainer.latest_extra())
         torch.save({"identity_sha256": ident_sha, "step": step_done, **trainer.state_dict()}, tmp / RESUME_STATE)
         old = ckpt / (LATEST + ".old")
         if old.exists():
@@ -870,9 +1117,11 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
             n = len(examples)
             comps = [c.as_sample(wall_time_s=step_s / n) for c in comps]
             if step == start:
+                shown = examples[:4] if not trainer.mixed else [e for s in STREAMS
+                                                                 for e in [x for x in examples if D.stream_of(x.plan) == s][:4]]
                 trainer.audit["first_step_examples"] = [{"id": e.plan.sample_id, "task": e.plan.task, "kind": e.plan.kind,
                                                          "n_images": len(e.images), "n_target": len(e.target_ids),
-                                                         "n_supervised": e.n_supervised} for e in examples[:4]]
+                                                         "n_supervised": e.n_supervised} for e in shown]
             line = {"step": step, **rec, "n_skipped": len(skipped), "skipped": skipped}
             _append(leaf / TRAIN_LOG, [_jsonl(line)])
             _append(timing_path, [_jsonl({"step": step, "data_s": t_data, **times, "step_s": step_s,
@@ -914,7 +1163,22 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
         if final.exists():
             shutil.rmtree(final)
         final.parent.mkdir(parents=True, exist_ok=True)
-        adapter.save_trained(final)
+        concat = None
+        if parent is None:
+            adapter.save_trained(final)
+        else:  # C3+预热（模块说明）：先存预热的 LoRA（相对 base + C3），再与 C3 的 LoRA 按秩拼接成 final，逐位核对两半后删掉中间目录
+            child = ckpt / (FINAL + ".child")
+            if child.exists():
+                shutil.rmtree(child)
+            adapter.save_trained(child / MODEL_SUB)
+            write_rank_concat(parent.checkpoint, child / MODEL_SUB, final,
+                              record={"variant": spec.variant, "seed": spec.seed, "parent": parent.identity(),
+                                      "training_identity_sha256": ident_sha})
+            chk = check_rank_concat(final, parent.checkpoint, child / MODEL_SUB)
+            shutil.rmtree(child)
+            concat = {"rule": read_manifest(final)["lora_concat"]["rule"],
+                      "check": f"check_rank_concat 通过（{chk['checked']}，{chk['n_tensors']} 个张量逐位相同）",
+                      "r": chk["r"], "lora_alpha": chk["lora_alpha"]}
         if not keep_optimizer_state and latest.exists():
             shutil.rmtree(latest)
         man = json.loads((final / "manifest.json").read_text(encoding="utf-8"))
@@ -928,6 +1192,11 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
                    "lora": man.get("lora"), "trainable_token_rows": man.get("trainable_token_rows")}
         if trainer.frozen_llm:  # C1′：没有 LoRA，manifest 不记 trainable_token_rows（不经过适配器的开关），这里补上
             summary.update(frozen_llm=True, trainable_token_rows=list(trainer.rows.ids))
+        if parent is not None:  # C3+预热：起点与拼接
+            summary.update(parent=parent.record(), lora_concat=concat)
+        if trainer.mixed:  # E3b+C3：两种监督各自的合计（每步的 by_supervision 相加）
+            summary["by_supervision"] = {s: {k: int(sum(r["by_supervision"][s][k] for r in tlog)) for k in tlog[0]["by_supervision"][s]}
+                                         for s in STREAMS} if tlog else None
         if warm:
             ok = rule.met(history)
             summary["warmup"] = {
@@ -960,16 +1229,25 @@ def run_training(adapter: Any, cfg: E3Config, spec: RunSpec, run_cfg: Mapping[st
 __all__ = [
     "FrozenRowsProbe",
     "GRID_LIKE",
+    "PARENT_MARKER",
+    "ParentError",
+    "ParentRef",
     "RunSpec",
     "StopRequested",
     "TokenRows",
     "Trainer",
     "WARMUP_EVAL",
+    "WITH_GRID_TOKENS",
     "accounting_doc",
+    "checkpoint_leaf",
     "frozen_llm_token_rows",
     "identity_sha256",
     "leaf_dir",
     "lr_factor",
+    "merge_parent",
+    "parent_marker",
+    "read_parent_marker",
+    "resolve_parent",
     "run_identity",
     "run_training",
     "warmup_identity",

@@ -35,6 +35,21 @@
 - `manifest.json`：最后写；base 的 repo / revision / 模型键 / 家族 / dtype / 构造方式（factory 记下的 build_spec）、base 指纹
   （各参数前 FINGERPRINT_ELEMS 个元素的 bf16 字节的 sha256，attach 时算）、LoRA 配置摘要、各文件的 sha256 与字节数、版本。
   读取时逐个核对文件的 sha256 与字节数，目录里多出或缺少文件都报错（以 "." 开头的文件不算，如 macOS 的 .DS_Store）。
+
+**按秩拼接两份 LoRA**（DEV-0042 §2：C3+预热；write_rank_concat / check_rank_concat，只新增函数，上面的函数行为不变）
+- 用途：父检查点（如 C3）的 LoRA 先在内存里合并进 base，再在其上训练子检查点（如网格格式预热）的 LoRA；两者合成一个对原 base 独立
+  可读的检查点（load_trained、eval_e3b、run_e1 --checkpoint、E5 的起点都按普通检查点读）。
+- 做法：同一组目标模块上，A = [A_父; A_子]（沿秩的维度，peft 的 lora_A.weight 是 [r, in]），B = [B_父, B_子]（lora_B.weight 是
+  [out, r]），秩 R = r_父 + r_子，lora_alpha = (alpha / r) × R，所以缩放 alpha / r 不变，合并后的增量
+  scaling · B A = scaling · B_父 A_父 + scaling · B_子 A_子 = ΔW_父 + ΔW_子（代数上相等）。
+- 浮点上：一次合并 W0 + scaling · (B A) 与依次合并 (W0 + ΔW_父) + ΔW_子 的求和顺序不同（矩阵乘在秩维上的累加、两次舍入对一次
+  舍入），一般只差末位舍入，不保证逐位相同；数值可精确表示时（例如位数很少的二进制小数）两者逐位相同（tests 用这种值核对拼接的代数）。
+- 只允许：两份检查点的 base（家族、模型键、repo / revision、dtype、指纹、构造方式、图像口径）相同；LoRA 的目标模块、dropout、缩放
+  相同，adapter_config 除 r、lora_alpha 以外逐项相同，没有 rank_pattern / alpha_pattern；父检查点没有新增 token 行、没有查询嵌入、
+  没有 extra（拼接只取子检查点的 token 表与行，父的不能被丢掉）；子检查点没有查询嵌入与 extra。
+- 结果的 manifest 是子检查点的 manifest 换掉 lora 摘要（r、lora_alpha、参数个数）与 files，另加 lora_concat 一节：格式、规则、
+  缩放、父与子各自 manifest 的 sha256、LoRA 摘要与秩区间，以及调用方给的记录（record）。check_rank_concat 反过来核对：父检查点的
+  manifest sha256 与记下的相同（不同就报错），拼接里前 r_父 个秩与父的 LoRA 逐位相同（给了子检查点时，其余的秩与子的逐位相同）。
 """
 
 from __future__ import annotations
@@ -43,6 +58,7 @@ import bisect
 import hashlib
 import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -228,6 +244,156 @@ def _load_tensors(path: Path) -> dict[str, torch.Tensor]:
     from safetensors.torch import load_file
 
     return load_file(str(path))
+
+
+# ---------------------------------------------------------------------------
+# 按秩拼接两份 LoRA（DEV-0042 §2；规则见模块说明）
+# ---------------------------------------------------------------------------
+
+LORA_CONCAT_FORMAT = "visint-lora-rank-concat/1"
+LORA_CONCAT_RULE = (
+    "A = [A_父; A_子]（lora_A.weight [r, in] 沿第 0 维），B = [B_父, B_子]（lora_B.weight [out, r] 沿第 1 维），R = r_父 + r_子，"
+    "lora_alpha = (alpha / r) × R（缩放不变）：合并后的增量 scaling · B A = ΔW_父 + ΔW_子。浮点上与依次合并只差舍入（不保证逐位相同）")
+_CONCAT_SAME_KEYS = ("family", "model_key", "tiny", "repo", "revision", "dtype", "base_fingerprint", "build_spec", "image_policy")
+_CONCAT_FILES = frozenset({TOKENS_JSON, TOKEN_ROWS, LORA_CONFIG, LORA_WEIGHTS})
+
+
+def _lora_part(key: str) -> str:
+    if key.endswith(".lora_A.weight"):
+        return "A"
+    if key.endswith(".lora_B.weight"):
+        return "B"
+    raise CheckpointError(f"LoRA 权重里有不认识的键 {key!r}（只认 lora_A.weight / lora_B.weight）")
+
+
+def rank_concat_lora_state(parent: Mapping[str, torch.Tensor], child: Mapping[str, torch.Tensor], *, r_parent: int,
+                           r_child: int) -> dict[str, torch.Tensor]:
+    """两份 peft 的 LoRA state dict（同一组键）→ 按秩拼接的 state dict（规则见模块说明）。形状、dtype、秩逐个核对。"""
+    if set(parent) != set(child):
+        raise CheckpointError(f"两份 LoRA 的键不同：父多 {sorted(set(parent) - set(child))[:3]}，子多 {sorted(set(child) - set(parent))[:3]}")
+    out: dict[str, torch.Tensor] = {}
+    for k in sorted(parent):
+        a, b = parent[k], child[k]
+        if a.dtype != b.dtype or a.dim() != 2 or b.dim() != 2:
+            raise CheckpointError(f"{k}：dtype 或维数不同（{a.dtype} {tuple(a.shape)}，{b.dtype} {tuple(b.shape)}）")
+        if _lora_part(k) == "A":
+            if a.shape[0] != r_parent or b.shape[0] != r_child or a.shape[1] != b.shape[1]:
+                raise CheckpointError(f"{k}：形状 {tuple(a.shape)} 与 {tuple(b.shape)} 不是 [r_父 = {r_parent}, in] 与 [r_子 = {r_child}, in]")
+            out[k] = torch.cat([a, b], dim=0).contiguous()
+        else:
+            if a.shape[1] != r_parent or b.shape[1] != r_child or a.shape[0] != b.shape[0]:
+                raise CheckpointError(f"{k}：形状 {tuple(a.shape)} 与 {tuple(b.shape)} 不是 [out, r_父 = {r_parent}] 与 [out, r_子 = {r_child}]")
+            out[k] = torch.cat([a, b], dim=1).contiguous()
+    return out
+
+
+def _lora_config_dict(cfg: Any) -> dict[str, Any]:
+    d = cfg.to_dict()
+    return {k: (sorted(v) if isinstance(v, (set, frozenset)) else v) for k, v in d.items()}
+
+
+def write_rank_concat(parent_dir: str | os.PathLike, child_dir: str | os.PathLike, out_dir: str | os.PathLike, *,
+                      record: Mapping[str, Any] | None = None) -> Path:
+    """父、子两个检查点 → 按秩拼接的检查点目录 out_dir（必须不存在或为空；规则与限制见模块说明）。返回 out_dir。"""
+    from peft import LoraConfig
+
+    dp, dc, out = Path(parent_dir), Path(child_dir), Path(out_dir)
+    mp, mc = read_manifest(dp), read_manifest(dc)
+    bad = {k: (mp.get(k), mc.get(k)) for k in _CONCAT_SAME_KEYS if mp.get(k) != mc.get(k)}
+    if bad:
+        raise CheckpointError(f"父、子检查点的 base 不同（父, 子）：{bad}")
+    lp, lc = mp.get("lora"), mc.get("lora")
+    if lp is None or lc is None:
+        raise CheckpointError("父、子检查点都必须有 LoRA")
+    for k in ("n_targets", "targets_sha256", "lora_dropout"):
+        if lp.get(k) != lc.get(k):
+            raise CheckpointError(f"父、子 LoRA 的 {k} 不同：{lp.get(k)!r} 与 {lc.get(k)!r}")
+    scale_p, scale_c = float(lp["lora_alpha"]) / int(lp["r"]), float(lc["lora_alpha"]) / int(lc["r"])
+    if scale_p != scale_c:
+        raise CheckpointError(f"父、子 LoRA 的缩放 alpha / r 不同：{scale_p} 与 {scale_c}")
+    for name, m in (("父", mp), ("子", mc)):
+        extra_files = set(m["files"]) - _CONCAT_FILES
+        if extra_files or m.get("extra_keys") or (m.get("query") or {}).get("n") is not None:
+            raise CheckpointError(f"{name}检查点有拼接不处理的内容（文件 {sorted(extra_files)}、extra {m.get('extra_keys')}、"
+                                  f"查询 {m.get('query')}）")
+    tp = json.loads((dp / TOKENS_JSON).read_text())
+    if tp.get("row_ids") or tp.get("grid_tokens"):
+        raise CheckpointError(f"父检查点有新增 token 行（{len(tp.get('row_ids') or [])} 行）：拼接只取子检查点的 token 表，父的行会被丢掉")
+    cp, cc = LoraConfig.from_pretrained(str(dp / LORA_DIR)), LoraConfig.from_pretrained(str(dc / LORA_DIR))
+    if (int(cp.r), float(cp.lora_alpha), int(cc.r), float(cc.lora_alpha)) != (int(lp["r"]), float(lp["lora_alpha"]), int(lc["r"]),
+                                                                             float(lc["lora_alpha"])):
+        raise CheckpointError("adapter_config.json 的 r / lora_alpha 与 manifest 的 LoRA 摘要不符")
+    dpd, dcd = _lora_config_dict(cp), _lora_config_dict(cc)
+    diff = sorted(k for k in set(dpd) | set(dcd) if k not in ("r", "lora_alpha") and dpd.get(k) != dcd.get(k))
+    if diff:
+        raise CheckpointError(f"父、子的 adapter_config 除 r、lora_alpha 以外不同：{diff}")
+    if dcd.get("rank_pattern") or dcd.get("alpha_pattern") or dcd.get("use_rslora") or dcd.get("use_dora"):
+        raise CheckpointError("拼接不支持 rank_pattern / alpha_pattern / use_rslora / use_dora")
+    r_total = int(cp.r) + int(cc.r)
+    alpha = scale_p * r_total
+    if alpha / r_total != scale_p:
+        raise CheckpointError(f"拼接后的缩放 {alpha} / {r_total} 不等于 {scale_p}")
+    cat = rank_concat_lora_state(_load_tensors(dp / LORA_WEIGHTS), _load_tensors(dc / LORA_WEIGHTS), r_parent=int(cp.r),
+                                 r_child=int(cc.r))
+    if out.exists() and (not out.is_dir() or any(out.iterdir())):
+        raise CheckpointError(f"{out} 已存在且不是空目录")
+    out.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(dc / TOKENS_JSON, out / TOKENS_JSON)
+    shutil.copyfile(dc / TOKEN_ROWS, out / TOKEN_ROWS)
+    cc.r, cc.lora_alpha = r_total, alpha
+    (out / LORA_DIR).mkdir()
+    cc.save_pretrained(str(out / LORA_DIR))
+    _save_tensors(cat, out / LORA_WEIGHTS)
+    files = {rel: {"sha256": file_sha256(out / rel), "bytes": (out / rel).stat().st_size} for rel in sorted(_listed_files(out))}
+    manifest = dict(mc)
+    manifest["lora"] = {**lc, "r": r_total, "lora_alpha": float(alpha),
+                        "n_parameters": int(lp["n_parameters"]) + int(lc["n_parameters"]), "n_tensors": len(cat)}
+    manifest["files"] = files
+    manifest["lora_concat"] = {
+        "format": LORA_CONCAT_FORMAT, "rule": LORA_CONCAT_RULE, "scaling": scale_p,
+        "parent": {"manifest_sha256": file_sha256(dp / MANIFEST), "lora": dict(lp), "ranks": [0, int(lp["r"])]},
+        "child": {"manifest_sha256": file_sha256(dc / MANIFEST), "lora": dict(lc), "ranks": [int(lp["r"]), r_total]},
+        "record": dict(record or {}),
+    }
+    tmp = out / (MANIFEST + ".tmp")
+    tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=1, sort_keys=True))
+    tmp.replace(out / MANIFEST)
+    return out
+
+
+def check_rank_concat(ckpt_dir: str | os.PathLike, parent_dir: str | os.PathLike,
+                      child_dir: str | os.PathLike | None = None) -> dict[str, Any]:
+    """核对按秩拼接的检查点（模块说明）：父检查点 manifest 的 sha256 必须与记下的相同，拼接的前 r_父 个秩与父的 LoRA 逐位相同；
+    给了子检查点时，它的 manifest sha256 与其余的秩也逐位核对。不符就抛 CheckpointError。返回摘要。"""
+    d, dp = Path(ckpt_dir), Path(parent_dir)
+    man = read_manifest(d)
+    lc = man.get("lora_concat")
+    if not lc or lc.get("format") != LORA_CONCAT_FORMAT:
+        raise CheckpointError(f"{d} 不是按秩拼接的检查点（manifest 没有 lora_concat）")
+    sha_p = file_sha256(dp / MANIFEST)
+    if sha_p != lc["parent"]["manifest_sha256"]:
+        raise CheckpointError(f"父检查点 {dp} 的 manifest sha256 {sha_p[:16]}… 与拼接时记下的 {lc['parent']['manifest_sha256'][:16]}… 不符")
+    read_manifest(dp)
+    cat = _load_tensors(d / LORA_WEIGHTS)
+    parts = [("parent", dp)]
+    if child_dir is not None:
+        dc = Path(child_dir)
+        sha_c = file_sha256(dc / MANIFEST)
+        if sha_c != lc["child"]["manifest_sha256"]:
+            raise CheckpointError(f"子检查点 {dc} 的 manifest sha256 {sha_c[:16]}… 与拼接时记下的不符")
+        read_manifest(dc)
+        parts.append(("child", dc))
+    for role, src in parts:
+        lo, hi = (int(x) for x in lc[role]["ranks"])
+        st = _load_tensors(src / LORA_WEIGHTS)
+        if set(st) != set(cat):
+            raise CheckpointError(f"{role} 的 LoRA 键与拼接的不同")
+        for k, v in st.items():
+            got = cat[k][lo:hi] if _lora_part(k) == "A" else cat[k][:, lo:hi]
+            if got.dtype != v.dtype or not torch.equal(got, v):
+                raise CheckpointError(f"拼接里 {role} 的秩 [{lo}, {hi}) 与 {src} 的 {k} 不是逐位相同")
+    return {"parent_manifest_sha256": sha_p, "checked": [r for r, _ in parts], "n_tensors": len(cat),
+            "r": int(man["lora"]["r"]), "lora_alpha": float(man["lora"]["lora_alpha"])}
 
 
 @dataclass

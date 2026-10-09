@@ -2,7 +2,7 @@
 """E3b 像素 token 通道的训练入口（DEV-0025 第一部分；简报 §8.5）：一个模型 × 一种监督 × 一个种子。
 
 运行（--out 是本次运行的目录 experiments/E3/<NNNN_slug>；结果写进 <out>/<变体>/<模型>/seed<k>/，变体 e3b = 网格监督，c3 = 稀疏文本，
-c1prime = C1′，warmup = 网格格式预热）：
+c1prime = C1′，warmup = 网格格式预热，e3b_c3 = E3b+C3，c3_warmup = C3+预热）：
     python scripts/train_e3b.py --model qwen3.5-0.8b --supervision grid --seed 0 --data-root $DATA \\
         --out experiments/E3/0040_e3b_train [--resume] [--stop-after-steps N] [--ckpt-root DIR] [--keep-optimizer-state]
     python scripts/train_e3b.py --model qwen3.5-0.8b --supervision text --seed 0 --data-root $DATA --out experiments/E3/0040_e3b_train
@@ -14,6 +14,13 @@ C1′（DEV-0035 §1：冻结 LLM，只训练网格 token 的行，没有 LoRA�
 数格式错误，连续两次 < 1% 就停，上限 warmup.stop.max_steps 步；规则见配置的 warmup 节与 src/e3/warmup.py）：
     python scripts/train_e3b.py --model qwen3.5-0.8b --supervision warmup --seed 0 --out experiments/E3/0042_e3b_warmup
     # 不需要 --data-root；结果写进 <out>/warmup/<模型>/seed<k>/（warmup_eval.jsonl 是逐次读数，train_summary.json 的 warmup 一节是结果）
+E3b+C3（DEV-0042 §1：每步 = C3 同一种子的文本流 8 条 + E3b 同一种子的网格流 8 条，8000 步，两种损失 1 : 1；规则见配置的 mixed 节）：
+    python scripts/train_e3b.py --model qwen3.5-0.8b --supervision grid+text --seed 0 --data-root $DATA --out experiments/E3/0043_e3b_c3
+    # 结果写进 <out>/e3b_c3/<模型>/seed<k>/；检查点同 E3b（LoRA + 网格 token 行）
+C3+预热（DEV-0042 §2：先把 C3 的 LoRA 合并进 base，再做网格格式预热；检查点 = 两份 LoRA 按秩拼接，对原 base 独立可读）：
+    python scripts/train_e3b.py --model qwen3.5-0.8b --supervision warmup --seed 0 \\
+        --start-checkpoint <C3 的训练叶目录>/ckpt/final/model --out experiments/E3/0044_c3_warmup
+    # 变体 c3_warmup；起点必须是同一模型、同一种子的 C3（叶目录 config.yaml 的 variant = c3、seed = --seed），不需要 --data-root
 开发机彩排（小型随机模型、CPU、fp32、tests/fixtures 的小数据；配置的 tiny 节只改规模参数）：
     python scripts/train_e3b.py --tiny --model qwen3.5-0.8b --supervision grid --seed 0 --out <dir>
     --model 可以给多个（三家族一起彩排：qwen3.5-0.8b gemma-4-e2b-it internvl3.5-2b-hf）。
@@ -46,7 +53,9 @@ from src.adapters.factory import make_adapter  # noqa: E402
 from src.adapters.image_policy import parse_policy  # noqa: E402
 from src.e3.config import (  # noqa: E402
     C1PRIME,
+    C3_WARMUP,
     CONFIG_PATH,
+    MIXED,
     SUPERVISIONS,
     VARIANTS,
     ConfigError,
@@ -65,9 +74,12 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", nargs="+", required=True, help="注册键（src/adapters/registry.py），可多个（依次跑）")
     p.add_argument("--supervision", required=True, choices=SUPERVISIONS,
-                   help="grid = E3b（GT 网格 + 修正对）；text = C3（稀疏文本）；warmup = 网格格式预热（纯文字给坐标 → 网格）")
-    p.add_argument("--variant", choices=VARIANTS, help=f"输出变体（默认由监督决定：grid → e3b、text → c3、warmup → warmup）；"
-                                                       f"{C1PRIME} = C1′（只配 grid：冻结 LLM，只训练网格 token 的行）")
+                   help="grid = E3b（GT 网格 + 修正对）；text = C3（稀疏文本）；warmup = 网格格式预热（纯文字给坐标 → 网格）；"
+                        f"{MIXED} = E3b+C3（C3 的文本流 + E3b 的网格流）")
+    p.add_argument("--variant", choices=VARIANTS, help=f"输出变体（默认由监督决定：grid → e3b、text → c3、warmup → warmup、"
+                                                       f"{MIXED} → e3b_c3）；{C1PRIME} = C1′（只配 grid：冻结 LLM，只训练网格 token 的行）；"
+                                                       f"{C3_WARMUP} = C3+预热（只配 warmup，要给 --start-checkpoint；给了时默认就是它）")
+    p.add_argument("--start-checkpoint", help=f"C3+预热的起点：同一模型、同一种子的 C3 检查点 <叶目录>/ckpt/final/model（变体 {C3_WARMUP}）")
     p.add_argument("--seed", type=int, required=True, help="种子（必须在配置的 seeds 里）")
     p.add_argument("--out", required=True, help="本次运行的目录（experiments/E3/<NNNN_slug>）")
     p.add_argument("--resume", action="store_true", help="续跑：从 <ckpt>/latest 接着训练")
@@ -87,6 +99,16 @@ def parse_args(argv=None):
         p.error("--model 有重复")
     if a.stop_after_steps is not None and a.stop_after_steps < 1:
         p.error("--stop-after-steps 必须是正整数")
+    if a.start_checkpoint is not None:
+        if a.supervision != "warmup":
+            p.error(f"--start-checkpoint 只配 --supervision warmup（{C3_WARMUP}），收到 {a.supervision}")
+        if a.variant not in (None, C3_WARMUP):
+            p.error(f"给了 --start-checkpoint，变体只能是 {C3_WARMUP}，收到 {a.variant}")
+        if len(a.model) != 1:
+            p.error("--start-checkpoint 只配一个 --model（起点检查点属于一个模型）")
+        a.variant = C3_WARMUP
+    elif a.variant == C3_WARMUP:
+        p.error(f"变体 {C3_WARMUP} 要给 --start-checkpoint（C3 的 ckpt/final/model）")
     try:
         a.variant = resolve_variant(a.supervision, a.variant)
     except ConfigError as e:
@@ -125,7 +147,7 @@ def make_spec(a, entry, ad, dtype: str) -> RunSpec:
     return RunSpec(model_key=entry.key, family=entry.family, repo=entry.repo, revision=entry.revision,
                    adapter_model_key=str(getattr(ad, "model_key", entry.key)), tiny=a.tiny,
                    image_policy=policy_spec(ad.image_policy), model_dtype=dtype, supervision=a.supervision, seed=int(a.seed),
-                   frozen_llm=a.variant == C1PRIME)
+                   frozen_llm=a.variant == C1PRIME, parent_checkpoint=a.start_checkpoint)
 
 
 def cmd_run(a, argv) -> int:

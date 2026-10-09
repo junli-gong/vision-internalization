@@ -17,6 +17,13 @@
    （corrupt）、C3 选框还是多边形（c3_kind）、点对的抽样键。同一条样本在不同 epoch 里拿到不同的修正对。
 C3 与 E3b 用同一个种子时，每一步的任务、样本 id、epoch 逐个相同（匹配曝光量）；只有目标不同。
 
+**E3b+C3 的两条流**（MixedSchedule；监督 grid+text，DEV-0042 §1，配置的 mixed 节）：第 t 步 = C3 种子 s 的样本流
+（Schedule(supervision = text, batch_size = per_step.text)）的 step_plans(t)，接着 E3b 种子 s 的样本流（supervision = grid，
+batch_size = per_step.grid）的 step_plans(t)。plan(k) 只由 (种子, k) 决定、与 batch_size 无关（batch_size 只决定 SlotPlan.step），所以
+文本流第 t 步就是 C3 运行的第 8t … 8t + 7 个槽位（任务、样本 id、epoch、text_kind 逐个相同，构造出来的样本也逐个相同），网格流就是
+E3b 运行的第 8t … 8t + 7 个槽位（含修正对）。同一个 k 在两条流里是同一条样本（同一张图、同一个 epoch），所以同一步里同一张图以两种
+监督各出现一次（不另换数据种子，见配置的 mixed.basis）。样本属于哪条流由 stream_of(plan) 判定：kind = text 是文本流，其余是网格流。
+
 **修正对**（supervision = grid，概率 correction.fraction）：
 - 分割：GT mask → mask_noise.corrupt(mask, s, rng, others)（s 按 sample_severity 的噪声日程；others 是同一张图上其他被指代的物体）
   → mask_to_grid → feedback_image("refseg", 原图, 带错的网格)。
@@ -38,7 +45,7 @@ from src.data import train_dedupe as TD
 from src.data import train_loaders as TL
 from src.data.records import LoadResult, Sample
 from src.e3 import c3 as C3
-from src.e3.config import E3Config
+from src.e3.config import MIXED, STREAMS, E3Config
 from src.e3.depth_noise import corrupt_depth_grid
 from src.e3.feedback import feedback_image
 from src.e3.targets import (
@@ -262,6 +269,27 @@ class Schedule:
         return [self.plan(step * self.batch_size + i) for i in range(self.batch_size)]
 
 
+def stream_of(plan: SlotPlan) -> str:
+    """E3b+C3 里样本属于哪条流：kind = text 是文本流（C3），grid / correction 是网格流（E3b）。"""
+    return "text" if plan.kind == "text" else "grid"
+
+
+class MixedSchedule:
+    """E3b+C3 的样本日程（模块说明）：第 t 步 = 各条流（按 order）的 step_plans(t) 依次拼接。"""
+
+    def __init__(self, pools: Mapping[str, Sequence[Sample]], cfg: E3Config, *, seed: int, per_step: Mapping[str, int],
+                 order: Sequence[str] = STREAMS) -> None:
+        if sorted(order) != sorted(STREAMS) or set(per_step) != set(STREAMS):
+            raise ValueError(f"E3b+C3 的样本流必须恰好是 {STREAMS}，收到 order {list(order)}、per_step {dict(per_step)}")
+        self.order = tuple(order)
+        self.per_step = {s: int(per_step[s]) for s in STREAMS}
+        self.streams = {s: Schedule(pools, cfg, seed=seed, supervision=s, batch_size=self.per_step[s]) for s in STREAMS}
+        self.batch_size = sum(self.per_step.values())
+
+    def step_plans(self, step: int) -> list[SlotPlan]:
+        return [p for s in self.order for p in self.streams[s].step_plans(step)]
+
+
 # ---------------------------------------------------------------------------
 # 一条训练样本
 # ---------------------------------------------------------------------------
@@ -305,7 +333,7 @@ def _iou(a: np.ndarray, b: np.ndarray) -> float:
 class ExampleBuilder:
     """SlotPlan → Example。grid 监督要给 tokens（网格词表的 id 布局）；text 监督要给 encode（适配器 tokenizer 的无特殊 token 编码）、
     family（取 E1 的多边形统一提示与本家族的定位提示）与 format_boxes（适配器的 format_boxes：C3 的框目标用本家族原生格式，
-    DEV-0030 §3）。"""
+    DEV-0030 §3）；grid+text（E3b+C3）两样都要给，按 plan.kind 构造（text 走 C3 的构造，其余走 E3b 的，与单一监督逐个相同）。"""
 
     def __init__(self, cfg: E3Config, pools: Mapping[str, Sequence[Sample]], *, seed: int, supervision: str, stop_id: int,
                  tokens: GridTokens | None = None, encode: Callable[[str], list[int]] | None = None,
@@ -320,9 +348,9 @@ class ExampleBuilder:
         self.format_boxes = format_boxes
         self.stop_id = int(stop_id)
         self.n = cfg.grid_n
-        if supervision == "grid" and tokens is None:
+        if supervision in ("grid", MIXED) and tokens is None:
             raise ValueError("网格监督要给 tokens")
-        if supervision == "text":
+        if supervision in ("text", MIXED):
             if encode is None or family is None or format_boxes is None:
                 raise ValueError("文本监督（C3）要给 encode、family 与 format_boxes")
             self.polygon_template, self.polygon_source = C3.load_polygon_template(self.doc, family, REPO_ROOT)
@@ -451,6 +479,7 @@ __all__ = [
     "Example",
     "ExampleBuilder",
     "KINDS",
+    "MixedSchedule",
     "Schedule",
     "SlotPlan",
     "TASK_INDEX",
@@ -463,4 +492,5 @@ __all__ = [
     "refseg_mask",
     "sample_rng",
     "slot_task",
+    "stream_of",
 ]

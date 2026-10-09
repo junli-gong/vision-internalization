@@ -1,7 +1,7 @@
 {
  "schema": 1,
- "version": "e3b-train-v2",
- "version_note": "v2（DEV-0030）：C3 的框改用本家族原生格式与 E1 的定位提示（c3.box_template_from、box_basis）；加 eval 节（评测）",
+ "version": "e3b-train-v3",
+ "version_note": "v3（DEV-0042）：加 mixed 节（E3b+C3 混合训练，D83-2），其余条目逐项同 v2 的最后一版（sha256 35e69b56…，D70；tests 钉住）。v2（DEV-0030）：C3 的框改用本家族原生格式与 E1 的定位提示（c3.box_template_from、box_basis）；加 eval 节（评测）",
  "framework": "src/e3（DEV-0025 第一部分：词表、目标、数据管线、训练循环、C3 对照；DEV-0030 第二部分：评测 src/e3/evaluate.py）；规则见 src/e3/__init__.py",
  "status": "草稿，未冻结。超参取简报的默认值或常用值（各节 basis）；按简报 §9，LoRA 的秩与放置、数据混合与课程属于自由探索，正式取值由 E3 预注册冻结",
  "grid": {
@@ -187,6 +187,15 @@
   "stop": {"eval_every": 100, "threshold": 0.01, "consecutive": 2, "max_steps": 2000},
   "basis": "网格格式预热（D36-5，N5 第 2 处；DEV-0035 §2）：E5 主比较里\"基座 + 网格格式预热\"那一臂。scripts/train_e3b.py --supervision warmup，输出变体 warmup。纯符号任务：输入只有文字（不给图像），用文字给出要涂的格子坐标（分割）或若干区域的深度档号（深度），目标是对应的 32×32 网格 token 序列，与 E3b 的网格监督同一套 token、同一种格式、同一个受限交叉熵；LoRA、token 行、优化器、批、检查点格式都同 E3b 的网格监督（eval_e3b 与 run_e1 --checkpoint 都能加载）。混合 mix：分割 : 深度 = 1 : 1（与 E3b 的 mix 相同）。坐标从左上角起编号 0..n−1，区间一律写成 range（单行也写 \"5-5\"）。随机数：训练样本 k 用 default_rng([data_seed, 0, 运行种子, k, attempt])，留出集第 i 条用 default_rng([data_seed, 1, heldout.seed, i])，与任何视觉数据无关；训练样本的指令与留出集某条逐字相同时重抽，留出集不进训练。停止规则：每 eval_every 步在留出集（heldout.n 条，按 mix 轮转，分割、深度各半）上做受限解码（与 E3b 单轮评测同一个设置：allowed_ids、max_new_tokens 1057、批大小取 eval.batch_size），格式错误 = src/e3/targets.parse_target 解析失败（没有停止 token、长度不对、行数或列数不对、格子里出现本任务以外的 token）；两个任务合计的格式错误率连续 consecutive 次 < threshold 就停，记下步数（train_summary.json 的 warmup 一节，逐次读数在 warmup_eval.jsonl）。max_steps 是步数上限（学习率的 warmup_ratio 与余弦按它排）；到了上限还没满足，照样存检查点并记 stop_rule_met = false。阈值 0.01 = 负责人原话\"格式错误率低于 1%\"，n = 200 时即至多 1 条；consecutive = 2 = 任务书的\"连续两次\"。eval_every、max_steps、n 是暂定值（简报 §9 的自由探索），E3 / E5 预注册冻结",
   "tiny": {"max_steps": 6, "eval_every": 2, "heldout_n": 4}
+ },
+ "mixed": {
+  "version": "e3b-mixed-v1",
+  "per_step": {"text": 8, "grid": 8},
+  "order": ["text", "grid"],
+  "loss_weights": {"text": 1, "grid": 1},
+  "steps": 8000,
+  "tiny": {"per_step": {"text": 2, "grid": 2}, "steps": 8},
+  "basis": "E3b+C3（D83-2，负责人 2026-10-08 的答复，docs/lead_answers/2026-10-08-n31.md；DEV-0042 §1）：scripts/train_e3b.py --supervision grid+text，输出变体 e3b_c3。两条样本流，第 t 步（t = 0 … steps − 1）取：文本 per_step.text 条 = C3 种子 s 的样本流（src/e3/data.Schedule(supervision = text, 种子 s)）第 8t … 8t + 7 个槽位；网格 per_step.grid 条 = E3b 种子 s 的样本流（Schedule(supervision = grid, 种子 s)，含修正对，比例同 E3b 的 correction.fraction）第 8t … 8t + 7 个槽位。steps = 8000 的来历：C3、E3b 各自 steps（4000）× 每步 16 条 = 64,000 条 = 8000 × 8，所以全程的文本样本恰好是 C3 种子 s 运行的 64,000 条、顺序相同，网格样本恰好是 E3b 种子 s 运行的 64,000 条、顺序相同；稠密样本是在 C3 的文本曝光之外额外加上的，步数因此加倍（load_config 核对 steps × per_step.<监督> = 顶层 steps × 每步条数，tiny 节同理）。两条流的槽位与任务、图像的对应只由种子与 k 决定，所以同一步里同一张图（同一个样本 id、同一个 epoch）以两种监督各出现一次；不另换数据种子去避开它（换了文本流就不再与 C3 相同）。每步 16 条 = per_step.text + per_step.grid = batch.micro_batch_size × batch.grad_accum_steps；微批 4 条，每个微批只含一种监督（order：文本的 2 个微批在前，网格的 2 个在后）。理由：同一个微批里的序列形状相近（C3 的目标几十个 token、一张图；E3b 的目标 1057 个 token、修正对两张图），填充少，显存峰值不超过 E3b 单独训练；两种损失按各自的 token 数归一，每次 backward 只对应一种归一化。损失：每步 = loss_weights.text × 文本样本的逐 token 平均 + loss_weights.grid × 网格样本的逐 token 平均，即 1 : 1，事先固定（D83-2：不调；load_config 只认 1 : 1）。各自的逐 token 平均与 C3、E3b 单独训练时的定义相同（loss 节：一步之内这种监督全部监督 token 的平均；文本 = chunked_lm_loss 全词表、逐 token 权重 1；网格 = 本任务允许集合上的受限交叉熵 × src/e3/targets 的逐 token 权重）。学习率同 E3b（optim 节：2e-4，warmup_ratio 3% + 余弦），按 8000 步排（warmup 240 步）：日程长度是 C3、E3b 的 2 倍，照实写进运行身份（training.mixed.schedule_length_ratio）与 README。LoRA、网格 token 行、优化器、检查点格式同 E3b（eval_e3b、run_e1 --checkpoint 与 E5 的起点都能直接读）。与 C3 的模型结构差别只在网格 token，照实报告：E3b+C3 加了 67 个网格 token 并训练这些行（Qwen / InternVL 复用预留行、Gemma 复用 <unusedN>，词表大小不变），文本损失的全词表 softmax 里这 67 行是均值初始化后训练的值（文本损失的梯度也流到这些输出行），C3 里是 base 的原值、不训练。训练日志：loss = 两项之和（已乘权重）；loss_by_task 的 text、grid 两项是两种监督各自的逐 token 平均，text/<任务>、grid/<任务> 是分任务的；by_supervision 记两种监督各自的样本数与 token 数"
  },
  "tiny": {
   "basis": "--tiny：小型随机模型 + CPU + fp32 + tests/fixtures 的小数据。只改下面这些规模参数，其余同正式配置",

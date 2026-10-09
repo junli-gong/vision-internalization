@@ -86,18 +86,24 @@ def test_config_pins():
 
 
 OLD_CONFIG = REPO / "tests" / "fixtures" / "e3" / "e3b_train_3bff3604.json"  # D67 的 E3b 配置原样
+DEV0035_CONFIG = REPO / "tests" / "fixtures" / "e3" / "e3b_train_35e69b56.json"  # DEV-0035 之后的 E3b 配置原样（D70）
 
 
 def test_config_only_adds_c1prime_and_warmup():
-    """DEV-0035 只为 C1′ 与预热新增条目，已有条目逐项不变（与 D67 的版本 3bff3604… 比较）。"""
+    """DEV-0035 只为 C1′ 与预热新增条目，已有条目逐项不变（它的产物 35e69b56… 与 D67 的版本 3bff3604… 比较）。DEV-0042 之后的
+    配置在此之上只加 mixed 节、升版本号（tests/test_e3_mixed.py::test_config_only_adds_mixed）；c1prime、warmup 两节照旧。"""
     import hashlib
 
     assert hashlib.sha256(OLD_CONFIG.read_bytes()).hexdigest() == (
         "3bff36043ace0a63161b106ed92aa9bff8e674062140665ccdd76965faf064b6")
+    assert hashlib.sha256(DEV0035_CONFIG.read_bytes()).hexdigest() == (
+        "35e69b56324281356aba22419391fe8d092e3c0f0413ee1af4ed8ea74b60f457")
     old = json.loads(OLD_CONFIG.read_text(encoding="utf-8"))
-    assert set(CFG.doc) - set(old) == {"c1prime", "warmup"} and not set(old) - set(CFG.doc)
-    assert all(CFG.doc[k] == old[k] for k in old)
-    assert list(CFG.doc)[-3:] == ["c1prime", "warmup", "tiny"]
+    new = json.loads(DEV0035_CONFIG.read_text(encoding="utf-8"))
+    assert set(new) - set(old) == {"c1prime", "warmup"} and not set(old) - set(new)
+    assert all(new[k] == old[k] for k in old)
+    assert list(new)[-3:] == ["c1prime", "warmup", "tiny"]
+    assert all(CFG.doc[k] == new[k] for k in ("c1prime", "warmup"))
 
 
 @pytest.mark.parametrize("mutate,match", [
