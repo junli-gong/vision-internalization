@@ -59,11 +59,37 @@
   规则、E3b 配置的 sha256）与 meta.json；README.md；logs/timing.jsonl（每条每阶段的墙钟）、logs/run_<k>.json。
 **续跑**（--resume）：config.yaml 必须与本次完全相同；各阶段按顺序跑（第 r 轮要第 r − 1 轮完整），每个阶段的文件只追加整批，
 中断在一批中间时退回到这一批的开头整批重跑（批组成与一次跑完相同）。没有 --resume 而目录非空：拒绝覆盖。
+
+**结构强制解码**（DEV-0041 §2，D83；resolve_eval(decode = "structured")，scripts/eval_e3b.py --decode structured）：每一次生成（单轮、
+多轮的每一轮、匹配计算量的每次采样）都改走 adapter.generate_batch(allowed_token_ids = 同一允许集合, logits_processor =
+[src/grid/structured_decode.StructuredGridProcessor])：第 r 行的格子只允许本任务的值 token，行末只允许行分隔，最后一个位置只允许停止
+token，长度恒为 n(n + 1) + 1；贪心（do_sample = False），采样同上面的受限采样（同一处理器）；批组成、续跑、评分与 restricted 相同。
+每批之后逐行核对结构（check_structured_ids，处理器没生效就报错）。叶目录名加后缀 __structured（<任务>__structured），设置与运行身份
+（config.yaml 的 eval.decode）、metrics.json 的 decode、README 各记一笔；不给（或给 restricted）时没有这个键，输出与原来逐字节相同
+（tests 用 53aefd2 的快照钉住）。与 generate_restricted 的关系（CPU fp32 逐 token 相同；bf16 上的差异见合并核对）见 structured_decode
+的模块说明。
+
+**指令检查**（DEV-0041 §1，只用于 refseg、只跑单轮：k_values = [1]；scripts/eval_e3b.py --instruction-check {none,swap}）：
+- none：去掉指令。定义与 E3a 的 no_instruction 相同：指令换成 configs/e3a_train.json 的 eval.leak_checks.no_instruction.instruction
+  （空串，由 src/readout/evaluate.resolve_eval 读出，不另写），user 轮里只剩图像；允许集合、解码与正常评测相同。
+- swap：指代句换成同一张图里另一个物体的指代句（候选与取法见 SWAP_RULE；没有候选的样本跳过并计数）。每条预测对两个目标评分：
+  换上去的物体（swapped）与原来的物体（original）。
+- 叶目录 <任务>__instr_<种类>[__structured]，与正常评测并列；正常评测那一侧取已有的结果（--normal-leaf，默认同一 --out 里同一解码的
+  <任务>/），按 id 配对，不重跑：它的运行身份（模型、检查点、网格上下文、token 布局、配置、批大小、上采样、解码）必须与本次相同，它的
+  样本顺序的前 N 条必须就是本次的 N 条（--limit N）；它的单轮网格在本次的评分规则下重算，原目标上的读数必须与它的 scores.jsonl 逐项
+  相同（核对配对没有错位）。只用默认上采样（同 E3a 的泄漏检查）。
+- 批组成：N 取批大小的整数倍时，none 的每一批与正常评测的对应批是同一组样本（只是提示不同）；swap 跳过样本后按剩下的样本连续成批，
+  与正常评测的批不再一一对应——配对按 id 做，跳过的样本不进配对，条数照记。
+- 输出：predictions.jsonl（同单轮）、swap_pairs.jsonl（swap：每条样本的候选或跳过）、scores.jsonl（每条：两侧在各目标上的统计）、
+  metrics.json（各目标上本次与正常评测的 cIoU、gIoU、BIoU，配对差 = 正常 − 检查的配对 bootstrap CI，跳过条数）、compute.json、
+  config.yaml（运行身份另记 instruction_check 与 normal 的指纹）、README.md、logs/。
 """
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
+import gzip
 import hashlib
 import json
 import multiprocessing
@@ -92,6 +118,7 @@ from src.e3.feedback import DEPTH_COLORMAP, feedback_image
 from src.e3.merge_check import settings_from_config
 from src.e3.targets import parse_target, seq_len
 from src.e3.tokens import GRID_TASKS, GridTokens
+from src.grid.structured_decode import STRUCTURED_RULE, GridStructure, StructuredGridProcessor, check_structured_ids
 from src.runlog import write_run_metadata
 from src.stats import bootstrap_ci, paired_bootstrap_ci, ratio_of_sums
 
@@ -113,6 +140,16 @@ MERGE_CHECK = "merge_check.json"
 EVAL_SUB = "eval"
 SAMPLING_KW = {"top_k": 0, "top_p": 1.0, "repetition_penalty": 1.0}  # 采样不截断、不惩罚：就是受限分布本身（模块说明）
 GROUPS = ("person", "non_person", "unknown")
+DECODE_MODES = ("restricted", "structured")  # DEV-0041 §2：restricted = generate_restricted（默认，不进运行身份）
+STRUCTURED_SUFFIX = "__structured"
+INSTRUCTION_CHECKS = ("none", "swap")  # DEV-0041 §1
+SWAP_PAIRS = "swap_pairs.jsonl"
+SWAP_SEED = 20261008  # swap 候选的取法的种子（事先固定，DEV-0041 §1）
+SWAP_RULE = ("候选 = 评测总体（load_eval_set 的全部样本，不受 --limit 影响）里同一张图（fields.image_id）、不同标注 id（fields.ann_id）的"
+             "全部指代句，按评测总体的顺序排列；取第 k 个，k = sha256('visint-e3b-instr-swap|<SWAP_SEED>|<样本 id>') 的前 8 字节"
+             "（大端整数）mod 候选数；没有候选的样本跳过并计数。指令 = 同一模板（tasks.refseg.grid_template）填候选的指代句")
+NONE_RULE = ("去掉指令：指令换成 E3a 的 no_instruction（configs/e3a_train.json 的 eval.leak_checks.no_instruction.instruction，"
+             "由 src/readout/evaluate.resolve_eval 读出），user 轮里只剩图像；允许集合与解码与正常评测相同")
 
 
 # ---------------------------------------------------------------------------
@@ -178,9 +215,11 @@ def k_values_prefix(config_ks: Sequence[int], requested: Sequence[int]) -> list[
 
 
 def resolve_eval(cfg: E3Config, *, tiny: bool, batch_size: int | None = None, score_workers: int | None = None,
-                 merge_check_n: int | None = None, k_values: Sequence[int] | None = None) -> dict[str, Any]:
+                 merge_check_n: int | None = None, k_values: Sequence[int] | None = None,
+                 decode: str | None = None) -> dict[str, Any]:
     """configs/e3b_train.json 的 eval 节 → 本次生效的设置（--tiny 时按 eval.tiny 覆盖规模；命令行可再覆盖批大小、评分进程数、
-    合并核对的 n，以及只跑配置 K 那一列的前缀：k_values，规则见模块说明）。结构不合规就报错。"""
+    合并核对的 n，以及只跑配置 K 那一列的前缀：k_values，规则见模块说明）。decode（DEV-0041 §2）：None 或 restricted = 原来的
+    受限解码，设置里没有 decode 这个键（逐字节不变）；structured = 结构强制，设置里加 decode。结构不合规就报错。"""
     e = cfg.doc["eval"]
     config_ks = config_k_values(cfg)
     ks = config_ks if k_values is None else k_values_prefix(config_ks, k_values)
@@ -210,7 +249,29 @@ def resolve_eval(cfg: E3Config, *, tiny: bool, batch_size: int | None = None, sc
         raise ValueError(f"批大小、合并核对的 n 必须 ≥ 1，评分进程数 ≥ 0：{out}")
     if ks != config_ks:  # 只在真的覆盖时加这个键：不给 --k-values（或给的就是配置那一列）时设置与运行身份逐字节不变
         out["k_values_override"] = {"config_k_values": list(config_ks), "k_values": list(ks), "basis": K_VALUES_OVERRIDE_BASIS}
+    if decode is not None and decode not in DECODE_MODES:
+        raise ValueError(f"decode 必须是 {DECODE_MODES} 之一，收到 {decode!r}")
+    if decode == "structured":  # 只在结构强制时加这个键（DEV-0041 §2）：restricted 的设置与运行身份逐字节不变
+        out["decode"] = {"mode": "structured", "rule": STRUCTURED_RULE,
+                         "greedy": "adapter.generate_batch(allowed_token_ids = 任务的允许集合, logits_processor = "
+                                   "[StructuredGridProcessor], do_sample = False)",
+                         "sampling": "匹配计算量的采样：同上，do_sample = True，temperature 与 sampling_kw 同 matched_compute",
+                         "basis": "D83：E3b+C3 与 E5 全部网格任务的正式口径；现有各臂另报作诊断"}
     return out
+
+
+def decode_mode(settings: Mapping[str, Any]) -> str:
+    """本次的解码方式（DEV-0041 §2）：设置里没有 decode 就是 restricted。"""
+    d = settings.get("decode")
+    return "restricted" if d is None else str(d["mode"])
+
+
+def leaf_name(task: str, settings: Mapping[str, Any] | None = None, check: str | None = None) -> str:
+    """叶目录名：<任务>，指令检查加 __instr_<种类>，结构强制再加 __structured（restricted、没有检查时就是任务名，与原来相同）。"""
+    if check is not None and check not in INSTRUCTION_CHECKS:
+        raise ValueError(f"指令检查只有 {INSTRUCTION_CHECKS}，收到 {check!r}")
+    name = task if check is None else f"{task}__instr_{check}"
+    return name + (STRUCTURED_SUFFIX if settings is not None and decode_mode(settings) == "structured" else "")
 
 
 def identity_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
@@ -334,16 +395,52 @@ def _jsonl(rec: Mapping[str, Any]) -> str:
     return json.dumps(rec, ensure_ascii=False) + "\n"
 
 
+def grid_structure(ctx: TaskContext) -> GridStructure:
+    """本任务网格的形状（结构强制解码，DEV-0041 §2）：各行的值 token = 本任务的值 token，行分隔与停止 token 取 ctx.tokens。"""
+    st = GridStructure.uniform(ctx.tokens.value_ids(ctx.task), ctx.tokens.row_id, ctx.tokens.stop_id, ctx.n)
+    if st.length != ctx.max_new_tokens:
+        raise RuntimeError(f"结构的长度 {st.length} 与 max_new_tokens {ctx.max_new_tokens} 不同")
+    missing = sorted(set(st.all_ids()) - {int(i) for i in ctx.allowed})
+    if missing:
+        raise RuntimeError(f"结构里的 token {missing[:4]} 不在允许集合里")
+    return st
+
+
+def structured_generate(ad: Any, ctx: TaskContext, inputs: Sequence[Any], *, where: str,
+                        sample_kw: Mapping[str, Any] | None = None) -> list[Any]:
+    """结构强制的一批（模块说明）：generate_batch(allowed_token_ids, logits_processor = [StructuredGridProcessor])，贪心
+    （sample_kw = None）或受限采样；之后逐行核对结构（入口断言），处理器没有生效就报错。"""
+    st = grid_structure(ctx)
+    proc = StructuredGridProcessor(st)
+    kw = dict(sample_kw) if sample_kw is not None else {"do_sample": False}
+    res = ad.generate_batch(list(inputs), enable_thinking=ctx.enable_thinking, max_new_tokens=ctx.max_new_tokens,
+                            allowed_token_ids=list(ctx.allowed), logits_processor=[proc], **kw)
+    if len(res) != len(inputs):
+        raise RuntimeError(f"{where}：生成返回 {len(res)} 行，输入 {len(inputs)} 行")
+    if inputs and proc.n_calls != st.length:
+        raise RuntimeError(f"{where}：结构强制的处理器被调用了 {proc.n_calls} 次，应为 {st.length}")
+    for k, r in enumerate(res):
+        check_structured_ids(r.token_ids, st, stopped=r.stopped, where=f"{where} 第 {k} 行")
+    return res
+
+
 def generate_chunk(ad: Any, ctx: TaskContext, inputs: Sequence[Any], stage: str, chunk: int,
                    settings: Mapping[str, Any]) -> list[Any]:
-    """一批的生成：第 r 轮贪心受限解码（generate_restricted）；第 s 次采样走 generate_batch 的受限采样（模块说明）。"""
+    """一批的生成：第 r 轮贪心受限解码（generate_restricted）；第 s 次采样走 generate_batch 的受限采样（模块说明）。
+    结构强制（DEV-0041 §2）时两者都改走 structured_generate（贪心 / 同一受限采样，逐位置收窄）。"""
+    structured = decode_mode(settings) == "structured"
     if stage.startswith("round"):
+        if structured:
+            return structured_generate(ad, ctx, inputs, where=f"[{ctx.task} {stage} 第 {chunk} 批]")
         return ad.generate_restricted(list(inputs), list(ctx.allowed), max_new_tokens=ctx.max_new_tokens,
                                       stop_ids=[int(ctx.tokens.stop_id)], enable_thinking=ctx.enable_thinking)
     import torch
 
     mc = settings["matched_compute"]
     torch.manual_seed(sampling_seed(mc["seed"], stage, chunk))
+    if structured:
+        return structured_generate(ad, ctx, inputs, where=f"[{ctx.task} {stage} 第 {chunk} 批]",
+                                   sample_kw={"do_sample": True, "temperature": float(mc["temperature"]), **mc["sampling_kw"]})
     return ad.generate_batch(list(inputs), enable_thinking=ctx.enable_thinking, max_new_tokens=ctx.max_new_tokens,
                              allowed_token_ids=list(ctx.allowed), do_sample=True, temperature=float(mc["temperature"]),
                              **mc["sampling_kw"])
@@ -751,8 +848,10 @@ class EvalSpec:
     limit: int | None = None
 
 
-def leaf_dir(out: str | Path, spec: EvalSpec, task: str) -> Path:
-    return model_dir(out, spec) / task
+def leaf_dir(out: str | Path, spec: EvalSpec, task: str, settings: Mapping[str, Any] | None = None,
+             check: str | None = None) -> Path:
+    """<out>/eval/<变体>/<模型>/seed<k>/<叶目录名>（leaf_name：restricted、没有指令检查时就是任务名）。"""
+    return model_dir(out, spec) / leaf_name(task, settings, check)
 
 
 def model_dir(out: str | Path, spec: EvalSpec) -> Path:
@@ -834,6 +933,9 @@ def readme_text(spec: EvalSpec, ident: Mapping[str, Any], metrics: Mapping[str, 
     ov = ident["eval"].get("k_values_override")
     if ov:  # DEV-0039：只跑了配置 K 那一列的前缀（不覆盖时没有这一行，README 与原来逐字节相同）
         lines += ["", f"- 本次只跑 K = {ov['k_values']}（--k-values 覆盖配置的 {ov['config_k_values']}；{ov['basis']}）"]
+    dec = ident["eval"].get("decode")
+    if dec:  # DEV-0041 §2：结构强制（restricted 时没有这一行，README 与原来逐字节相同）
+        lines += ["", f"- 解码：{dec['mode']}（{dec['rule']}）"]
     lines += ["", "- K = 1 的多轮与单轮是同一次调用（逐个相同）；匹配的单轮 = 贪心 + K − 1 次受限采样，逐格合成（规则见 src/e3/evaluate.py）",
               "- GPU 墙钟（call_time_s）与端到端墙钟（wall_time_s）在记账文件里（compute*.json）；本表只列由输出决定的计数",
               "", "## 文件", "",
@@ -883,22 +985,17 @@ def finalize(leaf: Path, spec: EvalSpec, ident: Mapping[str, Any], ctx: TaskCont
     metrics = {"task": ctx.task, "model": spec.model_key, "variant": spec.variant, "seed": int(spec.seed),
                "checkpoint_manifest_sha256": spec.checkpoint.get("manifest_sha256"), "n": len(samples), "complete": True,
                "config_sha256": ident["config"]["sha256"], **body}
+    if decode_mode(settings) == "structured":  # DEV-0041 §2：只在结构强制时加（restricted 的 metrics.json 逐字节不变）
+        metrics["decode"] = settings["decode"]
     (leaf / METRICS).write_text(json.dumps(metrics, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     (leaf / README).write_text(readme_text(spec, ident, metrics), encoding="utf-8")
     return metrics
 
 
-def run_eval_task(adapter: Any, cfg: E3Config, settings: Mapping[str, Any], spec: EvalSpec, ctx: TaskContext, sel: LoadResult,
-                  out_dir: str | Path, *, resume: bool = False, argv: Sequence[str] = (),
-                  run_extra: Mapping[str, Any] | None = None, log: Callable[[str], None] | None = None,
-                  warmup: bool = True) -> dict[str, Any]:
-    """一个任务的评测（规则见模块说明）；adapter 是合并后的检查点（load_trained(merge=True)）。返回 metrics。"""
-    log = log or (lambda m: print(m, file=sys.stderr, flush=True))
-    samples = list(sel.records)[: spec.limit] if spec.limit else list(sel.records)
-    if not samples:
-        raise ValueError(f"{ctx.task} 的评测集是空的")
-    leaf = leaf_dir(out_dir, spec, ctx.task)
-    ident = run_identity(spec, cfg, settings, ctx, sel, samples)
+def _open_leaf(leaf: Path, ident: Mapping[str, Any], cfg: E3Config, spec: EvalSpec, settings: Mapping[str, Any], adapter: Any,
+               *, resume: bool, argv: Sequence[str], run_extra: Mapping[str, Any] | None
+               ) -> tuple[int, Path, dict[str, Any]]:
+    """叶目录的续跑规则（模块说明）与本次的运行记录：返回 (第几次运行, logs/run_<k>.json 的路径, 运行记录)。"""
     if leaf.exists() and any(leaf.iterdir()):
         if not resume:
             raise FileExistsError(f"{leaf} 已存在且非空；续跑请加 --resume")
@@ -920,6 +1017,22 @@ def run_eval_task(adapter: Any, cfg: E3Config, settings: Mapping[str, Any], spec
                                "device": str(getattr(adapter, "device", None)), "score_workers": settings["score_workers"],
                                **dict(run_extra or {}), "stages": [], "finished_utc": None}
     run_path.write_text(json.dumps(run_log, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    return run_k, run_path, run_log
+
+
+def run_eval_task(adapter: Any, cfg: E3Config, settings: Mapping[str, Any], spec: EvalSpec, ctx: TaskContext, sel: LoadResult,
+                  out_dir: str | Path, *, resume: bool = False, argv: Sequence[str] = (),
+                  run_extra: Mapping[str, Any] | None = None, log: Callable[[str], None] | None = None,
+                  warmup: bool = True) -> dict[str, Any]:
+    """一个任务的评测（规则见模块说明）；adapter 是合并后的检查点（load_trained(merge=True)）。返回 metrics。"""
+    log = log or (lambda m: print(m, file=sys.stderr, flush=True))
+    samples = list(sel.records)[: spec.limit] if spec.limit else list(sel.records)
+    if not samples:
+        raise ValueError(f"{ctx.task} 的评测集是空的")
+    leaf = leaf_dir(out_dir, spec, ctx.task, settings)
+    ident = run_identity(spec, cfg, settings, ctx, sel, samples)
+    run_k, run_path, run_log = _open_leaf(leaf, ident, cfg, spec, settings, adapter, resume=resume, argv=argv,
+                                          run_extra=run_extra)
     t_all = time.perf_counter()
     if warmup and hasattr(adapter, "warmup") and not (leaf / stage_file(stage_names(settings)[-1])).exists():
         run_log["warmup_wall_s"] = adapter.warmup([load_rgb(samples[0].images[0])],
@@ -935,28 +1048,320 @@ def run_eval_task(adapter: Any, cfg: E3Config, settings: Mapping[str, Any], spec
     return metrics
 
 
+# ---------------------------------------------------------------------------
+# 指令检查（DEV-0041 §1；规则见模块说明）
+# ---------------------------------------------------------------------------
+
+
+def no_instruction_text(*, tiny: bool) -> dict[str, Any]:
+    """E3a 的 no_instruction：configs/e3a_train.json 的 eval.leak_checks.no_instruction，由 src/readout/evaluate.resolve_eval 读出
+    （同一个定义，不另写）。返回指令与来源（进运行身份）。"""
+    from src.readout.config import load_config as load_e3a_config
+    from src.readout.evaluate import resolve_eval as e3a_resolve_eval
+
+    c = load_e3a_config()
+    ni = e3a_resolve_eval(c, tiny=tiny)["leak_checks"]["no_instruction"]
+    if "refseg" not in ni["tasks"]:
+        raise ValueError(f"E3a 的 no_instruction 不含 refseg（tasks = {ni['tasks']}），定义对不上")
+    return {"instruction": str(ni["instruction"]),
+            "source": "configs/e3a_train.json 的 eval.leak_checks.no_instruction.instruction（src/readout/evaluate.resolve_eval）",
+            "e3a_config": {"path": c.path, "sha256": c.sha256}}
+
+
+def swap_index(sample_id: str, n_candidates: int) -> int:
+    """swap 的取法（SWAP_RULE）：sha256('visint-e3b-instr-swap|<SWAP_SEED>|<样本 id>') 的前 8 字节 mod 候选数。"""
+    if n_candidates < 1:
+        raise ValueError("候选数必须 ≥ 1")
+    h = hashlib.sha256(f"visint-e3b-instr-swap|{SWAP_SEED}|{sample_id}".encode("utf-8")).digest()
+    return int.from_bytes(h[:8], "big") % int(n_candidates)
+
+
+def swap_candidates(samples: Sequence[Sample], pool: Sequence[Sample]) -> list[tuple[Sample | None, int]]:
+    """每条样本的 (换上去的指代句所在的样本或 None, 候选数)：候选 = pool 里同一张图、不同标注 id 的全部指代句（pool 的顺序）。"""
+    by_image: dict[Any, list[Sample]] = {}
+    for c in pool:
+        by_image.setdefault(c.fields["image_id"], []).append(c)
+    out: list[tuple[Sample | None, int]] = []
+    for s in samples:
+        cands = [c for c in by_image.get(s.fields["image_id"], []) if c.fields["ann_id"] != s.fields["ann_id"]]
+        out.append((cands[swap_index(s.id, len(cands))] if cands else None, len(cands)))
+    return out
+
+
+@dataclass(frozen=True)
+class InstructionCheckPlan:
+    """一项指令检查：kind、送进模型时用的上下文（none：模板换成空指令）、原样本（前 N 条）、送进模型的样本（swap：指代句换成候选的，
+    没有候选的不在里面）、swap 的新目标（id → 候选样本）、swap_pairs.jsonl 的行、运行身份里的 instruction_check。"""
+
+    kind: str
+    ctx: TaskContext
+    samples: tuple[Sample, ...]
+    called: tuple[Sample, ...]
+    targets: Mapping[str, Sample]
+    pairs: tuple[Mapping[str, Any], ...]
+    identity: Mapping[str, Any]
+
+
+def instruction_check_plan(kind: str, ctx: TaskContext, samples: Sequence[Sample], pool: Sequence[Sample], *,
+                           tiny: bool) -> InstructionCheckPlan:
+    if ctx.task != "refseg":
+        raise ValueError(f"指令检查只用于 refseg，收到 {ctx.task!r}")
+    base = {"kind": kind, "n_eval": len(samples)}
+    if kind == "none":
+        ni = no_instruction_text(tiny=tiny)
+        cctx = dataclasses.replace(ctx, grid_template=ni["instruction"])
+        ident = {**base, "rule": NONE_RULE, **ni, "n_called": len(samples), "n_skipped": 0}
+        return InstructionCheckPlan("none", cctx, tuple(samples), tuple(samples), {}, (), ident)
+    if kind != "swap":
+        raise ValueError(f"指令检查只有 {INSTRUCTION_CHECKS}，收到 {kind!r}")
+    called, targets, pairs = [], {}, []
+    for s, (c, nc) in zip(samples, swap_candidates(samples, pool)):
+        pairs.append({"id": s.id, "image_id": s.fields["image_id"], "ann_id": s.fields["ann_id"], "n_candidates": nc,
+                      "skipped": c is None, "candidate_id": None if c is None else c.id,
+                      "candidate_ann_id": None if c is None else c.fields["ann_id"],
+                      "expression": None if c is None else str(c.fields["expression"]).strip()})
+        if c is None:
+            continue
+        called.append(dataclasses.replace(s, fields={**s.fields, "expression": c.fields["expression"]}))
+        targets[s.id] = c
+    ident = {**base, "rule": SWAP_RULE, "seed": SWAP_SEED, "n_called": len(called), "n_skipped": len(samples) - len(called),
+             "pool": {"n": len(pool), "ids_sha256": ids_digest([p.id for p in pool])},
+             "pairs_sha256": hashlib.sha256("".join(_jsonl(p) for p in pairs).encode("utf-8")).hexdigest()}
+    return InstructionCheckPlan("swap", ctx, tuple(samples), tuple(called), targets, tuple(pairs), ident)
+
+
+NORMAL_SAME_KEYS = ("task", "model", "checkpoint", "context", "tokens", "grid_code", "config")
+NORMAL_SAME_EVAL = ("version", "batch_size", "upsample", "decode")
+
+
+def _read_jsonl_any(leaf: Path, name: str) -> tuple[list[dict[str, Any]], Path] | None:
+    """<name> 或服务器压缩后的 <name>.gz（eval_lib.sh 把大于 20 MB 的文件压缩）；都没有时返回 None。"""
+    p = leaf / name
+    if p.is_file():
+        return read_jsonl_tolerant(p, repair=False), p
+    gz = leaf / f"{name}.gz"
+    if gz.is_file():
+        raw = gzip.decompress(gz.read_bytes()).decode("utf-8")
+        return [json.loads(x) for x in raw.splitlines() if x.strip()], gz
+    return None
+
+
+def load_normal_side(leaf: str | Path, ident: Mapping[str, Any], ids: Sequence[str]) -> dict[str, Any]:
+    """正常评测那一侧（模块说明）：核对运行身份与样本顺序，返回前 N 条的单轮网格、它的逐样本评分（有的话）与指纹。"""
+    leaf = Path(leaf)
+    if not (leaf / CONFIG).is_file():
+        raise FileNotFoundError(f"正常评测的叶目录 {leaf} 里没有 {CONFIG}（--normal-leaf 指向已有的 <任务>/ 叶目录）")
+    raw_cfg = (leaf / CONFIG).read_bytes()
+    old = _identity(yaml.safe_load(raw_cfg.decode("utf-8")))
+    new = _identity(ident)
+    bad = [k for k in NORMAL_SAME_KEYS if old.get(k) != new.get(k)]
+    bad += [f"eval.{k}" for k in NORMAL_SAME_EVAL if (old.get("eval") or {}).get(k) != (new.get("eval") or {}).get(k)]
+    if bad:
+        raise ValueError(f"正常评测 {leaf} 的运行身份与本次不同（{bad}），不能配对")
+    got = _read_jsonl_any(leaf, PREDICTIONS)
+    if got is None:
+        raise FileNotFoundError(f"{leaf} 里没有 {PREDICTIONS}（或 .gz）")
+    preds, ppath = got
+    have = [r["id"] for r in preds]
+    if have[: len(ids)] != list(ids):
+        raise ValueError(f"正常评测 {leaf} 的样本顺序的前 {len(ids)} 条不是本次的 {len(ids)} 条（它有 {len(have)} 条），不能逐条配对")
+    sc = _read_jsonl_any(leaf, SCORES)
+    stored = {r["id"]: r["procs"]["single"] for r in sc[0]} if sc is not None else {}
+    return {"codes": {r["id"]: r["grid"] for r in preds[: len(ids)]}, "stored": stored,
+            "fingerprint": {"config_sha256": hashlib.sha256(raw_cfg).hexdigest(), "predictions_file": ppath.name,
+                            "predictions_sha256": hashlib.sha256(ppath.read_bytes()).hexdigest(), "n": len(preds),
+                            "decode": decode_mode(old.get("eval") or {})}}
+
+
+def _instr_block(rows: Sequence[Mapping[str, Any]], target: str, m: str) -> dict[str, Any]:
+    rr = [{"procs": {"check": r["targets"][target]["check"], "normal": r["targets"][target]["normal"]}} for r in rows]
+    pa = [x["procs"]["normal"][m] for x in rr]
+    pb = [x["procs"]["check"][m] for x in rr]
+    return {"check": _seg_block(rr, "check", m), "normal": _seg_block(rr, "normal", m),
+            "paired_normal_minus_check": {
+                "gIoU": _paired([x["iou"] for x in pa], [x["iou"] for x in pb]),
+                "cIoU": _paired([[x["inter"], x["union"]] for x in pa], [[x["inter"], x["union"]] for x in pb],
+                                statistic=ratio_of_sums),
+                "BIoU": _paired([x["biou"] for x in pa], [x["biou"] for x in pb])}}
+
+
+INSTR_DEFINITION = ("配对差 = 正常 − 检查（同一组 id、同一套评分，配对 bootstrap）。original：两侧都对原来的物体评分（模型跟着指令走时"
+                    "差为正）；swapped（只有 swap）：两侧都对换上去的物体评分（跟着指令走时检查一侧更高，差为负）。只用默认上采样")
+
+
+def finalize_instruction_check(leaf: Path, spec: EvalSpec, ident: Mapping[str, Any], ctx: TaskContext,
+                               settings: Mapping[str, Any], plan: InstructionCheckPlan,
+                               normal: Mapping[str, Any]) -> dict[str, Any]:
+    """由 predictions.jsonl 与正常评测的网格写 scores.jsonl、metrics.json、compute.json、README.md（模块说明）。返回 metrics。"""
+    prim = settings["upsample"]["primary"]
+    recs = read_jsonl_tolerant(leaf / PREDICTIONS, repair=False)
+    if [r["id"] for r in recs] != [s.id for s in plan.called]:
+        raise RuntimeError(f"{PREDICTIONS} 不完整或顺序不对（{len(recs)}/{len(plan.called)} 条）")
+    check_code = {r["id"]: r["grid"] for r in recs}
+    tsamples, tcodes, keys = [], [], []
+    for s in plan.samples:
+        if s.id not in check_code:
+            continue
+        codes = {"check": check_code[s.id], "normal": normal["codes"][s.id]}
+        for target, ts in (("original", s), ("swapped", plan.targets.get(s.id))):
+            if ts is None:
+                continue
+            tsamples.append(ts)
+            tcodes.append(codes)
+            keys.append((s, target))
+    one = {**settings, "upsample": {**settings["upsample"], "methods": [prim]}}
+    scored = score_all(ctx.task, tsamples, tcodes, ctx, one)
+    rows: dict[str, dict[str, Any]] = {}
+    n_verified = 0
+    for (s, target), ts, sc, codes in zip(keys, tsamples, scored, tcodes):
+        if sc["id"] != ts.id:
+            raise RuntimeError("评分结果与样本顺序不符")
+        row = rows.setdefault(s.id, {"id": s.id, "group": group_of(ctx.task, s), "codes": codes, "targets": {}})
+        if target == "swapped":
+            row["candidate_id"] = ts.id
+        row["targets"][target] = {"gt": sc["gt"], "check": sc["procs"]["check"], "normal": sc["procs"]["normal"]}
+        if target == "original" and s.id in normal["stored"]:
+            st = normal["stored"][s.id]
+            want = json.loads(json.dumps({k: st.get(k) for k in ("valid", "grid", prim)}))
+            got = json.loads(json.dumps({k: sc["procs"]["normal"].get(k) for k in ("valid", "grid", prim)}))
+            if want != got:
+                raise RuntimeError(f"{s.id}：正常评测的网格按本次规则重算的读数与它的 scores.jsonl 不同（{want} vs {got}），配对可能错位")
+            n_verified += 1
+    rows_l = [rows[s.id] for s in plan.samples if s.id in rows]
+    (leaf / SCORES).write_text("".join(_jsonl(r) for r in rows_l), encoding="utf-8")
+    timing: dict[tuple[str, str], dict[str, Any]] = {}
+    for t in read_jsonl_tolerant(leaf / TIMING, repair=False):
+        timing[(t["stage"], t["id"])] = t
+    comp = compute_of_stages(["round1"], {"round1": recs}, timing, len(recs))
+    write_compute_json(leaf / COMPUTE, comp)
+    targets = ["original"] + (["swapped"] if plan.kind == "swap" else [])
+    ic = {k: v for k, v in plan.identity.items() if k not in ("pool", "pairs_sha256", "e3a_config")}
+    metrics: dict[str, Any] = {
+        "task": ctx.task, "model": spec.model_key, "variant": spec.variant, "seed": int(spec.seed),
+        "checkpoint_manifest_sha256": spec.checkpoint.get("manifest_sha256"), "n": len(plan.samples), "complete": True,
+        "config_sha256": ident["config"]["sha256"],
+        "instruction_check": ic,
+        "upsample": prim,
+        "definition": INSTR_DEFINITION,
+        "normal": {**normal["fingerprint"], "n_paired": len(rows_l), "n_verified_against_scores": n_verified,
+                   "pairing": "按 id；正常一侧取已有结果的前 N 条（同一检查点、同一批配置），不重跑。批组成：none 与正常评测逐批同一组样本；"
+                              "swap 跳过样本后按剩下的样本连续成批，与正常评测的批不再一一对应，跳过的不进配对"},
+        "targets": {t: _instr_block(rows_l, t, prim) for t in targets},
+        "stages": stage_diagnostics({"round1": recs}),
+        "compute": {k: getattr(comp, k) for k in COUNT_FIELDS},
+    }
+    if decode_mode(settings) == "structured":
+        metrics["decode"] = settings["decode"]
+    (leaf / METRICS).write_text(json.dumps(metrics, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    (leaf / README).write_text(instruction_readme(spec, ident, metrics), encoding="utf-8")
+    return metrics
+
+
+def instruction_readme(spec: EvalSpec, ident: Mapping[str, Any], metrics: Mapping[str, Any]) -> str:
+    ic = metrics["instruction_check"]
+    prim = metrics["upsample"]
+    lines = [f"# E3b 指令检查 · {ic['kind']} · {spec.variant} · {spec.model_key} · seed {spec.seed} · {ident['task']}", "",
+             f"- 检查点 manifest sha256：{spec.checkpoint.get('manifest_sha256')}",
+             f"- 规则：{ic['rule']}",
+             f"- 样本：前 {ic['n_eval']} 条，送进模型 {ic['n_called']} 条，跳过 {ic['n_skipped']} 条；配对 {metrics['normal']['n_paired']} 条",
+             f"- 正常评测一侧：{metrics['normal']['predictions_file']}（sha256 {metrics['normal']['predictions_sha256'][:16]}…；"
+             f"解码 {metrics['normal']['decode']}）；与它的 scores.jsonl 核对一致 {metrics['normal']['n_verified_against_scores']} 条",
+             f"- 上采样：{prim}；{metrics['definition']}", ""]
+    if metrics.get("decode"):
+        lines += [f"- 解码：{metrics['decode']['mode']}（{metrics['decode']['rule']}）", ""]
+    lines += ["| 目标 | 检查 cIoU | 正常 cIoU | 检查 gIoU | 正常 gIoU | 正常 − 检查 cIoU | 正常 − 检查 gIoU |", "|---|---|---|---|---|---|---|"]
+
+    def pd(x: Mapping[str, Any] | None) -> str:
+        if not x:
+            return "—"
+        return f"{_fmt(x['estimate'])} [{_fmt(x['low'])}, {_fmt(x['high'])}]"
+
+    for t, b in metrics["targets"].items():
+        p = b["paired_normal_minus_check"]
+        lines.append(f"| {t} | {_ci_s(b['check']['cIoU'])} | {_ci_s(b['normal']['cIoU'])} | {_ci_s(b['check']['gIoU'])} | "
+                     f"{_ci_s(b['normal']['gIoU'])} | {pd(p['cIoU'])} | {pd(p['gIoU'])} |")
+    lines += ["", "## 文件", "", "- predictions.jsonl：本次的单轮输出；scores.jsonl：每条在各目标上两侧的统计；metrics.json：汇总；",
+              "  swap_pairs.jsonl（swap）：每条样本的候选或跳过；compute.json；config.yaml：运行身份；logs/。", ""]
+    return "\n".join(lines)
+
+
+def run_instruction_check(adapter: Any, cfg: E3Config, settings: Mapping[str, Any], spec: EvalSpec, ctx: TaskContext,
+                          sel: LoadResult, out_dir: str | Path, *, check: str, normal_leaf: str | Path | None = None,
+                          resume: bool = False, argv: Sequence[str] = (), run_extra: Mapping[str, Any] | None = None,
+                          log: Callable[[str], None] | None = None, warmup: bool = True) -> dict[str, Any]:
+    """一项指令检查（DEV-0041 §1，规则见模块说明）：只跑单轮（settings 的 k_values 必须是 [1]）。返回 metrics。"""
+    log = log or (lambda m: print(m, file=sys.stderr, flush=True))
+    if ctx.task != "refseg":
+        raise ValueError(f"指令检查只用于 refseg，收到 {ctx.task!r}")
+    if list(settings["k_values"]) != [1]:
+        raise ValueError(f"指令检查只跑单轮：k_values 必须是 [1]（--k-values 1），收到 {settings['k_values']}")
+    pool = list(sel.records)
+    samples = pool[: spec.limit] if spec.limit else pool
+    if not samples:
+        raise ValueError(f"{ctx.task} 的评测集是空的")
+    plan = instruction_check_plan(check, ctx, samples, pool, tiny=spec.tiny)
+    if not plan.called:
+        raise ValueError(f"{check}：{len(samples)} 条样本没有一条能做这项检查（全部没有候选）")
+    leaf = leaf_dir(out_dir, spec, ctx.task, settings, check)
+    nleaf = Path(normal_leaf) if normal_leaf is not None else leaf_dir(out_dir, spec, ctx.task, settings)
+    ident = run_identity(spec, cfg, settings, ctx, sel, samples)
+    normal = load_normal_side(nleaf, ident, [s.id for s in samples])
+    ident["instruction_check"] = dict(plan.identity)
+    ident["normal"] = dict(normal["fingerprint"])
+    run_k, run_path, run_log = _open_leaf(leaf, ident, cfg, spec, settings, adapter, resume=resume, argv=argv,
+                                          run_extra={**dict(run_extra or {}), "normal_leaf": str(nleaf)})
+    if plan.pairs:
+        (leaf / SWAP_PAIRS).write_text("".join(_jsonl(p) for p in plan.pairs), encoding="utf-8")
+    t_all = time.perf_counter()
+    if warmup and hasattr(adapter, "warmup") and not (leaf / PREDICTIONS).exists():
+        run_log["warmup_wall_s"] = adapter.warmup([load_rgb(plan.called[0].images[0])],
+                                                  batch_size=min(int(settings["batch_size"]), len(plan.called)))
+    run_log["stages"].append(run_stage(adapter, plan.ctx, settings, leaf, list(plan.called), "round1", run_k=run_k, log=log))
+    run_path.write_text(json.dumps(run_log, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    t_score = time.perf_counter()
+    metrics = finalize_instruction_check(leaf, spec, ident, ctx, settings, plan, normal)
+    run_log.update(finished_utc=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+                   wall_s=round(time.perf_counter() - t_all, 3), score_wall_s=round(time.perf_counter() - t_score, 3))
+    run_path.write_text(json.dumps(run_log, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    return metrics
+
+
 __all__ = [
+    "DECODE_MODES",
     "EvalPaths",
     "EvalSpec",
+    "INSTRUCTION_CHECKS",
+    "InstructionCheckPlan",
     "TaskContext",
     "chunk_plan",
     "compute_of",
     "compute_procs",
     "config_k_values",
+    "decode_mode",
     "finalize",
+    "finalize_instruction_check",
+    "grid_structure",
+    "instruction_check_plan",
     "k_values_prefix",
     "leaf_dir",
+    "leaf_name",
     "load_eval_set",
+    "load_normal_side",
     "make_context",
     "model_dir",
     "multi_proc",
+    "no_instruction_text",
     "procedure_codes",
     "procedure_stages",
     "procedures",
     "resolve_eval",
     "run_eval_task",
+    "run_instruction_check",
     "run_stage",
     "stage_file",
     "stage_names",
+    "structured_generate",
+    "swap_candidates",
+    "swap_index",
     "vote",
 ]

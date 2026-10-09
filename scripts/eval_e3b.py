@@ -9,6 +9,14 @@
     # 只跑单轮（DEV-0039，D72-4 (c)：多轮与匹配计算量每个尺寸只做 1 个种子）：加 --k-values 1（只有第 1 轮，不做任何采样）；
     # --k-values 必须是配置 eval.multi_turn.k_values（1 2 4）从 1 开始的前缀（1 或 1 2），否则用法错误。单轮的 predictions.jsonl 与
     # 单轮指标与不给时逐字节相同；config.yaml 的 eval.k_values 记生效的 K，覆盖时另记 eval.k_values_override。续跑时 K 不同拒绝混写。
+    # 结构强制解码（DEV-0041 §2，D83）：加 --decode structured（每行格子只允许值 token、行末只允许行分隔、最后只允许停止 token；
+    # 单轮、多轮与匹配计算量的采样都用）；结果写进 <任务>__structured/，运行身份与 metrics 记 decode。不给（或 restricted）时与原来逐字节相同。
+    # 指令检查（DEV-0041 §1，只用于 refseg、只跑单轮）：加 --instruction-check none|swap [--limit N] [--normal-leaf <正常评测的 refseg 叶目录>]
+    # （N 取批大小的整数倍；--task 默认就是 refseg，--k-values 默认就是 1）；结果写进 <任务>__instr_<种类>[__structured]/，正常评测一侧
+    # 取已有结果里的同一批 id（默认同一 --out 里同一解码的 refseg/），不重跑。例：
+    #   python scripts/eval_e3b.py --checkpoint <叶>/ckpt/final/model --model qwen3.5-2b --seed 0 --data-root $PROJ/data \\
+    #       --out experiments/E3/00NN_e3b_instr --instruction-check swap --limit 2048 \\
+    #       --normal-leaf experiments/E3/0038_e3_eval_2b_s0/eval/e3b/qwen3.5-2b/seed0/refseg
 开发机彩排（小型随机模型、CPU fp32；检查点用 scripts/train_e3b.py --tiny 训出来的；分割用 tests/fixtures/e3/eval_root，
 深度用 tests/fixtures/e1/root 的 NYU 测试图）：
     python scripts/train_e3b.py --tiny --model qwen3.5-0.8b --supervision grid --seed 0 --out /tmp/t
@@ -60,7 +68,7 @@ def parse_args(argv=None):
     p.add_argument("--model", required=True, help="注册键（必须与检查点 manifest 的构造方式相同）")
     p.add_argument("--variant", default="e3b", help="输出目录里的变体名（默认 e3b）")
     p.add_argument("--seed", type=int, required=True, help="训练的种子（输出目录 seed<k>）")
-    p.add_argument("--task", nargs="+", default=list(GRID_TASKS), choices=GRID_TASKS, help="默认 refseg depth")
+    p.add_argument("--task", nargs="+", choices=GRID_TASKS, help="默认 refseg depth（--instruction-check 时默认、也只能是 refseg）")
     p.add_argument("--out", required=True, help="本次运行的目录（experiments/E3/<NNNN_slug>）")
     p.add_argument("--resume", action="store_true", help="续跑：已完成的整批跳过")
     p.add_argument("--limit", type=int, help="只取每个评测集的前 N 条（调试）")
@@ -73,6 +81,12 @@ def parse_args(argv=None):
     p.add_argument("--k-values", type=int, nargs="+",
                    help="只跑这些 K（DEV-0039，D72-4 (c)）：必须是配置 eval.multi_turn.k_values 从 1 开始的前缀，如 1 或 1 2；"
                         "匹配计算量的单轮随之只做这些 K（1 = 只跑单轮、不采样）。不给时取配置的全部 K")
+    p.add_argument("--decode", choices=EV.DECODE_MODES,
+                   help="DEV-0041 §2：restricted（默认，generate_restricted）或 structured（结构强制，D83）；结果目录 <任务>__structured")
+    p.add_argument("--instruction-check", choices=EV.INSTRUCTION_CHECKS,
+                   help="DEV-0041 §1（只用于 refseg、只跑单轮）：none = 去掉指令（同 E3a 的 no_instruction）；swap = 换成同一张图里"
+                        "另一个物体的指代句。结果目录 refseg__instr_<种类>")
+    p.add_argument("--normal-leaf", help="--instruction-check 的正常评测一侧：已有的 refseg 叶目录（默认同一 --out 里同一解码的 refseg/）")
     p.add_argument("--merge-check-n", type=int, help="合并核对的开发样本数（默认取配置的 eval.merge_check.n）")
     p.add_argument("--score-workers", type=int, help="评分的进程数（默认取配置的 eval.score_workers；0 = 串行）")
     p.add_argument("--device", help="默认：真模型 cuda，--tiny 时 cpu")
@@ -88,6 +102,16 @@ def parse_args(argv=None):
             p.error(f"--{name.replace('_', '-')} 必须是正整数")
     if a.score_workers is not None and a.score_workers < 0:
         p.error("--score-workers 不能为负")
+    if a.instruction_check is not None:  # DEV-0041 §1：只用于 refseg、只跑单轮
+        if a.task is not None and a.task != ["refseg"]:
+            p.error(f"--instruction-check 只用于 refseg，收到 --task {' '.join(a.task)}")
+        if a.k_values is not None and a.k_values != [1]:
+            p.error(f"--instruction-check 只跑单轮（--k-values 1），收到 --k-values {' '.join(map(str, a.k_values))}")
+        a.task, a.k_values = ["refseg"], [1]
+    elif a.normal_leaf is not None:
+        p.error("--normal-leaf 只配 --instruction-check 用")
+    if a.task is None:
+        a.task = list(GRID_TASKS)
     if len(set(a.task)) != len(a.task):
         p.error("--task 有重复")
     a.device = a.device or ("cpu" if a.tiny else "cuda")
@@ -119,18 +143,24 @@ def eval_paths(a) -> EV.EvalPaths:
 
 def checkpoint_block(ck_dir: Path, man: dict) -> dict:
     """运行身份里的检查点：manifest 的 sha256 与几项摘要（目录路径与机器有关，只进运行记录）。"""
-    return {"manifest_sha256": sha256_file(ck_dir / "manifest.json"), "format": man.get("format"),
-            "build_spec": man.get("build_spec"), "image_policy": man.get("image_policy"), "dtype": man.get("dtype"),
-            "lora": man.get("lora"), "trainable_token_rows": man.get("trainable_token_rows")}
+    out = {"manifest_sha256": sha256_file(ck_dir / "manifest.json"), "format": man.get("format"),
+           "build_spec": man.get("build_spec"), "image_policy": man.get("image_policy"), "dtype": man.get("dtype"),
+           "lora": man.get("lora"), "trainable_token_rows": man.get("trainable_token_rows")}
+    if man.get("derived") is not None:  # DEV-0041 §3：派生检查点（scripts/scale_lora_ckpt.py）；原生的检查点没有这个键，运行身份不变
+        out["derived"] = man["derived"]
+    return out
 
 
 def cmd_run(a, argv) -> int:
     cfg = load_config(a.config)
     settings = EV.resolve_eval(cfg, tiny=a.tiny, batch_size=a.batch_size, score_workers=a.score_workers,
-                               merge_check_n=a.merge_check_n, k_values=a.k_values)
+                               merge_check_n=a.merge_check_n, k_values=a.k_values, decode=a.decode)
     if not a.tiny and settings["batch_size"] != settings["batch_size_config"] and not a.allow_unfrozen_batch:
         raise ValueError(f"--batch-size {settings['batch_size']} 不是配置的 eval.batch_size {settings['batch_size_config']}；"
                          "确要换就加 --allow-unfrozen-batch")
+    if a.instruction_check is not None and a.limit is not None and a.limit % settings["batch_size"]:
+        raise ValueError(f"--instruction-check 的 --limit {a.limit} 必须是批大小 {settings['batch_size']} 的整数倍"
+                         "（批组成才与正常评测的前 N 条相同）")
     ck = Path(a.checkpoint)
     man = read_manifest(ck)
     spec_b = man.get("build_spec") or {}
@@ -158,6 +188,16 @@ def cmd_run(a, argv) -> int:
     for task in a.task:
         sel = EV.load_eval_set(task, paths)
         ctx = EV.make_context(cfg, tokens, task)
+        if a.instruction_check is not None:  # DEV-0041 §1
+            m = EV.run_instruction_check(ad, cfg, settings, spec, ctx, sel, a.out, check=a.instruction_check,
+                                         normal_leaf=a.normal_leaf, resume=a.resume, argv=argv, run_extra=extra)
+            ic = m["instruction_check"]
+            for t, b in m["targets"].items():
+                pc = b["paired_normal_minus_check"]["cIoU"] or {}
+                print(f"{entry.key} {a.variant} seed{a.seed} {task} instr_{ic['kind']} target={t} n={b['check']['cIoU']['n']} "
+                      f"(skipped {ic['n_skipped']}) cIoU check={b['check']['cIoU']['value']} normal={b['normal']['cIoU']['value']} "
+                      f"normal-check={pc.get('estimate')} [{pc.get('low')}, {pc.get('high')}]")
+            continue
         m = EV.run_eval_task(ad, cfg, settings, spec, ctx, sel, a.out, resume=a.resume, argv=argv, run_extra=extra)
         h = m["headline"]
         vals = "  ".join(f"{k}={(h[k] or {}).get('value')}" for k in h if isinstance(h[k], dict))
