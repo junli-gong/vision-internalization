@@ -1,0 +1,95 @@
+Loading weights:   0%|          | 0/617 [00:00<?, ?it/s]Loading weights:  15%|█▌        | 93/617 [00:00<00:00, 925.99it/s]Loading weights:  44%|████▍     | 270/617 [00:00<00:00, 1408.83it/s]Loading weights: 100%|██████████| 617/617 [00:00<00:00, 2193.42it/s]
+[transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+
+=== checkpoint /home/ubuntu/workspace/wzg/gjl/vision-internalization/ckpt/0036/e3a/full/qwen3.5-2b/seed0/ckpt/final (variant full, bf16 on cuda, readout = trained) ===
+  family qwen3.5; hidden 2048; layers 0..24; queries 256; order instruction_first; enable_thinking False
+  instructions: A 'Segment woman on left in the image.' (8 tok), C 'Segment woman on right in the image.' (8 tok), B 'Segment man right in the image.' (7 tok), empty ''
+  layout A_img1 (instruction 'Segment woman on left in the image.'):
+    user turn = 586 tokens; prompt row (+ family prefix shift 0, + assistant header) = 593
+    [0,3) '<|im_start|>user\n'
+    [3,11) INSTRUCTION 'Segment woman on left in the image.'
+    [11,12) '<|vision_start|>'
+    [12,327) IMAGE x315 (grid (15, 21))
+    [327,328) '<|vision_end|>'
+    [328,584) QUERY x256 (grid2d)
+    [584,586) '<|im_end|>\n'
+    + assistant header '<|im_start|>assistant\n<think>\n\n</think>\n\n'
+  layout empty_img1 (instruction ''):
+    user turn = 578 tokens; prompt row (+ family prefix shift 0, + assistant header) = 585
+    [0,3) '<|im_start|>user\n'
+    [3,3) INSTRUCTION ''
+    [3,4) '<|vision_start|>'
+    [4,319) IMAGE x315 (grid (15, 21))
+    [319,320) '<|vision_end|>'
+    [320,576) QUERY x256 (grid2d)
+    [576,578) '<|im_end|>\n'
+    + assistant header '<|im_start|>assistant\n<think>\n\n</think>\n\n'
+  prompt lengths: {'A_img1': 593, 'C_img1': 593, 'B_img1': 592, 'empty_img1': 585, 'A_img2': 578}; batched (593, 585, 592)
+  query hidden states, per layer (rel = ||a-b||_F/||a||_F over the 256 x H block; rel_ln = same after per-token LayerNorm, as LayerMix sees it). 'A vs C' isolates instruction content (same token count, so all later positions are identical); A vs B / A vs empty also shift the RoPE positions of image + query tokens
+  layer type             |   A vs C (same len)    |         A vs B         | A vs empty (=no_instr) | img1 vs img2 (instr A)
+                         |        rel     rel_ln |        rel     rel_ln |        rel     rel_ln |        rel     rel_ln
+      0 embed(+vision)   |  0.000e+00  0.000e+00 |  0.000e+00  0.000e+00 |  0.000e+00  0.000e+00 |  0.000e+00  0.000e+00
+      1 linear_attention |  6.183e-03  6.755e-03 |  1.163e-02  1.274e-02 |  7.902e-02  6.818e-02 |  9.694e-02  1.196e-01
+      2 linear_attention |  6.724e-03  6.145e-03 |  1.029e-02  1.026e-02 |  6.283e-02  5.549e-02 |  8.860e-02  9.146e-02
+      3 linear_attention |  9.493e-03  7.018e-03 |  1.184e-02  1.057e-02 |  6.646e-02  5.468e-02 |  1.382e-01  1.371e-01
+      4 full_attention   |  9.259e-03  7.357e-03 |  1.203e-02  1.103e-02 |  7.289e-02  5.941e-02 |  1.695e-01  1.667e-01
+      5 linear_attention |  9.338e-03  7.891e-03 |  1.256e-02  1.186e-02 |  7.061e-02  6.296e-02 |  1.688e-01  1.626e-01
+      6 linear_attention |  1.367e-02  1.331e-02 |  2.306e-02  2.354e-02 |  1.146e-01  1.172e-01 |  2.125e-01  2.088e-01
+      7 linear_attention |  1.360e-02  1.308e-02 |  2.315e-02  2.322e-02 |  1.443e-01  1.468e-01 |  2.163e-01  2.105e-01
+      8 full_attention   |  1.753e-02  1.747e-02 |  3.047e-02  3.088e-02 |  1.729e-01  1.781e-01 |  4.056e-01  4.051e-01
+      9 linear_attention |  1.755e-02  1.700e-02 |  3.009e-02  2.979e-02 |  1.725e-01  1.744e-01 |  4.185e-01  4.232e-01
+     10 linear_attention |  1.873e-02  1.719e-02 |  3.153e-02  3.021e-02 |  1.778e-01  1.776e-01 |  4.429e-01  4.415e-01
+     11 linear_attention |  1.923e-02  1.701e-02 |  3.183e-02  2.970e-02 |  1.753e-01  1.745e-01 |  4.595e-01  4.483e-01
+     12 full_attention   |  2.340e-02  2.215e-02 |  4.061e-02  3.998e-02 |  2.501e-01  2.554e-01 |  5.924e-01  6.001e-01
+     13 linear_attention |  2.485e-02  2.380e-02 |  4.269e-02  4.301e-02 |  2.656e-01  2.719e-01 |  6.352e-01  6.333e-01
+     14 linear_attention |  2.626e-02  2.554e-02 |  4.604e-02  4.647e-02 |  2.880e-01  2.951e-01 |  6.455e-01  6.434e-01
+     15 linear_attention |  2.467e-02  2.348e-02 |  4.906e-02  4.733e-02 |  2.929e-01  2.916e-01 |  6.172e-01  5.760e-01
+     16 full_attention   |  2.564e-02  2.457e-02 |  5.187e-02  5.134e-02 |  3.127e-01  3.075e-01 |  6.799e-01  6.035e-01
+     17 linear_attention |  2.202e-02  2.154e-02 |  4.493e-02  4.746e-02 |  2.800e-01  2.636e-01 |  9.143e-01  7.795e-01
+     18 linear_attention |  2.001e-02  1.937e-02 |  4.146e-02  4.303e-02 |  2.562e-01  2.331e-01 |  7.965e-01  7.149e-01
+     19 linear_attention |  1.627e-02  1.475e-02 |  3.246e-02  3.094e-02 |  2.156e-01  1.810e-01 |  6.289e-01  6.045e-01
+     20 full_attention   |  1.403e-02  1.202e-02 |  2.787e-02  2.470e-02 |  1.820e-01  1.463e-01 |  5.627e-01  4.665e-01
+     21 linear_attention |  1.037e-02  8.326e-03 |  1.887e-02  1.613e-02 |  1.276e-01  1.025e-01 |  4.026e-01  3.629e-01
+     22 linear_attention |  1.008e-02  7.898e-03 |  1.841e-02  1.526e-02 |  1.242e-01  9.675e-02 |  3.845e-01  3.359e-01
+     23 linear_attention |  9.439e-03  7.507e-03 |  1.742e-02  1.441e-02 |  1.180e-01  9.080e-02 |  3.613e-01  3.144e-01
+     24 full_attention+no|  3.561e-03  3.557e-03 |  4.203e-03  4.197e-03 |  1.200e-02  1.199e-02 |  3.151e-02  3.148e-02
+  same input twice: max|d| = 0.000e+00; batched (left-padded) vs single, max rel over layers: A 6.925e-03, empty 8.914e-03
+  last layer: mean pairwise cosine among the 256 query states (after LN) = 0.9997
+  readout LayerMix output (decoder input):
+    A vs C (same len)        rel 1.190e-02
+    A vs B                   rel 2.248e-02
+    A vs empty (=no_instr)   rel 1.340e-01
+    img1 vs img2 (instr A)   rel 3.311e-01
+  readout refseg logits [128x128]:
+    A vs C (same len)        rel 1.883e-02   mask IoU 0.958
+    A vs B                   rel 3.660e-02   mask IoU 0.927
+    A vs empty (=no_instr)   rel 1.595e-01   mask IoU 0.813
+    img1 vs img2 (instr A)   rel 1.003e+00   mask IoU 0.048
+  foreground fraction (logit > 0): A_img1 0.186, C_img1 0.194, B_img1 0.201, empty_img1 0.185, A_img2 0.089
+  [attn] query-row attention mass (mean over heads x 256 query rows); 'uniform' = share the instruction would get under uniform causal attention
+  [attn] module                                            instr  uniform    image    query    other  instr max-head
+  [attn] model.language_model.layers.3.self_attn          0.0122   0.0180   0.6227   0.3611   0.0040   0.0327 (h4)
+  [attn] model.language_model.layers.7.self_attn          0.0113   0.0180   0.5269   0.4579   0.0039   0.0320 (h4)
+  [attn] model.language_model.layers.11.self_attn         0.0588   0.0180   0.6929   0.2182   0.0301   0.3219 (h6)
+  [attn] model.language_model.layers.15.self_attn         0.0028   0.0180   0.2705   0.7153   0.0113   0.0123 (h7)
+  [attn] model.language_model.layers.19.self_attn         0.0069   0.0180   0.2441   0.7293   0.0197   0.0114 (h5)
+  [attn] model.language_model.layers.23.self_attn         0.0044   0.0180   0.4460   0.5282   0.0214   0.0306 (h1)
+  [gdn] decay from end of instruction to first query (318 steps) / to last query (573 steps): log10 exp(sum g) per head (upper bound on surviving instruction state)
+  [gdn] model.language_model.layers.0.linear_attn      first query: max     -0.00 median     -0.10 | last query: max     -0.00 median     -1.05  (16 heads)
+  [gdn] model.language_model.layers.1.linear_attn      first query: max     -0.01 median    -64.42 | last query: max     -0.02 median   -129.48  (16 heads)
+  [gdn] model.language_model.layers.2.linear_attn      first query: max     -0.05 median     -5.69 | last query: max     -0.08 median    -12.38  (16 heads)
+  [gdn] model.language_model.layers.4.linear_attn      first query: max     -0.00 median     -0.16 | last query: max     -0.00 median     -0.45  (16 heads)
+  [gdn] model.language_model.layers.5.linear_attn      first query: max     -0.01 median     -0.05 | last query: max     -0.02 median     -0.18  (16 heads)
+  [gdn] model.language_model.layers.6.linear_attn      first query: max     -0.01 median     -2.70 | last query: max     -0.03 median     -7.61  (16 heads)
+  [gdn] model.language_model.layers.8.linear_attn      first query: max     -0.01 median     -1.82 | last query: max     -0.02 median     -3.00  (16 heads)
+  [gdn] model.language_model.layers.9.linear_attn      first query: max     -0.01 median     -0.34 | last query: max     -0.02 median     -0.54  (16 heads)
+  [gdn] model.language_model.layers.10.linear_attn     first query: max     -0.05 median     -1.03 | last query: max     -0.10 median     -3.62  (16 heads)
+  [gdn] model.language_model.layers.12.linear_attn     first query: max     -0.01 median     -0.10 | last query: max     -0.01 median     -0.11  (16 heads)
+  [gdn] model.language_model.layers.13.linear_attn     first query: max     -0.01 median     -1.17 | last query: max     -0.01 median     -1.87  (16 heads)
+  [gdn] model.language_model.layers.14.linear_attn     first query: max     -0.05 median     -3.35 | last query: max     -0.09 median     -5.55  (16 heads)
+  [gdn] model.language_model.layers.16.linear_attn     first query: max     -0.02 median     -2.90 | last query: max     -0.02 median     -4.50  (16 heads)
+  [gdn] model.language_model.layers.17.linear_attn     first query: max     -0.01 median     -1.03 | last query: max     -0.03 median     -1.60  (16 heads)
+  [gdn] model.language_model.layers.18.linear_attn     first query: max     -0.01 median     -0.30 | last query: max     -0.01 median     -0.54  (16 heads)
+  [gdn] model.language_model.layers.20.linear_attn     first query: max     -0.00 median     -0.33 | last query: max     -0.01 median     -0.56  (16 heads)
+  [gdn] model.language_model.layers.21.linear_attn     first query: max     -0.02 median     -5.87 | last query: max     -0.04 median    -12.30  (16 heads)
+  [gdn] model.language_model.layers.22.linear_attn     first query: max     -0.01 median     -4.29 | last query: max     -0.01 median     -6.38  (16 heads)
