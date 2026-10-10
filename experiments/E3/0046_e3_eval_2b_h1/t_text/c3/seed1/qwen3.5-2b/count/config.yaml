@@ -1,0 +1,99 @@
+experiment: E1
+framework: src/e1（DEV-0014；协议 v2：DEV-0017）
+model:
+  key: qwen3.5-2b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-2B
+  revision: 15852e8c16360a2fea060d615a32b45270f8a8fc
+  adapter_model_key: qwen3.5-2b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+task: count
+subset: eval
+generation:
+  enable_thinking: false
+  max_new_tokens: 256
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  readout:
+    kind: text
+    parse: count
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+  entry:
+    template: How many {object} are there in the image? Answer with a single number.
+    native: false
+    provenance: unified_common_practice
+    source_url: https://arxiv.org/abs/2407.07726
+    parse: count
+    max_new_tokens: 256
+  count_questions: countbenchqa
+data:
+  n_samples: 442
+  sample_ids_sha256: 39b1f0c9bc094646f23eff4ba1d070f1207f17b7c17668eb7aef3eb6ba5d0faf
+  has_gt: true
+  selection_stats:
+    population:
+      n_total: 491
+      n_kept: 442
+      excluded_by_reason:
+        开发子集: 49
+    count_questions:
+      source: countbenchqa
+      file: countbenchqa_questions/countbench_paired_questions.json
+      sha256: d3d94521899ff05bcd3facc8712e3cb4c1f9fb5cfa17ce35b14310a882090046
+      n_questions: 540
+      upstream_commit: ec104fd760a1272796e12e5fcde42f6bc3f78f9b
+    n: 442
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: null
+map_ci_resamples: 0
+batch_size: 64
+batch_protocol:
+  protocol_version: 1
+  batch_size: 64
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: true
+  frozen_batch_size: 64
+checkpoint:
+  manifest_sha256: fcd74981a47eea3baf3cbc8404119d230507152cfc3ac493e98f00d1df4b0657
+  label: t_text/c3/seed1
+  build_spec:
+    family_kw: {}
+    image_policy: pixel_budget:300
+    key: qwen3.5-2b
+    tiny: false
+  image_policy: pixel_budget:300
+  dtype: bfloat16
+  lora:
+    lora_alpha: 64.0
+    lora_dropout: 0.05
+    n_parameters: 33638400
+    n_targets: 186
+    n_tensors: 372
+    r: 32
+    targets_sha256: d993d0cbcc93630509dd4c28bee72f41f9cea5a455c5fae42b831780bf8c061c
+  trainable_token_rows: null
+  n_grid_tokens: 0
+  merge_check:
+    criteria_version: v1
+    n: 200
+    checks:
+    - merge
