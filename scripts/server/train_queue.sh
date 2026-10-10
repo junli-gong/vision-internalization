@@ -29,6 +29,10 @@ set -uo pipefail
 case "$OUT" in "$REPO"/*) ;; *) echo "OUT 必须在 REPO 里：$OUT" >&2; exit 2;; esac
 TINY=${TINY:-0}
 PROJ=${PROJ:-}
+# TQ_NO_GIT=1（ITSC HPC，D89）：驱动所在的计算节点不碰 git（hpcgpu07 连不上 github），推送由登录节点上的同步循环做；
+# HOLD 改看本地开关文件 $LOGS/HOLD。TQ_QUOTA_CMD：给了就用它算份额（输出整数 GB；Lustre 上用 lfs quota，不能对大目录 du）。
+TQ_NO_GIT=${TQ_NO_GIT:-0}
+TQ_QUOTA_CMD=${TQ_QUOTA_CMD:-}
 # CPU 线程（RUN-0036 的教训）：不设时 torch 与 numpy 按全部核开线程，B200 只有 30 核、多人共用，E3a 的 build_inputs 每步从 0.22 s
 # 慢到 0.8–1.6 s。与 RUN-0034、A800 的 common.sh 相同，取 16；调用方已设的照用。
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} MKL_NUM_THREADS=${MKL_NUM_THREADS:-16}
@@ -55,12 +59,15 @@ sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasu
 locked() { if command -v flock >/dev/null 2>&1; then ( flock 9 || exit 1; "$@" ) 9>"$GITLOCK"; else ( "$@" ); fi; }  # 子 shell 里跑，函数可用
 mem_avail_gb() { if [ -r /proc/meminfo ]; then awk '/^MemAvailable:/{print int($2/1048576)}' /proc/meminfo; else echo 9999; fi; }
 disk_free_gb() { df -Pk / | awk 'NR==2{print int($4/1048576)}'; }
-share_gb() { if [ -n "$PROJ" ]; then du -sk "$PROJ" 2>/dev/null | awk '{print int($1/1048576)}'; else echo 0; fi; }
+share_gb() { if [ -n "$TQ_QUOTA_CMD" ]; then bash -c "$TQ_QUOTA_CMD" 2>/dev/null || echo 0; elif [ -n "$PROJ" ]; then du -sk "$PROJ" 2>/dev/null | awk '{print int($1/1048576)}'; else echo 0; fi; }
 gpu_foreign() {  # 过闸时我们自己的训练没在跑，GPU 上的任何计算进程都算别人的
   [ "$TINY" = 1 ] && return 0
   nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | tr -d ' ' | grep -v '^$' | paste -sd, -
 }
-hold_on_origin() { locked git -C "$REPO" fetch -q origin main 2>/dev/null; git -C "$REPO" cat-file -e origin/main:HOLD 2>/dev/null; }
+hold_on_origin() {
+  if [ "$TQ_NO_GIT" = 1 ]; then [ -e "$LOGS/HOLD" ]; return; fi
+  locked git -C "$REPO" fetch -q origin main 2>/dev/null; git -C "$REPO" cat-file -e origin/main:HOLD 2>/dev/null
+}
 dir_sums() { (cd "$1" && find . -type f | LC_ALL=C sort | while IFS= read -r f; do sha "$f"; done); }
 
 _push() {  # 在锁里：只提交 OUT 下的改动，rebase 后推送，最多试 3 次
@@ -75,7 +82,10 @@ _push() {  # 在锁里：只提交 OUT 下的改动，rebase 后推送，最多�
   done
   return 1
 }
-push_results() { locked _push "[results] $RUN_ID: $1" || note "推送失败（$1），下次推送时一并带上"; }
+push_results() {
+  if [ "$TQ_NO_GIT" = 1 ]; then note "（不推送，TQ_NO_GIT=1：由登录节点的同步循环推）$1"; return 0; fi
+  locked _push "[results] $RUN_ID: $1" || note "推送失败（$1），下次推送时一并带上"
+}
 
 die() { beat "blocked $*"; note "停止：$*"; push_results "driver stopped: $*"; exit 1; }
 mem_stop() {
@@ -102,7 +112,7 @@ gate() {  # 不满足就等；触到停止线就停
     s=$(share_gb); [ "$s" -gt "$SHARE_STOP_GB" ] && die "project share ${s}GB>${SHARE_STOP_GB}GB (D28-8)"
     why=""
     if [ -e "$TQ_PAUSE" ]; then why="paused (pause file: $(head -c 80 "$TQ_PAUSE" | tr '\n' ' '))"
-    elif hold_on_origin; then why="paused (HOLD on origin)"
+    elif hold_on_origin; then why="paused (HOLD$( [ "$TQ_NO_GIT" = 1 ] && echo " file $LOGS/HOLD" || echo " on origin"))"
     else g=$(gpu_foreign); [ -n "$g" ] && why="waiting (GPU busy, pids $g)"
     fi
     [ -z "$why" ] && return 0
