@@ -1,0 +1,62 @@
+== 2026-10-10T08:27:39Z host=hpcgpu07
+# RUN-0044 盘上文件重算 sha256，对照各源自己的 MANIFEST.json
+
+| 源 | MANIFEST 文件数 | 盘上文件数（不含 MANIFEST.json） | sha256 与字节都相同 | 不同 | MANIFEST 有、盘上缺 | 盘上有、MANIFEST 没有 |
+|---|---|---|---|---|---|---|
+| refcoco_train | 24411 | 24411 | 24411 | 0 | 0 | 0 |
+| nyu_depth_train | 45698 | 45698 | 45698 | 0 | 0 | 0 |
+| nyu_normals | 2899 | 2899 | 2899 | 0 | 0 | 0 |
+| ade20k | 44424 | 44424 | 44424 | 0 | 0 | 0 |
+all_ok True
+=== disk_sha rc=0 321s
+=== p33 vs A800 rc=0
+# RUN-0034 落地清单与 A800 的对照（逐文件 sha256 的集合）
+
+| 源 | B200 文件数 | A800 文件数 | B200 总字节 | A800 总字节 | 失败成员 B200 / A800 | 两边都有且 sha256 相同 | 同路径 sha256 不同 | 只在 B200 | 只在 A800 |
+|---|---|---|---|---|---|---|---|---|---|
+| refcoco_train | 24411 | 24411 | 4264204008 | 4264204008 | 0 / 0 | 24411 | 0 | 0 | 0 |
+| nyu_depth_train | 45698 | 45698 | 3969712007 | 3969712007 | 0 / 0 | 45698 | 0 | 0 | 0 |
+| nyu_normals | 2899 | 2899 | 1009158299 | 1009158299 | 0 / 0 | 2899 | 0 | 0 | 0 |
+| ade20k | 44424 | 44424 | 975810735 | 975810735 | 0 / 0 | 44424 | 0 | 0 | 0 |
+# RUN-0044 落地清单与 B200（RUN-0034）的对照（逐文件 sha256 的集合）
+
+| 源 | HPC 文件数 | B200 文件数 | HPC 总字节 | B200 总字节 | 失败成员 HPC / B200 | 两边都有且 sha256 相同 | 同路径 sha256 不同 | 只在 HPC | 只在 B200 |
+|---|---|---|---|---|---|---|---|---|---|
+| refcoco_train | 24411 | 24411 | 4264204008 | 4264204008 | 0 / 0 | 24411 | 0 | 0 | 0 |
+| nyu_depth_train | 45698 | 45698 | 3969712007 | 3969712007 | 0 / 0 | 45698 | 0 | 0 | 0 |
+| nyu_normals | 2899 | 2899 | 1009158299 | 1009158299 | 0 / 0 | 2899 | 0 | 0 | 0 |
+| ade20k | 44424 | 44424 | 975810735 | 975810735 | 0 / 0 | 44424 | 0 | 0 | 0 |
+identical True
+=== p44 vs B200 rc=0
+=== p34 vs B200 rc=0
+# RUN-0034 去重：与 A800 剔除清单的对照
+
+- max_hamming：B200 8，A800 8
+- eval_sets 相同：True（B200 13 个，A800 13 个）
+
+| 训练集 | B200 剔除条数 | A800 剔除条数 | 两边都剔除的键 | 只在 B200 | 只在 A800 |
+|---|---|---|---|---|---|
+| ade20k/train | 26 | 26 | 26（整条记录相同 26） | 0 | 0 |
+| nyu_depth_train/train | 132 | 132 | 132（整条记录相同 132） | 0 | 0 |
+| nyu_normals/train | 50 | 50 | 50（整条记录相同 50） | 0 | 0 |
+| refcoco_train/train | 10 | 10 | 10（整条记录相同 10） | 0 | 0 |
+
+**完全相同：True**
+=== p34 vs A800 rc=0
+# RUN-0034 去重：与 A800 剔除清单的对照
+
+- max_hamming：B200 8，A800 8
+- eval_sets 相同：True（B200 13 个，A800 13 个）
+
+| 训练集 | B200 剔除条数 | A800 剔除条数 | 两边都剔除的键 | 只在 B200 | 只在 A800 |
+|---|---|---|---|---|---|
+| ade20k/train | 26 | 26 | 26（整条记录相同 26） | 0 | 0 |
+| nyu_depth_train/train | 132 | 132 | 132（整条记录相同 132） | 0 | 0 |
+| nyu_normals/train | 50 | 50 | 50（整条记录相同 50） | 0 | 0 |
+| refcoco_train/train | 10 | 10 | 10（整条记录相同 10） | 0 | 0 |
+
+**完全相同：True**
+40f214fb14315c990de811ef9d23172d6c36ea661e40a241ad46fc667f3c1838  /home/mail/chenyuma/visint/data/train_data/dedupe/train_exclusions.json
+40f214fb14315c990de811ef9d23172d6c36ea661e40a241ad46fc667f3c1838  /home/mail/chenyuma/visint/wt/wt0044/experiments/E3/0034_b200_prep/dedupe/train_exclusions.json
+4ddb8fc2bab1ac3ca0d764150cd5e3a6148c17dc183e1e2ff74cbf1de617bd0b  /home/mail/chenyuma/visint/wt/wt0044/experiments/P0/0026_a800_delta/results_0026/dedupe/train_exclusions.json
+== done 2026-10-10T08:33:05Z
