@@ -275,7 +275,7 @@
 - 节点本地盘与 `/dev/shm` 都没有用。
 - `hf/hub` 里除 Qwen 外，还有 Gemma-4-E2B-it 与 InternVL3.5-2B/4B-HF 的 config 与 tokenizer，没有权重。
   - 来历：开发机 HF 缓存里同一钉住 revision 的副本，只为全量测试拷来（§2.1）；
-  - 大小见 `raw/hf_small_sizes.txt`，合计约 45 MB；
+  - 大小见 `raw/hf_small_sizes.txt`，合计约 52.7 MB（Gemma 0.05、InternVL 各 4.5、共享 blobs 43.6 MB）；
   - 不删。
 
 ## 11. 需要用户决定
