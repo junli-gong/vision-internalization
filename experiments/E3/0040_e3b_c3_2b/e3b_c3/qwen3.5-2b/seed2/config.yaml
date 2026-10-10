@@ -1,0 +1,705 @@
+experiment: E3b
+framework: src/e3（DEV-0025）
+model:
+  key: qwen3.5-2b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-2B
+  revision: 15852e8c16360a2fea060d615a32b45270f8a8fc
+  adapter_model_key: qwen3.5-2b
+  tiny: false
+  dtype: bf16
+image_policy: pixel_budget:300
+supervision: grid+text
+variant: e3b_c3
+seed: 2
+training:
+  supervision: grid+text
+  variant: e3b_c3
+  steps: 8000
+  micro_batch_size: 4
+  grad_accum_steps: 4
+  ckpt_every: 500
+  lora:
+    r: 32
+    alpha: 64
+    dropout: 0.05
+  optim:
+    optimizer: adamw
+    betas:
+    - 0.9
+    - 0.999
+    eps: 1.0e-08
+    lora:
+      lr: 0.0002
+      weight_decay: 0.0
+    token_rows:
+      lr: 0.0002
+      weight_decay: 0.0
+      mode: fp32_master_rows
+    max_grad_norm: 1.0
+    schedule: warmup_cosine
+    warmup_ratio: 0.03
+    min_lr_ratio: 0.0
+  loss_reduction: token_mean
+  gradient_checkpointing: true
+  enable_thinking: false
+  allowed_scope: task
+  mix:
+    refseg: 1
+    depth: 1
+  correction_fraction: 0.5
+  data_workers: 4
+  mixed:
+    version: e3b-mixed-v1
+    per_step:
+      text: 8
+      grid: 8
+    order:
+    - text
+    - grid
+    loss_weights:
+      text: 1.0
+      grid: 1.0
+    steps: 8000
+    micro_batches:
+      text: 2
+      grid: 2
+    reference:
+      steps: 4000
+      batch_size: 16
+      variants:
+        text: c3
+        grid: e3b
+      samples_per_stream: 64000
+    schedule_length_ratio: 2.0
+    streams:
+      text: 第 t 步取 c3 同一种子的样本流第 8t … 8t + 7 个槽位
+      grid: 第 t 步取 e3b 同一种子的样本流第 8t … 8t + 7 个槽位
+  batch_size: 16
+  warmup_steps: 240
+grid_size: 32
+tokens:
+  vocab:
+  - <|e3_m0|>
+  - <|e3_m1|>
+  - <|e3_d00|>
+  - <|e3_d01|>
+  - <|e3_d02|>
+  - <|e3_d03|>
+  - <|e3_d04|>
+  - <|e3_d05|>
+  - <|e3_d06|>
+  - <|e3_d07|>
+  - <|e3_d08|>
+  - <|e3_d09|>
+  - <|e3_d10|>
+  - <|e3_d11|>
+  - <|e3_d12|>
+  - <|e3_d13|>
+  - <|e3_d14|>
+  - <|e3_d15|>
+  - <|e3_d16|>
+  - <|e3_d17|>
+  - <|e3_d18|>
+  - <|e3_d19|>
+  - <|e3_d20|>
+  - <|e3_d21|>
+  - <|e3_d22|>
+  - <|e3_d23|>
+  - <|e3_d24|>
+  - <|e3_d25|>
+  - <|e3_d26|>
+  - <|e3_d27|>
+  - <|e3_d28|>
+  - <|e3_d29|>
+  - <|e3_d30|>
+  - <|e3_d31|>
+  - <|e3_d32|>
+  - <|e3_d33|>
+  - <|e3_d34|>
+  - <|e3_d35|>
+  - <|e3_d36|>
+  - <|e3_d37|>
+  - <|e3_d38|>
+  - <|e3_d39|>
+  - <|e3_d40|>
+  - <|e3_d41|>
+  - <|e3_d42|>
+  - <|e3_d43|>
+  - <|e3_d44|>
+  - <|e3_d45|>
+  - <|e3_d46|>
+  - <|e3_d47|>
+  - <|e3_d48|>
+  - <|e3_d49|>
+  - <|e3_d50|>
+  - <|e3_d51|>
+  - <|e3_d52|>
+  - <|e3_d53|>
+  - <|e3_d54|>
+  - <|e3_d55|>
+  - <|e3_d56|>
+  - <|e3_d57|>
+  - <|e3_d58|>
+  - <|e3_d59|>
+  - <|e3_d60|>
+  - <|e3_d61|>
+  - <|e3_d62|>
+  - <|e3_d63|>
+  - <|e3_row|>
+  budget:
+    n_vocab: 67
+    n_planned_extra: 150
+    n_total_planned: 217
+    limit: 300
+  layout:
+    mask:
+      <|e3_m0|>: 248077
+      <|e3_m1|>: 248078
+    depth_first: 248079
+    depth_last: 248142
+    depth_contiguous: true
+    row: 248143
+    stop: 248046
+    grid_id_runs:
+    - - 248077
+      - 248143
+    n_grid_tokens: 67
+  allowed:
+    refseg:
+    - 248046
+    - 248077
+    - 248078
+    - 248143
+    depth:
+    - 248046
+    - 248079
+    - 248080
+    - 248081
+    - 248082
+    - 248083
+    - 248084
+    - 248085
+    - 248086
+    - 248087
+    - 248088
+    - 248089
+    - 248090
+    - 248091
+    - 248092
+    - 248093
+    - 248094
+    - 248095
+    - 248096
+    - 248097
+    - 248098
+    - 248099
+    - 248100
+    - 248101
+    - 248102
+    - 248103
+    - 248104
+    - 248105
+    - 248106
+    - 248107
+    - 248108
+    - 248109
+    - 248110
+    - 248111
+    - 248112
+    - 248113
+    - 248114
+    - 248115
+    - 248116
+    - 248117
+    - 248118
+    - 248119
+    - 248120
+    - 248121
+    - 248122
+    - 248123
+    - 248124
+    - 248125
+    - 248126
+    - 248127
+    - 248128
+    - 248129
+    - 248130
+    - 248131
+    - 248132
+    - 248133
+    - 248134
+    - 248135
+    - 248136
+    - 248137
+    - 248138
+    - 248139
+    - 248140
+    - 248141
+    - 248142
+    - 248143
+  table:
+    format: visint-token-table/1
+    family: qwen3.5
+    model_key: qwen3.5-2b
+    tiny: false
+    repo: Qwen/Qwen3.5-2B
+    revision: 15852e8c16360a2fea060d615a32b45270f8a8fc
+    tied_word_embeddings: true
+    vocab:
+      n_tok_at_attach: 248077
+      n_rows_at_attach: 248320
+      query_row: 248319
+    grid_tokens:
+    - name: <|e3_m0|>
+      id: 248077
+      surface: <|e3_m0|>
+    - name: <|e3_m1|>
+      id: 248078
+      surface: <|e3_m1|>
+    - name: <|e3_d00|>
+      id: 248079
+      surface: <|e3_d00|>
+    - name: <|e3_d01|>
+      id: 248080
+      surface: <|e3_d01|>
+    - name: <|e3_d02|>
+      id: 248081
+      surface: <|e3_d02|>
+    - name: <|e3_d03|>
+      id: 248082
+      surface: <|e3_d03|>
+    - name: <|e3_d04|>
+      id: 248083
+      surface: <|e3_d04|>
+    - name: <|e3_d05|>
+      id: 248084
+      surface: <|e3_d05|>
+    - name: <|e3_d06|>
+      id: 248085
+      surface: <|e3_d06|>
+    - name: <|e3_d07|>
+      id: 248086
+      surface: <|e3_d07|>
+    - name: <|e3_d08|>
+      id: 248087
+      surface: <|e3_d08|>
+    - name: <|e3_d09|>
+      id: 248088
+      surface: <|e3_d09|>
+    - name: <|e3_d10|>
+      id: 248089
+      surface: <|e3_d10|>
+    - name: <|e3_d11|>
+      id: 248090
+      surface: <|e3_d11|>
+    - name: <|e3_d12|>
+      id: 248091
+      surface: <|e3_d12|>
+    - name: <|e3_d13|>
+      id: 248092
+      surface: <|e3_d13|>
+    - name: <|e3_d14|>
+      id: 248093
+      surface: <|e3_d14|>
+    - name: <|e3_d15|>
+      id: 248094
+      surface: <|e3_d15|>
+    - name: <|e3_d16|>
+      id: 248095
+      surface: <|e3_d16|>
+    - name: <|e3_d17|>
+      id: 248096
+      surface: <|e3_d17|>
+    - name: <|e3_d18|>
+      id: 248097
+      surface: <|e3_d18|>
+    - name: <|e3_d19|>
+      id: 248098
+      surface: <|e3_d19|>
+    - name: <|e3_d20|>
+      id: 248099
+      surface: <|e3_d20|>
+    - name: <|e3_d21|>
+      id: 248100
+      surface: <|e3_d21|>
+    - name: <|e3_d22|>
+      id: 248101
+      surface: <|e3_d22|>
+    - name: <|e3_d23|>
+      id: 248102
+      surface: <|e3_d23|>
+    - name: <|e3_d24|>
+      id: 248103
+      surface: <|e3_d24|>
+    - name: <|e3_d25|>
+      id: 248104
+      surface: <|e3_d25|>
+    - name: <|e3_d26|>
+      id: 248105
+      surface: <|e3_d26|>
+    - name: <|e3_d27|>
+      id: 248106
+      surface: <|e3_d27|>
+    - name: <|e3_d28|>
+      id: 248107
+      surface: <|e3_d28|>
+    - name: <|e3_d29|>
+      id: 248108
+      surface: <|e3_d29|>
+    - name: <|e3_d30|>
+      id: 248109
+      surface: <|e3_d30|>
+    - name: <|e3_d31|>
+      id: 248110
+      surface: <|e3_d31|>
+    - name: <|e3_d32|>
+      id: 248111
+      surface: <|e3_d32|>
+    - name: <|e3_d33|>
+      id: 248112
+      surface: <|e3_d33|>
+    - name: <|e3_d34|>
+      id: 248113
+      surface: <|e3_d34|>
+    - name: <|e3_d35|>
+      id: 248114
+      surface: <|e3_d35|>
+    - name: <|e3_d36|>
+      id: 248115
+      surface: <|e3_d36|>
+    - name: <|e3_d37|>
+      id: 248116
+      surface: <|e3_d37|>
+    - name: <|e3_d38|>
+      id: 248117
+      surface: <|e3_d38|>
+    - name: <|e3_d39|>
+      id: 248118
+      surface: <|e3_d39|>
+    - name: <|e3_d40|>
+      id: 248119
+      surface: <|e3_d40|>
+    - name: <|e3_d41|>
+      id: 248120
+      surface: <|e3_d41|>
+    - name: <|e3_d42|>
+      id: 248121
+      surface: <|e3_d42|>
+    - name: <|e3_d43|>
+      id: 248122
+      surface: <|e3_d43|>
+    - name: <|e3_d44|>
+      id: 248123
+      surface: <|e3_d44|>
+    - name: <|e3_d45|>
+      id: 248124
+      surface: <|e3_d45|>
+    - name: <|e3_d46|>
+      id: 248125
+      surface: <|e3_d46|>
+    - name: <|e3_d47|>
+      id: 248126
+      surface: <|e3_d47|>
+    - name: <|e3_d48|>
+      id: 248127
+      surface: <|e3_d48|>
+    - name: <|e3_d49|>
+      id: 248128
+      surface: <|e3_d49|>
+    - name: <|e3_d50|>
+      id: 248129
+      surface: <|e3_d50|>
+    - name: <|e3_d51|>
+      id: 248130
+      surface: <|e3_d51|>
+    - name: <|e3_d52|>
+      id: 248131
+      surface: <|e3_d52|>
+    - name: <|e3_d53|>
+      id: 248132
+      surface: <|e3_d53|>
+    - name: <|e3_d54|>
+      id: 248133
+      surface: <|e3_d54|>
+    - name: <|e3_d55|>
+      id: 248134
+      surface: <|e3_d55|>
+    - name: <|e3_d56|>
+      id: 248135
+      surface: <|e3_d56|>
+    - name: <|e3_d57|>
+      id: 248136
+      surface: <|e3_d57|>
+    - name: <|e3_d58|>
+      id: 248137
+      surface: <|e3_d58|>
+    - name: <|e3_d59|>
+      id: 248138
+      surface: <|e3_d59|>
+    - name: <|e3_d60|>
+      id: 248139
+      surface: <|e3_d60|>
+    - name: <|e3_d61|>
+      id: 248140
+      surface: <|e3_d61|>
+    - name: <|e3_d62|>
+      id: 248141
+      surface: <|e3_d62|>
+    - name: <|e3_d63|>
+      id: 248142
+      surface: <|e3_d63|>
+    - name: <|e3_row|>
+      id: 248143
+      surface: <|e3_row|>
+    n_grid_tokens: 67
+    query:
+      id: null
+      surface: <|visint_query|>
+      row_allocated: false
+      in_tokenizer: false
+      injected: false
+      n: null
+      position_mode: null
+    row_ids:
+    - 248077
+    - 248078
+    - 248079
+    - 248080
+    - 248081
+    - 248082
+    - 248083
+    - 248084
+    - 248085
+    - 248086
+    - 248087
+    - 248088
+    - 248089
+    - 248090
+    - 248091
+    - 248092
+    - 248093
+    - 248094
+    - 248095
+    - 248096
+    - 248097
+    - 248098
+    - 248099
+    - 248100
+    - 248101
+    - 248102
+    - 248103
+    - 248104
+    - 248105
+    - 248106
+    - 248107
+    - 248108
+    - 248109
+    - 248110
+    - 248111
+    - 248112
+    - 248113
+    - 248114
+    - 248115
+    - 248116
+    - 248117
+    - 248118
+    - 248119
+    - 248120
+    - 248121
+    - 248122
+    - 248123
+    - 248124
+    - 248125
+    - 248126
+    - 248127
+    - 248128
+    - 248129
+    - 248130
+    - 248131
+    - 248132
+    - 248133
+    - 248134
+    - 248135
+    - 248136
+    - 248137
+    - 248138
+    - 248139
+    - 248140
+    - 248141
+    - 248142
+    - 248143
+    row_hash: sha256 of the row's bfloat16 bytes
+stop_id: 248046
+instructions:
+  refseg:
+    order: instruction_first
+    grid_template: Segment {expression} in the image. Output the {n}x{n} mask grid.
+    correction_template: 'Segment {expression} in the image. The second image is a
+      candidate result: a mask overlaid on the first image. Output the corrected complete
+      {n}x{n} mask grid.'
+  depth:
+    order: instruction_first
+    grid_instruction: Estimate the depth of the image. Output the {n}x{n} depth grid.
+    correction_instruction: 'Estimate the depth of the image. The second image is
+      a candidate result: a depth map overlaid on the first image. Output the corrected
+      complete {n}x{n} depth grid.'
+c3:
+  seg_kinds:
+    box: 1
+    polygon: 1
+  box_template_from:
+    config: configs/e1_prompts.json
+    task: refexp_box
+  box_format: adapter.format_boxes（本家族原生格式，label = 指代句；DEV-0030 §3）
+  box_basis: 'DEV-0030 §3（D56-3、D60-4）：正式运行前 C3 的框改用各家族原生的框格式加 E1 的定位提示，否则对比偏向 E3b（统一格式对零样本的模型是陌生格式）。目标
+    = adapter.format_boxes([GT 框], width, height, labels=[指代句])：Qwen 是 ```json 代码块里的
+    {"bbox_2d": [x1, y1, x2, y2], "label": …}，Gemma 是 {"box_2d": [y1, x1, y2, x2],
+    "label": …}，InternVL 是 <ref>…</ref><box>[[x1, y1, x2, y2]]</box>，都是 0–1000 的整数；label
+    写指代句，与三家族零样本实测的原生输出一致（model_notes §5.5、§6.5、§7.5 都回写了被指代的物体）。提示 = configs/e1_prompts.json
+    的 tasks.refexp_box.families.<家族>.template 原文（要求 native = true），按 E1 的规则渲染（format(expression=…).strip()）。往返：本家族的
+    parse_boxes 解析回来与 GT 框每个坐标差 ≤ W/2000、H/2000（tests 钉住）。DEV-0025 暂行的统一格式提示与 "[x0,
+    y0, x1, y1]" 目标已删除'
+  polygon_template_from:
+    config: configs/e1_prompts.json
+    task: refexp_poly
+  polygon_max_points: 64
+  depth_template: 'Which point of each pair is closer to the camera? Coordinates are
+    relative to the image size and range from 0 to 1000, with x first.
+
+    {pairs}'
+  depth_pair_line: '{i}. A [{ax}, {ay}], B [{bx}, {by}]'
+  depth_answer_line: '{i}. {closer} is closer'
+  depth_pairs_per_image: 5
+  chunk_size: 1024
+  polygon_template: 'Outline {expression} in the image with a polygon. Report the
+    polygon vertices in JSON format as a list of [x, y] points: [[x1, y1], [x2, y2],
+    ...]. Coordinates are relative to the image size and range from 0 to 1000, with
+    x first. Output only one JSON block.'
+  polygon_template_source:
+    config: configs/e1_prompts.json
+    task: refexp_poly
+    sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+    provenance: unified
+  box_template: Locate {expression} in the image. Report bbox coordinates in JSON
+    format.
+  box_template_source:
+    config: configs/e1_prompts.json
+    task: refexp_box
+    sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+    provenance: predecessor_cookbook
+    native: true
+    source_url: https://github.com/QwenLM/Qwen3-VL/blob/0dcc180d854f4b132f8059b10bbf0b5fd5dae9ed/cookbooks/2d_grounding.ipynb
+noise:
+  correction:
+    fraction: 0.5
+    render: src/e3/feedback.feedback_image（训练与评测共用的唯一入口）：分割 = grid_to_mask 回填 + src/executors/overlay.render_overlay；深度
+      = 64 档 HSV 色带的伪彩色，alpha 与 render_overlay 相同
+  depth_noise:
+    max_ops: 3
+    shift_max_bins: 8
+    field_amp_max_bins: 6
+    field_smooth_cells: 4.0
+    blob_count:
+    - 1
+    - 3
+    blob_radius_max_cells: 8.0
+config:
+  path: configs/e3b_train.json
+  sha256: b265cd87b2f141a37d8aea4d62b667efe084709d737220903938feaf7811c375
+  version: e3b-train-v3
+data:
+  refseg:
+    pool:
+      set: refcoco_train/train
+      datasets:
+        refcoco:
+          set: refcoco_train/train
+          n_total: 107859
+          n_missing: 0
+          n_dedupe_excluded: 27
+          n_kept: 107832
+          dataset: refcoco
+        refcoco+:
+          set: refcoco_train/train
+          n_total: 107376
+          n_missing: 0
+          n_dedupe_excluded: 27
+          n_kept: 107349
+          dataset: refcoco+
+        refcocog:
+          set: refcoco_train/train
+          n_total: 72369
+          n_missing: 0
+          n_dedupe_excluded: 32
+          n_kept: 72337
+          dataset: refcocog
+      n_kept: 287518
+      n_empty_expression: 0
+    n: 287518
+    ids_sha256: 835f4f7940948432226da31d61a1fbf20ef3d56daa4019ccef2da1230fed5185
+    dedupe:
+      file_sha256: 40f214fb14315c990de811ef9d23172d6c36ea661e40a241ad46fc667f3c1838
+      schema: 2
+      legacy: false
+      max_hamming: 8
+      eval_sets:
+      - ade20k/val
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - coco_val2017_full/val2017
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyu_normals/test
+      - nyuv2/dev_train
+      - nyuv2/test
+      - odinw13/eval
+      - probe/D20
+      - refcoco/eval
+      required_eval_sets:
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyuv2/test
+      - odinw13/eval
+      - refcoco/eval
+  depth:
+    pool:
+      set: nyu_depth_train/train
+      n_total: 22848
+      n_missing: 0
+      n_dedupe_excluded: 132
+      n_kept: 22716
+    n: 22716
+    ids_sha256: ade362c2b310428ee01d18f4234c46a61c0753ecceb0f777f3e11437985ec96e
+    dedupe:
+      file_sha256: 40f214fb14315c990de811ef9d23172d6c36ea661e40a241ad46fc667f3c1838
+      schema: 2
+      legacy: false
+      max_hamming: 8
+      eval_sets:
+      - ade20k/val
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - coco_val2017_full/val2017
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyu_normals/test
+      - nyuv2/dev_train
+      - nyuv2/test
+      - odinw13/eval
+      - probe/D20
+      - refcoco/eval
+      required_eval_sets:
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyuv2/test
+      - odinw13/eval
+      - refcoco/eval
