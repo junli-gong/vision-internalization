@@ -1,0 +1,312 @@
+## squeue 2026-10-10T05:21:07Z [before]
+157296 RUNNING 55-16:46:53 hpcgpu06
+157297 RUNNING 57-14:19:02 hpcgpu07
+=================== minimax-h3-a100-1gpu-06.sbatch
+-rwxr-xr-x 1 chenyuma domain users 894 2026-08-12 02:37:23.000000000 +0800 /home/mail/chenyuma/minimax-h3-fp8/minimax-h3-a100-1gpu-06.sbatch
+#!/usr/bin/env bash
+#SBATCH --partition=gpu
+#SBATCH --nodelist=hpcgpu06
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=180G
+#SBATCH --gres=gpu:a100:1
+#SBATCH --time=UNLIMITED
+#SBATCH --job-name=h3-fp16-a100-06
+#SBATCH --output=/home/mail/chenyuma/minimax-h3-fp8/logs/slurm-h3-fp16-a100-06-%j.log
+#SBATCH --error=/home/mail/chenyuma/minimax-h3-fp8/logs/slurm-h3-fp16-a100-06-%j.log
+#SBATCH --requeue
+
+set -uo pipefail
+BASE="${MINIMAX_H3_BASE:-/home/mail/chenyuma/minimax-h3-fp8}"
+mkdir -p "$BASE/logs" "$BASE/run"
+
+echo "[$(date -u +%FT%TZ)] allocation active: job=$SLURM_JOB_ID node=$(hostname -s)" >&2
+while true; do
+  "$BASE/start_minimax_h3_a100_1gpu_fp16.sh"
+  status=$?
+  echo "[$(date -u +%FT%TZ)] MiniMax H3 exited status=$status; allocation remains active; retrying in 300 seconds" >&2
+  touch "$BASE/run/h3-fp16-a100-06-startup-failed"
+  sleep 300
+done
+
+=================== minimax-h3-a100-1gpu-07.sbatch
+-rwxr-xr-x 1 chenyuma domain users 894 2026-08-12 02:37:23.000000000 +0800 /home/mail/chenyuma/minimax-h3-fp8/minimax-h3-a100-1gpu-07.sbatch
+#!/usr/bin/env bash
+#SBATCH --partition=gpu
+#SBATCH --nodelist=hpcgpu07
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=180G
+#SBATCH --gres=gpu:a100:1
+#SBATCH --time=UNLIMITED
+#SBATCH --job-name=h3-fp16-a100-07
+#SBATCH --output=/home/mail/chenyuma/minimax-h3-fp8/logs/slurm-h3-fp16-a100-07-%j.log
+#SBATCH --error=/home/mail/chenyuma/minimax-h3-fp8/logs/slurm-h3-fp16-a100-07-%j.log
+#SBATCH --requeue
+
+set -uo pipefail
+BASE="${MINIMAX_H3_BASE:-/home/mail/chenyuma/minimax-h3-fp8}"
+mkdir -p "$BASE/logs" "$BASE/run"
+
+echo "[$(date -u +%FT%TZ)] allocation active: job=$SLURM_JOB_ID node=$(hostname -s)" >&2
+while true; do
+  "$BASE/start_minimax_h3_a100_1gpu_fp16.sh"
+  status=$?
+  echo "[$(date -u +%FT%TZ)] MiniMax H3 exited status=$status; allocation remains active; retrying in 300 seconds" >&2
+  touch "$BASE/run/h3-fp16-a100-07-startup-failed"
+  sleep 300
+done
+
+=================== minimax-h3-a100-1gpu-fp16.env
+-rw-r--r-- 1 chenyuma domain users 307 2026-08-12 02:37:23.000000000 +0800 /home/mail/chenyuma/minimax-h3-fp8/minimax-h3-a100-1gpu-fp16.env
+# MiniMax H3 single-A100 quality profile.
+MINIMAX_H3_PRECISION=fp16
+MINIMAX_H3_DIT_NAME=minimax_h3_ref2va_pruned_fp16.safetensors
+MINIMAX_H3_DEFAULT_RESOLUTION=1366x768
+MINIMAX_H3_STEPS=30
+MINIMAX_H3_ENABLE_CACHE=0
+MINIMAX_H3_ENABLE_COMPILE=0
+MINIMAX_H3_ATTENTION_BACKEND=sage
+MINIMAX_H3_API_CONCURRENCY=1
+
+=================== start_minimax_h3_a100_1gpu_fp16.sh
+-rwxr-xr-x 1 chenyuma domain users 3996 2026-08-12 02:55:55.000000000 +0800 /home/mail/chenyuma/minimax-h3-fp8/start_minimax_h3_a100_1gpu_fp16.sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+BASE="${MINIMAX_H3_BASE:-/home/mail/chenyuma/minimax-h3-fp8}"
+ENV_DIR="$BASE/comfy-env"
+PROFILE="$BASE/minimax-h3-a100-1gpu-fp16.env"
+
+set -a
+# shellcheck disable=SC1090
+source "$PROFILE"
+set +a
+
+node="$(hostname -s)"
+case "$node" in
+  hpcgpu06) comfy_port=18606; api_port=8406 ;;
+  hpcgpu07) comfy_port=18607; api_port=8407 ;;
+  *) echo "Unsupported node for this launcher: $node" >&2; exit 64 ;;
+esac
+
+instance="a100-1gpu-${node}"
+dit_path="$BASE/ComfyUI/models/diffusion_models/$MINIMAX_H3_DIT_NAME"
+bf16_path="$BASE/ComfyUI/models/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors"
+token_path="$BASE/run/api-token-$node"
+
+mkdir -p "$BASE"/{logs,run,outputs} \
+  "$BASE/instances/$instance"/{user,input,output,temp,torchinductor}
+
+echo "[$(date -u +%FT%TZ)] MiniMax H3 FP16 start attempt on $node" >&2
+echo "profile: precision=$MINIMAX_H3_PRECISION resolution=$MINIMAX_H3_DEFAULT_RESOLUTION steps=$MINIMAX_H3_STEPS easycache=$MINIMAX_H3_ENABLE_CACHE attention=$MINIMAX_H3_ATTENTION_BACKEND concurrency=$MINIMAX_H3_API_CONCURRENCY" >&2
+nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader >&2
+
+[[ -x "$ENV_DIR/bin/python" && -x "$ENV_DIR/bin/uvicorn" ]] || {
+  echo "MiniMax H3 environment is incomplete: $ENV_DIR" >&2
+  exit 65
+}
+if [[ ! -s "$dit_path" ]]; then
+  if [[ ! -s "$bf16_path" ]]; then
+    echo "Official BF16 source checkpoint is not ready: $bf16_path" >&2
+    echo "The allocation keeper will retain the GPU and retry without falling back to FP8." >&2
+    exit 66
+  fi
+  echo "FP16 checkpoint is absent; acquiring the shared conversion lock." >&2
+  exec 9>"$BASE/run/minimax-h3-fp16-conversion.lock"
+  flock 9
+  if [[ ! -s "$dit_path" ]]; then
+    "$ENV_DIR/bin/python" "$BASE/convert_minimax_h3_bf16_to_fp16.py" "$bf16_path" "$dit_path"
+  fi
+  flock -u 9
+fi
+
+token="$($ENV_DIR/bin/python -c 'import secrets; print(secrets.token_hex(32))')"
+printf '%s\n' "$token" >"$token_path"
+
+export CUDA_VISIBLE_DEVICES=0 CUDA_DEVICE_ORDER=PCI_BUS_ID
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export TORCHINDUCTOR_CACHE_DIR="$BASE/instances/$instance/torchinductor"
+export MINIMAX_H3_DIT_COMPUTE_DEVICE=cuda:0
+export MINIMAX_H3_DIT_DONOR_DEVICE=cpu
+export MINIMAX_H3_CLIP_DEVICE=cpu
+export MINIMAX_H3_VAE_DEVICE=cuda:0
+export MINIMAX_H3_API_TOKEN="$token"
+export MINIMAX_H3_UPSTREAM_URL="http://127.0.0.1:$comfy_port"
+
+comfy_pid=""
+api_pid=""
+cleanup_children() {
+  [[ -n "$api_pid" ]] && kill "$api_pid" 2>/dev/null || true
+  [[ -n "$comfy_pid" ]] && kill "$comfy_pid" 2>/dev/null || true
+  wait 2>/dev/null || true
+}
+trap cleanup_children EXIT INT TERM
+
+wait_for_service() {
+  local url="$1" pid="$2" name="$3" deadline=$((SECONDS + 1800))
+  until curl --connect-timeout 2 -fsS "$url" >/dev/null 2>&1; do
+    kill -0 "$pid" 2>/dev/null || { echo "$name exited before healthy" >&2; return 1; }
+    (( SECONDS < deadline )) || { echo "Timed out waiting for $name" >&2; return 1; }
+    sleep 3
+  done
+}
+
+cd "$BASE/ComfyUI"
+"$ENV_DIR/bin/python" main.py \
+  --listen 127.0.0.1 --port "$comfy_port" --disable-auto-launch \
+  --preview-method none --disable-metadata --fp16-unet --use-sage-attention \
+  --user-directory "$BASE/instances/$instance/user" \
+  --input-directory "$BASE/instances/$instance/input" \
+  --output-directory "$BASE/instances/$instance/output" \
+  --temp-directory "$BASE/instances/$instance/temp" \
+  --database-url "sqlite:///$BASE/instances/$instance/user/comfyui.db" \
+  >"$BASE/logs/comfy-$instance.log" 2>&1 &
+comfy_pid=$!
+wait_for_service "http://127.0.0.1:$comfy_port/system_stats" "$comfy_pid" "ComfyUI-$node"
+
+cd "$BASE"
+"$ENV_DIR/bin/uvicorn" api:create_app --factory \
+  --host 0.0.0.0 --port "$api_port" \
+  >"$BASE/logs/api-$instance.log" 2>&1 &
+api_pid=$!
+wait_for_service "http://127.0.0.1:$api_port/health" "$api_pid" "MiniMax-H3-API-$node"
+
+echo "[$(date -u +%FT%TZ)] MiniMax H3 ready on $node: API port $api_port, default 1366x768 / 30 steps" >&2
+wait "$api_pid"
+=================== run/
+total 251596
+drwxr-xr-x  2 chenyuma domain users      4096 2026-08-15 20:34:18.000000000 +0800 .
+drwxr-xr-x 17 chenyuma domain users      4096 2026-09-27 10:17:13.000000000 +0800 ..
+-rw-------  1 chenyuma domain users         8 2026-08-05 10:52:47.000000000 +0800 api-0.pid
+-rw-------  1 chenyuma domain users         8 2026-08-05 10:52:47.000000000 +0800 api-1.pid
+-rw-r--r--  1 chenyuma domain users         8 2026-08-06 09:51:31.000000000 +0800 api-6g-6g_a.pid
+-rw-r--r--  1 chenyuma domain users         8 2026-08-06 09:51:31.000000000 +0800 api-6g-6g_b.pid
+-rw-r--r--  1 chenyuma domain users         8 2026-08-12 02:52:12.000000000 +0800 api-6g-quality-8188.pid
+-rw-r--r--  1 chenyuma domain users         8 2026-08-12 02:52:12.000000000 +0800 api-6g-quality-8288.pid
+-rw-r--r--  1 chenyuma domain users         8 2026-09-09 14:19:16.000000000 +0800 api-6g-single-8188.pid
+-rw-r--r--  1 chenyuma domain users         8 2026-09-09 14:19:16.000000000 +0800 api-6g-single-8288.pid
+-rw-------  1 chenyuma domain users        65 2026-08-05 02:50:55.000000000 +0800 api-token
+-rw-r--r--  1 chenyuma domain users        65 2026-08-15 20:34:18.000000000 +0800 api-token-hpcgpu06
+-rw-r--r--  1 chenyuma domain users        65 2026-08-13 23:17:13.000000000 +0800 api-token-hpcgpu07
+-rw-r--r--  1 chenyuma domain users         7 2026-08-05 04:09:24.000000000 +0800 benchmark-instance1.pid
+-rw-r--r--  1 chenyuma domain users         7 2026-08-05 04:05:16.000000000 +0800 benchmark.pid
+-rw-------  1 chenyuma domain users         8 2026-08-05 10:52:16.000000000 +0800 comfy-0.pid
+-rw-------  1 chenyuma domain users         8 2026-08-05 10:52:16.000000000 +0800 comfy-1.pid
+-rw-r--r--  1 chenyuma domain users         8 2026-08-06 09:51:22.000000000 +0800 comfy-6g-6g_a.pid
+-rw-r--r--  1 chenyuma domain users         8 2026-08-06 09:51:22.000000000 +0800 comfy-6g-6g_b.pid
+-rw-r--r--  1 chenyuma domain users         8 2026-09-09 14:16:48.000000000 +0800 comfy-6g-single.pid
+-rw-r--r--  1 chenyuma domain users         7 2026-08-05 03:28:59.000000000 +0800 comfy-install.pid
+-rw-r--r--  1 chenyuma domain users         7 2026-08-05 03:16:13.000000000 +0800 comfy-object-info.pid
+-rw-------  1 chenyuma domain users         8 2026-08-05 02:58:09.000000000 +0800 engine-0.pid
+-rw-------  1 chenyuma domain users         8 2026-08-05 02:58:09.000000000 +0800 engine-1.pid
+-rw-r--r--  1 chenyuma domain users         7 2026-08-05 04:02:57.000000000 +0800 ffmpeg-copy.pid
+-rw-r--r--  1 chenyuma domain users         7 2026-08-05 04:00:52.000000000 +0800 ffmpeg-install.pid
+-rw-r--r--  1 chenyuma domain users         7 2026-08-05 04:21:35.000000000 +0800 flash-attn-install.pid
+-rw-r--r--  1 chenyuma domain users 256043372 2026-08-05 04:20:26.000000000 +0800 flash_attn_torch28_abi_true.whl
+-rw-r--r--  1 chenyuma domain users         7 2026-08-05 23:12:23.000000000 +0800 job-id
+-rw-r--r--  1 chenyuma domain users         7 2026-08-05 23:23:26.000000000 +0800 job-id-3gpu
+-rw-r--r--  1 chenyuma domain users         0 2026-08-13 23:02:06.000000000 +0800 minimax-h3-fp16-conversion.lock
+-rw-r--r--  1 chenyuma domain users   1452447 2026-08-05 03:17:46.000000000 +0800 object_info.json
+-rw-r--r--  1 chenyuma domain users         8 2026-08-12 02:52:12.000000000 +0800 quality-api-srun.pid
+-rw-r--r--  1 chenyuma domain users         7 2026-08-05 04:04:52.000000000 +0800 service-step.pid
+-rw-r--r--  1 chenyuma domain users         7 2026-08-05 04:08:56.000000000 +0800 tunnel.pid
+=================== ~/h3_guard.sh
+#!/usr/bin/env bash
+# H3 6卡任务自我守护：只要它不存在(R/PD 都没有)，就先清理 park 占位、再立即重提。
+# 目的：把 H3 崩了/结束导致的"卡释放窗口"压缩到 1 分钟内，防止别人趁隙抢占。
+BASE="${H3_BASE:-/home/mail/chenyuma/minimax-h3-fp8}"
+SB="$BASE/minimax-h3-6g.sbatch"
+LOG="$BASE/logs/h3_guard.log"
+
+# 只要还有(任意状态) minimax-h3-6g 任务，就不动它
+ANY=$(squeue -h -u chenyuma -n minimax-h3-6g 2>/dev/null | wc -l)
+[ "$ANY" -ge 1 ] && exit 0
+
+# 清掉会占位的 park 空占任务(gpu_park_4 / gpu_park_a100)，给 H3 腾 6 张
+PARK=$(squeue -h -u chenyuma -t RUNNING -o "%i %j" 2>/dev/null | awk  /Users/chenyuma /^gpu_park/ {print })
+[ -n "$PARK" ] && { scancel $PARK 2>/dev/null; echo "$(date +%F %T) 已取消park占位: $PARK" >> "$LOG"; }
+
+# 重提 H3 6卡任务
+sleep 2
+if sbatch "$SB" >> "$LOG" 2>&1; then
+  echo "$(date +%F %T) H3 6卡任务已自动复活" >> "$LOG"
+else
+  echo "$(date +%F %T) H3 复活失败" >> "$LOG"
+fi
+=================== ~/gpu.sh
+for n in hpcgpu{03,06,07,08,09,10,11,12,13,14,15}; do echo $n; scontrol show node $n | grep -E "CfgGRES|AllocGRES"; echo; done
+=================== schedule_a100_h3.sh
+#!/usr/bin/env bash
+# 定时任务守护：保证「minimax-h3-a100-2gpu」作业始终处于 SUSP 队列（占用 2 张 A100）。
+#
+# 由 crontab 每 5 分钟调用一次；逻辑：
+#   1. 若该作业已在 R(运行)/PD(排队) => 不做任何事。
+#   2. 若不存在或已终止 => 重新提交 sbatch，令其回到排队，一旦 A100 释放立即抢占。
+#
+# crontab 行示例（登录节点，minute 级）：
+#   */5 * * * * /home/mail/chenyuma/minimax-h3-fp8/schedule_a100_h3.sh >>/home/mail/chenyuma/minimax-h3-fp8/logs/schedule-a100.log 2>&1
+set -euo pipefail
+
+BASE="${MINIMAX_H3_BASE:-/home/mail/chenyuma/minimax-h3-fp8}"
+JOB_NAME="minimax-h3-a100-2gpu"
+SBATCH="$BASE/minimax-h3-a100-2gpu.sbatch"
+LOG_DIR="$BASE/logs"
+mkdir -p "$LOG_DIR"
+
+# 已存在（运行中或排队中）则不重复提交
+if squeue --name="$JOB_NAME" --states=RUNNING,PENDING -h | grep -q .; then
+  echo "$(date -u +%FT%TZ) 作业已在队列/运行中，跳过。"
+  exit 0
+fi
+
+echo "$(date -u +%FT%TZ) 未发现作业，重新提交 $SBATCH"
+cd "$BASE" && sbatch "$SBATCH"
+=================== crontab -l
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+#*/3 * * * * /home/mail/chenyuma/occupy_gpus.sh
+#* * * * * /home/mail/chenyuma/h3_guard.sh >/dev/null 2>&1
+=================== tail gpu_park.log
+[2026-09-23 00:03:01] --- 检查 (可用A100=0 可用总数=8) 队中:pA=1 p4=1 ---
+[2026-09-23 00:06:02] --- 检查 (可用A100=0 可用总数=12) 队中:pA=0 p4=0 ---
+[2026-09-23 00:06:02] 可用总数 12>=4，提交 4 卡占卡任务
+Submitted batch job 172470
+[2026-09-23 00:09:01] --- 检查 (可用A100=0 可用总数=7) 队中:pA=0 p4=1 ---
+-rw-r--r-- 1 chenyuma domain users 1931702 2026-09-23 00:09:01.000000000 +0800 /home/mail/chenyuma/gpu_park.log
+=================== slurm log tails
+-rw-r--r--  1 chenyuma domain users  161873 Aug 30 03:31 turbo6-comfy-0.log
+-rw-r--r--  1 chenyuma domain users  137764 Aug 30 12:01 turbo6-comfy-1.log
+-rw-r--r--  1 chenyuma domain users  119881 Aug 17 00:01 turbo6-comfy-2.log
+-rw-r--r--  1 chenyuma domain users   68163 Aug 17 00:01 turbo6-comfy-3.log
+-rw-r--r--  1 chenyuma domain users   61875 Aug 17 00:01 turbo6-comfy-4.log
+-rw-r--r--  1 chenyuma domain users   61875 Aug 17 00:01 turbo6-comfy-5.log
+-rw-r--r--  1 chenyuma domain users   62836 Aug 16 19:03 turbo6-comfy-6.log
+-rw-r--r--  1 chenyuma domain users 3900185 Sep  7 15:06 turbo6-router-srun.log
+-rw-r--r--  1 chenyuma domain users     252 Sep  7 15:06 turbo6-worker6-srun.log
+-rw-r--r--  1 chenyuma domain users     251 Sep  7 15:06 turbo6-workers0-5-srun.log
+[2026-08-15T12:34:14Z] allocation active: job=157296 node=hpcgpu06
+[2026-08-15T12:34:14Z] MiniMax H3 FP16 start attempt on hpcgpu06
+profile: precision=fp16 resolution=1366x768 steps=30 easycache=0 attention=sage concurrency=1
+0, NVIDIA A100-PCIE-40GB, 40960 MiB, 40439 MiB
+[2026-08-15T12:44:06Z] MiniMax H3 ready on hpcgpu06: API port 8406, default 1366x768 / 30 steps
+...
+[2026-08-13T15:02:05Z] allocation active: job=157297 node=hpcgpu07
+[2026-08-13T15:02:05Z] MiniMax H3 FP16 start attempt on hpcgpu07
+profile: precision=fp16 resolution=1366x768 steps=30 easycache=0 attention=sage concurrency=1
+0, NVIDIA A100-PCIE-40GB, 40960 MiB, 40439 MiB
+FP16 checkpoint is absent; acquiring the shared conversion lock.
+Loading checkpoint: /home/mail/chenyuma/minimax-h3-fp8/ComfyUI/models/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors
+converted 100/532 tensors
+converted 200/532 tensors
+converted 300/532 tensors
+converted 400/532 tensors
+converted 500/532 tensors
+Writing temporary FP16 checkpoint: /home/mail/chenyuma/minimax-h3-fp8/ComfyUI/models/diffusion_models/.minimax_h3_ref2va_pruned_fp16.safetensors.4010101.tmp
+FP16 checkpoint ready: /home/mail/chenyuma/minimax-h3-fp8/ComfyUI/models/diffusion_models/minimax_h3_ref2va_pruned_fp16.safetensors
+[2026-08-13T15:25:51Z] MiniMax H3 ready on hpcgpu07: API port 8407, default 1366x768 / 30 steps
+## squeue 2026-10-10T05:21:07Z [after]
+157296 RUNNING 55-16:46:53 hpcgpu06
+157297 RUNNING 57-14:19:02 hpcgpu07
