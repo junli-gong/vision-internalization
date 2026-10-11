@@ -11,6 +11,12 @@
 #   push_out <说明>      只提交 $OUT 下的改动，在 git 锁里 rebase 后推送（同 train_queue.sh）。
 #   progress <说明>      心跳写 $LOGS/eval_<RUN_ID>.status。
 # 调用方先设好：RUN_ID、REPO、OUT（在 REPO 里）、LOGS；TINY=1 时不查 GPU、不写暂停文件。
+# ITSC HPC（D89、D91）：两台节点共用 $LOGS，计算节点不碰 git、Lustre 上不能对大目录 du。可选：
+#   EV_PAUSE        暂停文件（默认 $LOGS/train.pause）；HPC 上按节点分开，与该节点训练队列的 TQ_PAUSE 相同
+#   EV_STATUS_GLOB  claim_gpu 要等哪些训练心跳（$LOGS 下的通配，默认 train_*.status）；HPC 上只等本节点的队列
+#   EV_NO_GIT=1     push_out 只压大文件、不提交推送（由登录节点的 sync_push.sh 推）
+#   EV_QUOTA_CMD    算份额的命令（输出整数 GB），给了就不对 PROJ 做 du；EV_SHARE_STOP_GB（默认 15，D28-8）
+#   EV_DF_PATH      查剩余空间的路径（默认 /，D6）；EV_DISK_STOP_GB（默认 3）
 set -uo pipefail
 : "${RUN_ID:?}" "${REPO:?}" "${OUT:?}" "${LOGS:?}"
 case "$OUT" in "$REPO"/*) ;; *) echo "OUT 必须在 REPO 里：$OUT" >&2; exit 2;; esac
@@ -21,6 +27,13 @@ CLAIM_MAX_S=${CLAIM_MAX_S:-10800}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} MKL_NUM_THREADS=${MKL_NUM_THREADS:-16}
 EV_CAP_S=${EV_CAP_S:-}
 PROJ=${PROJ:-}
+EV_PAUSE=${EV_PAUSE:-$LOGS/train.pause}
+EV_STATUS_GLOB=${EV_STATUS_GLOB:-train_*.status}
+EV_NO_GIT=${EV_NO_GIT:-0}
+EV_QUOTA_CMD=${EV_QUOTA_CMD:-}
+EV_SHARE_STOP_GB=${EV_SHARE_STOP_GB:-15}
+EV_DF_PATH=${EV_DF_PATH:-/}
+EV_DISK_STOP_GB=${EV_DISK_STOP_GB:-3}
 EV_T0=$(date +%s)
 EV_STATUS=$LOGS/eval_${RUN_ID}.status
 OUT_REL=${OUT#"$REPO"/}
@@ -31,16 +44,16 @@ progress() { printf '%s %s\n' "$(now)" "$*" > "$EV_STATUS.tmp" && mv -f "$EV_STA
 sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 locked() { if command -v flock >/dev/null 2>&1; then ( flock 9 || exit 1; "$@" ) 9>"$LOGS/git.lock"; else ( "$@" ); fi; }
 
-release_gpu() { [ "$TINY" = 1 ] || rm -f "$LOGS/train.pause"; }
+release_gpu() { [ "$TINY" = 1 ] || rm -f "$EV_PAUSE"; }
 claim_gpu() {
   [ "$TINY" = 1 ] && return 0
-  echo "$1" > "$LOGS/train.pause"
+  echo "$1" > "$EV_PAUSE"
   trap release_gpu EXIT
   local t0 st running procs
   t0=$(date +%s)
   while :; do
     running=""
-    for st in "$LOGS"/train_*.status; do
+    for st in "$LOGS"/$EV_STATUS_GLOB; do
       [ -e "$st" ] || continue
       case "$(cut -d' ' -f2- "$st")" in running*) running="$running $(basename "$st")";; esac
     done
@@ -55,8 +68,10 @@ claim_gpu() {
 stop_line() {  # 触线就推送、写 blocked、退出 3
   local why="" d g
   if [ -n "$EV_CAP_S" ] && [ $(( $(date +%s) - EV_T0 )) -ge "$EV_CAP_S" ]; then why="cap ${EV_CAP_S}s reached"; fi
-  d=$(df -Pk / | awk 'NR==2{print int($4/1048576)}'); [ "$d" -lt 3 ] && why="disk free ${d}GB<3GB (D6)"
-  if [ -n "$PROJ" ]; then g=$(du -sk "$PROJ" 2>/dev/null | awk '{print int($1/1048576)}'); [ "$g" -gt 15 ] && why="project share ${g}GB>15GB (D28-8)"; fi
+  d=$(df -Pk "$EV_DF_PATH" | awk 'NR==2{print int($4/1048576)}'); [ "$d" -lt "$EV_DISK_STOP_GB" ] && why="disk free ${d}GB<${EV_DISK_STOP_GB}GB at $EV_DF_PATH (D6)"
+  if [ -n "$EV_QUOTA_CMD" ]; then g=$(bash -c "$EV_QUOTA_CMD" 2>/dev/null || echo 0)
+  elif [ -n "$PROJ" ]; then g=$(du -sk "$PROJ" 2>/dev/null | awk '{print int($1/1048576)}'); else g=0; fi
+  [ "$g" -gt "$EV_SHARE_STOP_GB" ] && why="project share ${g}GB>${EV_SHARE_STOP_GB}GB (D28-8)"
   [ -z "$why" ] && return 0
   echo "$(now) STOP before $1: $why" | tee -a "$OUT/steps.log"
   progress "blocked: $why"
@@ -101,4 +116,8 @@ _push() {
   done
   return 1
 }
-push_out() { shrink_large; locked _push "[results] $RUN_ID: $1" || echo "$(now) 推送失败（$1）" | tee -a "$OUT/steps.log"; }
+push_out() {
+  shrink_large
+  if [ "$EV_NO_GIT" = 1 ]; then echo "$(now) （不推送，EV_NO_GIT=1：由登录节点的同步循环推）$1" >> "$OUT/steps.log"; return 0; fi
+  locked _push "[results] $RUN_ID: $1" || echo "$(now) 推送失败（$1）" | tee -a "$OUT/steps.log"
+}

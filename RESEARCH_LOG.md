@@ -1195,3 +1195,13 @@
     - e3a 对 B200 的两组比对，用 `--ignore-key class_names_check.file`。两边只差本机路径（`/dev/shm/visint/…` 对 `/home/mail/chenyuma/visint/…`），同一处的 sha256 相同，按机器字段处理。以后把这个键加进 `compare_train_logs.py` 的机器字段，和合并核对那条失败的测试一起派开发。
     - 启动环境加了 `PATH=$VI/env/bin:/usr/bin:/bin`。计算节点没有系统 git，不加的话 meta.json 的 commit 是 null。已核对 nvidia-smi、flock、awk、du 都在 `/usr/bin`，驱动的闸门不受影响。以后的 HPC 队列脚本自己设 PATH。
 - **10-11 用户定迁移方案（D91）**：E5 拆到两台 A100。可比评测改在 A100 上做（替代 D55），9B 推到 10-25 之后；这两项先按建议做，转负责人确认（N32）。发 RUN-0047，把 B200 的归档传到 HPC。
+- **10-11 06:03 UTC：RUN-0045 推送循环 v1 的事故**（A100 的 CC 发现并停掉循环；训练没停）：
+  - v1 在 `$VI/repo` 里提交后 `pull --rebase --autostash`，autostash 把驱动整段开着写的 `driver/logs/c3_s0.cur` 换成新文件，段结束时读到截断内容；
+  - 两台的 c3_s0 各被误判一次"没有完成也没有按段停下"（07 是 05:47，06 是 06:00）。训练没丢数据：train_log.jsonl 行数等于步数，误判后都从检查点接着训。
+  - 这是管理员设计的错。修法：
+    - `sync_push.sh` v2，在专用推送工作树里 rsync 后提交，不碰源仓库的工作区，`*.cur` 不同步。开发机彩排：写入进程开着文件时 inode 不变、内容不丢；推送被拒后能 rebase 再推。
+    - `train_queue.sh`：段正常续上后重试计数清零。
+    - `.gitignore` 加 `*.cur`。
+  - 发 0045-addendum-1。运行中的驱动不重启。从此不在 `$VI/repo` 里 pull，新工作树用 fetch 后 `worktree add origin/main` 建。
+  - 另：`eval_lib.sh` 加 HPC 模式（按节点分开的暂停文件、只等本节点的心跳、不碰 git、份额命令）。原因是 HPC 上两台共用 `$VI/logs`，写 `train.pause` 会同时停住两台的训练。
+- **派 DEV-0045**（worktree agent）：合并核对的病态检查点测试在 HPC 上确定失败。

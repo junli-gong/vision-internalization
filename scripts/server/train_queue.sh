@@ -22,7 +22,7 @@
 #   PY        python 解释器
 #   LOGS      心跳、暂停文件、git 锁所在的目录（真跑时 $PROJ/logs）
 #   可选：PROJ（算份额用）、EXTRA（每条命令都加的参数，数组）、TQ_TRAIN_DATA（内存低于停止线时删掉的训练数据目录）、
-#         TINY=1（开发机彩排：不查 GPU）、POLL_S、WATCH_S、BEAT_S、MEM_STOP_GB、DISK_STOP_GB、SHARE_STOP_GB
+#         TINY=1（开发机彩排：不查 GPU）、POLL_S、WATCH_S、BEAT_S、MEM_STOP_GB、DISK_STOP_GB、SHARE_STOP_GB、TQ_PAUSE
 # 运行的命令与工作目录：调用 run 时的当前目录（队列脚本先 cd 到固定 commit 的工作树）。
 set -uo pipefail
 : "${RUN_ID:?}" "${REPO:?}" "${OUT:?}" "${CK_TMP:?}" "${CK_FINAL:?}" "${CHUNK:?}" "${PY:?}" "${LOGS:?}"
@@ -43,7 +43,8 @@ MAX_CHUNKS=${MAX_CHUNKS:-200}
 QUEUE_CAP_H=${QUEUE_CAP_H:-}
 EST_H=${EST_H:-0}
 TQ_STATUS=$LOGS/train_${RUN_ID}.status
-TQ_PAUSE=$LOGS/train.pause
+# TQ_PAUSE：暂停文件。ITSC HPC 上两台节点共用 $LOGS，要按节点分开（例如 $LOGS/train.pause.$NODE），否则一台的评测会停住另一台的训练。
+TQ_PAUSE=${TQ_PAUSE:-$LOGS/train.pause}
 GITLOCK=$LOGS/git.lock
 DRV=$OUT/driver
 OUT_REL=${OUT#"$REPO"/}
@@ -190,7 +191,7 @@ run() {  # $1 = 名字（队列内唯一），$2 = 脚本，其余 = 参数（�
     beat "running $name (chunk $n)"
     chunk "$name" "$PY" "$@" ${EXTRA[@]+"${EXTRA[@]}"} --out "$OUT" --ckpt-root "$CK_TMP" --resume --stop-after-steps "$CHUNK"
     rc=$?
-    if [ $rc -eq 0 ] && grep -q '按 --stop-after-steps 停下' "$cur"; then continue; fi
+    if [ $rc -eq 0 ] && grep -q '按 --stop-after-steps 停下' "$cur"; then tries=0; continue; fi  # 段正常续上：重试计数只算连续的失败（RUN-0045）
     if [ $rc -eq 0 ] && ck=$(grep -E ' steps=[0-9]+ .*ckpt=' "$cur" | tail -n 1 | grep -oE 'ckpt=[^ ]+' | cut -d= -f2-) && [ -n "$ck" ]; then
       finalize "$name" "$ck"
       rm -f "$cur"; FAILS_IN_ROW=0
