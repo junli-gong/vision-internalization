@@ -1,0 +1,131 @@
+........................................................................ [  2%]
+........................................................................ [  5%]
+........................................................................ [  7%]
+........................................................................ [ 10%]
+........................................................................ [ 13%]
+........................................................................ [ 15%]
+........................................................................ [ 18%]
+........................................................................ [ 20%]
+........................................................................ [ 23%]
+........................................................................ [ 26%]
+...........................F............................................ [ 28%]
+........................................................................ [ 31%]
+........................................................................ [ 33%]
+........................................................................ [ 36%]
+........................................................................ [ 39%]
+........................................................................ [ 41%]
+........................................................................ [ 44%]
+........................................................................ [ 46%]
+......s................................................................. [ 49%]
+........................................................................ [ 52%]
+.......................................................................s [ 54%]
+s..ss................................................................... [ 57%]
+........................................................................ [ 59%]
+........................................................................ [ 62%]
+........................................................................ [ 65%]
+.......s...s..................s......................................... [ 67%]
+...............................s.......................ssss............. [ 70%]
+ssss...........s........................................................ [ 73%]
+........................................................................ [ 75%]
+........................................................s............... [ 78%]
+........................................................................ [ 80%]
+........................................................................ [ 83%]
+........................................................................ [ 86%]
+........................................................................ [ 88%]
+........................................................................ [ 91%]
+........................................F............................... [ 93%]
+..........................................F............................. [ 96%]
+........................................................................ [ 99%]
+.........................                                                [100%]
+=================================== FAILURES ===================================
+___________ test_grid_checkpoint_split_across_merge_fails_restricted ___________
+
+cti = <module '_check_training_interfaces_under_test' from '/home/mail/chenyuma/visint/wt/wt0044/scripts/check_training_interfaces.py'>
+tmp_path = PosixPath('/home/mail/chenyuma/visint/tmp/pt_skips/test_grid_checkpoint_split_acr0')
+
+    def test_grid_checkpoint_split_across_merge_fails_restricted(cti, tmp_path):
+        """坏检查点：合并前后网格 token 的 logits 分家。合并后的模型内部自洽（by_thinking 逐个相同），只有 across_merge 查得出；
+        restricted 判不过（退出码 1）。"""
+        ck, _ = _grid_checkpoint(cti, tmp_path / "bad", pathological=True)
+        code, doc = _run(cti, tmp_path, "--model", "qwen3.5-0.8b", "--checkpoint", str(ck), "--checks", "restricted")
+        assert doc["error"] is None, doc["error"]
+>       assert code == 1 and doc["pass"] is False and doc["checks"]["restricted"]["pass"] is False
+E       assert (0 == 1)
+
+tests/test_check_training_interfaces.py:471: AssertionError
+----------------------------- Captured stdout call -----------------------------
+[qwen3.5-0.8b restricted] pass=True
+pass=True -> /home/mail/chenyuma/visint/tmp/pt_skips/test_grid_checkpoint_split_acr0/check.json
+___________________ test_speed_floor_single_core[viewpoint] ____________________
+
+task = 'viewpoint'
+
+    @pytest.mark.parametrize("task", ["rotation3d", "viewpoint"])
+    def test_speed_floor_single_core(task):
+        generate(task, "train", 0)
+        t = time.process_time()
+        n = 40
+        for i in range(n):
+            generate(task, "train", 3000 + i)
+        rate = n / (time.process_time() - t)
+        print(f"{task}: {rate:.1f} samples/s (CPU time, single process)")
+>       assert rate >= SPEED_FLOOR[task]
+E       assert 18.739335148637377 >= 20
+
+tests/test_synth_3d_tasks.py:414: AssertionError
+----------------------------- Captured stdout call -----------------------------
+viewpoint: 18.7 samples/s (CPU time, single process)
+________________ test_speed_at_least_50_per_second_single_core _________________
+
+    def test_speed_at_least_50_per_second_single_core():
+        generate("occlusion", "train", 0)  # 预热（import、单位形状缓存）
+        t = time.process_time()
+        n = 60
+        for i in range(n):
+            generate("occlusion", "train", 1000 + i)
+        rate = n / (time.process_time() - t)
+        print(f"occlusion: {rate:.1f} samples/s (CPU time, single process)")
+>       assert rate >= 50
+E       assert 38.64865690009246 >= 50
+
+tests/test_synth_occlusion.py:113: AssertionError
+----------------------------- Captured stdout call -----------------------------
+occlusion: 38.6 samples/s (CPU time, single process)
+=============================== warnings summary ===============================
+tests/test_adapter_answer_prefix.py::test_no_prefix_inputs_unchanged[qwen3.5-0.8b]
+  /home/mail/chenyuma/visint/env/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+    _cpu_device_warning()
+
+tests/test_adapter_answer_prefix.py: 14 warnings
+  /home/mail/chenyuma/visint/env/lib/python3.12/site-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+tests/test_adapter_internvl35.py::test_processor_default_is_the_opposite_of_preprocessor_config
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[False-instruction_first-single]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[False-instruction_first-multi]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[False-image_first-single]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[False-image_first-multi]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[True-instruction_first-single]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[True-instruction_first-multi]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[True-image_first-single]
+tests/test_adapter_internvl35.py::test_matches_official_processor_class[True-image_first-multi]
+  /home/mail/chenyuma/visint/env/lib/python3.12/site-packages/numpy/_core/fromnumeric.py:45: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+    return conv.wrap(result, to_scalar=False)
+
+tests/test_adapter_training_logits.py::test_chunked_lm_loss_no_grad_path_and_validation[qwen3.5-0.8b]
+  /home/mail/chenyuma/visint/wt/wt0044/tests/test_adapter_training_logits.py:121: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+  Consider using tensor.detach() first. (Triggered internally at /__w/pytorch/pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:822.)
+    assert abs(float(a) - float(b)) <= LOSS_RTOL * max(1.0, abs(float(b)))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_e2_bilinear.py:298: 没有 CUDA：CPU 上没有 TF32，这条的含义由上面的探针测试与运行期审计承担
+SKIPPED [2] tests/test_e3_eval.py:403: 续跑与评分进程数只在一个家族上核对
+SKIPPED [2] tests/test_e3_eval.py:433: 只在一个家族上核对
+SKIPPED [2] tests/test_e5_train.py:189: 一个家族就够
+SKIPPED [1] tests/test_e5_train_data.py:220: 规范平台上 d 可以不加 --tiny
+SKIPPED [9] tests/test_health_ifeval.py:177: 找不到 punkt_tab：设 NLTK_DATA 指向含 tokenizers/punkt_tab 的目录（python -m nltk.downloader -d <目录> punkt_tab）
+SKIPPED [1] tests/test_health_ifeval.py:279: 找不到 punkt_tab：设 NLTK_DATA 指向含 tokenizers/punkt_tab 的目录（python -m nltk.downloader -d <目录> punkt_tab）
+SKIPPED [1] tests/test_metrics_seg.py:129: could not import 'cv2': No module named 'cv2'
+3 failed, 2739 passed, 19 skipped, 25 warnings in 6068.42s (1:41:08)
+rc=1

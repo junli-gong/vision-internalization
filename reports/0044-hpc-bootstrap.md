@@ -1,19 +1,22 @@
-# RUN-0044 — ITSC HPC A100 开训前准备（进度报告：停在第 5 节，等用户）
+# RUN-0044 — ITSC HPC A100 开训前准备（完成）
 
-服务器 CC（HPC），在用户的 Mac 上经 `ssh a100 → gpu(hpcmgt)` 操作。2026-10-10 06:06–18:15 UTC。只贴数字与事实，不做解读。
+服务器 CC（HPC），在用户的 Mac 上经 `ssh a100 → gpu(hpcmgt)` 操作。2026-10-10 06:06 – 2026-10-11 05:10 UTC。只贴数字与事实，不做解读。
 
 ## 0. 一句话状态
 
-- **第 2、3、4、6 节完成。**
+- **第 2–8 节全部完成。**
   - 环境、全量测试、deploy key、数据（四个源）与去重、权重（0.8B、2B、4B）都已到位并核对；
-  - 从节点发起 srun 测通。
-- **第 5 节（MiniMax 停车）没有执行**：
-  - 第 2–4 步的命令（备份 `.orig`、写新文件、mv 原子替换）被 Claude Code 的 auto mode 权限分类器拦下："judged this action dangerous"。
-  - 命令一条都没有运行，MiniMax 的文件与进程**完全没动**。
-  - 第 1 步（只读核对）已做，见 §5。
-- **第 7、8 节（一致性、吞吐）没有执行**：任务书要求停车之后才用 GPU。需要用户决定，见 §11。
+  - MiniMax 两台都已停车；从节点发起 srun 测通。
+- **一致性：6 组比对全部判"一致"**（§7）：每台对 B200 RUN-0034 各 2 组，06 对 07 共 2 组。
+  - e3a 对 B200 的两组用了 `--ignore-key class_names_check.file`：这是唯一不同的运行身份键，是本机路径，同一处的 sha256 相同。
+- **吞吐与预估**（§8）：
+  - hpcgpu06（4B）：C3 × 3 + E3b+C3 × 3 约 **76 h**（+10 % 余量约 84 h）；
+  - hpcgpu07（0.8B）：约 **27 h**（约 30 h）。
+- **停车经过**（§5）：
+  - 第 2–4 步第一次被 Claude Code 的权限分类器拦下，用户本人放行后执行。
+  - 执行中发现两台的 uvicorn 与 comfy 早已处于 SIGSTOP（State T），SIGTERM 只会挂起；经用户选择，改为 SIGTERM 加 SIGCONT，进程 2 秒内正常退出。
 - **铁律：** 每一步前后 squeue，两个任务始终都是 RUNNING（§1）。没有 scancel、scontrol 改动、sbatch、salloc，没有碰 slurm_script。
-  - 停过的只有我们自己的步骤：weights v1、v2 两个 srun 步骤，以及一个慢的 git clone，见 §9。
+  - 停过的只有我们自己的步骤与进程：weights v1、v2，一个慢的 git clone，见 §9；以及 MiniMax 的子进程，见 §5。
 - **Lustre 用量约 40 GB**（上限 80 GB）。
 
 ## 1. squeue
@@ -22,7 +25,7 @@
 - 全程每一条都是两行 RUNNING，运行时长单调增长。例如：
   - 首条：`2026-10-10T06:06:58Z  157296 RUNNING 55-17:32:44 hpcgpu06 / 157297 RUNNING 57-15:04:53 hpcgpu07`；
   - 停车第 1 步之后：`08:57:05Z  157296 RUNNING 55-20:22:51 / 157297 RUNNING 57-17:55:00`；
-  - 最后：`18:00Z` 前后，两行 RUNNING。
+  - 停车与一致性前后，以及最后（2026-10-11 05:00Z 前后）：两行 RUNNING，例如 `04:58Z  157296 RUNNING 56-16:25:12 / 157297 RUNNING 58-13:57:21`。
 - 停我们自己的 weights v1 步骤（157296.127）时，前后各一次 squeue，都是 RUNNING：
 
   ```
@@ -79,7 +82,13 @@
   - macOS tar 带过来的 `._*` 文件（AppleDouble）已删除。
   - 拷贝之后没有悬空链接。
 - **第 3 轮总数：** 2739 + 3 + 19 = 2,761 条，`--co` 也是 2,761，与 D87 的 2,743 passed + 18 skipped 总数相同。
-  - skipped 多 1 条，是哪一条还在查：带 `-rs` 的普通套件 18:07 起在 hpcgpu06 上跑，日志 `$VI/logs/0044_skips.log`。
+  - **skip 清单**（`raw/skips_rs.txt`，`-rs` 重跑的普通套件，结果同样是 3 failed、2739 passed、19 skipped）：
+    - `test_health_ifeval.py` 10 条（没有 punkt_tab）；
+    - `test_e3_eval.py` 4 条与 `test_e5_train.py` 2 条（"只在一个家族上核对"）；
+    - `test_e2_bilinear.py:298`（没有 CUDA）；
+    - `test_e5_train_data.py:220`（规范平台）；
+    - **`test_metrics_seg.py:129`：could not import 'cv2'。** 开发机装了 cv2 5.0.0，HPC 的环境里没有（B200 的 freeze 里也没有 opencv）。
+  - 开发机的 skip 清单我手上没有，所以"多出的 1 条"能确定的只有：cv2 这一条在 HPC 上 skip，在开发机上不会。
 - **第 3 轮的 3 条失败**，两套相同。各条单独重跑 4 次（`raw/cluster_logs/logs/0044_rerun3.log`、`0044_rerun4.txt`）：
 
   | 测试 | 全量时 | 单独重跑 4 次 |
@@ -90,7 +99,10 @@
 
   - 第三条不属于"计时类"，按任务书单独列出，不解读。
   - 它是 `--model qwen3.5-0.8b`、tiny、CPU fp32 下的"合并前后网格 logits 分家"检测（`tests/test_check_training_interfaces.py:465`）。
-  - 实验代码与测试都没有改。
+  - 带 `-l` 的完整失败输出：`raw/failtest_grid_checkpoint_split_locals.txt`；工具写出的 `check.json`：`raw/failtest_grid_checkpoint_split_check.json`。
+    - 其中 `pass: true`；restricted 的 `across_merge.by_thinking.thinking_off.teacher_forcing`：n_tokens 3171、argmax_agreement 1.0、n_disagreements 0、max_abs_logit 8.574。
+    - 即病态检查点在这台机器上，合并前后的受限 logits 没有出现 argmax 分家。
+  - 实验代码与测试都没有改。管理员已裁定这条不挡本任务与 A100 训练（评测前的合并核对在 B200 上做），另开开发任务查。
 
 ## 3. git 与 deploy key（§3）
 
@@ -164,7 +176,7 @@
 - **v2 慢：** 一条长连接降到约 87–117 KB/s；同时新开的连接是 2.7–3.3 MB/s。我停掉 v2 步骤并重启，之后约 3.4 MB/s。
 - **清理：** 停掉的两次留下了 `.incomplete` 文件（0.8B 1.41 GB、2B 0.53 GB），确认是我们的残留后已删除。
 
-## 5. MiniMax 停车（§5）：只做了第 1 步
+## 5. MiniMax 停车（§5）：完成
 
 **第 1 步（只读，08:56:35–08:57:05，前后 squeue 都 RUNNING；`raw/park_step1_readonly.txt`）：**
 
@@ -173,26 +185,56 @@
 - **进程树与 RUN-0043 相同：**
   - hpcgpu06：slurm_script 3065231 → 启动脚本 3065235 → comfy 3065243（卡上 416 MiB）、uvicorn 3066512；
   - hpcgpu07：4010090 → 4010094 → comfy 4012165（416 MiB）、uvicorn 4013622。
-- **准备好的新启动脚本**（`probe_scripts/park_start.sh`，sha256 `6a9acbf7…`）：内容即 RUN-0043 §3.3 第 3 步，日期写成 2026-10-10、编号 RUN-0044。
+- **新启动脚本**（`probe_scripts/park_start.sh`，sha256 `6a9acbf7…`）：内容即 RUN-0043 §3.3 第 3 步。
   - `bash -n` 通过；
-  - 在 hpcmgt 上用假的 BASE（`$VI/tmp/parktest`，测完删除）测过两种情况：没有开关文件时 exec `.orig`（输出 `ORIG_RAN x`）；有开关文件时 exec `sleep infinity`（`timeout 3` 返回 124）。
+  - 在 hpcmgt 上用假的 BASE 测过两种情况：没有开关文件时 exec `.orig`；有开关文件时 exec `sleep infinity`。
 
-**第 2–4 步被拦下：**
+**第 2–4 步：**
 
-- 要运行的脚本：被拦下的那条命令本身就包含"写出脚本"这一步，所以脚本文件没有生成，仓库里也没有存档。逐条是：
-  1. 核对 sha256；
-  2. `cp -p` 成 `.orig` 并核对；
-  3. 把 `park_start.sh` 拷成 `.start_…new`，`chmod 755`，`bash -n`；
-  4. `mv -f` 原子替换，核对 inode。
-  - 每一步前后 squeue，任何一项不符就停。
-- 结果：被 auto mode 的权限分类器拒绝，**一条命令都没有运行**。
-- 我没有尝试绕过。MiniMax 的文件、开关文件、进程都是原样。
+- 2026-10-10 第一次执行时，被 Claude Code 的 auto mode 权限分类器拒绝，一条命令都没有运行，我没有绕过。用户本人放行后，18:18:44 执行（`probe_scripts/park_steps2to4.sh`，输出 `raw/pk2.out`）：
+  - `cp -p` 成 `.orig`，sha256 仍是 `e42bfde1…`；
+  - 新文件 `.start_…new`：755，`bash -n` 通过，sha256 `6a9acbf7…`；
+  - `mv -f` 原子替换：inode 144115351133661484 → 144115375678745635；`.orig` 完好。
+  - 前后 squeue 都是 RUNNING。
 
-**恢复方法**（停车做完之后适用，RUN-0043 §3.3 第 8 步）：
+**第 5 步（hpcgpu06）：**
+
+- 前两次在我自己的 PID 核对处停下，开关文件没写，什么都没动：
+  - 第一次是匹配模式写错：PID 后面还有 PPID 等列；
+  - 第二次是 `cut -c1-150` 把 uvicorn 那一行截成了 "uvico"。
+- 第三次（`probe_scripts/park_step5_hpcgpu06.sh`，`raw/pk5_06.out`）：PID 与记录相同 → `touch run/park-hpcgpu06` → 经 `srun --overlap` 按 PID 发 SIGTERM：uvicorn 3066512、comfy 3065243，两条都是 rc=0。
+- **与预期不同：** 10 s 后两个进程都还在。只读查 `/proc`（`raw/procstat_06.txt`、`raw/procstat_07.txt`）：
+  - uvicorn 与 comfy 都是 **`State: T (stopped)`**，ShdPnd `0x4000`，即 SIGTERM 挂起；
+  - 启动脚本与 slurm_script 是 S；freezer 是 THAWED。
+  - hpcgpu07 的 uvicorn 与 comfy 同样是 T（当时我还没动 07）。
+  - 只陈述事实：这与 API 日志自 08-16 起没有记录、端口上 CLOSE-WAIT 连接里有未读数据、comfy 从没执行过任务都对得上。是谁、何时暂停的，查不到。
+- 停下问用户，用户选择"SIGCONT 让它们处理 SIGTERM"。
+  - 18:24:54 发 SIGCONT（`probe_scripts/park_step5b_sigcont_hpcgpu06.sh`，`raw/pk5b_06.out`），两个进程 2 s 内退出。
+  - uvicorn 日志：`Shutting down … Application shutdown complete. Finished server process [3066512]`。
+  - 启动脚本 3065235 随之退出；slurm_script 3065231 还在；外层循环记 `MiniMax H3 exited status=143; … retrying in 300 seconds`。
+  - 没有用到 kill -9。
+
+**第 6 步（hpcgpu06，`raw/pk6_06.out`）：**
+
+- 18:29:54：`parked on hpcgpu06 by visint (run/park-hpcgpu06)`。
+- 进程树：`3065231 slurm_script → 215571 sleep infinity`。
+- 我们的卡：memory.used 0 MiB、free 40,442 MiB，没有进程。squeue RUNNING。
+
+**第 7 步（hpcgpu07，`probe_scripts/park_step5_hpcgpu07.sh`，`raw/pk5_07.out`）：**
+
+- 18:31:03：PID 与记录相同 → `touch run/park-hpcgpu07` → SIGTERM uvicorn 4013622、comfy 4012165 → SIGCONT 两者。
+- 回传的输出在 `SIGTERM uvicorn rc=0` 之后断了：ssh 流断开，我的会话随后中断了约 8 小时。事后只读核对：
+  - slurm 日志 `[2026-10-10T18:31:07Z] MiniMax H3 exited status=143`、`[18:36:07Z] parked on hpcgpu07`；
+  - uvicorn 日志 `Finished server process [4013622]`；
+  - 进程树 `4010090 slurm_script → 202178 sleep infinity`。
+- 两台的 `run/` 里都有开关文件；启动脚本是 `6a9acbf7…`，`.orig` 是 `e42bfde1…`。
+- 一致性开跑前（02:56Z），两台我们的卡都是 0 MiB 占用、40,442 MiB 可用、没有进程（`raw/s7s8/logs/0044_*/gpu_snapshots.txt`）。
+
+**恢复方法**（RUN-0043 §3.3 第 8 步）：
 
 1. 删掉 `run/park-<节点>`；
-2. 按 PID kill 那个 `sleep infinity`；
-3. 外层循环 300 s 后调用新脚本，没有开关文件，就 exec `.orig`，MiniMax 约 10 分钟后就绪；
+2. 按 PID kill 那个 `sleep infinity`（06：215571；07：202178）；
+3. 外层循环 300 s 后调用新脚本，没有开关文件，就 exec `.orig`，MiniMax 约 10 分钟后就绪（会是正常运行，不是暂停状态）；
 4. 要完全复原：确认两台都没有停车之后，`mv .orig` 回原名。
 
 ### 5.1 hpcgpu07 的卡（管理员 18:10 的消息里提到"我们那张卡上有别的用户的进程"）
@@ -229,18 +271,92 @@
 - 后续都用它启动：nyu 落地、测试、核对、权重。
 - 原来的写法是把两个 srun 用 `&` 放在同一条 ssh 命令里，第二个没有起来，ssh 也一直挂着；用 `launch.sh` 一次只起一个就没有这个问题。
 
-## 7. 跨机器一致性（§7）：未执行
+## 7. 跨机器一致性（§7）
 
-- 卡在第 5 节。
-- **驱动已写好**：`probe_scripts/driver_0044.sh`。命令行与 RUN-0034 §5 的两条相同，只换 `--data-root` 与 `--out 0044_hpc_consistency_<node>`。
-  - 环境块一行一个 export，含 `OMP_NUM_THREADS=16`、`PYTHONHASHSEED=0`；
-  - 带内存与 RSS 的停止线（MemAvailable < 100 GB，或我们的 RSS > 150 GB）。
-- **彩排：** 在开发机上 `TINY=1` 原样跑过（6e77ab0 的工作树 consistency 两条、ea49e15 的工作树 throughput 两条，都是 rc=0）。
-- `compare_train_logs.py` 对 tiny 日志自比，判定"一致"，rc=0。
+- **启动：** 02:56:15Z 用方案 B 在两台节点上启动 `run_both.sh`（先 consistency 再 throughput），步骤 157296.150、157297.78。
+- **驱动：** `probe_scripts/driver_0044.sh`（sha256 `0733a382…`）。
+  - 命令行与 RUN-0034 §5 的两条相同，只换 `--data-root $VI/data/train_data` 与 `--out …/0044_hpc_consistency_<node>`；
+  - 工作树 `$VI/wt/wt0044_6e77ab0`，`6e77ab064da0…`，没有本地改动。
+  - 每条运行前查闸门（我们的卡上其他进程 ≤ 1 GB 且 memory.free ≥ 35,000 MiB）并记 nvidia-smi，运行后再记一次；遇到 OOM 就停（管理员的规则）。没有触发。
+  - 内存与 RSS 停止线没有触发：MemAvailable 最低约 498 GB。
+- **运行**（`raw/s7s8/logs/0044_<node>/driver_consistency.log`）：
 
-## 8. 吞吐（§8）：未执行
+  | 节点 | e3b 50 步 | e3a 50 步 |
+  |---|---|---|
+  | hpcgpu06 | rc=0，611 s | rc=0，251 s |
+  | hpcgpu07 | rc=0，612 s | rc=0，227 s |
 
-同上，驱动的 throughput 阶段已彩排，含 `/dev/shm` 的 A/B 组。
+- **比对**：`scripts/compare_train_logs.py`（ea49e15 版本），判据 v1-provisional；结果在 `experiments/E3/0044_hpc_consistency_compare/`。
+
+  | 比对 | 判定 | loss 相对差：最大 | 中位数 | 最后 10 步平均 | grad_norm（只报）最大 / 中位数 | 忽略的机器字段 |
+  |---|---|---|---|---|---|---|
+  | e3b：06 对 B200 | 一致 | 0.00727 | 0.000366 | 0.00191 | 0.0604 / 0.00271 | 无 |
+  | e3b：07 对 B200 | 一致 | 0.00506 | 0.000731 | 0.00229 | 0.364 / 0.00515 | 无 |
+  | e3b：06 对 07 | 一致 | 0.00818 | 0.00143 | 0.00419 | 0.384 / 0.00362 | 无 |
+  | e3a：06 对 B200 | 一致 | 0.00572 | 0.000637 | 0.000947 | 0.0444 / 0.00586 | `class_names_check.file` |
+  | e3a：07 对 B200 | 一致 | 0.00445 | 0.000856 | 0.00150 | 0.0525 / 0.00709 | `class_names_check.file` |
+  | e3a：06 对 07 | 一致 | 0.00686 | 0.000514 | 0.000549 | 0.0513 / 0.00616 | 无 |
+
+  - 六组都是"数据与日程逐步相同：True（不同的步 0）"，没有 NaN 或 Inf。
+- **e3a 对 B200 第一遍 rc=2（不可比）：**
+  - 报错原文：`不可比：两边的运行身份（config.yaml）除机器字段外不同：['class_names_check.file']`。
+  - 两边 config.yaml 的唯一差别（diff）：`file: /dev/shm/visint/train_data/ade20k/objectInfo150.txt` 对 `file: /home/mail/chenyuma/visint/data/train_data/ade20k/objectInfo150.txt`；同一处的 `sha256: c368be0c…` 两边相同。
+  - 按工具文档的 `--ignore-key` 把它当作机器字段重比（`probe_scripts/compare_e3a.sh`），报告里照记。是否接受由管理员定。
+  - e3b 的配置里没有这个键，06 对 07 两边路径相同，所以只有这两组受影响。
+
+## 8. 吞吐（§8）与正式训练的逐项预估
+
+- **运行：** 工作树 `$VI/wt/wt0044`（ea49e15）。
+  - hpcgpu07：0.8B 的 C3 与 E3b+C3；hpcgpu06：4B 的同样两条；各 20 步。
+  - A/B 组：同一条 E3b+C3 20 步，`--data-root` 改为拷到 `/dev/shm/visint-chenyuma/train_data` 的副本。拷贝用时：06 2,964 s、07 2,638 s，各 10,276,337,019 B；用完已删。
+  - 所有运行 rc=0，没有 OOM，闸门没有触发。
+- **表**由 `probe_scripts/p44_tput_table.py` 从 `accounting.json` 与 `logs/timing_run_*.jsonl` 生成（`experiments/E3/0044_hpc_bootstrap_tput_table.{md,json}`），原样：
+
+| 节点 | 运行 | 模型 | rc | 命令墙钟 s（driver，含加载） | accounting wall_s | 步数（计时 / 记录） | 每步中位 s | 输入构建中位 s | 前向中位 s | 反向中位 s | 每步平均 s | 显存峰值 GB | 目录 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| hpcgpu06 | consistency_e3b_qwen3.5-2b | qwen3.5-2b | 0 | 611 | 386.5 | 50 / 50 | 5.874 | 0.281 | 1.742 | 3.805 | 7.698 | 9.83 | `0044_hpc_consistency_hpcgpu06/e3b/qwen3.5-2b/seed0` |
+| hpcgpu06 | consistency_e3a_qwen3.5-2b | qwen3.5-2b | 0 | 251 | 188.3 | 50 / 50 | 3.314 | 0.547 | 1.139 | 1.577 | 3.734 | 7.07 | `0044_hpc_consistency_hpcgpu06/e3a/full/qwen3.5-2b/seed0` |
+| hpcgpu06 | tput_c3_qwen3.5-4b | qwen3.5-4b | 0 | 247 | 200.0 | 20 / 20 | 5.562 | 0.211 | 1.723 | 3.609 | 9.910 | 16.53 | `0044_hpc_throughput_hpcgpu06/c3/qwen3.5-4b/seed0` |
+| hpcgpu06 | tput_e3b_c3_qwen3.5-4b | qwen3.5-4b | 0 | 224 | 192.4 | 20 / 20 | 8.636 | 0.213 | 2.559 | 5.683 | 9.525 | 19.21 | `0044_hpc_throughput_hpcgpu06/e3b_c3/qwen3.5-4b/seed0` |
+| hpcgpu06 | tput_shm_e3b_c3_qwen3.5-4b | qwen3.5-4b | 0 | 265 | 180.9 | 20 / 20 | 8.586 | 0.217 | 2.554 | 5.701 | 8.949 | 19.21 | `0044_hpc_throughput_shm_hpcgpu06/e3b_c3/qwen3.5-4b/seed0` |
+| hpcgpu07 | consistency_e3b_qwen3.5-2b | qwen3.5-2b | 0 | 612 | 402.1 | 50 / 50 | 5.812 | 0.119 | 1.766 | 3.838 | 7.997 | 9.83 | `0044_hpc_consistency_hpcgpu07/e3b/qwen3.5-2b/seed0` |
+| hpcgpu07 | consistency_e3a_qwen3.5-2b | qwen3.5-2b | 0 | 227 | 191.4 | 50 / 50 | 3.315 | 0.543 | 1.138 | 1.592 | 3.798 | 7.07 | `0044_hpc_consistency_hpcgpu07/e3a/full/qwen3.5-2b/seed0` |
+| hpcgpu07 | tput_c3_qwen3.5-0.8b | qwen3.5-0.8b | 0 | 75 | 44.5 | 20 / 20 | 2.102 | 0.186 | 0.622 | 1.248 | 2.172 | 6.40 | `0044_hpc_throughput_hpcgpu07/c3/qwen3.5-0.8b/seed0` |
+| hpcgpu07 | tput_e3b_c3_qwen3.5-0.8b | qwen3.5-0.8b | 0 | 90 | 63.7 | 20 / 20 | 2.986 | 0.211 | 0.834 | 1.912 | 3.137 | 6.43 | `0044_hpc_throughput_hpcgpu07/e3b_c3/qwen3.5-0.8b/seed0` |
+| hpcgpu07 | tput_shm_e3b_c3_qwen3.5-0.8b | qwen3.5-0.8b | 0 | 513 | 115.6 | 20 / 20 | 2.971 | 0.217 | 0.832 | 1.872 | 5.609 | 6.43 | `0044_hpc_throughput_shm_hpcgpu07/e3b_c3/qwen3.5-0.8b/seed0` |
+
+### 正式训练的逐项预估（每步中位 × 配置步数；3 个种子；另列 +10 % 的加载、检查点与分段重启余量）
+
+步数：C3 = e3b_train.json `steps` = 4000；E3b+C3 = `mixed.steps` = 8000。
+
+| 节点 | 模型 | 变体 | 每步中位 s（Lustre） | 单个种子 h | 3 个种子 h | 3 个种子 h（+10 %） |
+|---|---|---|---|---|---|---|
+| hpcgpu06 | qwen3.5-4b | c3 | 5.562 | 6.18 | 18.54 | 20.39 |
+| hpcgpu06 | qwen3.5-4b | e3b_c3 | 8.636 | 19.19 | 57.58 | 63.33 |
+| hpcgpu07 | qwen3.5-0.8b | c3 | 2.102 | 2.34 | 7.01 | 7.71 |
+| hpcgpu07 | qwen3.5-0.8b | e3b_c3 | 2.986 | 6.64 | 19.91 | 21.90 |
+| hpcgpu06 | 合计（C3 × 3 + E3b+C3 × 3） | | | | 76.12 | 83.73 |
+| hpcgpu07 | 合计（C3 × 3 + E3b+C3 × 3） | | | | 26.91 | 29.60 |
+
+- **nvidia-smi 采样**（每 10 s，`raw/s7s8/logs/0044_<node>/gpu_*.csv`）：
+
+  | 节点 | 阶段 | memory.used 最大 | 卡总显存 | 利用率最大 | 节点 load1 范围 | MemAvailable 最低 |
+  |---|---|---|---|---|---|---|
+  | 06 | 一致性 | 11,355 MiB | 40,960 MiB | 100 % | 0.06–11.95 | 500.6 GB |
+  | 06 | 吞吐 | 21,779 MiB | 40,960 MiB | 100 % | 0.00–3.69 | 475.0 GB |
+  | 07 | 一致性 | 11,355 MiB | 40,960 MiB | 100 % | 0.92–7.71 | 498.3 GB |
+  | 07 | 吞吐 | 7,213 MiB | 40,960 MiB | 100 % | 0.01–5.57 | 475.9 GB |
+
+- **hpcgpu07 的可用显存**（管理员要求）：每条运行之前都是 40,442 MiB free，卡上没有进程（`gpu_snapshots.txt`）。
+- **0.8B 的显存峰值**：`accounting.json` 的 peak_mem 是 C3 6.40 GB、E3b+C3 6.43 GB；nvidia-smi 看到的最大 memory.used 是 7,213 MiB。
+- **Lustre 对 /dev/shm（只陈述，不解读）：**
+  - 每步中位：06 是 8.636 s 对 8.586 s；07 是 2.986 s 对 2.971 s。输入构建中位：06 0.213 对 0.217 s，07 0.211 对 0.217 s。
+  - 但 07 的 `/dev/shm` 那条，命令墙钟 513 s（Lustre 那条 90 s），accounting wall_s 115.6 对 63.7，每步平均 5.609 对 3.137 s。
+  - 06 的命令墙钟 265 对 224 s，accounting wall_s 180.9 对 192.4。
+  - 管理员已定：正式训练的数据仍放 Lustre。
+- **预估的读法：** 每步中位 × 配置步数（C3 4,000、E3b+C3 8,000），不含加载与检查点；另列 +10 %。
+  - 4B 的 C3 每步平均（9.910 s）比中位（5.562 s）高得多，原因是前几步慢（`timing_run_001.jsonl`）。20 步太短，平均值不代表稳态。
+- **与 RUN-0043 §3.8 的估计对照（只陈述）：** 当时估 0.8B 26–32 h、4B 58–68 h；按本次中位算是 26.9 h 与 76.1 h。4B 的 E3b+C3 单个种子 19.2 h，高于当时估的 14–17 h。
 
 ## 9. 与方案或任务书不符之处、我自己造成的问题
 
@@ -254,6 +370,11 @@
   - **一次后台 ssh 挂着没退出**，后面要写的 `bundle_send.sh` 因此没生成，我晚了几分钟才发现。
   - **macOS tar 带进了 `._*` 文件**，已全部删除（HF 缓存与 probe 目录，共 81 个）。
   - **第 3 轮测试的完成通知晚到：** 测试约 11:47 跑完，我在约 18:00 才收到后台通知，中间没有新动作。集群任务不受影响，只是墙钟多耗了约 6 小时。
+  - **停车第 5 步的 PID 核对写错两次**（匹配模式、行截断），都在动手之前就停下了，没有副作用（§5）。
+  - **会话中断约 8 小时**（18:31 → 02:55 UTC）：07 的停车已经在 18:36 完成，一致性因此晚开了约 8 小时。
+- **MiniMax 的进程处于 SIGSTOP**：RUN-0043 的调查没查进程状态，方案按"空闲在运行"来写，实际是暂停。改用 SIGTERM 加 SIGCONT，由用户选定（§5）。
+- **e3a 一致性的 `class_names_check.file`**：比对工具的机器字段列表里没有这个本机路径，要 `--ignore-key`（§7）。
+- **hpcgpu07 上 `/dev/shm` 的 A/B 墙钟比 Lustre 长**（§8），与"内存盘更快"的预期相反，照实列出。
 - **不在 Lustre 上对大目录 du：** 为份额，我对我们自己的子目录跑过一次 `du -s --apparent-size`，几十秒内完成。份额主要看 `lfs quota` 的差值。
 
 ## 10. Lustre 份额（`raw/quota_after_bootstrap.txt`）
@@ -278,12 +399,10 @@
   - 大小见 `raw/hf_small_sizes.txt`，合计约 52.7 MB（Gemma 0.05、InternVL 各 4.5、共享 blobs 43.6 MB）；
   - 不删。
 
-## 11. 需要用户决定
+## 11. 待管理员确认
 
-1. **MiniMax 停车：** 怎么做？
-   - (a) 你在 Claude Code 里放行这一类操作（加一条 Bash 权限规则，或在提示时手动同意），我按 §5 的步骤继续，先 06 后 07；
-   - (b) 你自己执行 §5 的四步，我只做核对；
-   - (c) 改成与 MiniMax 共存，按 RUN-0043 §3.3 的 OOM 察觉与恢复做法来跑。这与 D89-1 不同，要新的裁定。
-2. **非计时的测试失败：** `test_grid_checkpoint_split_across_merge_fails_restricted` 在 HPC 上 4/4 确定失败（§2.1）。是否先处理（管理员与开发），再开一致性与吞吐？它不涉及训练脚本本身。
+1. e3a 对 B200 两组用了 `--ignore-key class_names_check.file`（§7），是否接受。
+2. `test_grid_checkpoint_split_across_merge_fails_restricted` 在 HPC 上 4/4 确定失败（§2.1），管理员已定另开开发任务，不挡训练。
+3. 正式训练的预估（§8）：4B 约 76 h（+10 % 约 84 h），比 RUN-0043 的估计长。
 
-之后的顺序不变：停车 → 第 7 节一致性（两台节点各 2 条，约 1 小时）→ 判定通过 → 第 8 节吞吐 → 正式训练的逐项预估。
+本任务到此结束，没有开正式训练。正式训练按 RUN-0045 另行执行。

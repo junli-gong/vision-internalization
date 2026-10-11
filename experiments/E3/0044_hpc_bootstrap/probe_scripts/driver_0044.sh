@@ -57,11 +57,23 @@ if [ "$TINY" != 1 ]; then
       sleep 30; done ) &
 fi
 
+# gpu_snap <label>: our card only (in-allocation view): processes and memory.free -> $L/gpu_snapshots.txt (D-admin 2026-10-10: before/after every run)
+gpu_snap() { [ "$TINY" = 1 ] && return 0; { echo "## $(date -u +%FT%TZ) $NODE $1"; nvidia-smi --query-gpu=pci.bus_id,memory.used,memory.free,utilization.gpu --format=csv,noheader
+  nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader; } >> "$L/gpu_snapshots.txt" 2>&1; }
+# gate: before a run, the card must hold only MiniMax's idle comfy (<= 1024 MiB) and our nothing; memory.free >= 35000 MiB. Else stop (no retry).
+gate() { [ "$TINY" = 1 ] && return 0; local free used_other
+  free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -1 | tr -d ' ')
+  used_other=$(nvidia-smi --query-compute-apps=used_memory --format=csv,noheader,nounits | awk '{s+=$1} END {print s+0}')
+  if [ "$free" -lt 35000 ] || [ "$used_other" -gt 1024 ]; then log "=== GATE STOP before $1: memory.free=${free} MiB, other processes ${used_other} MiB (MiniMax awake or card busy)"
+    beat "blocked gpu-gate before $1 free=$free other=$used_other"; exit 3; fi; }
 # trn <name> <worktree> <script> args... : one training run, rc and wall time logged; data root / tiny flag / --resume appended
-trn() { local name=$1 wt=$2; shift 2; local t0; t0=$(date +%s); beat "running $PHASE $name"
+# On rc != 0: if the log shows an OOM, stop the phase (no retry; admin rule); otherwise continue with the next run.
+trn() { local name=$1 wt=$2; shift 2; local t0; t0=$(date +%s); gate "$name"; gpu_snap "before $name"; beat "running $PHASE $name"
   local DA=(); [ -n "${DATA_ROOT:-}" ] && DA=(--data-root "$DATA_ROOT")
   ( cd "$wt" && python "$@" ${DA[@]+"${DA[@]}"} ${TFLAG[@]+"${TFLAG[@]}"} --resume ) > "$L/$name.log" 2>&1; local rc=$?
-  log "=== $name rc=$rc $(( $(date +%s) - t0 ))s"; return $rc; }
+  log "=== $name rc=$rc $(( $(date +%s) - t0 ))s"; gpu_snap "after $name rc=$rc"
+  if [ $rc -ne 0 ] && grep -qE "OutOfMemoryError|CUDA out of memory" "$L/$name.log"; then log "=== OOM in $name; stopping phase (no retry)"; beat "blocked oom $name"; exit 4; fi
+  return $rc; }
 
 if [ "$PHASE" = consistency ]; then
   [ "$TINY" != 1 ] && log "worktree $(git -C "$WT_CONS" rev-parse HEAD) dirty=$(git -C "$WT_CONS" status --short | wc -l)"

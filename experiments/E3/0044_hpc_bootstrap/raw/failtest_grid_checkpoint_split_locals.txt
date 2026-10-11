@@ -1,0 +1,53 @@
+157296 RUNNING 56-05:43:12 hpcgpu06
+157297 RUNNING 58-03:15:21 hpcgpu07
+== 2026-10-10T18:17:26Z hpcgpu06 load: 7.86 5.19 3.73 4/1182 200381
+== 2026-10-10T18:17:26Z hpcgpu06
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_grid_checkpoint_split_across_merge_fails_restricted ___________
+
+cti = <module '_check_training_interfaces_under_test' from '/home/mail/chenyuma/visint/wt/wt0044/scripts/check_training_interfaces.py'>
+tmp_path = PosixPath('/home/mail/chenyuma/visint/tmp/pt_failtest/test_grid_checkpoint_split_acr0')
+
+    def test_grid_checkpoint_split_across_merge_fails_restricted(cti, tmp_path):
+        """坏检查点：合并前后网格 token 的 logits 分家。合并后的模型内部自洽（by_thinking 逐个相同），只有 across_merge 查得出；
+        restricted 判不过（退出码 1）。"""
+        ck, _ = _grid_checkpoint(cti, tmp_path / "bad", pathological=True)
+        code, doc = _run(cti, tmp_path, "--model", "qwen3.5-0.8b", "--checkpoint", str(ck), "--checks", "restricted")
+        assert doc["error"] is None, doc["error"]
+>       assert code == 1 and doc["pass"] is False and doc["checks"]["restricted"]["pass"] is False
+E       assert (0 == 1)
+
+_          = GridTokens(vocab=GridVocab(mask=('<|e3_m0|>', '<|e3_m1|>'), depth=('<|e3_d00|>', '<|e3_d01|>', '<|e3_d02|>', '<|e3_d03...60|>': 248139, '<|e3_d61|>': 248140, '<|e3_d62|>': 248141, '<|e3_d63|>': 248142, '<|e3_row|>': 248143}, stop_id=248046)
+ck         = PosixPath('/home/mail/chenyuma/visint/tmp/pt_failtest/test_grid_checkpoint_split_acr0/bad')
+code       = 0
+cti        = <module '_check_training_interfaces_under_test' from '/home/mail/chenyuma/visint/wt/wt0044/scripts/check_training_interfaces.py'>
+doc        = {'format': 'visint-training-interface-check/1', 'argv': ['--tiny', '--out', '/home/mail/chenyuma/visint/tmp/pt_failtes...': {'commit': 'ea49e15db6dd5ac46c15c3508947ce7efac69a44', 'dirty': False, 'diff_shortstat': '', 'n_untracked': 0}, ...}
+tmp_path   = PosixPath('/home/mail/chenyuma/visint/tmp/pt_failtest/test_grid_checkpoint_split_acr0')
+
+tests/test_check_training_interfaces.py:471: AssertionError
+----------------------------- Captured stdout call -----------------------------
+[qwen3.5-0.8b restricted] pass=True
+pass=True -> /home/mail/chenyuma/visint/tmp/pt_failtest/test_grid_checkpoint_split_acr0/check.json
+----------------------------- Captured stderr call -----------------------------
+[transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `causal_conv1d_update` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+------------------------------ Captured log call -------------------------------
+WARNING  transformers.integrations.hub_kernels:logging.py:340 `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+WARNING  transformers.integrations.hub_kernels:logging.py:340 `causal_conv1d_update` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+=============================== warnings summary ===============================
+tests/test_check_training_interfaces.py::test_grid_checkpoint_split_across_merge_fails_restricted
+  /home/mail/chenyuma/visint/env/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+    _cpu_device_warning()
+
+tests/test_check_training_interfaces.py: 14 warnings
+  /home/mail/chenyuma/visint/env/lib/python3.12/site-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_check_training_interfaces.py::test_grid_checkpoint_split_across_merge_fails_restricted
+1 failed, 15 warnings in 32.55s
+== rc=1 2026-10-10T18:18:01Z
+157296 RUNNING 56-05:43:47 hpcgpu06
+157297 RUNNING 58-03:15:56 hpcgpu07
