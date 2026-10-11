@@ -9,6 +9,9 @@
   token 的受限解码），另比较合并前后的受限 logits（across_merge）；坏检查点（合并前后网格 token 的 logits 分家）判不过，而合并后
   的模型内部自洽（by_thinking 照样通过）。不带网格 token 的检查点与 base：输出与 69884b8 的脚本（tests/fixtures/cti 存档）逐字节相同。
   过拟合小检查点（DEV-0025 的流程）的 restricted 通过，见 tests/test_e3_eval.py。
+- DEV-0045：网格检查点与坏检查点的构造只在 scripts/diag/merge_split_probe.py 里定义（HPC 上同一个诊断量本机的分家幅度）。坏检查点分两条：
+  - 病态的 LoRA 分解，分家来自 fp32 舍入：先独立复算分家，没分家就 skip 并写明平台；
+  - 确定分家的对照：良态的 LoRA 加"合并漏模块"，与舍入无关，任何平台上都必须判不过。
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import platform
 import sys
 from pathlib import Path
 
@@ -24,12 +28,13 @@ import pytest
 import torch
 
 from src.adapters import checkpoint as CK
-from src.adapters import training
+from src.adapters import factory, training
 from src.adapters.factory import make_adapter
 from src.e1.prompts import load_prompt_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts/check_training_interfaces.py"
+PROBE = REPO_ROOT / "scripts/diag/merge_split_probe.py"
 FAMILY_KEYS = ("qwen3.5-0.8b", "gemma-4-e2b-it", "internvl3.5-2b-hf")
 FIXTURE_N = 3  # tests/fixtures/e1 的三个 RefCOCO 开发子集各 1 句
 
@@ -46,6 +51,12 @@ def _load(path: Path, name: str):
 @pytest.fixture(scope="module")
 def cti():
     return _load(SCRIPT, "_check_training_interfaces_under_test")
+
+
+@pytest.fixture(scope="module")
+def probe():
+    """DEV-0045：网格检查点、病态 / 良态的 LoRA 分解、"合并漏模块"的构造只在诊断脚本里定义，这里 import。"""
+    return _load(PROBE, "_merge_split_probe_under_test")
 
 
 def _run(cti, tmp_path, *args):
@@ -391,44 +402,63 @@ def test_non_grid_outputs_identical_to_69884b8(cti, tmp_path):
         torch.set_num_threads(n_threads)
 
 
-def _grid_checkpoint(cti, root: Path, *, pathological: bool, query: bool = False) -> tuple[Path, object]:
-    """带 E3b 词表的检查点（Qwen 小模型，E3b --tiny 的图像口径）：网格 token 的行取互不相同的随机值（受限解码写满 1057 个 token）。
-    pathological = 病态的 LoRA（同 tests/test_e3_eval.bad_checkpoint：A 的两行几乎相同、B 的两列相反且放大 1e7；真实的 ΔW 很小，
-    但合并与不合并两条路径的中间量都很大、舍入各不相同，合并前后网格 token 的 logits 分家）；否则是 randomize_lora 的随机 LoRA。"""
-    from src.adapters.image_policy import parse_policy
-    from src.e3.config import load_config
-    from src.e3.tokens import add_vocab
-
-    cfg = load_config()
-    pol = parse_policy(cfg.doc["tiny"]["image_policies"]["qwen3.5"])
-    ad = make_adapter("qwen3.5-0.8b", device="cpu", dtype=torch.float32, image_policy=pol, tiny=True, init_std=cti.TINY_INIT_STD)
-    tok = add_vocab(ad, cfg.vocab)
-    if query:
-        ad.inject_query_tokens(4, "grid2d")
-    g = torch.Generator().manual_seed(0)
-    if pathological:
-        ad.inject_lora(r=2, lora_alpha=2, init_lora_weights=False)
-        mods = dict(ad.model.named_modules())
-        with torch.no_grad():
-            for name in ad.lora_target_modules():
-                m = mods[name]
-                a_w, b_w = m.lora_A["default"].weight, m.lora_B["default"].weight
-                u = torch.randn(a_w.shape[1], generator=g)
-                a_w.copy_(torch.stack([u, u + 1e-6 * torch.randn(a_w.shape[1], generator=g)]))
-                v = torch.randn(b_w.shape[0], generator=g)
-                b_w.copy_(torch.stack([v, -v], dim=1) * 1e7)
-    else:
-        ad.inject_lora(r=8, lora_alpha=16, init_lora_weights=False)
-        cti.randomize_lora(ad, rel_scale=cti.LORA_REL_SCALE, seed=3)
-    ids = torch.tensor(sorted(tok.grid_ids))
+def _run0044_split_lora(ad, g) -> None:
+    """RUN-0044 时（e2063ee）_grid_checkpoint(pathological=True) 设 LoRA 的原样副本，只用来钉住 merge_split_probe.split_lora 在
+    SPLIT_RUN0044 的参数下与它逐位相同（构造本身只在 merge_split_probe 里定义）。"""
+    ad.inject_lora(r=2, lora_alpha=2, init_lora_weights=False)
+    mods = dict(ad.model.named_modules())
     with torch.no_grad():
-        for w in ad.trainable_token_rows(list(cfg.vocab.names)):
-            w[ids] = torch.randn(len(ids), w.shape[1], generator=g)
-    qe = torch.randn(4, ad.hidden_size(), generator=g) * 0.05 if query else None
-    return ad.save_trained(root, query_embeds=qe), tok
+        for name in ad.lora_target_modules():
+            m = mods[name]
+            a_w, b_w = m.lora_A["default"].weight, m.lora_B["default"].weight
+            u = torch.randn(a_w.shape[1], generator=g)
+            a_w.copy_(torch.stack([u, u + 1e-6 * torch.randn(a_w.shape[1], generator=g)]))
+            v = torch.randn(b_w.shape[0], generator=g)
+            b_w.copy_(torch.stack([v, -v], dim=1) * 1e7)
 
 
-def test_grid_checkpoint_restricted_uses_own_grid_tokens(cti, tmp_path):
+def _lora_tensors(ad) -> dict:
+    return {n: p.detach().clone() for n, p in ad.model.named_parameters() if "lora_" in n}
+
+
+def _delta_fp64(m) -> torch.Tensor:
+    """LoRA 模块的 ΔW = scaling·B·A（fp64，真值）。"""
+    return (m.lora_B["default"].weight.detach().double() @ m.lora_A["default"].weight.detach().double()) * m.scaling["default"]
+
+
+def test_merge_split_constructions(probe):
+    """DEV-0045：病态分解与良态分解的构造（scripts/diag/merge_split_probe）。
+    - SPLIT_RUN0044 的参数下 split_lora 与 RUN-0044 的测试构造逐位相同（诊断脚本复现的就是 HPC 上失败的那个检查点）；
+    - 两种 split 的 scale·eps 都是 10，conditioned_lora 是同一个 ΔW 的 rank-1 分解（只差 n 与 n' 的舍入）；
+    - 说明里的"ΔW 不小"：‖ΔW‖_F / ‖W‖_F 的中位数在 100–400 之间（开发机约 200）。"""
+    assert (probe.SPLIT_EPS, probe.SPLIT_SCALE) == (1e-7, 1e8)
+    assert (probe.SPLIT_RUN0044_EPS, probe.SPLIT_RUN0044_SCALE) == (1e-6, 1e7)
+    assert probe.SPLIT_EPS * probe.SPLIT_SCALE == pytest.approx(10) == probe.SPLIT_RUN0044_EPS * probe.SPLIT_RUN0044_SCALE
+    assert probe.CONTROL_LEFT_OUT == "mlp.down_proj" and probe.CONTROL_N == 1
+
+    def adapter():
+        return make_adapter("qwen3.5-0.8b", device="cpu", dtype=torch.float32, tiny=True, init_std=probe.load_cti().TINY_INIT_STD)
+
+    old, new = adapter(), adapter()
+    _run0044_split_lora(old, torch.Generator().manual_seed(0))
+    probe.split_lora(new, torch.Generator().manual_seed(0), eps=probe.SPLIT_RUN0044_EPS, scale=probe.SPLIT_RUN0044_SCALE)
+    a, b = _lora_tensors(old), _lora_tensors(new)
+    assert a.keys() == b.keys() and all(torch.equal(a[k], b[k]) for k in a)
+    split, cond = adapter(), adapter()
+    probe.split_lora(split, torch.Generator().manual_seed(0))
+    probe.conditioned_lora(cond, torch.Generator().manual_seed(0))
+    ms, mc = dict(split.model.named_modules()), dict(cond.model.named_modules())
+    ratios, rel = [], []
+    for name in split.lora_target_modules():
+        d_split, d_cond = _delta_fp64(ms[name]), _delta_fp64(mc[name])
+        assert mc[name].lora_A["default"].weight.shape[0] == 1  # rank 1：没有相消
+        rel.append(float((d_split - d_cond).norm() / d_cond.norm()))
+        ratios.append(float(d_cond.norm() / ms[name].base_layer.weight.detach().double().norm()))
+    assert max(rel) < 1.0  # 同一个 ΔW，只差 n' 的舍入（eps = 1e-7 时 (u + eps·n) − u 只剩约 1 位）
+    assert 100 < float(np.median(ratios)) < 400
+
+
+def test_grid_checkpoint_restricted_uses_own_grid_tokens(cti, probe, tmp_path):
     """带网格 token 的检查点（带查询 token）：restricted 的 allowed 集合 = tokens.allowed_ids(refseg, task)，提示与长度同 E3b 的
     单轮评测，只有关思考；by_thinking 与 across_merge 都逐个相同（CPU fp32），受限解码写满 1057 个 token；merge 照旧。"""
     from src.e3.config import load_config
@@ -436,7 +466,7 @@ def test_grid_checkpoint_restricted_uses_own_grid_tokens(cti, tmp_path):
     from src.e3.targets import seq_len
 
     cfg = load_config()
-    ck, tok = _grid_checkpoint(cti, tmp_path / "ck", pathological=False, query=True)
+    ck, tok = probe.grid_checkpoint(tmp_path / "ck", lora="random", query=True)
     code, doc = _run(cti, tmp_path, "--model", "qwen3.5-0.8b", "--checkpoint", str(ck), "--checks", "restricted", "merge")
     assert doc["error"] is None, doc["error"]
     assert code == 0 and doc["pass"] is True, doc["failures"]
@@ -462,21 +492,88 @@ def test_grid_checkpoint_restricted_uses_own_grid_tokens(cti, tmp_path):
     assert rj["pass"] is True and "restricted_grid" in rj["criteria"]
 
 
-def test_grid_checkpoint_split_across_merge_fails_restricted(cti, tmp_path):
-    """坏检查点：合并前后网格 token 的 logits 分家。合并后的模型内部自洽（by_thinking 逐个相同），只有 across_merge 查得出；
-    restricted 判不过（退出码 1）。"""
-    ck, _ = _grid_checkpoint(cti, tmp_path / "bad", pathological=True)
+def _independent_split_count(ck: Path, rec: dict) -> int:
+    """across_merge 的独立复算（不经 checkpoint.compare_merge_sides）：自己 load_trained(merge=False)，在核对合并一侧的目标上做教师强制
+    （同样的输入与批），用适配器唯一的受限 logits（restricted_logits）逐位置比较两侧在 allowed 集合上的 argmax，返回不同的位置数。"""
+    ad0, _ = factory.load_trained(ck, device="cpu", merge=False)
+    assert ad0.lora_state == "injected"  # 真是未合并的一侧
+    g, merged = rec["g"], rec["merged"]
+    n = 0
+    with torch.no_grad():
+        for k, (inputs, thinking, _) in enumerate(rec["runs0"]):
+            h0 = ad0.training_forward(inputs, merged.targets[k], enable_thinking=thinking).target_hidden
+            la, lb = ad0.restricted_logits(merged.hidden[k], g.allowed), ad0.restricted_logits(h0, g.allowed)
+            n += int((la.argmax(-1) != lb.argmax(-1)).sum())
+    return n
+
+
+def test_grid_checkpoint_split_across_merge_fails_restricted(cti, probe, tmp_path, monkeypatch):
+    """坏检查点：合并前后网格 token 的 logits 分家。合并后的模型内部自洽（by_thinking 逐个相同），只有 across_merge 查得出；restricted
+    判不过（退出码 1）。
+
+    DEV-0045：这里的分家来自 fp32 舍入，所以用 merge_split_probe.split_lora（eps 1e-7、B×1e8，任何 fp32 实现上都大量分家）。
+    RUN-0044 时的构造（eps 1e-6、B×1e7）只在尾部分家，HPC 上 0 处，测试确定失败。测试先独立量分家：自己加载 merge=False 的模型，
+    在核对用的同一组目标上数 argmax 不同的位置。
+    - 一处也没有：skip，写明平台。这时是本平台的舍入没让它分家，与核对无关；确定分家的对照见下一条测试。
+    - 有分家：核对必须判不过，数目与独立计数相同。"""
+    rec = {}
+    orig = cti.run_restricted_across_merge
+
+    def spy(ad0, runs0, merged, g):  # 记下核对用的输入、合并一侧（目标与目标隐藏状态）与网格设置，照原样转给核对
+        rec.update(runs0=runs0, merged=merged, g=g)
+        return orig(ad0, runs0, merged, g)
+
+    monkeypatch.setattr(cti, "run_restricted_across_merge", spy)
+    ck, _ = probe.grid_checkpoint(tmp_path / "bad", lora="split")
     code, doc = _run(cti, tmp_path, "--model", "qwen3.5-0.8b", "--checkpoint", str(ck), "--checks", "restricted")
+    assert doc["error"] is None, doc["error"]
+    r = doc["checks"]["restricted"]
+    am = r["across_merge"]["by_thinking"]["thinking_off"]["teacher_forcing"]
+    n_split = _independent_split_count(ck, rec)
+    if n_split == 0:
+        pytest.skip(f"本平台（{platform.machine()}，{platform.processor() or '?'}，torch {torch.__version__}）的 fp32 舍入没有让病态检查点"
+                    f"分家：独立复算 0 处 argmax 不同（max_abs_logit {am['max_abs_logit']:.3g}）；核对的灵敏度由确定分家的对照"
+                    "（test_grid_checkpoint_merge_missing_modules_fails_restricted）保证。请跑 scripts/diag/merge_split_probe.py 报告读数")
+    assert am["n_disagreements"] == n_split  # 核对数到的就是独立复算的
+    assert code == 1 and doc["pass"] is False and r["pass"] is False
+    bad = doc["failures"]["restricted"]
+    assert bad and all(m.startswith("restricted/across_merge/thinking_off") for m in bad)
+    assert r["by_thinking"]["thinking_off"]["teacher_forcing"]["agreement"] == 1.0
+    assert r["by_thinking"]["thinking_off"]["decode_vs_generate_batch"]["exact_rows"] == 1.0
+    assert am["n_disagreements"] > 0 and am["argmax_agreement"] < 1.0
+    for rec_ in am["disagreements"]:
+        assert rec_["gap"] >= rec_["top2_gap"] - 1e-6 and rec_["merged"] != rec_["unmerged"]
+
+
+def test_grid_checkpoint_merge_missing_modules_fails_restricted(cti, probe, tmp_path):
+    """确定分家的对照（DEV-0045）：不依赖舍入，任何平台上核对都必须判不过。
+    - 构造：良态的 LoRA（merge_split_probe.conditioned_lora，与病态检查点同一个 ΔW，没有相消）；合并时漏掉 mlp.down_proj
+      （merge_split_probe.merge_leaving_out，模拟"合并漏模块"的实现错误）。
+    - 合并后的模型内部自洽，by_thinking 逐个相同，只有 across_merge 查得出：几乎每个位置都不同，差远大于 fp32 的舍入。
+    - 同一个检查点正确合并时通过（两侧只差舍入）。"""
+    ck, _ = probe.grid_checkpoint(tmp_path / "ck", lora="conditioned")
+    args = ("--model", "qwen3.5-0.8b", "--checkpoint", str(ck), "--checks", "restricted", "--n", str(probe.CONTROL_N))
+    code, doc = _run(cti, tmp_path / "ok", *args)
+    assert doc["error"] is None, doc["error"]
+    assert code == 0 and doc["pass"] is True, doc["failures"]
+    am = doc["checks"]["restricted"]["across_merge"]["by_thinking"]["thinking_off"]["teacher_forcing"]
+    assert am["n_disagreements"] == 0 and am["max_abs_logit"] < 1e-3
+    with probe.merge_leaving_out(probe.is_control_left_out) as left:
+        code, doc = _run(cti, tmp_path / "bad", *args)
+    assert CK.CheckpointSupport.merge_lora.__name__ == "merge_lora"  # 退出后恢复原来的合并
+    want = [n for n in make_adapter("qwen3.5-0.8b", device="cpu", dtype=torch.float32, tiny=True).lora_target_modules()
+            if n.endswith(probe.CONTROL_LEFT_OUT)]
+    assert len(want) == 4 and sorted(set(left)) == sorted(want)  # 4 层的 MLP 各一个
     assert doc["error"] is None, doc["error"]
     assert code == 1 and doc["pass"] is False and doc["checks"]["restricted"]["pass"] is False
     bad = doc["failures"]["restricted"]
     assert bad and all(m.startswith("restricted/across_merge/thinking_off") for m in bad)
     r = doc["checks"]["restricted"]
-    assert r["by_thinking"]["thinking_off"]["teacher_forcing"]["agreement"] == 1.0
+    bt = r["by_thinking"]["thinking_off"]
+    assert bt["teacher_forcing"]["agreement"] == 1.0 and bt["decode_vs_generate_batch"]["exact_rows"] == 1.0
     am = r["across_merge"]["by_thinking"]["thinking_off"]["teacher_forcing"]
-    assert am["n_disagreements"] > 0 and am["argmax_agreement"] < 1.0
-    for rec in am["disagreements"]:
-        assert rec["gap"] >= rec["top2_gap"] - 1e-6 and rec["merged"] != rec["unmerged"]
+    assert am["n_disagreements"] >= 0.9 * am["n_tokens"] and am["n_tokens"] == 1057  # 开发机：1057 / 1057
+    assert min(x["gap"] for x in am["disagreements"]) > 1.0  # 远大于 fp32 的舍入（正确合并时 max_abs_logit < 1e-3）
 
 
 def test_judge_across_merge_rules(cti):

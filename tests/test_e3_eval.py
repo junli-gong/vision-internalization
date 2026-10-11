@@ -485,21 +485,15 @@ def test_cli_tiny_and_resume(tiny_ckpt, tmp_path):
 
 
 def bad_checkpoint(root: Path) -> Path:
-    """病态的 LoRA：A 的两行几乎相同（差 1e-6 的方向）、B 的两列相反且放大 1e7。真实的 ΔW 很小，但合并（先算 B·A）与不合并
-    （先算 A·x）两条路径的中间量都很大、舍入误差各不相同，fp32 上也分家：合并核对判不过（教师强制与生成都不一致）。"""
+    """病态的 LoRA 分解：A 的两行相对只差 1e-7，B 的两列相反且放大 1e8。DEV-0045 起构造只在 scripts/diag/merge_split_probe.split_lora
+    里定义，原来是 1e-6 与 1e7。
+    - 真实的 ΔW 并不小，约为 ‖W‖ 的 200 倍；病在分解。
+    - 合并（先算 B·A）与不合并（先算 A·x）都把 ΔW 算成两个大数之差，fp32 只剩约 1 位有效数字，两条路径的舍入各不相同，于是分家。
+    - 结果：合并核对判不过，教师强制与生成都不一致。这在任何 fp32 实现上都成立，见该脚本的说明。"""
     ad = _tiny(FAMILIES[0])
     add_vocab(ad, CFG.vocab)
-    ad.inject_lora(r=2, lora_alpha=2, init_lora_weights=False)
-    mods = dict(ad.model.named_modules())
-    g = torch.Generator().manual_seed(0)
-    with torch.no_grad():
-        for name in ad.lora_target_modules():
-            m = mods[name]
-            a_w, b_w = m.lora_A["default"].weight, m.lora_B["default"].weight
-            u = torch.randn(a_w.shape[1], generator=g)
-            a_w.copy_(torch.stack([u, u + 1e-6 * torch.randn(a_w.shape[1], generator=g)]))
-            v = torch.randn(b_w.shape[0], generator=g)
-            b_w.copy_(torch.stack([v, -v], dim=1) * 1e7)
+    probe = _load_path(REPO / "scripts" / "diag" / "merge_split_probe.py", "_merge_split_probe_for_e3_eval")
+    probe.split_lora(ad, torch.Generator().manual_seed(0))
     return ad.save_trained(root / "bad_ck")
 
 

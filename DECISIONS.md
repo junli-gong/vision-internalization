@@ -2210,3 +2210,27 @@
   3. **9B 推到 10 月 25 日之后**。先按建议做，转负责人确认。
   4. **数据中转**：归档经 Mac → lab5 → 集群，传到 Lustre（RUN-0047）。在 HPC 上逐文件重算 sha256，对照 `SHA256SUMS.b200`。份额照 D89-7 的 80 GB。
 - **排期**（约 395 个 A100 GPU 小时，两张卡、利用率 80% 时大约 10 月 22 日前后跑完）：RUN-0045 训练 → 07 先接 E5 与 0.8B 的评测，06 训完 4B 后接 E5 其余部分、4B 的评测、2B 的 E3a+C3 与重评。每份任务书照实写预估与上限。
+
+## D92 — DEV-0045 合入：合并核对的病态检查点测试在 HPC 上失败，是测试构造依赖 fp32 舍入，核对没有变钝（2026-10-11，管理员审查）
+
+- **结论**（开发机复现与 fp64 参照）：
+  - RUN-0044 的病态构造（eps 1e-6、B×1e7）只在尾部分家。开发机 3171 个位置里 31 处 argmax 不同，HPC 是 0 处；fp64 下两侧只差 5.7e-6。不合并一侧换一种同样合法的 fp32 求和，是 1–39 处。所以 HPC 的 0 处落在舍入噪声的范围里，与 ARM 还是 x86 无关，B200 同为 x86 也通过了。
+  - 核对比较了不合并的一侧：HPC 上 max_abs_logit 是 8.57，不是 0。判据 v1 只数 argmax 不同的位置，这是 D50 的设计，不改。
+  - 原注释"真实的 ΔW 很小"不对：ΔW 约为 ‖W‖ 的 200 倍，病在分解。
+- **改动**：
+  - 新构造 eps 1e-7、B×1e8，在任何 fp32 实现上都大量分家：开发机 2714/3171；最准的 fp32 实现也有 1157 处。
+  - 分家测试先独立复算；本平台没分家就 skip，并写明平台。
+  - 新增一条确定分家的对照：良态 LoRA 加"合并漏掉 down_proj"。它与舍入无关，任何平台都必须判不过；开发机上 1057 个位置全部不同。
+  - 构造只定义在 `scripts/diag/merge_split_probe.py`，测试与 HPC 诊断共用。
+- **偏离，全部接受**：
+  - 构造放在诊断脚本里，由测试按路径载入；
+  - 开发机的参照输出 `scripts/diag/merge_split_probe.dev.json` 入库；
+  - 诊断用时 62 s；
+  - 诊断里用了几个私有属性；
+  - `test_e3_eval` 的 `bad_checkpoint` 一并换成新构造。
+- **核对**：管理员在主仓库重跑 `tests/test_check_training_interfaces.py` 与 `test_e3_eval.py::test_bad_checkpoint_refused`，28 passed。开发 agent 跑全量：2744 passed、18 skipped、1 failed。失败的是 `test_e3_c3_warmup` 比较 `adapter_config.json` 的既有不稳定测试：peft 的 target_modules 是集合，顺序随哈希种子变。单独重跑通过；HPC 设了 PYTHONHASHSEED=0，不显现。
+- **遗留**：
+  - 同一种病态构造另有 4 处副本：`test_e3a_eval`、`test_e5_train`、`test_e5_start_only`、`test_e2_checkpoint`。它们靠全词表 merge 判不过，在 HPC 上都通过了。下一个相关开发任务统一到 `split_lora`。
+  - 那条不稳定测试改成排序后比较。
+  - "CPU fp32 下把 max_abs_logit 纳入判定"是改 D50 的判据，不做。确定分家的对照已经说明现有判据够用。
+- **HPC 复核**：RUN-0049 在 hpcgpu07 上跑诊断与这两组测试（07 训完 0.8B、RUN-0048 之前）。预期：诊断退出码 0，split_run0044 复现 0 处不同、max_abs_logit 8.57，测试全过、没有 skip。

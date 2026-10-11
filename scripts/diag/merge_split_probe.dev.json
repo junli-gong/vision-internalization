@@ -1,0 +1,375 @@
+{
+ "format": "visint-merge-split-probe/1",
+ "argv": [
+  "--out",
+  "scripts/diag/merge_split_probe.dev.json"
+ ],
+ "written_utc": "2026-10-11T06:42:27+00:00",
+ "code": {
+  "commit": "e2063ee7d4055ab7b091ea546f9829a5ba17889c",
+  "dirty": true,
+  "diff_shortstat": "2 files changed, 151 insertions(+), 60 deletions(-)",
+  "n_untracked": 1
+ },
+ "versions": {
+  "numpy": "2.5.3",
+  "scipy": "1.18.1",
+  "torch": "2.14.0",
+  "pillow": "12.3.0",
+  "shapely": "2.1.2",
+  "pycocotools": "2.0.11",
+  "pyyaml": "6.0.3",
+  "transformers": "5.17.0",
+  "accelerate": "1.15.0",
+  "peft": "0.21.1",
+  "vllm": null
+ },
+ "platform": {
+  "machine": "arm64",
+  "system": "Darwin",
+  "platform": "macOS-15.7.3-arm64-arm-64bit",
+  "cpu_model": "Apple M4",
+  "cpu_count": 10,
+  "python": "3.12.14",
+  "torch": "2.14.0",
+  "torch_cpu_capability": "DEFAULT",
+  "torch_blas": "accelerate",
+  "mkl": false,
+  "mkldnn": false,
+  "torch_threads": 4,
+  "fla_installed": false,
+  "causal_conv1d_installed": false
+ },
+ "constants": {
+  "SPLIT_EPS": 1e-07,
+  "SPLIT_SCALE": 100000000.0,
+  "SPLIT_RUN0044_EPS": 1e-06,
+  "SPLIT_RUN0044_SCALE": 10000000.0,
+  "CONTROL_LEFT_OUT": "mlp.down_proj",
+  "CONTROL_N": 1,
+  "permutations": 3
+ },
+ "cases": {
+  "split_run0044": {
+   "construction": {
+    "lora": "split_run0044",
+    "eps": 1e-06,
+    "scale": 10000000.0,
+    "r": 2,
+    "lora_alpha": 2,
+    "base_fingerprint": "707f89df27e52067d9c0122439a1dd7b1bb98abe523ea2def455afab9e1eff6d",
+    "lora_sha256": "c4b5558a5066a516db79308654cc8eb73104a1db7602c3ee0fd83c0fcd1d3ea4",
+    "token_rows_sha256": "b5703127dda9cadf6fdadbce844766b48e09bdf1f53349ea783887466cccb3cb"
+   },
+   "inputs_sha256": "ca3c976348678db30929fb7c2bf8562b05486bd063ca5aab1326ec5ce3b830da",
+   "targets": {
+    "sha256": "4b02a409d25f63b2372c0566aea5085e171746dfef677148c0304659ce4d588b",
+    "lengths": [
+     1057,
+     1057,
+     1057
+    ]
+   },
+   "across_merge": {
+    "n_tokens": 3171,
+    "n_disagreements": 31,
+    "argmax_agreement": 0.9902239041311889,
+    "max_abs_logit": 12.320674896240234,
+    "max_abs_hidden": 4.417927265167236
+   },
+   "abs_diff_per_position": {
+    "p50": 1.1996986865997314,
+    "p90": 5.026209354400635,
+    "p99": 6.194058752059945,
+    "max": 12.320674896240234
+   },
+   "merged_margin": {
+    "min": 2.947021245956421,
+    "p01": 2.9508233785629274,
+    "p50": 5.273961067199707
+   },
+   "fp64": {
+    "merged64_vs_unmerged64": {
+     "n_tokens": 3171,
+     "n_disagreements": 0,
+     "argmax_agreement": 1.0,
+     "max_abs_logit": 5.7220458984375e-06,
+     "max_abs_hidden": 4.76837158203125e-07
+    },
+    "merged32_vs_truth": {
+     "n_tokens": 3171,
+     "n_disagreements": 0,
+     "argmax_agreement": 1.0,
+     "max_abs_logit": 0.7436580657958984,
+     "max_abs_hidden": 0.1981513500213623
+    },
+    "unmerged32_vs_truth": {
+     "n_tokens": 3171,
+     "n_disagreements": 31,
+     "argmax_agreement": 0.9902239041311889,
+     "max_abs_logit": 12.337764739990234,
+     "max_abs_hidden": 4.521651268005371
+    }
+   },
+   "lora_path": {
+    "Ax_rel_diff": {
+     "median": 9.769188274222484e-07,
+     "max": 1.1762078129837064e-05
+    },
+    "Ax_diff_rel_err": {
+     "median": 0.12097234956589914,
+     "max": 1.3655483220207398
+    },
+    "lora_out_rel_err": {
+     "median": 0.1235361916871193,
+     "max": 1.6698084197064664
+    },
+    "merged_dW_rel_err": {
+     "median": 0.017074496588413913,
+     "max": 0.023495030265452285
+    },
+    "dW_over_W": {
+     "median": 190.3310749570253,
+     "max": 299.00771815812874
+    },
+    "bits_cancelled": {
+     "median": 19.965257971148365,
+     "fp32_significand_bits": 24
+    },
+    "n_modules": 31
+   },
+   "unmerged_variants": {
+    "perm0": {
+     "n_disagreements": 5,
+     "max_abs_logit": 8.398500442504883
+    },
+    "perm1": {
+     "n_disagreements": 26,
+     "max_abs_logit": 10.946338653564453
+    },
+    "perm2": {
+     "n_disagreements": 15,
+     "max_abs_logit": 10.785429000854492
+    },
+    "fp64_accumulated_A": {
+     "n_disagreements": 0,
+     "max_abs_logit": 2.8995437622070312
+    }
+   },
+   "timing_s": {
+    "decode": 14.201949540991336,
+    "total": 23.457854915992357
+   }
+  },
+  "split": {
+   "construction": {
+    "lora": "split",
+    "eps": 1e-07,
+    "scale": 100000000.0,
+    "r": 2,
+    "lora_alpha": 2,
+    "base_fingerprint": "707f89df27e52067d9c0122439a1dd7b1bb98abe523ea2def455afab9e1eff6d",
+    "lora_sha256": "d68bd88ac301eb1441d5ffef8925166310ba0e8ba160296e88088d290941f14a",
+    "token_rows_sha256": "b5703127dda9cadf6fdadbce844766b48e09bdf1f53349ea783887466cccb3cb"
+   },
+   "inputs_sha256": "ca3c976348678db30929fb7c2bf8562b05486bd063ca5aab1326ec5ce3b830da",
+   "targets": {
+    "sha256": "4b02a409d25f63b2372c0566aea5085e171746dfef677148c0304659ce4d588b",
+    "lengths": [
+     1057,
+     1057,
+     1057
+    ]
+   },
+   "across_merge": {
+    "n_tokens": 3171,
+    "n_disagreements": 2714,
+    "argmax_agreement": 0.14411857458215072,
+    "max_abs_logit": 29.06112289428711,
+    "max_abs_hidden": 5.842892646789551
+   },
+   "abs_diff_per_position": {
+    "p50": 12.965225219726562,
+    "p90": 25.946645736694336,
+    "p99": 28.05980567932129,
+    "max": 29.06112289428711
+   },
+   "merged_margin": {
+    "min": 1.1694108247756958,
+    "p01": 1.1696428060531616,
+    "p50": 6.07195520401001
+   },
+   "fp64": {
+    "merged64_vs_unmerged64": {
+     "n_tokens": 3171,
+     "n_disagreements": 0,
+     "argmax_agreement": 1.0,
+     "max_abs_logit": 3.1948089599609375e-05,
+     "max_abs_hidden": 6.556510925292969e-06
+    },
+    "merged32_vs_truth": {
+     "n_tokens": 3171,
+     "n_disagreements": 1581,
+     "argmax_agreement": 0.5014191106906338,
+     "max_abs_logit": 22.72707748413086,
+     "max_abs_hidden": 4.920539855957031
+    },
+    "unmerged32_vs_truth": {
+     "n_tokens": 3171,
+     "n_disagreements": 2578,
+     "argmax_agreement": 0.18700725323241885,
+     "max_abs_logit": 35.39125442504883,
+     "max_abs_hidden": 6.738223552703857
+    }
+   },
+   "lora_path": {
+    "Ax_rel_diff": {
+     "median": 9.454368419252031e-08,
+     "max": 3.983223381451183e-07
+    },
+    "Ax_diff_rel_err": {
+     "median": 1.0555034565232213,
+     "max": 5.294539709234186
+    },
+    "lora_out_rel_err": {
+     "median": 1.1172001324936616,
+     "max": 9.997382139369694
+    },
+    "merged_dW_rel_err": {
+     "median": 0.20088792870608618,
+     "max": 0.3802215115544602
+    },
+    "dW_over_W": {
+     "median": 195.46383399439037,
+     "max": 316.1566060532779
+    },
+    "bits_cancelled": {
+     "median": 23.334443674149362,
+     "fp32_significand_bits": 24
+    },
+    "n_modules": 31
+   },
+   "unmerged_variants": {
+    "perm0": {
+     "n_disagreements": 2055,
+     "max_abs_logit": 33.703575134277344
+    },
+    "perm1": {
+     "n_disagreements": 2604,
+     "max_abs_logit": 27.84561538696289
+    },
+    "perm2": {
+     "n_disagreements": 1712,
+     "max_abs_logit": 31.933900833129883
+    },
+    "fp64_accumulated_A": {
+     "n_disagreements": 1157,
+     "max_abs_logit": 25.088529586791992
+    }
+   },
+   "timing_s": {
+    "decode": 12.897913333028555,
+    "total": 22.193996000045445
+   }
+  },
+  "conditioned": {
+   "construction": {
+    "lora": "conditioned",
+    "dw_scale": 10.0,
+    "r": 1,
+    "lora_alpha": 1,
+    "base_fingerprint": "707f89df27e52067d9c0122439a1dd7b1bb98abe523ea2def455afab9e1eff6d",
+    "lora_sha256": "e85bc026a727bfaecbc596a8ab0eee77eac626d8f20c67bdedda197268ae530f",
+    "token_rows_sha256": "b5703127dda9cadf6fdadbce844766b48e09bdf1f53349ea783887466cccb3cb"
+   },
+   "targets": "split 情形的受限解码序列",
+   "across_merge": {
+    "n_tokens": 3171,
+    "n_disagreements": 0,
+    "argmax_agreement": 1.0,
+    "max_abs_logit": 1.049041748046875e-05,
+    "max_abs_hidden": 2.7567148208618164e-06
+   },
+   "abs_diff_per_position": {
+    "p50": 2.384185791015625e-06,
+    "p90": 4.76837158203125e-06,
+    "p99": 7.62939453125e-06,
+    "max": 1.1444091796875e-05
+   },
+   "merged_margin": {
+    "min": 2.910855293273926,
+    "p01": 2.9135837316513062,
+    "p50": 4.8681159019470215
+   },
+   "timing_s": {
+    "total": 3.172131790954154
+   }
+  },
+  "control": {
+   "construction": {
+    "lora": "conditioned",
+    "merge": "漏掉 *mlp.down_proj",
+    "n_left_out": 4,
+    "base_fingerprint": "707f89df27e52067d9c0122439a1dd7b1bb98abe523ea2def455afab9e1eff6d",
+    "lora_sha256": "e85bc026a727bfaecbc596a8ab0eee77eac626d8f20c67bdedda197268ae530f",
+    "token_rows_sha256": "b5703127dda9cadf6fdadbce844766b48e09bdf1f53349ea783887466cccb3cb"
+   },
+   "check": {
+    "exit_code": 1,
+    "pass": false,
+    "error": null,
+    "failures": [
+     "restricted/across_merge/thinking_off：合并前后的受限教师强制有 1057 个位置不同"
+    ],
+    "failures_only_across_merge": true,
+    "by_thinking": {
+     "teacher_forcing_agreement": 1.0,
+     "decode_exact_rows": 1.0
+    },
+    "across_merge": {
+     "n_tokens": 1057,
+     "n_disagreements": 1057,
+     "argmax_agreement": 0.0,
+     "max_abs_logit": 22.275508880615234,
+     "max_abs_hidden": 5.97691535949707
+    },
+    "across_merge_gap": {
+     "n": 1057,
+     "median": 16.77845001220703,
+     "max": 26.38235855102539,
+     "frac_lt_threshold": 0.0,
+     "threshold": 2.0
+    }
+   },
+   "timing_s": {
+    "total": 13.048407333961222
+   }
+  }
+ },
+ "verdict": {
+  "split_splits_here": true,
+  "control_refused": true,
+  "ok": true
+ },
+ "error": null,
+ "data": {
+  "n": 3,
+  "sample_ids": [
+   "refcoco_unc/val/101",
+   "refcoco+_unc/val/300",
+   "refcocog_umd/val/403"
+  ],
+  "sample_ids_sha256": "99034971b1bb508012564ec5c0531a78de1f810f07280bc80d50048d83db533d"
+ },
+ "batches": [
+  [
+   0,
+   2
+  ],
+  [
+   2,
+   3
+  ]
+ ],
+ "timing_s": 62.172256708028726
+}
