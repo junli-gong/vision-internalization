@@ -27,7 +27,7 @@ else
   LOGS=$PROJ/logs
   OUT=$REPO/experiments/E5/0037_e5_main
   CK_TMP=/dev/shm/visint/ckpt_0037
-  CK_FINAL=$PROJ/ckpt/0037
+  CK_FINAL=${CK_FINAL_OVERRIDE:-$PROJ/ckpt/0037}  # 0037-addendum-1（D90）：根盘被别人写满，E5 的最终检查点改放 /dev/shm
   ROOT36=$PROJ/ckpt/0036
   ROOT40=$PROJ/ckpt/0040
   PY=$PROJ/venv/bin/python
