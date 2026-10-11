@@ -1,4 +1,4 @@
-# RUN-0045 — HPC A100 正式训练（第一版：已启动，第一段已跑完）
+# RUN-0045 — HPC A100 正式训练（进行中）
 
 服务器 CC（HPC），在用户的 Mac 上经 `ssh a100 → gpu(hpcmgt)` 操作。2026-10-11 05:12 UTC 起。只贴数字与事实，不做解读。
 
@@ -108,7 +108,38 @@
   - `$VI/repo` 里这些路径有未提交的改动，我不在那里做 pull 或 stash。
   - 已用 SendMessage 告诉管理员，并给了修法建议：去掉 `--autostash` 或换成单独的副本提交；`.cur` 移出仓库或加进 .gitignore；段续上后清零 `tries`。等管理员给出新的推送方式再重启。
 
-## 6. 之后
+## 6. 推送循环 v1 的事故与 v2（0045-addendum-1）
+
+- **两次误判的时刻：** hpcgpu07 `05:47:11Z`（c3_s0 第 2 段），hpcgpu06 `06:00:40Z`（c3_s0 第 1 段）。都落在 05:44:40Z 那一轮 v1 同步里。机制见 §5。
+- **停 v1 的方法：** `git.lock.stop` 只在一轮做完后才检查，所以 06:03:50Z 我核对循环在 `sleep 1800`、没有 git 操作在进行，按 PID 停了 3576368 和 3706012。
+- **v2**（`raw/a1.out`、`raw/a6.out`）：
+  - `pgrep -u chenyuma -f scripts/server/sync_push.sh` 为空，v1 不在；
+  - 启动前记下 `$VI/repo` 的 `git status --short`，共 24 行。
+  - `flock … git -C $VI/repo fetch -q origin main`，rc=0，5 s；origin/main `8a16ea0b` 包含 `1eaad3f`。
+  - `git worktree add --detach $VI/wt/sync origin/main`，HEAD `8a16ea0b…`；`sync_push.sh` 的 sha256 是 `4d50e7a17f23b6a8241d779d14ef6102fa97a03f4f3df9f7ef17097ddda8c41d`，与 addendum 相同。
+  - 删掉 `$VI/logs/git.lock.stop`。06:10:09Z 用 addendum 的命令启动 v2（`SYNC_WT=$VI/wt/push`），PID 3811513；启动脚本 `experiments/E3/0045_hpc_train_probe/start_sync_v2.sh`。
+- **第一轮的核对（第 6 步）：**
+  - `sync_0045.status` 是 `2026-10-11T06:10:56Z ok`，进程在。
+  - origin 上有 `2cae705b [results] 0045: sync 2026-10-11T06:10:48Z`：删掉了 `0045_hpc_train_hpcgpu07/driver/logs/c3_s0.cur`（45 行），06 的 `c3_s0.cur` 显示为改名成 `c3_s0.log`；共 23 个文件，+2538 / −85。
+  - `$VI/repo` 的 `git status --short` 启动前后都是 24 行，路径相同；`git stash list` 为空。
+  - **下一次段边界：** 两台的驱动日志里没有新的"没有完成也没有按段停下"（08:54 的巡检，`raw/patrol_0855.out`）：
+    - hpcgpu07 之后的 c3_s0 第 3–8 段都正常续上，07:52:31Z c3_s0 完成；
+    - hpcgpu06 的 c3_s0 第 2–4 段正常续上，现在在跑第 5 段。
+  - 之后每轮都是 `ok`（例如 08:44:53Z）。
+
+## 7. 完成的运行
+
+| 节点 | 运行 | 完成时刻 | 步数 | 各段墙钟合计 | accounting gpu_hours | 每步中位（各段） | 显存峰值 | 最后一步 loss | 检查点（CK_FINAL） |
+|---|---|---|---|---|---|---|---|---|---|
+| hpcgpu07 | c3_s0（qwen3.5-0.8b） | 07:52:31Z | 4,000 | 9,527 s（2.65 h）：1051、990、1020、1020、1325、1932、1138、1051 | 2.35 | 1.870–1.949 s | 6.41 GB | 0.6758 | `$VI/ckpt/hpcgpu07/0045/c3/qwen3.5-0.8b/seed0/ckpt/final/model`，81,934 KB；`ckpt/final.sha256.txt`；manifest sha256 `fae595c0…` |
+
+- 段墙钟里第 6 段（约 07:10–07:42Z）是 1,932 s，其余段是 990–1,325 s。这段时间里 RUN-0047 正在往同一个 Lustre 写数据（只陈述）。
+- **在跑**（08:54Z）：
+  - hpcgpu07 `e3b_c3_s0`：第 1–3 段每步中位 2.989–3.005 s，是 RUN-0044 实测的 1.00 倍；
+  - hpcgpu06 `c3_s0` 第 5 段：第 1–5 段每步中位 5.182–5.302 s，0.93–0.95 倍。
+- **份额：** 08:54Z `lfs quota` 是 7,115,224,788 KB，比 RUN-0044 开始时多 55.8 GB（含 RUN-0047 的 6.13 GB）；`$VI/ckpt` 是 1.1 G。
+
+## 8. 之后
 
 - 每条运行跑完时更新本报告：墙钟、每步中位、显存峰值、最终 loss、`CK_FINAL` 下的检查点目录与 `.sha256.txt`。
 - 本会话里挂了每小时第 17、52 分钟的巡检，7 天后过期。
