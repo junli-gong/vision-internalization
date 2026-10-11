@@ -1207,3 +1207,4 @@
   - 发 0045-addendum-1。运行中的驱动不重启。从此不在 `$VI/repo` 里 pull，新工作树用 fetch 后 `worktree add origin/main` 建。
   - 另：`eval_lib.sh` 加 HPC 模式（按节点分开的暂停文件、只等本节点的心跳、不碰 git、份额命令）。原因是 HPC 上两台共用 `$VI/logs`，写 `train.pause` 会同时停住两台的训练。
 - **派 DEV-0045**（worktree agent）：合并核对的病态检查点测试在 HPC 上确定失败。
+- **10-11 07:52 UTC：RUN-0045 第一条跑完**：0.8B c3_s0（hpcgpu07），墙钟约 2.65 小时（预估 2.6）；检查点 `$VI/ckpt/hpcgpu07/0045/c3/qwen3.5-0.8b/seed0`（82 MB）。07 接着跑 e3b_c3_s0，06 的 4B c3_s0 还在训。
