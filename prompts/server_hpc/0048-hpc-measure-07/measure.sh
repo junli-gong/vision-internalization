@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# RUN-0048（ITSC HPC hpcgpu07）：迁移后排期用的实测（D81-2、D91）。B200 退役后，E5、2B 的 E3a+C3、0.8B 的评测与基座 E1 都改在 A100 上做；
+# RUN-0048（ITSC HPC hpcgpu07）：迁移后排期用的实测（D81-2、D91）。B200 退役后，E5、0.8B 与 4B 的 E3b、0.8B 的评测与基座 E1 都改在 A100 上做（D91、D93）；
 # A100 上没有这几类命令的实测，按 B200 推算的倍数不可靠（生成受显存带宽限制，与训练的倍数不同）。这里每类跑一小段，量墙钟与单位耗时，
 # 管理员据此写后面的长任务（每条的预估与上限）。顺带核对 E5 的三个 2B 起点在 A100 上过得了合并核对（训练开头自动做）。
 #   1. E5 训练 20 步 × 3 个起点（2B，种子 0，1K 档）：每步耗时；起点的合并核对。
 #   2. E5 的 val 评测一次（e3b_c3 起点，种子 0，每类 64 条 = 一次 val 选择的量；结构强制解码）：test 评测与 val 选择的单位耗时。
 #      用 val（dev 子集），不碰 test：起点的 test 读数（N = 0）留给正式任务，只评一次。
-#   3. 2B 的 E3a+C3 训练 20 步：每步耗时。
+#   3. 0.8B 的 E3b 训练 20 步：每步耗时（D93：0.8B、4B 的 E3b 提前，给干扰随尺寸的分析，E3 §13）。2B 的 E3a+C3 已取消（D93）。
+#   3b. E3b 种子 1 起点的 E5 训练 20 步（D93、E5 §8b）：它在 B200 上没过合并核对，这里照 E5 的既有规则在 A100 上再核对一次，决定 E3b 起点用不用种子 1。
 #   4. 0.8B 的评测（RUN-0045 的 E3b+C3 种子 0）：T 文本（dev 前 20 条、free 前 10 条），结构强制网格（refseg 前 100 条、depth 前 50 条）。
 #   5. 0.8B 基座的 E1（dev 前 20 条）。
 # 只在 RUN-0045 的 hpcgpu07 队列跑完之后启动（$LOGS/train_0045-hpcgpu07.done）。这里写的检查点放 $CKM，跑完删掉；结果只作计时用。
@@ -64,7 +65,8 @@ ck_start() {  # $1 = 起点 → 种子 0 的起点检查点（训练叶目录的
   esac
 }
 CK08=$CK45/e3b_c3/$M08/seed0/ckpt/final/model
-for p in "$(ck_start e3b_c3)" "$(ck_start c3_warmup)" "$(ck_start base_warmup)" "$CK08"; do
+CKE3B1=$ROOT36/e3b/$M2/seed1/ckpt/final/model
+for p in "$(ck_start e3b_c3)" "$(ck_start c3_warmup)" "$(ck_start base_warmup)" "$CK08" "$CKE3B1"; do
   [ -d "$p" ] || { progress "blocked: 检查点不在：$p"; exit 1; }
 done
 
@@ -82,10 +84,14 @@ push_out "E5 train ${STEPS} steps x 3 starts"
 step "e5_val${L5}_e3b_c3" "$PY" scripts/eval_e5_trained.py --start-only --init e3b_c3 --start-checkpoint "$(ck_start e3b_c3)" --model $M2 \
   --seed 0 ${T[@]+"${T[@]}"} ${D[@]+"${D[@]}"} --out "$OUT5" --task all --subset dev --limit "$L5" || NOK=$((NOK + 1))
 push_out "E5 val pass on e3b_c3 start"
-# 3. 2B 的 E3a+C3 训练 20 步
-step "e3a_c3_train${STEPS}" "$PY" scripts/train_e3a.py --model $M2 --variant full --with-text --seed 0 ${T[@]+"${T[@]}"} ${TD[@]+"${TD[@]}"} \
-  --out "$OUT" --ckpt-root "$CKM/e3a_c3" --stop-after-steps "$STEPS" || NOK=$((NOK + 1))
-push_out "E3a+C3 2B train ${STEPS} steps"
+# 3. 0.8B 的 E3b 训练 20 步
+step "e3b_train${STEPS}_$M08" "$PY" scripts/train_e3b.py --model $M08 --supervision grid --seed 0 ${T[@]+"${T[@]}"} ${TD[@]+"${TD[@]}"} \
+  --out "$OUT" --ckpt-root "$CKM/e3b" --stop-after-steps "$STEPS" || NOK=$((NOK + 1))
+# 3b. E3b 种子 1 起点的 E5 训练 20 步（训练开头做起点的合并核对；不过就拒绝训练，rc ≠ 0 是这一步的预期结果之一，照实记录）
+step "e5_train${STEPS}_e3b_s1" "$PY" scripts/train_e5.py --init e3b --start-checkpoint "$CKE3B1" --model $M2 \
+  --n-train "$( [ "$TINY" = 1 ] && echo 10 || echo 1000 )" --seed 1 ${T[@]+"${T[@]}"} ${D[@]+"${D[@]}"} \
+  --out "$OUT5" --ckpt-root "$CKM/e5" --stop-after-steps "$STEPS" || echo "$(now) e5_train${STEPS}_e3b_s1 没有开训（见日志：合并核对或其他原因）" >> "$OUT/steps.log"
+push_out "E3b 0.8B train ${STEPS} steps; E3b s1 start check"
 # 4. 0.8B 的评测（RUN-0045 的 E3b+C3 种子 0）
 step "ttext_e3b_c3_s0_dev${L1}" "$PY" scripts/run_e1.py --model $M08 ${T[@]+"${T[@]}"} ${D[@]+"${D[@]}"} --checkpoint "$CK08" \
   --checkpoint-label t_text/e3b_c3/seed0 --out "$OUT/e1" --task all --subset dev --limit "$L1" || NOK=$((NOK + 1))
