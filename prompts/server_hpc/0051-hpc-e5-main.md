@@ -85,7 +85,7 @@
 
 3. 再跑一次 `squeue`。
 4. 心跳：`$VI/logs/train_0051-hpcgpu07.status`；驱动日志在 `experiments/E5/0051_e5_main_hpcgpu07/driver/driver.log`。
-5. 推送：另起一个 v2 循环（`SYNC_WT=$VI/wt/push`，脚本用 `$VI/wt/sync` 里的），TAG `0051`，间隔 1800 秒。路径：`experiments/E5/0051_e5_main_hpcgpu07`，06 加入后再加 `experiments/E5/0051_e5_main_hpcgpu06`。
+5. 推送：另起一个 v3 循环（0053-addendum-1；脚本用 `$VI/wt/sync3/scripts/server/sync_push.sh`，不要 `SYNC_WT`），TAG `0051`，间隔 1800 秒。路径：`experiments/E5/0051_e5_main_hpcgpu07`，06 加入后再加 `experiments/E5/0051_e5_main_hpcgpu06`。
 
 ## 4. 巡检
 
