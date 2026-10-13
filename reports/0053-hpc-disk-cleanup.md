@@ -82,3 +82,48 @@
 
 - 两台驱动的心跳在更新：06 `22:43:18Z running e3b_c3_s2`，07 `22:42:36Z running e3b_s1`。
 - 推送循环：0045 `22:42:09Z ok`，0050 `22:39:25Z ok`。
+
+## 5. 管理员对 tmp 的答复之后（22:49Z，`bundles_rm.txt`）
+
+- 删掉 `repo.bundle`（248,903,095 B）和 `delta.bundle`（57,861,080 B）。
+- 核对清单、`visint_nyu_pairs_rendered/`、三个小缓存按答复留着。
+
+## 6. 补充 1：推送循环换成 v3（`addendum1_v3.txt`、`addendum1_step67.txt`，脚本 `d1.sh`）
+
+- **第一次运行（22:48Z）在第 2 步停下**：
+  - 任务书的命令是 `worktree add --no-checkout` 之后接 `sparse-checkout set`；这样索引是空的，`sync3` 里一个文件都没签出（status 16,246 行），`sync_push.sh` 不存在，sha256 核对不过；
+  - 脚本按设计停下，v2 循环没有被动过。
+  - 补了一步 `git -C $VI/wt/sync3 read-tree -mu HEAD` 之后：HEAD `f12e4927`，status 为空，`experiments/` 只有 P0（P0 清单 `60267210…`），大小 91,492,284 B，`sync_push.sh` 的 sha256 `21e5892ef539b5095b21974978a36d44f28f197c7bd000ab6ddf1240a16092d4` 与任务书相同。
+  - 照这个写法，以后的任务书建 sparse 工作树要么不加 `--no-checkout`，要么补 `read-tree -mu HEAD`（只陈述）。
+- **第二次运行（22:49Z）：**
+  - 停 v2：都是在 sleep、`git.lock` 没人拿着时按 PID 停掉：
+    - `22:49:55Z v2 0045 stopped (pid 3811513, child 924888)`；
+    - `22:50:58Z v2 0050 stopped (pid 3044664, child 810833)`。
+  - 起 v3：命令与任务书相同，TAG 与路径不变，没有 `SYNC_WT`：
+    - `v3 0045 started pid 975340`；
+    - `v3 0050 started pid 988275`。
+  - 第一轮：`sync_0045` 是 `22:50:50Z ok`，`sync_0050` 是 `22:52:41Z ok`；origin 上有 `9b12f635 [results] 0050: sync 2026-10-13T22:52:36Z`。
+    - 脚本里判断"第一轮已完成"的那一段，对 0050 读到的还是 v2 留下的 22:39 那条 status。这是脚本的问题，我事后另读确认了上面这两行。
+- **核对第一轮**（origin/main 的树）：
+
+  | 目录 | 树里大于 5 MB 的文件 | `LARGE_FILES.manifest.tsv` | 清单行数 |
+  |---|---|---|---|
+  | 0045_hpc_train_hpcgpu06 | 0 | 有 | 3 |
+  | 0045_hpc_train_hpcgpu07 | 0 | 有 | 4 |
+  | 0050_hpc_eval_08b_hpcgpu07 | 0 | 有 | 32 |
+  | 0050_hpc_e3b_hpcgpu07 | 0 | 没有。目录里没有大于 5 MB 的文件，最大的是 2,295,325 B 的 train_log.jsonl | 0 |
+
+  - 抽查：`0050_hpc_eval_08b_hpcgpu07/eval/e3b_c3/qwen3.5-0.8b/seed0/refseg__structured/predictions.jsonl`，8,957,246 B。Lustre 上重算的 sha256 是 `1fab29d5…87ec4`，与清单相同。
+  - `$VI/repo` 的 `git status --short`：切换前 74 行，切换后 76 行。多出的两行是 `?? experiments/E3/0045_hpc_train_hpcgpu0{6,7}/LARGE_FILES.manifest.tsv`，即 v3 写进源目录的清单；其余行相同。
+- **第 6 步：** `wt/push`（3,421,357,048 B）和 `wt/sync`（91,229,634 B）在没有进程使用后，用 `worktree remove --force` 删掉，然后 `worktree prune`。
+  - 剩下的工作树：repo、wt/sync3、wt0045、wt0049、wt0050、wt0051、wt0052。
+- **第 7 步：** 份额差值 **54,401,328 KB**（22:53Z）。squeue 两条都是 RUNNING：
+
+```
+## squeue 2026-10-13T22:53:37Z [0053a step6 before]
+157296 RUNNING 59-10:19:23 hpcgpu06
+157297 RUNNING 61-07:51:32 hpcgpu07
+## squeue 2026-10-13T22:53:52Z [0053a after]
+157296 RUNNING 59-10:19:38 hpcgpu06
+157297 RUNNING 61-07:51:47 hpcgpu07
+```
