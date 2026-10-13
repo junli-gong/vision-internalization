@@ -37,8 +37,8 @@
 
   | 文件 | sha256 |
   |---|---|
-  | `prompts/server_hpc/0051-hpc-e5-main/queue.sh` | `2e2f013cae5dccba754b01ce153f189b4d7da04923d70efc5cd0f5d130e53d95` |
-  | `scripts/server/train_queue.sh` | `128200e73787b2f3bf62e3f07dac7f3df7e55fce37d981fd07df916d5efa1457` |
+  | `prompts/server_hpc/0051-hpc-e5-main/queue.sh` | `8f33ad28c0f7b95757c0a2555b96f3c01f4c4d840824f0a2b45e39cb9a5ab769`（D95 改过：不查份额） |
+  | `scripts/server/train_queue.sh` | `fcb10f47c2fb6cf068b29f849230c82611bbcc018eb550116867b17337e0dbaa`（D95：TQ_DF_PATH） |
   | `configs/e5_train.json` | `e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3`（e5-train-v3） |
   | `configs/e5_prompts.json` | `c0e59d3589cfb51a29eb271d1e1527604899a062408f5d429c9acc4f80467ec4` |
 
@@ -89,8 +89,8 @@
 
 ## 4. 巡检
 
-- 同 RUN-0045：squeue、心跳、推送状态、份额差值（80 GB 停）、训练进程的 RSS 不超过 150 GB。
-- **份额**：E5 的最终检查点每个约 0.1 GB，全部约 5 GB。现在的差值约 59 GB；到 75 GB 时就告诉管理员。
+- 同 RUN-0045：squeue、心跳、推送状态、训练进程的 RSS 不超过 150 GB。**不设份额上限**（D95）；驱动在 Lustre 剩余空间低于 3 GB 时停。
+- **用量**：E5 的最终检查点每个约 0.1 GB，全部约 5 GB。巡检时照旧记一次 lfs quota 的差值，只作记录。
 - **认领目录**：如果某个组只有目录、没有 `node` 文件（认领刚做完驱动就断了），不要手动删，告诉管理员。
 - 某条运行失败，驱动会从检查点重试一次，还失败就记进 `failed.txt`，跳到下一条。把 `failed.txt` 的原文和那条的日志尾部发给管理员。
 - **起点合并核对不过**：脚本会拒绝训练，这是规则，不要绕过。报告里照实写，包括 exact_rows。

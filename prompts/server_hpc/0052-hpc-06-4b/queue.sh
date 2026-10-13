@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # RUN-0052（ITSC HPC hpcgpu06）的训练部分：4B 的 E3b 单独训练 × 3 个种子（--supervision grid），给像素干扰（E3 预注册 §13；D93）。
 # 这一臂在 E3 v1 的消融里，原定往后排（D83-2），D93 提前。配置与 2B 的 E3b（RUN-0036）相同，只换尺寸。
-# 驱动规则见 scripts/server/train_queue.sh；HPC 模式：TQ_NO_GIT=1，本节点自己的暂停文件，份额用 lfs quota 的差值。
+# 驱动规则见 scripts/server/train_queue.sh；HPC 模式：TQ_NO_GIT=1，本节点自己的暂停文件；不查份额（D95），只看 Lustre 的剩余空间。
 # 铁律：任何情况下都不能取消或停止 Slurm 任务 157296、157297。
 #
 # 用法：由 run.sh 在节点上经 srun 调用。
@@ -33,14 +33,14 @@ else
   export TRITON_CACHE_DIR=$VI/cache/$NODE/triton TORCHINDUCTOR_CACHE_DIR=$VI/cache/$NODE/inductor XDG_CACHE_HOME=$VI/cache/$NODE/xdg
   export TQ_NO_GIT=1
   export TQ_PAUSE=$LOGS/train.pause.$NODE   # 按节点分开（D91、0045-addendum-1）；不碰 06 驱动看的 $LOGS/train.pause
-  export TQ_QUOTA_CMD="timeout 60 lfs quota -u chenyuma /home | awk 'NR==3{u=\$2; gsub(/\\*/,\"\",u); v=int((u-7059403936)/1048576)} END{print v+0}'"
-  SHARE_STOP_GB=80
+  # D95：HPC 的共享盘不设份额上限，不查份额；只在 Lustre 剩余空间低于 DISK_STOP_GB（默认 3 GB）时停
+  export TQ_DF_PATH=$VI
   MEM_STOP_GB=100
   EXTRA=(); DATA=(--data-root "$TRAIN"); TQ_TRAIN_DATA=""
   SEEDS=(0 1 2)
   QUEUE_CAP_H=${QUEUE_CAP_H:?任务书 §3 的上限}
 fi
-export SHARE_STOP_GB MEM_STOP_GB 2>/dev/null
+export MEM_STOP_GB 2>/dev/null
 # shellcheck disable=SC1091
 source "$WT/scripts/server/train_queue.sh"
 cd "$WT" || die "工作树不存在：$WT"

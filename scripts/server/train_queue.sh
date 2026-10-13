@@ -22,7 +22,8 @@
 #   PY        python 解释器
 #   LOGS      心跳、暂停文件、git 锁所在的目录（真跑时 $PROJ/logs）
 #   可选：PROJ（算份额用）、EXTRA（每条命令都加的参数，数组）、TQ_TRAIN_DATA（内存低于停止线时删掉的训练数据目录）、
-#         TINY=1（开发机彩排：不查 GPU）、POLL_S、WATCH_S、BEAT_S、MEM_STOP_GB、DISK_STOP_GB、SHARE_STOP_GB、TQ_PAUSE
+#         TINY=1（开发机彩排：不查 GPU）、POLL_S、WATCH_S、BEAT_S、MEM_STOP_GB、DISK_STOP_GB、SHARE_STOP_GB、TQ_PAUSE、
+#         TQ_DF_PATH（查剩余空间的路径，默认 /；ITSC HPC 给 Lustre 上的目录，D95）
 # 运行的命令与工作目录：调用 run 时的当前目录（队列脚本先 cd 到固定 commit 的工作树）。
 set -uo pipefail
 : "${RUN_ID:?}" "${REPO:?}" "${OUT:?}" "${CK_TMP:?}" "${CK_FINAL:?}" "${CHUNK:?}" "${PY:?}" "${LOGS:?}"
@@ -59,7 +60,8 @@ note() { echo "$(now) $*" | tee -a "$DRV/driver.log"; }
 sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 locked() { if command -v flock >/dev/null 2>&1; then ( flock 9 || exit 1; "$@" ) 9>"$GITLOCK"; else ( "$@" ); fi; }  # 子 shell 里跑，函数可用
 mem_avail_gb() { if [ -r /proc/meminfo ]; then awk '/^MemAvailable:/{print int($2/1048576)}' /proc/meminfo; else echo 9999; fi; }
-disk_free_gb() { df -Pk / | awk 'NR==2{print int($4/1048576)}'; }
+TQ_DF_PATH=${TQ_DF_PATH:-/}
+disk_free_gb() { df -Pk "$TQ_DF_PATH" | awk 'NR==2{print int($4/1048576)}'; }
 share_gb() { if [ -n "$TQ_QUOTA_CMD" ]; then bash -c "$TQ_QUOTA_CMD" 2>/dev/null || echo 0; elif [ -n "$PROJ" ]; then du -sk "$PROJ" 2>/dev/null | awk '{print int($1/1048576)}'; else echo 0; fi; }
 gpu_foreign() {  # 过闸时我们自己的训练没在跑，GPU 上的任何计算进程都算别人的
   [ "$TINY" = 1 ] && return 0
@@ -109,7 +111,7 @@ gate() {  # 不满足就等；触到停止线就停
   local why last="" m d s g
   while :; do
     m=$(mem_avail_gb); [ "$m" -lt "$MEM_STOP_GB" ] && mem_stop "$m"
-    d=$(disk_free_gb); [ "$d" -lt "$DISK_STOP_GB" ] && die "disk free ${d}GB<${DISK_STOP_GB}GB (D6)"
+    d=$(disk_free_gb); [ "$d" -lt "$DISK_STOP_GB" ] && die "disk free ${d}GB<${DISK_STOP_GB}GB at $TQ_DF_PATH (D6)"
     s=$(share_gb); [ "$s" -gt "$SHARE_STOP_GB" ] && die "project share ${s}GB>${SHARE_STOP_GB}GB (D28-8)"
     why=""
     if [ -e "$TQ_PAUSE" ]; then why="paused (pause file: $(head -c 80 "$TQ_PAUSE" | tr '\n' ' '))"

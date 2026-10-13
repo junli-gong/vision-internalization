@@ -9,7 +9,7 @@
 #   同一个数据量档、同一个种子的所有起点在同一组里，所以 H5 的比较都在机内完成。哪台先空就认领下一组。
 #   N = 0 的 9 + 2 个读数放一组，最先跑（§8a 第 6 项）。
 # 每个 E5 运行训完，紧接着在 test 上评一次（选定的检查点只评这一次，D77-3）。
-# 驱动规则见 scripts/server/train_queue.sh；HPC 模式：TQ_NO_GIT=1，本节点自己的暂停文件，份额用 lfs quota 的差值。
+# 驱动规则见 scripts/server/train_queue.sh；HPC 模式：TQ_NO_GIT=1，本节点自己的暂停文件；不查份额（D95），只看 Lustre 的剩余空间。
 # 铁律：任何情况下都不能取消或停止 Slurm 任务 157296、157297。
 #
 # 用法（在节点上经 srun 启动，见任务书）：
@@ -44,15 +44,15 @@ else
   export TRITON_CACHE_DIR=$VI/cache/$NODE/triton TORCHINDUCTOR_CACHE_DIR=$VI/cache/$NODE/inductor XDG_CACHE_HOME=$VI/cache/$NODE/xdg
   export TQ_NO_GIT=1
   export TQ_PAUSE=$LOGS/train.pause.$NODE
-  export TQ_QUOTA_CMD="timeout 60 lfs quota -u chenyuma /home | awk 'NR==3{u=\$2; gsub(/\\*/,\"\",u); v=int((u-7059403936)/1048576)} END{print v+0}'"
-  SHARE_STOP_GB=80
+  # D95：HPC 的共享盘不设份额上限，不查份额；只在 Lustre 剩余空间低于 DISK_STOP_GB（默认 3 GB）时停
+  export TQ_DF_PATH=$VI
   MEM_STOP_GB=100
   EXTRA=(); DATA=(--data-root "$VI/b200/data")  # 起点检查点的合并核对用 E1 的 grid16 开发子集
   SMALL=(1000 4000); MID=(16000); BIG=(64000); SEEDS=(0 1 2); E3B_SEEDS=(0 2); TIER_AD=4000; EVAL_LIMIT=()
   QUEUE_CAP_H=${QUEUE_CAP_H:?任务书的上限}
 fi
 CLAIMS=$LOGS/e5_claims_0051
-export SHARE_STOP_GB MEM_STOP_GB 2>/dev/null
+export MEM_STOP_GB 2>/dev/null
 # shellcheck disable=SC1091
 source "$WT/scripts/server/train_queue.sh"
 cd "$WT" || die "工作树不存在：$WT"

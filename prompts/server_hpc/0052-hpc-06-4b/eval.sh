@@ -33,10 +33,10 @@ else
   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
   export TRITON_CACHE_DIR=$VI/cache/$NODE/triton TORCHINDUCTOR_CACHE_DIR=$VI/cache/$NODE/inductor XDG_CACHE_HOME=$VI/cache/$NODE/xdg
   T=(); D=(--data-root "$VI/b200/data"); SEEDS=(0 1 2)
-  # eval_lib 的 HPC 模式（D91）；份额用 lfs quota 减 RUN-0044 开始时的基线（RUN-0047 报告 §5）
+  # eval_lib 的 HPC 模式（D91）
   export EV_PAUSE=$LOGS/train.pause.$NODE EV_STATUS_GLOB="train_0052-$NODE.status" EV_NO_GIT=1
-  export EV_QUOTA_CMD="timeout 60 lfs quota -u chenyuma /home | awk 'NR==3{u=\$2; gsub(/\\*/,\"\",u); v=int((u-7059403936)/1048576)} END{print v+0}'"
-  export EV_SHARE_STOP_GB=80 EV_DF_PATH=$VI
+  # D95：HPC 的共享盘不设份额上限，不查份额；只在 Lustre 剩余空间低于 3 GB 时停
+  export EV_DF_PATH=$VI
   EV_CAP_S=$(awk -v h="${EV_CAP_H:?任务书 §3 给每个阶段的上限（小时）}" 'BEGIN{print int(h * 3600)}')
 fi
 OUT=$REPO/experiments/E3/0052_hpc_eval_4b_$NODE

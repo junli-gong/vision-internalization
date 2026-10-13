@@ -1272,3 +1272,4 @@
 - **10-13 21:00 UTC 份额差值 68.4 GB**（A100 的 CC 报）。发 RUN-0053 第一步。
 - **稀疏签出的隐患**：`src/data/train_dedupe.py` 在运行时读 `experiments/P0/…/coco_val2017_coco_urls.txt`，文件不在就悄悄跳过 COCO val2017 的去重组，训练数据会跟着变。稀疏规则写成 `'/*' '!/experiments/*/' '/experiments/P0/'` 保住它；开发机验证 P0 在、sha256 对、status 干净、工作树 91 MB。
 - RUN-0050 段 a 各组墙钟（A100 的 CC 迟报）：种子 0 组 6.72 小时，种子 1 组 6.45，种子 2 组 6.55，基座 3.10。
+- **10-13 用户：HPC 共享盘不设上限，取消 80 GB 停止线（D95）**。RUN-0051、RUN-0052 的脚本改成只看 Lustre 剩余空间（< 3 GB 停）；train_queue.sh 加 TQ_DF_PATH。tiny 检查 rc=0。D94 的清理照做。
