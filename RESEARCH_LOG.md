@@ -1291,3 +1291,4 @@
 - **RUN-0050 报告**（1491f6a8）：
   - 12 份合并核对全部通过。网格检查点的 exact_rows：E3b 是 0.965 / 0.975 / 1.000，E3b+C3 都是 1.000。所有 metrics 都是 complete，n 等于 n_expected。
   - train_summary 的 final_checkpoint 指向 tmp：summary 写在 finalize 搬走之前，以 ckpt_ledger 为准，ledger 的 manifest sha256 与评测记录一致。这是已知行为，不影响结果。
+- **10-14 10:45 UTC**：06 的 e3b_c3_s2 第 15 段开始训练前又多花了约 20 分钟（09:18 → 09:39）。日志显示加载权重只要 5–36 s，慢的是加载之前的启动阶段；最可能是 Lustre 元数据争用（import 环境、扫训练数据的大量小文件）。训练本身每步照常。4B 约 12:30 UTC 训完。RUN-0052 的约 50 次启动，如果也这样，会多出约 10 小时，届时再查。
