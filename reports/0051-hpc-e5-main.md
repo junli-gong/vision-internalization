@@ -183,6 +183,20 @@
 
 - 15:05:34Z 驱动认领了 `small_s0`，开始 `e3b_c3_n1000_s0`。
 
-## 4. hpcgpu06
+## 4. 被拒的评测（评测前合并核对没过；按管理员 10-14 的答复：照规则继续，记进 failed.txt，检查点留着以后补评，不改代码、配置与判据，也不手动补评）
+
+表由 `experiments/E5/0051_e5_main_probe/p51_refusals.py` 读出。每次有新的被拒，就重跑它更新这一节。
+
+| 运行 | 核对写于 | restricted exact_rows（不同行 / 行） | gap 中位 / 最大 | merge pass | restricted 教师强制 agreement | timing_s.total_s | failures | 核对文件 |
+|---|---|---|---|---|---|---|---|---|
+| e3b_c3/qwen3.5-2b/n1000/seed0 | 2026-10-14T17:01:06+00:00 | 0.825（7 / 40） | 0.1230 / 0.2458 | True | 0.9994560075685903 | 240.31790892407298 | {"restricted": ["restricted/thinking_off：关思考时受限解码与 generate_batch 的 exact_rows 0.8250 < 0.95"], "merge": []} | `0051_e5_main_hpcgpu07/trained/e3b_c3/qwen3.5-2b/n1000/seed0/merge_check.json` |
+
+- **eval_e3b_c3_n1000_s0（hpcgpu07）：**
+  - 训练 16:55:07Z 完成：1000 步，6,572 s，每步中位 5.088 s，峰值 9.35 GB；检查点 `$VI/ckpt/hpcgpu07/0051/train/e3b_c3/qwen3.5-2b/n1000/seed0/ckpt/final`，131,087 KB。
+  - 评测两次都是 rc=1：17:01:07Z（命令 360 s）、17:05:37Z。核对文件在第 2 次时重写，写于 17:05:07Z，失败项相同（0.8250）。上表读的是 origin 上第 1 次写的那份。
+  - `failed.txt` 原文：`2026-10-14T17:05:37Z eval_e3b_c3_n1000_s0 rc=1`。驱动随后跳到 `c3_warmup_n1000_s0`。
+  - 这个起点（e3b_c3 种子 0）在 n0_all 时的起点核对 exact_rows 是 0.985。
+
+## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
