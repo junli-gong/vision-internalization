@@ -155,3 +155,4 @@
 - **稀疏签出的两个坑**（RUN-0053）：
   - `git worktree add --no-checkout` 之后只做 `sparse-checkout set`，索引是空的，工作树里一个文件都没有。还要补一步 `git read-tree -mu HEAD`，或者 `checkout`。管理员在开发机上验证时补了 checkout，写进任务书时漏了。
   - 排除目录前，先查代码在运行时会不会读那里的文件。本项目的训练去重读 `experiments/P0/` 下的一份清单，而且是"有就用、没有就跳过"，排除掉不会报错，只会悄悄改变训练数据。
+  - 要在稀疏工作树里跑测试，稀疏规则还要留下测试会读的 experiments 子目录（RUN-0049 的 06 那一次：`test_v1_rejudges_run0021_all_pass` 读 `experiments/E3/0021_train_iface_check/`）。只跑训练、评测的工作树不受影响。
