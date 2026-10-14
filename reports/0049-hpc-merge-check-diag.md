@@ -53,6 +53,43 @@
 - 命令：`-rfEs tests/test_check_training_interfaces.py "tests/test_e3_eval.py::test_bad_checkpoint_refused"`。
 - 汇总行：`28 passed, 15 warnings in 210.52s (0:03:30)`，没有 skip、没有失败。
 
-## hpcgpu06
+## hpcgpu06（2026-10-14 13:06–13:24 UTC，RUN-0045 的 06 队列 12:09:57Z 跑完之后，RUN-0052 之前）
 
-等 RUN-0045 的 06 队列跑完再跑，结果追加到这里。
+- 用的是同一个工作树 `$VI/wt/wt0049`（`59f086f8`）与同一个 `r49_node.sh`，经 `srun --jobid=157296 --overlap -n1` 在 hpcgpu06 上运行，没有用 GPU。命令 rc=0，868 s，日志 `0049_hpcgpu06.log`。
+- squeue：`13:06:48Z 157296 RUNNING 60-00:32:34 / 157297 RUNNING 61-22:04:43`；跑完之后 `13:21:23Z 157296 RUNNING 60-00:47:09 / 157297 RUNNING 61-22:19:18`。
+
+### 诊断：`diag_rc=0`
+
+- 平台：`x86_64 Intel(R) Xeon(R) Gold 6342 CPU @ 2.80GHz，torch 2.13.0+cu130（mkl，AVX512，8 线程）`，与 hpcgpu07 相同。
+- **verdict：** `{"split_splits_here": true, "control_refused": true, "ok": true}`，输出 `msp_0049_hpcgpu06.json`。
+- **四个情形的 across_merge**（本机 | 开发机）：
+
+  | 情形 | argmax 不同的位置数 | max_abs_logit |
+  |---|---|---|
+  | split_run0044 | **0** \| 31 | **8.574** \| 12.32 |
+  | split | 3149 \| 2714 | 30.56 \| 29.06 |
+  | conditioned | 0 \| 0 | 1.335e-05 \| 1.049e-05 |
+  | control（check） | 1057 \| 1057；exit_code 1 \| 1 | 22.28 \| 22.28 |
+
+- **复现了 RUN-0044 的读数**：split_run0044 在 06 上 0 处不同，max_abs_logit 8.574，与任务书的预期相同。
+- 两台节点 JSON 里的 `cases` 逐项相同（脚本比对）。
+- 指纹的情况与 07 相同：输入与目标的 sha256 和开发机相同，基座、LoRA、token 行的指纹不同。
+
+### pytest
+
+- **第一次：`1 failed, 27 passed`（`pytest_rc=1`）。** 失败的是 `tests/test_check_training_interfaces.py::test_v1_rejudges_run0021_all_pass`：
+
+  ```
+  FileNotFoundError: [Errno 2] No such file or directory: '/home/mail/chenyuma/visint/wt/wt0049/experiments/E3/0021_train_iface_check/gemma-4-e2b-it.json'
+  ```
+
+  - 原因是 RUN-0053 已把 wt0049 改成稀疏签出，只保留了 `experiments/P0/`；这条测试要读的 `experiments/E3/0021_train_iface_check/` 不在工作树里。07 那次是在 RUN-0053 之前跑的。
+- **补跑**（`r49b.sh`）：
+  - 在同一个 commit `59f086f8` 上临时建了 `wt0049b`，稀疏规则多保留 `/experiments/E3/0021_train_iface_check/`（11 个文件），status 为空；
+  - 在 06 上经 srun 只重跑这一条：`1 passed in 5.01s`，`pytest_rc=0`；
+  - 跑完删掉 wt0049b 和它的 basetemp。前后 squeue 都是 RUNNING（`13:23:55Z`、`13:24:31Z`）。
+- 两次合起来，06 上 28 条都通过。
+
+### 收尾
+
+wt0049 已删除（`git worktree remove`，删前 status 为空，没有进程在用）。
