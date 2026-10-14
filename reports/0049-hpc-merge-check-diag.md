@@ -72,7 +72,12 @@
   | control（check） | 1057 \| 1057；exit_code 1 \| 1 | 22.28 \| 22.28 |
 
 - **复现了 RUN-0044 的读数**：split_run0044 在 06 上 0 处不同，max_abs_logit 8.574，与任务书的预期相同。
-- 两台节点 JSON 里的 `cases` 逐项相同（脚本比对）。
+- 两台节点 JSON 里的 `cases`：**除 `timing_s` 外逐项相同**（脚本比对）。不同的只有 6 个耗时字段（07 \| 06，单位 s）：
+  - split：total 21.40 \| 21.49，decode 10.02 \| 10.05；
+  - conditioned：total 4.13 \| 4.17；
+  - control：total 13.92 \| 14.31；
+  - split_run0044：total 86.59 \| 377.22，decode 74.29 \| 363.31。
+  - 更正：commit 5361d8b7 的说明写成了 "cases identical to 07"，不准确，准确的说法是上面这句。
 - 指纹的情况与 07 相同：输入与目标的 sha256 和开发机相同，基座、LoRA、token 行的指纹不同。
 
 ### pytest
