@@ -1,0 +1,135 @@
+experiment: E5
+framework: src/e5（DEV-0040：只评起点，N = 0）
+system: trained
+start_only: true
+n_train: 0
+start_only_rule: DEV-0040（D81-1；E5 预注册 §8 第 2 项）：只评起点，N = 0——起点检查点不经 E5 训练，加载 = src/e5/stack.load_start_only（与训练后评测只差没有
+  E5 LoRA），评测与训练后评测同一套函数；用于区分截距与斜率，不单独参与 H5 判定
+task: occlusion
+task_letter: c
+subset: eval
+data:
+  generator: src.synth.generate
+  split: test
+  n_per_bin: 100
+  n_samples: 300
+  sample_ids_sha256: d3c7f8190c0755e80768534462cf0d3b97a6d2091b1c002452fef5e0718f956e
+  limit: null
+  index_rule: 序号 0..B·n−1，档 = 序号 mod B（src/e5/protocol.py；与零样本相同）
+  task_generator_version: 2
+  synth_generator_version: 5
+n_resamples: 1000
+tiny: false
+dtype: bf16
+headline_scope: 全部样本
+gate:
+  rule: D59-4：配对 bootstrap 95% CI，判定条件同时胜过 copy_flat、gt_affine_upper、copy_convex
+checkpoint:
+  start_only: true
+  n_train: 0
+  start:
+    kind: base_warmup
+    grid_tokens: from_checkpoint
+    manifest_sha256: e13b53a97ceec20637d00e645ac498556d6918861935819d18adffe7f381356c
+    lora:
+      lora_alpha: 64.0
+      lora_dropout: 0.05
+      n_parameters: 33638400
+      n_targets: 186
+      n_tensors: 372
+      r: 32
+      targets_sha256: d993d0cbcc93630509dd4c28bee72f41f9cea5a455c5fae42b831780bf8c061c
+    build_spec:
+      family_kw: {}
+      image_policy: pixel_budget:300
+      key: qwen3.5-2b
+      tiny: false
+    image_policy: pixel_budget:300
+    dtype: bfloat16
+    n_grid_tokens: 67
+    leaf_variant: warmup
+    expected_variant: warmup
+    leaf_seed: 1
+  fingerprint:
+    value: da000506f257734154c7e0a61728af6c48e0e0935f1fe273019beb44ea3f78ab
+    device_key:
+      device_type: cuda
+      dtype: bfloat16
+      gpu: NVIDIA A100-PCIE-40GB
+    rule: src/e5/stack.stack_fingerprint：合并起点 LoRA 之后、加网格 token 之前；必须等于 factory.load_trained(起点,
+      merge=True) 的（src/e5/stack.reference_fingerprint）
+  seed: 1
+  seed_pairing:
+    seed: 1
+    start_seed: 1
+    allow_mismatch: false
+    rule: D77-3：E5 的第 i 个种子用 E3 的第 i 个种子训练的起点检查点；起点的种子取它训练叶目录 config.yaml 的 seed（manifest
+      不记种子）；不符或核对不了就拒绝训练，--allow-seed-mismatch 放开（记进运行身份）
+    status: match
+  checks:
+    done:
+      start_merge_check:
+        purpose: grid_eval
+        checks:
+        - merge
+        - restricted
+        n: 200
+        criteria_version: v1
+      start_fingerprint: 合并起点 LoRA 之后的权重指纹 = factory.load_trained(起点, merge=True)
+        的
+    skipped:
+      e5_lora_merge: 训练后评测的“E5 LoRA 合并前后”核对（stacked_merge_check）不适用：只评起点没有 E5 LoRA，起点
+        LoRA 已合并，评测的模型就是起点合并评测时的权重（由起点检查点的合并核对与权重指纹核对）
+decoding:
+  path: generate_batch
+  allowed_ids:
+  - 248046
+  - 248077
+  - 248078
+  - 248143
+  value_ids:
+  - 248077
+  - 248078
+  format: binary
+  max_new_tokens: 1057
+  stop_ids:
+  - 248046
+  enable_thinking: false
+  greedy: true
+  grid_size: 32
+  mode: structured
+  logits_processor: StructuredGridProcessor
+  structure:
+    n: 32
+    length: 1057
+    row_id: 248143
+    stop_id: 248046
+    value_ids:
+    - 248077
+    - 248078
+    value_ids_per_row: false
+    rule: 结构强制（D83，DEV-0041）：第 r 行的格子位置只允许第 r 行的值 token，行末只允许行分隔，最后一个位置只允许停止 token；长度恒为
+      n(n + 1) + 1；只强制网格的形状，不注入任务知识。经 generate_batch(allowed_token_ids = 任务的允许集合,
+      logits_processor = [StructuredGridProcessor]) 实现（src/grid/structured_decode.py）
+  basis: D83-3（E5 预注册 §8a 第 5 项）：E5 的全部网格任务（二值 c、d、e 与 33 个符号的起伏 a、b）在 N = 0、val 选择与
+    test 评测里都以结构强制解码为正式口径；网格形状固定，强制结构不注入任务知识
+batching:
+  batch_size: 64
+  order: 样本顺序，连续成批，左填充（适配器）
+prompt:
+  template: '{instruction} {ending}'
+  endings:
+    binary: Output the {n}x{n} mask grid.
+    relief: Output the {n}x{n} depth grid.
+  endings_from:
+    binary: tasks.refseg.grid_template
+    relief: tasks.depth.grid_instruction
+  order: instruction_first
+config:
+  path: configs/e5_train.json
+  sha256: e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3
+  version: e5-train-v3
+  e3b_config:
+    path: configs/e3b_train.json
+    sha256: b265cd87b2f141a37d8aea4d62b667efe084709d737220903938feaf7811c375
+    version: e3b-train-v3
