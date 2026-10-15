@@ -207,6 +207,8 @@
 
 | c3_warmup/qwen3.5-2b/n1000/seed1 | 2026-10-15T12:31:35+00:00 | 0.95（2 / 40） | 0.2405 / 0.4376 | False | 0.9991958372753075 | 231.05827533453703 | {"restricted": [], "merge": ["merge/thinking_off：教师强制的 argmax_agreement 0.97214 < 0.98"]} | `0051_e5_main_hpcgpu07/trained/c3_warmup/qwen3.5-2b/n1000/seed1/merge_check.json` |
 
+| base_warmup/qwen3.5-2b/n1000/seed1 | 2026-10-15T14:37:51+00:00 | 0.85（6 / 40） | 0.0986 / 0.3144 | False | 0.9993377483443708 | 227.42181426286697 | {"restricted": ["restricted/thinking_off：关思考时受限解码与 generate_batch 的 exact_rows 0.8500 < 0.95"], "merge": ["merge/thinking_off：教师强制的 argmax_agreement 0.96088 < 0.98"]} | `0051_e5_main_hpcgpu07/trained/base_warmup/qwen3.5-2b/n1000/seed1/merge_check.json` |
+
 - **eval_e3b_c3_n1000_s0（hpcgpu07）：**
   - 训练 16:55:07Z 完成：1000 步，6,572 s，每步中位 5.088 s，峰值 9.35 GB；检查点 `$VI/ckpt/hpcgpu07/0051/train/e3b_c3/qwen3.5-2b/n1000/seed0/ckpt/final`，131,087 KB。
   - 评测两次都是 rc=1：17:01:07Z（命令 360 s）、17:05:37Z。核对文件在第 2 次时重写，写于 17:05:07Z，失败项相同（0.8250）。上表读的是 origin 上第 1 次写的那份。
@@ -254,6 +256,12 @@
   - 评测两次 rc=1：12:27:32Z、12:32:02Z。`failed.txt` 原文 `2026-10-15T12:32:02Z eval_c3_warmup_n1000_s1 rc=1`。驱动随后跳到 `base_warmup_n1000_s1`。
   - restricted 通过（0.95，2 / 40；gap 中位 0.2405、最大 0.4376），**只有 merge 没过**：`merge/thinking_off：教师强制的 argmax_agreement 0.97214 < 0.98`。
 - 截至 14:23Z：`failed.txt` 共 8 行；驱动在跑 `base_warmup_n1000_s1`。
+- **eval_base_warmup_n1000_s1（hpcgpu07）：**
+  - 训练 14:27:52Z 完成，检查点 `…/0051/train/base_warmup/qwen3.5-2b/n1000/seed1/ckpt/final`，131,087 KB。
+  - 评测两次 rc=1：14:33:52Z、14:38:22Z。`failed.txt` 原文 `2026-10-15T14:38:22Z eval_base_warmup_n1000_s1 rc=1`。
+  - restricted 0.85（6 / 40；gap 中位 0.0986、最大 0.3144）与 merge（教师强制 argmax_agreement 0.96088 < 0.98）都没过。
+  - 驱动随后跳到 `e3b_c3_n4000_s1`。组 small_s1 里没有 `e3b_n1000_s1`：queue.sh 第 5 行写明 e3b 起点只用种子 0、2（种子 1 在 RUN-0048 没过合并核对），与 n0_all 里没有 `n0_e3b_s1` 一致。
+- 截至 14:39Z：`failed.txt` 共 9 行。
 - 管理员 10-14 的答复：判据交用户与负责人定（N34），队列不调整，照原样继续、继续记录，被拒的检查点留着以后统一补评。
 
 ## 5. hpcgpu06
