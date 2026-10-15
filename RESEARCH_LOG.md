@@ -1316,3 +1316,4 @@
 - 10-15 13:26 UTC 心跳：两条 RUNNING；06 在 ttext_c3_s1_eval（日志 13:23 有更新，3.5 小时）；07 在 base_warmup_n1000_s1（训了 50 分钟）；同步 ok；无新运行完成。
 - 10-15 13:59 UTC 心跳：两条 RUNNING；06 在 ttext_c3_s1_eval（4.0 小时，日志 13:56 有更新；种子 0 这一步 3.8 小时，E3b+C3 种子 1 是 4.3 小时）；07 在 base_warmup_n1000_s1（训了 86 分钟）；同步 ok；无新运行完成。
 - 10-15 14:16 UTC：RUN-0052 ttext_c3_s1_eval 完成（rc=0，4.30 小时），接 ttext_c3_s1_debiased。照种子 1 的耗时推算，段 a（T 文本）约 10-16 04:00 UTC 跑完。07 的 base_warmup_n1000_s1 训了 101 分钟。两条 RUNNING，同步 ok。
+- 10-15 14:45 UTC：RUN-0051 eval_base_warmup_n1000_s1 被合并核对拒绝（exact_rows 0.85、全词表合并教师强制 0.961；(b′) 下过），记入 N34。种子 1 没有 E3b 起点（§8b 只用种子 0、2），07 接 e3b_c3_n4000_s1。
