@@ -1331,3 +1331,4 @@
 - 10-15 19:15 UTC：RUN-0052 ttext_e3b_c3_s2_eval 完成（rc=0，4.13 小时），接 ttext_e3b_c3_s2_debiased。07 在 base_warmup_n4000_s1（20 分钟）。两条 RUNNING，同步 ok。
 - 10-15 19:45 UTC：RUN-0052 种子 2 的 E3b+C3 T 文本四步都完成（rc=0），接 grid_e3b_c3_s2_refseg（约 3.1 小时）。07 在 base_warmup_n4000_s1（50 分钟）。两条 RUNNING，同步 ok。
 - 10-15 20:15 UTC 心跳：两条 RUNNING；06 在 grid_e3b_c3_s2_refseg（30 分钟，日志 19:57 有更新）；07 在 base_warmup_n4000_s1（80 分钟）；同步 ok；无新运行完成。
+- 10-15 20:45 UTC：07 的 base_warmup_n4000_s1 训完，20:41 起评测（先过合并核对）。06 在 grid_e3b_c3_s2_refseg（1.0 小时，日志 20:36 有更新）。两条 RUNNING，同步 ok。
