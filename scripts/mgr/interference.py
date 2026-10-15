@@ -8,6 +8,8 @@
 - 像素干扰（两边结构强制解码、单轮、guided）：P_seg = E3b 的 refseg cIoU − E3b+C3 的；P_depth = E3b+C3 的 depth AbsRel − E3b 的。
 - 逐种子配对；只用两臂都有有效读数的种子（没过合并核对的种子没有读数）。
 - 趋势（L、P_seg、P_depth 各判一次）："随尺寸缩小" = 种子平均 0.8B > 2B > 4B 严格递减；"明显缩小" = 再加 4B ≤ 0.8B 的一半；其余为"不缩小"。
+- 事后补充（D96-4，2026-10-15，描述性，不参与判定）：相对干扰 R_seg = P_seg ÷ E3b 的 refseg cIoU，R_depth = P_depth ÷ E3b 的 depth AbsRel
+  （混入文本之后像素能力丢掉几成）；逐种子算、取种子平均，趋势用同一套写法描述，标"描述"。
 
 用法：
   python scripts/mgr/interference.py --size 2B:B200:qwen3.5-2b:<T 文本与网格运行目录…> \\
@@ -74,7 +76,7 @@ def grid(dirs, variant, seed, model, task, key):
 
 def size_block(label, machine, model, dirs):
     out = {"size": label, "machine": machine, "model": model, "L": {}, "L_items": {}, "free_items": {}, "grid16": {},
-           "P_seg": {}, "P_depth": {}}
+           "P_seg": {}, "P_depth": {}, "R_seg": {}, "R_depth": {}}
     for s in SEEDS:
         diffs = []
         for name, task in L_ITEMS:
@@ -96,9 +98,13 @@ def size_block(label, machine, model, dirs):
         e, m = grid(dirs, "e3b", s, model, "refseg", "cIoU"), grid(dirs, "e3b_c3", s, model, "refseg", "cIoU")
         if e is not None and m is not None:
             out["P_seg"][s] = e - m
+            if e:
+                out["R_seg"][s] = (e - m) / e
         e, m = grid(dirs, "e3b", s, model, "depth", "abs_rel"), grid(dirs, "e3b_c3", s, model, "depth", "abs_rel")
         if e is not None and m is not None:
             out["P_depth"][s] = m - e
+            if e:
+                out["R_depth"][s] = (m - e) / e
     return out
 
 
@@ -133,14 +139,17 @@ def main(argv=None):
     lines = ["# 干扰随尺寸的变化（E3 预注册 §13）", "",
              "| 尺寸 | 机器 | 量 | 种子 0 | 种子 1 | 种子 2 | 平均（标准差） |", "|---|---|---|---:|---:|---:|---:|"]
     means = {"L": [], "P_seg": [], "P_depth": []}
+    rel_means = {"R_seg": [], "R_depth": []}
     for b in blocks:
-        for q, unit in (("L", "点"), ("P_seg", "cIoU"), ("P_depth", "AbsRel")):
+        for q, unit in (("L", "点"), ("P_seg", "cIoU"), ("P_depth", "AbsRel"), ("R_seg", "比例，事后补充"), ("R_depth", "比例，事后补充")):
             m, sd = summary(b[q])
-            means[q].append((b["size"], m))
+            (means if q in means else rel_means)[q].append((b["size"], m))
             cells = [(f"{b[q][s]:.1f}" if q == "L" else f"{b[q][s]:.3f}") if s in b[q] else "—" for s in SEEDS]
             ms = "—" if m is None else (f"{m:.1f}" if q == "L" else f"{m:.3f}") + ("" if sd is None else f"（{sd:.1f}）" if q == "L" else f"（{sd:.3f}）")
             lines.append(f"| {b['size']} | {b['machine']} | {q}（{unit}） | " + " | ".join(cells) + f" | {ms} |")
-    lines += ["", "**趋势**（§13 的判定，现在定死）：" + "；".join(f"{q} {trend(v)}" for q, v in means.items()), ""]
+    lines += ["", "**趋势**（§13 的判定，现在定死）：" + "；".join(f"{q} {trend(v)}" for q, v in means.items()),
+              "", "**相对干扰的趋势**（D96-4 事后补充，描述性，不参与判定，不改 §13a 的触发）：" +
+              "；".join(f"{q} {trend(v)}（描述）" for q, v in rel_means.items()), ""]
     for b in blocks:
         lines += [f"## {b['size']}（{b['machine']}）：L 的逐项与 free（点，C3 −（E3b+C3）；种子 0 / 1 / 2）", ""]
         for name, d in list(b["L_items"].items()) + list(b["free_items"].items()):
@@ -149,7 +158,8 @@ def main(argv=None):
         lines.append("")
     print("\n".join(lines))
     if a.json:
-        Path(a.json).write_text(json.dumps({"blocks": blocks, "trend": {q: trend(v) for q, v in means.items()}},
+        Path(a.json).write_text(json.dumps({"blocks": blocks, "trend": {q: trend(v) for q, v in means.items()},
+                                            "relative_trend_descriptive": {q: trend(v) for q, v in rel_means.items()}},
                                            ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
 
