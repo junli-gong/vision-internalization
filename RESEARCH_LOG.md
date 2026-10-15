@@ -1307,3 +1307,4 @@
 - **10-15 08:50 UTC：RUN-0051 种子 0 组完成**（hpcgpu07，small_s0，08:24 UTC）：8 个训练后运行都训完。评测前核对照现行判据 v1 过了 2 个（e3b_c3 4K、e3b 4K），拒了 6 个；照 N34 的 (b′) 8 个都过（表在 DECISIONS_NEEDED.md N34）。管理员没看任何 E5 test 分数。种子 1 组（small_s1）已接上。
 - 10-15 09:19 UTC 心跳：两条 RUNNING；06 在 grid_e3b_c3_s1_refseg（日志 09:10 有更新）；07 在 e3b_c3_n1000_s1（训了 50 分钟）；同步 ok；无新运行完成。
 - 10-15 09:45 UTC：RUN-0052 grid_e3b_c3_s1_refseg 完成（rc=0，3.10 小时，与种子 0 的 3.10 小时相同），接 grid_e3b_c3_s1_depth。07 的 e3b_c3_n1000_s1 训了 80 分钟。两条 RUNNING，同步 ok。
+- 10-15 10:15 UTC：RUN-0052 grid_e3b_c3_s1_depth 完成（rc=0，12 分钟），4B 种子 1 的 E3b+C3 部分齐了，接 ttext_c3_s1_eval。07 的 e3b_c3_n1000_s1 训完，10:13 起评测（先过合并核对）。两条 RUNNING，同步 ok。
