@@ -201,6 +201,8 @@
 
 | c3_warmup/qwen3.5-2b/n4000/seed0 | 2026-10-15T03:37:29+00:00 | 0.95（2 / 40） | 0.0307 / 0.0450 | False | 0.9998817407757805 | 229.44479606673121 | {"restricted": [], "merge": ["merge/thinking_off：教师强制的 argmax_agreement 0.96585 < 0.98"]} | `0051_e5_main_hpcgpu07/trained/c3_warmup/qwen3.5-2b/n4000/seed0/merge_check.json` |
 
+| base_warmup/qwen3.5-2b/n4000/seed0 | 2026-10-15T05:53:18+00:00 | 1.0（0 / 40） | — / — | False | 1.0 | 238.73564265295863 | {"restricted": [], "merge": ["merge/thinking_off：教师强制的 argmax_agreement 0.95714 < 0.98"]} | `0051_e5_main_hpcgpu07/trained/base_warmup/qwen3.5-2b/n4000/seed0/merge_check.json` |
+
 - **eval_e3b_c3_n1000_s0（hpcgpu07）：**
   - 训练 16:55:07Z 完成：1000 步，6,572 s，每步中位 5.088 s，峰值 9.35 GB；检查点 `$VI/ckpt/hpcgpu07/0051/train/e3b_c3/qwen3.5-2b/n1000/seed0/ckpt/final`，131,087 KB。
   - 评测两次都是 rc=1：17:01:07Z（命令 360 s）、17:05:37Z。核对文件在第 2 次时重写，写于 17:05:07Z，失败项相同（0.8250）。上表读的是 origin 上第 1 次写的那份。
@@ -230,6 +232,11 @@
   - 评测两次 rc=1：03:33:28Z、03:37:58Z。`failed.txt` 原文 `2026-10-15T03:37:58Z eval_c3_warmup_n4000_s0 rc=1`。
   - **这次 restricted 通过**（0.95，2 / 40），**只有 merge 没过**：`merge/thinking_off：教师强制的 argmax_agreement 0.96585 < 0.98`。
   - 驱动随后跳到 `base_warmup_n4000_s0`。
+- **eval_base_warmup_n4000_s0（hpcgpu07）：**
+  - 训练 05:28:38Z 完成，检查点 131,091 KB。
+  - 评测两次 rc=1：05:49:07Z（1,229 s）、05:53:37Z（270 s）。`failed.txt` 原文 `2026-10-15T05:53:37Z eval_base_warmup_n4000_s0 rc=1`。驱动随后跳到 `e3b_n4000_s0`。
+  - restricted 通过（1.0，0 / 40 行不同），**只有 merge 没过**：`merge/thinking_off：教师强制的 argmax_agreement 0.95714 < 0.98`。
+  - `p51_refusals.py` 的第一版在没有分歧行时（gap 的 median、max 为 None）格式化出错，漏了这一行；已修，表里的这一行是修后的脚本读出的。
 - 管理员 10-14 的答复：判据交用户与负责人定（N34），队列不调整，照原样继续、继续记录，被拒的检查点留着以后统一补评。
 
 ## 5. hpcgpu06

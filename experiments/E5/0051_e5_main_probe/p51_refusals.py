@@ -3,6 +3,7 @@ Prints run, written time, failures, restricted thinking_off decode_vs_generate_b
 merge pass, teacher-forcing agreement, timing, and the file path. Facts only, no scores.
 usage: python p51_refusals.py <experiments/E5/0051_e5_main_hpcgpu0X> [...]"""
 import json, sys
+fmt = lambda v: "—" if v is None else f"{v:.4f}"  # no divergent rows -> gap median/max are None
 from pathlib import Path
 print("| 运行 | 核对写于 | restricted exact_rows（不同行 / 行） | gap 中位 / 最大 | merge pass | restricted 教师强制 agreement | timing_s.total_s | failures | 核对文件 |")
 print("|---|---|---|---|---|---|---|---|---|")
@@ -16,5 +17,5 @@ for root in sys.argv[1:]:
         tf = r.get("teacher_forcing", {}).get("agreement")
         run = "/".join(f.parent.parts[-4:])
         print(f"| {run} | {d.get('written_utc')} | {x.get('exact_rows')}（{x.get('n_divergent_rows')} / {x.get('n_rows')}） | "
-              f"{g.get('median', 0):.4f} / {g.get('max', 0):.4f} | {d['checks'].get('merge', {}).get('pass')} | {tf} | "
+              f"{fmt(g.get('median'))} / {fmt(g.get('max'))} | {d['checks'].get('merge', {}).get('pass')} | {tf} | "
               f"{(d.get('timing_s') or {}).get('total_s')} | {json.dumps(d.get('failures'), ensure_ascii=False)} | `{f.relative_to(root.parent)}` |")
