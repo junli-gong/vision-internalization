@@ -1309,3 +1309,4 @@
 - 10-15 09:45 UTC：RUN-0052 grid_e3b_c3_s1_refseg 完成（rc=0，3.10 小时，与种子 0 的 3.10 小时相同），接 grid_e3b_c3_s1_depth。07 的 e3b_c3_n1000_s1 训了 80 分钟。两条 RUNNING，同步 ok。
 - 10-15 10:15 UTC：RUN-0052 grid_e3b_c3_s1_depth 完成（rc=0，12 分钟），4B 种子 1 的 E3b+C3 部分齐了，接 ttext_c3_s1_eval。07 的 e3b_c3_n1000_s1 训完，10:13 起评测（先过合并核对）。两条 RUNNING，同步 ok。
 - 10-15 10:45 UTC：RUN-0051 eval_e3b_c3_n1000_s1 被合并核对拒绝（exact_rows 0.875；(b′) 下过），记入 N34；07 接 c3_warmup_n1000_s1。06 在 ttext_c3_s1_eval。两条 RUNNING，同步 ok。
+- 10-15 11:15 UTC 心跳：两条 RUNNING；06 在 ttext_c3_s1_eval（日志 11:13 有更新）；07 在 c3_warmup_n1000_s1（训了 45 分钟）；同步 ok；无新运行完成。
