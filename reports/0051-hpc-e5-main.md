@@ -252,7 +252,7 @@
 - **eval_e3b_c3_n1000_s1（hpcgpu07）：**
   - 训练 10:13:43Z 完成，检查点 `…/0051/train/e3b_c3/qwen3.5-2b/n1000/seed1/ckpt/final`，131,091 KB。
   - 评测两次 rc=1：10:22:13Z、10:26:43Z。`failed.txt` 原文 `2026-10-15T10:26:43Z eval_e3b_c3_n1000_s1 rc=1`。驱动随后跳到 `c3_warmup_n1000_s1`。
-  - restricted 0.875（5 / 40），gap 中位 0.2420、最大 0.3492；merge 通过。
+  - restricted 0.875（5 / 40），gap 中位 0.2420、最大 0.3492；merge 通过（merge 的教师强制 argmax_agreement 0.99489）。
 - **eval_c3_warmup_n1000_s1（hpcgpu07）：**
   - 训练 12:16:55Z 完成，检查点 `…/0051/train/c3_warmup/qwen3.5-2b/n1000/seed1/ckpt/final`，131,091 KB。
   - 评测两次 rc=1：12:27:32Z、12:32:02Z。`failed.txt` 原文 `2026-10-15T12:32:02Z eval_c3_warmup_n1000_s1 rc=1`。驱动随后跳到 `base_warmup_n1000_s1`。
@@ -267,7 +267,7 @@
 - **eval_e3b_c3_n4000_s1（hpcgpu07）：**
   - 训练 16:29:30Z 完成，检查点 `…/0051/train/e3b_c3/qwen3.5-2b/n4000/seed1/ckpt/final`，131,091 KB。
   - 评测两次 rc=1：16:40:30Z、16:45:01Z。`failed.txt` 原文 `2026-10-15T16:45:01Z eval_e3b_c3_n4000_s1 rc=1`。驱动随后跳到 `c3_warmup_n4000_s1`。
-  - restricted 0.875（5 / 40；gap 中位 0.0361、最大 0.0519）没过；merge 通过（教师强制 argmax_agreement 0.99979）。
+  - restricted 0.875（5 / 40；gap 中位 0.0361、最大 0.0519）没过；merge 通过（merge 的教师强制 argmax_agreement 0.99598）。
 - 截至 16:47Z：`failed.txt` 共 10 行。
 - 管理员 10-14 的答复：判据交用户与负责人定（N34），队列不调整，照原样继续、继续记录，被拒的检查点留着以后统一补评。
 
