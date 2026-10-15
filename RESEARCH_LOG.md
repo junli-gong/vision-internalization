@@ -1329,3 +1329,4 @@
 - 10-15 18:45 UTC：07 的 c3_warmup_n4000_s1 训完，约 18:37 起评测（先过合并核对）。06 在 ttext_e3b_c3_s2_eval（3.8 小时，日志 18:40 有更新）。两条 RUNNING，同步 ok。
 - 10-15 19:00 UTC：RUN-0051 eval_c3_warmup_n4000_s1 被合并核对拒绝（全词表合并教师强制 0.97992 < 0.98；(b′) 下过），记入 N34；07 接 base_warmup_n4000_s1。
 - 10-15 19:15 UTC：RUN-0052 ttext_e3b_c3_s2_eval 完成（rc=0，4.13 小时），接 ttext_e3b_c3_s2_debiased。07 在 base_warmup_n4000_s1（20 分钟）。两条 RUNNING，同步 ok。
+- 10-15 19:45 UTC：RUN-0052 种子 2 的 E3b+C3 T 文本四步都完成（rc=0），接 grid_e3b_c3_s2_refseg（约 3.1 小时）。07 在 base_warmup_n4000_s1（50 分钟）。两条 RUNNING，同步 ok。
