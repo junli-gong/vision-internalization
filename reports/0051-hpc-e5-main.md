@@ -203,6 +203,8 @@
 
 | base_warmup/qwen3.5-2b/n4000/seed0 | 2026-10-15T05:53:18+00:00 | 1.0（0 / 40） | — / — | False | 1.0 | 238.73564265295863 | {"restricted": [], "merge": ["merge/thinking_off：教师强制的 argmax_agreement 0.95714 < 0.98"]} | `0051_e5_main_hpcgpu07/trained/base_warmup/qwen3.5-2b/n4000/seed0/merge_check.json` |
 
+| e3b_c3/qwen3.5-2b/n1000/seed1 | 2026-10-15T10:26:17+00:00 | 0.875（5 / 40） | 0.2420 / 0.3492 | True | 0.9995506149479659 | 232.28397078812122 | {"restricted": ["restricted/thinking_off：关思考时受限解码与 generate_batch 的 exact_rows 0.8750 < 0.95"], "merge": []} | `0051_e5_main_hpcgpu07/trained/e3b_c3/qwen3.5-2b/n1000/seed1/merge_check.json` |
+
 - **eval_e3b_c3_n1000_s0（hpcgpu07）：**
   - 训练 16:55:07Z 完成：1000 步，6,572 s，每步中位 5.088 s，峰值 9.35 GB；检查点 `$VI/ckpt/hpcgpu07/0051/train/e3b_c3/qwen3.5-2b/n1000/seed0/ckpt/final`，131,087 KB。
   - 评测两次都是 rc=1：17:01:07Z（命令 360 s）、17:05:37Z。核对文件在第 2 次时重写，写于 17:05:07Z，失败项相同（0.8250）。上表读的是 origin 上第 1 次写的那份。
@@ -237,6 +239,14 @@
   - 评测两次 rc=1：05:49:07Z（1,229 s）、05:53:37Z（270 s）。`failed.txt` 原文 `2026-10-15T05:53:37Z eval_base_warmup_n4000_s0 rc=1`。驱动随后跳到 `e3b_n4000_s0`。
   - restricted 通过（1.0，0 / 40 行不同），**只有 merge 没过**：`merge/thinking_off：教师强制的 argmax_agreement 0.95714 < 0.98`。
   - `p51_refusals.py` 的第一版在没有分歧行时（gap 的 median、max 为 None）格式化出错，漏了这一行；已修，表里的这一行是修后的脚本读出的。
+- **eval_e3b_n4000_s0（hpcgpu07）：评测前的合并核对通过，评测完成**（10-15 08:24:32Z）。
+  - 训练 07:47:30Z 完成，检查点 131,091 KB。
+  - 核对写于 07:59:09Z：pass True；restricted exact_rows 0.975（1 / 40）；merge 的教师强制 argmax_agreement 0.99018。
+- **组 small_s0 08:24:32Z 跑完**（8 个训练运行全部完成；评测通过 2 个：e3b_c3 n4000、e3b n4000；被拒 6 个，`failed.txt` 6 行）。驱动同一时刻认领组 `small_s1`。
+- **eval_e3b_c3_n1000_s1（hpcgpu07）：**
+  - 训练 10:13:43Z 完成，检查点 `…/0051/train/e3b_c3/qwen3.5-2b/n1000/seed1/ckpt/final`，131,091 KB。
+  - 评测两次 rc=1：10:22:13Z、10:26:43Z。`failed.txt` 原文 `2026-10-15T10:26:43Z eval_e3b_c3_n1000_s1 rc=1`。驱动随后跳到 `c3_warmup_n1000_s1`。
+  - restricted 0.875（5 / 40），gap 中位 0.2420、最大 0.3492；merge 通过。
 - 管理员 10-14 的答复：判据交用户与负责人定（N34），队列不调整，照原样继续、继续记录，被拒的检查点留着以后统一补评。
 
 ## 5. hpcgpu06
