@@ -1312,3 +1312,4 @@
 - 10-15 11:15 UTC 心跳：两条 RUNNING；06 在 ttext_c3_s1_eval（日志 11:13 有更新）；07 在 c3_warmup_n1000_s1（训了 45 分钟）；同步 ok；无新运行完成。
 - 10-15 11:54 UTC 心跳：两条 RUNNING；06 在 ttext_c3_s1_eval（日志 11:39 有更新）；07 在 c3_warmup_n1000_s1（训了 85 分钟）；同步 ok；无新运行完成。
 - 10-15 12:28 UTC：07 的 c3_warmup_n1000_s1 训完，12:27 起评测（先过合并核对）。06 在 ttext_c3_s1_eval（日志 12:17 有更新）。两条 RUNNING，同步 ok。
+- 10-15 12:47 UTC：RUN-0051 eval_c3_warmup_n1000_s1 被合并核对拒绝（全词表合并教师强制 0.972；(b′) 下过），记入 N34；07 接 base_warmup_n1000_s1。06 在 ttext_c3_s1_eval（日志 12:37 有更新）。两条 RUNNING，同步 ok。
