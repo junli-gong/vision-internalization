@@ -1332,3 +1332,4 @@
 - 10-15 19:45 UTC：RUN-0052 种子 2 的 E3b+C3 T 文本四步都完成（rc=0），接 grid_e3b_c3_s2_refseg（约 3.1 小时）。07 在 base_warmup_n4000_s1（50 分钟）。两条 RUNNING，同步 ok。
 - 10-15 20:15 UTC 心跳：两条 RUNNING；06 在 grid_e3b_c3_s2_refseg（30 分钟，日志 19:57 有更新）；07 在 base_warmup_n4000_s1（80 分钟）；同步 ok；无新运行完成。
 - 10-15 20:45 UTC：07 的 base_warmup_n4000_s1 训完，20:41 起评测（先过合并核对）。06 在 grid_e3b_c3_s2_refseg（1.0 小时，日志 20:36 有更新）。两条 RUNNING，同步 ok。
+- 10-15 21:05 UTC：RUN-0051 eval_base_warmup_n4000_s1 被拒（全词表合并教师强制 0.963；(b′) 下过）。种子 1 组完成（20:57 UTC，12.55 小时），6 个运行照现行规则 0 个有读数、照 (b′) 6 个都过；N34 更新。07 认领 small_s2，在 e3b_c3_n1000_s2。
