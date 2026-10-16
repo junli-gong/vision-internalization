@@ -1381,3 +1381,4 @@
   - 按 §13a 报负责人定要不要跑秩 128 的变体 → N35，管理员建议 E5 后跑。
   - 表在 `docs/analysis/e3_interference_by_size.md`。像素干扰等 4B 的 E3b（约 10-18）。
 - 10-16 04:45 UTC 心跳：两条 RUNNING；06 在 ttext_base_s0_eval（55 分钟）；07 reeval.sh 完成 2 条（e3b_c3_n1000_s0、c3_warmup_n1000_s0，各约 31 分钟），在第 3 条 eval_base_warmup_n1000_s0；补评 failed.txt 为空。同步 ok。
+- 10-16 05:15 UTC 心跳：两条 RUNNING；06 在 ttext_base_s0_eval（1.4 小时，日志 05:14 有更新）；07 reeval.sh 完成 3 条，在第 4 条 eval_e3b_n1000_s0；补评无失败。同步 ok。
