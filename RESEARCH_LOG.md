@@ -1360,3 +1360,4 @@
 - 10-16 02:45 UTC 心跳：两条 RUNNING；06 在 ttext_c3_s2_eval（3.7 小时，日志 02:42 有更新）；07 主驱动在 base_warmup_n1000_s2（90 分钟），暂停文件已在，等这段跑完；wt0051 还在 07d677df（等暂停后切）。同步 ok。
 - 10-16 03:15 UTC：06 的 RUN-0052 ttext_c3_s2_eval 完成（rc=0，3.98 小时），接 ttext_c3_s2_debiased；4B 的 T 文本只差去偏、free、对调三小步（约 45 分钟）。07 主驱动已暂停（base_warmup_n1000_s2 训完后停在闸口），wt0051 已切到 f703d7db；a100-69 接下来在节点上跑测试、再起 reeval.sh。两条 RUNNING，同步 ok。
 - 10-16 03:30 UTC：补充 1 第 4 步在 07 上的测试失败（1 failed、4 errors，59 passed）：我写的命令漏了 HF 的三个环境变量，测试去连 huggingface.co。a100-69 停下等指示，主驱动保持暂停。已批准带上 HF 环境重跑，任务书已更正，lessons 加一条。
+- 10-16 03:31 UTC：补充 1 第 4 步带 HF 环境重跑，64 passed（345 s）；~/.cache/huggingface 没有新增或改动。03:31 起 reeval.sh（作业步 157297.87）：名单补评 14 个、只核对 2 个，与 failed.txt、done.txt 一致；主驱动（157297.84）保持暂停。
