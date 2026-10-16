@@ -463,6 +463,12 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 | base_warmup n4000 s2 | 20:43:56Z | e5-v2 | True | False | done | False | None | 0.0 | None | 40 |
 | e3b n4000 s2 | 23:07:20Z | e5-v2 | True | True | done | **True** | None | −0.01386 | None | 36 |
 
+- 23:30:33Z `eval_e3b_n4000_s2 完成`。
+- **组 small_s2 23:30:33Z 跑完**：从 10-15 20:57:35Z 认领起 95,578 s（26.55 h），其中含主驱动暂停的 03:01:20Z – 10:51:46Z（28,226 s，7.84 h；这段时间 GPU 跑的是补评脚本）。
+  - 8 个训练运行（e3b_c3、c3_warmup、base_warmup、e3b × 1K、4K）全部完成。8 个评测都完成：e3b_c3 n1000、c3_warmup n1000 暂停前被 v1 拒绝，在补评里做完；其余 6 个在恢复后由主驱动在 e5-v2 下做完，没有被拒。
+- 驱动同一时刻认领组 `mid_s0`；23:35:33Z 心跳 `running e3b_c3_n16000_s0`。
+- `failed.txt` 仍是 14 行。
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
