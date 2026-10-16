@@ -1,0 +1,132 @@
+experiment: E5
+framework: src/e5（DEV-0037：训练后系统的评测）
+system: trained
+task: imagery
+task_letter: e
+subset: eval
+data:
+  generator: src.synth.generate
+  split: test
+  n_per_bin: 100
+  n_samples: 400
+  sample_ids_sha256: f94cb7b097c8d72bf515e1fb30a935823bc62995ab5d2cabea9816806cba27fe
+  limit: null
+  index_rule: 序号 0..B·n−1，档 = 序号 mod B（src/e5/protocol.py；与零样本相同）
+  task_generator_version: 2
+  synth_generator_version: 5
+n_resamples: 1000
+tiny: false
+dtype: bf16
+headline_scope: 全部样本
+gate:
+  rule: D59-4：配对 bootstrap 95% CI，判定条件同时胜过 copy_flat、gt_affine_upper、copy_convex
+checkpoint:
+  manifest_sha256: 7235b4fe52811f294e0904eef96986d402d7c5280f907e1681ebf8180e690ed1
+  train_identity_sha256: 35e646ef30d75940874fc7a32a5961194da9e1b0d29c33fd8af7618a5da4a86b
+  start:
+    kind: base_warmup
+    manifest_sha256: f7367f7da15e1b80746e3a3732cc58e7c689de8cbb4dacb38b0c76ea65a9b7bc
+  lora:
+    lora_alpha: 64.0
+    lora_dropout: 0.05
+    n_parameters: 33638400
+    n_targets: 186
+    n_tensors: 372
+    r: 32
+    targets_sha256: d993d0cbcc93630509dd4c28bee72f41f9cea5a455c5fae42b831780bf8c061c
+  build_spec:
+    family_kw: {}
+    image_policy: pixel_budget:300
+    key: qwen3.5-2b
+    tiny: false
+  data:
+    generator: src.synth.generate
+    split: train
+    n_train: 4000
+    tasks:
+    - rotation3d
+    - viewpoint
+    - occlusion
+    - physics
+    - imagery
+    per_task: 800
+    n_examples: 4000
+    data_seed: 2
+    seed_stride: 4294967296
+    items_sha256: 973af20be3eafe892050bfc3e8342d3f2fcd03acff902027b3b0d189149da163
+    index_rule: 序号 = 数据种子 × seed_stride + j，档 = j mod 档数（src/e5/train_data.py）
+    bins_per_task:
+      rotation3d: 4
+      viewpoint: 4
+      occlusion: 3
+      physics: 4
+      imagery: 4
+  seed: 2
+  selection:
+    rule: mean_headline_v1
+    split: val
+    selected_step: 200
+    selected_score: 0.003125
+    steps: 1000
+    val_every: 200
+    n_per_task: 64
+    decode:
+      mode: structured
+      rule: 结构强制（D83，DEV-0041）：第 r 行的格子位置只允许第 r 行的值 token，行末只允许行分隔，最后一个位置只允许停止 token；长度恒为
+        n(n + 1) + 1；只强制网格的形状，不注入任务知识。经 generate_batch(allowed_token_ids = 任务的允许集合,
+        logits_processor = [StructuredGridProcessor]) 实现（src/grid/structured_decode.py）
+      basis: D83-3（E5 预注册 §8a 第 5 项）：E5 的全部网格任务（二值 c、d、e 与 33 个符号的起伏 a、b）在 N = 0、val
+        选择与 test 评测里都以结构强制解码为正式口径；网格形状固定，强制结构不注入任务知识
+decoding:
+  path: generate_batch
+  allowed_ids:
+  - 248046
+  - 248077
+  - 248078
+  - 248143
+  value_ids:
+  - 248077
+  - 248078
+  format: binary
+  max_new_tokens: 1057
+  stop_ids:
+  - 248046
+  enable_thinking: false
+  greedy: true
+  grid_size: 32
+  mode: structured
+  logits_processor: StructuredGridProcessor
+  structure:
+    n: 32
+    length: 1057
+    row_id: 248143
+    stop_id: 248046
+    value_ids:
+    - 248077
+    - 248078
+    value_ids_per_row: false
+    rule: 结构强制（D83，DEV-0041）：第 r 行的格子位置只允许第 r 行的值 token，行末只允许行分隔，最后一个位置只允许停止 token；长度恒为
+      n(n + 1) + 1；只强制网格的形状，不注入任务知识。经 generate_batch(allowed_token_ids = 任务的允许集合,
+      logits_processor = [StructuredGridProcessor]) 实现（src/grid/structured_decode.py）
+  basis: D83-3（E5 预注册 §8a 第 5 项）：E5 的全部网格任务（二值 c、d、e 与 33 个符号的起伏 a、b）在 N = 0、val 选择与
+    test 评测里都以结构强制解码为正式口径；网格形状固定，强制结构不注入任务知识
+batching:
+  batch_size: 64
+  order: 样本顺序，连续成批，左填充（适配器）
+prompt:
+  template: '{instruction} {ending}'
+  endings:
+    binary: Output the {n}x{n} mask grid.
+    relief: Output the {n}x{n} depth grid.
+  endings_from:
+    binary: tasks.refseg.grid_template
+    relief: tasks.depth.grid_instruction
+  order: instruction_first
+config:
+  path: configs/e5_train.json
+  sha256: e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3
+  version: e5-train-v3
+  e3b_config:
+    path: configs/e3b_train.json
+    sha256: b265cd87b2f141a37d8aea4d62b667efe084709d737220903938feaf7811c375
+    version: e3b-train-v3
