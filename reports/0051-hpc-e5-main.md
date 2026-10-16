@@ -300,6 +300,51 @@
 - 截至 10-16 01:22Z：`failed.txt` 共 14 行。
 - 管理员 10-14 的答复：判据交用户与负责人定（N34），队列不调整，照原样继续、继续记录，被拒的检查点留着以后统一补评。
 
+## addendum-1（判据 e5-v2，D96、D97；任务书 `prompts/server_hpc/0051-addendum-1.md`，f4d4f53b）
+
+### 暂停
+
+- squeue 10-16 02:37:32Z：157296、157297 都是 RUNNING。
+- 02:37:32Z 写 `$VI/logs/train.pause.hpcgpu07`，内容 `RUN-0051-addendum-1: switch to criteria e5-v2 and re-eval (D96)`。
+- 主驱动 03:01:20Z 进入 paused：停在 `base_warmup_n1000_s2 完成`（检查点 131,091 KB）之后，它的评测 `eval_base_warmup_n1000_s2` 还没跑。
+- 停住时：`failed.txt` 14 行，`done.txt` 30 行。
+- `$VI/logs/train.pause.hpcgpu06` 也存在：写于 10-14 13:21:32Z，内容 `0052-hpc-06-4b.md (a)`。它是 RUN-0052 段 a 的评测驱动按 `eval_lib.sh` 写的（`EV_PAUSE=$LOGS/train.pause.$NODE`）；本任务没碰它。
+
+### 切换 wt0051
+
+- 切换前 HEAD `07d677df0f0cd79c5f04e58b67e557e2ea18d6c1`，status 空。07 的 GPU 上没有计算进程。
+- fetch rc=0；`checkout --detach f703d7dbb25817d097a574ebb0e61cd3cbc91f57` rc=0；切换后 HEAD `f703d7dbb25817d097a574ebb0e61cd3cbc91f57`，status 空；`experiments/` 只有 P0。
+- sha256（切换后）：
+
+| 文件 | sha256 | 与任务书 |
+|---|---|---|
+| `prompts/server_hpc/0051-hpc-e5-main/reeval.sh` | `7593ec6853ea5909a413877050827f292ebb5db6828cb6788a7977a83aa1d8ba` | 相同 |
+| `src/e5/trained_eval.py` | `25a0596bb59f2e298339fdb76a249317d4a00dba15e688cc80eb81bdf5fdb2fe` | 相同 |
+| `scripts/eval_e5_trained.py` | `90dcb73889cbec320d5c79770cc2b892e46a1f26f0d411fc4e4f74fb5a7b25a7` | 相同 |
+| `prompts/server_hpc/0051-hpc-e5-main/queue.sh` | `8f33ad28c0f7b95757c0a2555b96f3c01f4c4d840824f0a2b45e39cb9a5ab769` | 相同，切换前也是这个值 |
+| `scripts/server/train_queue.sh` | `fcb10f47c2fb6cf068b29f849230c82611bbcc018eb550116867b17337e0dbaa` | 相同，切换前也是这个值 |
+
+### 测试（第 4 步，按任务书原命令）
+
+- 07 上经 srun，03:05:21Z – 03:22:21Z（995.30 s）。`pytest_rc=1`。之后删了 `$VI/tmp/pt_0051a1`；wt0051 status 仍为空；前后 squeue 都是两条 RUNNING。
+- 结果原文（尾部）：
+
+```
+FAILED tests/test_e5_merge_check_e5v2.py::test_check_only_cli_fail_exit1 - OS...
+ERROR tests/test_e5_merge_check_e5v2.py::test_metric_level_exact_and_lora_in_path
+ERROR tests/test_e5_merge_check_e5v2.py::test_metric_level_error_does_not_affect_pass
+ERROR tests/test_e5_merge_check_e5v2.py::test_check_only_cli - OSError: We co...
+ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f13
+1 failed, 59 passed, 4 errors in 995.30s (0:16:35)
+```
+
+- 5 条都是 `OSError: We couldn't connect to 'https://huggingface.co' to load the files, and couldn't find them in the cached files.`，之前是对 `https://huggingface.co/OpenGVLab/InternVL3_5-2B-HF/resolve/3f301ffcf3dcbb47893afae6650ea3e78d96fb6d/config.json` 的 HEAD 请求超时重试 5 次。
+- 相关事实：
+  - 任务书第 4 步的命令只设了 `PATH`，没有设 `HF_HOME`、`HF_HUB_CACHE`、`HF_HUB_OFFLINE`。
+  - `$VI/hf/hub/models--OpenGVLab--InternVL3_5-2B-HF/snapshots/3f301ffcf3dcbb47893afae6650ea3e78d96fb6d/config.json` 存在。
+  - 本集群上以前的测试与驱动脚本都 export 了 `HF_HOME=$VI/hf HF_HUB_CACHE=$VI/hf/hub HF_HUB_OFFLINE=1`（如 `driver_0044.sh` 第 22–24 行）；`reeval.sh` 第 37 行、`queue.sh` 第 40 行也自己 export 这三个。
+- 按任务书：测试不过就停，暂停文件留着，主驱动保持暂停。已把输出发给管理员（10-16 03:2xZ），等指示。没有重跑，也没有启动 `reeval.sh`。
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
