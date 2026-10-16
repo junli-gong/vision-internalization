@@ -1,0 +1,2918 @@
+{
+ "purpose": "DEV-0046 §4.1：RUN-0051（hpcgpu07）到 2026-10-15 23:00 UTC 的全部 E5 训练后合并核对文件（判据 v1）的 checks 一节、路径与文件里记录的判定；测试拿它复现 v1 的判定、验证 e5-v2（D96-1）全部通过，不依赖 experiments 目录",
+ "source_commit": "4bd7f13b",
+ "extraction": "checks 原样，只去掉逐条列举的 disagreements、divergent_rows（文件里至多 500 条）与 first_divergence.histogram：两版判据都只读汇总量（agreement、exact_rows、token_agreement、n_disagreements、n_divergent_rows、n_divergence_without_gap、gap 的 n / median / max）；source_sha256 是原文件的 sha256",
+ "n_files": 15,
+ "files": [
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/base_warmup/qwen3.5-2b/n1000/seed0/merge_check.json",
+   "source_sha256": "65c38631de1d9db4de6a40dd1042bfa6beeed8598ebee81028f2f2ae95bdbaff",
+   "written_utc": "2026-10-14T21:18:40+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": false,
+   "failures": {
+    "restricted": [
+     "restricted/thinking_off：关思考时受限解码与 generate_batch 的 exact_rows 0.9000 < 0.95"
+    ],
+    "merge": [
+     "merge/thinking_off：教师强制的 argmax_agreement 0.97025 < 0.98"
+    ]
+   },
+   "key": {
+    "e5_manifest_sha256": "a43076b8cb6d03e943b7ffa79bd4a0cbca4bab52658da33fc5ded17beed78210",
+    "start_manifest_sha256": "58ba382e9cd0b5bf1c4f3d5285cf205c96173100c1950ff2a83224e612c67dcc",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 103.65883146971464,
+    "merged_s": 126.046068508178,
+    "total_s": 229.70642948895693
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 0.625,
+        "token_agreement": 0.8284058656575213,
+        "n_agree_tokens": 35025,
+        "n_tokens": 42280,
+        "n_divergent_rows": 15,
+        "first_divergence": {
+         "n": 15,
+         "min": 347,
+         "p25": 445.0,
+         "median": 513.0,
+         "p75": 724.5,
+         "max": 908
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 15,
+         "median": 0.09741449356079102,
+         "max": 0.35617876052856445,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 15,
+         "median": 0.09741449356079102,
+         "max": 0.22907352447509766,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 15
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.9702459791863766,
+        "n_disagreements": 1258,
+        "gap": {
+         "n": 1258,
+         "median": 0.12103652954101562,
+         "max": 0.5681304931640625,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 1258,
+         "median": 0.10700035095214844,
+         "max": 0.4920520782470703,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 500,
+        "max_abs_logit": 1.2827465534210205,
+        "max_abs_hidden": 3.4921875
+       }
+      }
+     },
+     "pass": false
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 0.9,
+        "token_agreement": 0.944678334910123,
+        "n_agree_tokens": 39941,
+        "n_tokens": 42280,
+        "n_divergent_rows": 4,
+        "first_divergence": {
+         "n": 4,
+         "min": 347,
+         "p25": 373.25,
+         "median": 413.5,
+         "p75": 512.5,
+         "max": 715
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 4,
+         "median": 0.03591632843017578,
+         "max": 0.13982391357421875,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 4,
+         "median": 0.03591632843017578,
+         "max": 0.13982391357421875,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 4
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 0.9994087038789026,
+        "n_disagreements": 25,
+        "gap": {
+         "n": 25,
+         "median": 0.06104850769042969,
+         "max": 0.5118303298950195,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 25,
+         "median": 0.06104850769042969,
+         "max": 0.5118303298950195,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 25
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 0.9992904446546831,
+         "n_disagreements": 30,
+         "gap": {
+          "n": 30,
+          "median": 0.14770090579986572,
+          "max": 0.40164923667907715,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 30,
+          "median": 0.14770090579986572,
+          "max": 0.40164923667907715,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "n_listed": 30,
+         "max_abs_logit": 1.0646238327026367,
+         "max_abs_hidden": 3.4921875
+        }
+       }
+      }
+     },
+     "pass": false
+    }
+   }
+  },
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/base_warmup/qwen3.5-2b/n1000/seed1/merge_check.json",
+   "source_sha256": "5a95b0ace53f9b29bce8fe3fde0e7247a1e918631641b59257e926b2ee3d1e81",
+   "written_utc": "2026-10-15T14:37:51+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": false,
+   "failures": {
+    "restricted": [
+     "restricted/thinking_off：关思考时受限解码与 generate_batch 的 exact_rows 0.8500 < 0.95"
+    ],
+    "merge": [
+     "merge/thinking_off：教师强制的 argmax_agreement 0.96088 < 0.98"
+    ]
+   },
+   "key": {
+    "e5_manifest_sha256": "c79a75d5930793d0e8927031add4db83675943794890d43ed72198767db97123",
+    "start_manifest_sha256": "e13b53a97ceec20637d00e645ac498556d6918861935819d18adffe7f381356c",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 102.63958131894469,
+    "merged_s": 124.78066216781735,
+    "total_s": 227.42181426286697
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 0.5,
+        "token_agreement": 0.7905392620624409,
+        "n_agree_tokens": 33424,
+        "n_tokens": 42280,
+        "n_divergent_rows": 20,
+        "first_divergence": {
+         "n": 20,
+         "min": 380,
+         "p25": 508.25,
+         "median": 577.5,
+         "p75": 714.25,
+         "max": 935
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 20,
+         "median": 0.12589877843856812,
+         "max": 0.45391368865966797,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 20,
+         "median": 0.12589877843856812,
+         "max": 0.45391368865966797,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 20
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.960879848628193,
+        "n_disagreements": 1654,
+        "gap": {
+         "n": 1654,
+         "median": 0.11963367462158203,
+         "max": 0.9308290481567383,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 1654,
+         "median": 0.10535526275634766,
+         "max": 0.9308290481567383,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 500,
+        "max_abs_logit": 1.6838140487670898,
+        "max_abs_hidden": 2.75
+       }
+      }
+     },
+     "pass": false
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 0.85,
+        "token_agreement": 0.9266083254493851,
+        "n_agree_tokens": 39177,
+        "n_tokens": 42280,
+        "n_divergent_rows": 6,
+        "first_divergence": {
+         "n": 6,
+         "min": 411,
+         "p25": 447.75,
+         "median": 495.0,
+         "p75": 593.25,
+         "max": 780
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 6,
+         "median": 0.09855484962463379,
+         "max": 0.3144035339355469,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 6,
+         "median": 0.09855484962463379,
+         "max": 0.3144035339355469,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 6
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 0.9993377483443708,
+        "n_disagreements": 28,
+        "gap": {
+         "n": 28,
+         "median": 0.0826418399810791,
+         "max": 0.6191942691802979,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 28,
+         "median": 0.0826418399810791,
+         "max": 0.6191942691802979,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 28
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 0.9991012298959319,
+         "n_disagreements": 38,
+         "gap": {
+          "n": 38,
+          "median": 0.17282450199127197,
+          "max": 0.7418832778930664,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 38,
+          "median": 0.17282450199127197,
+          "max": 0.7418832778930664,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "n_listed": 38,
+         "max_abs_logit": 0.9795091152191162,
+         "max_abs_hidden": 2.75
+        }
+       }
+      }
+     },
+     "pass": false
+    }
+   }
+  },
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/base_warmup/qwen3.5-2b/n4000/seed0/merge_check.json",
+   "source_sha256": "dcc0e9b7ebee1abf6c9fdf1a43ef6a3bdbaeaf59366874babad7f84e73d26f11",
+   "written_utc": "2026-10-15T05:53:18+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": false,
+   "failures": {
+    "restricted": [],
+    "merge": [
+     "merge/thinking_off：教师强制的 argmax_agreement 0.95714 < 0.98"
+    ]
+   },
+   "key": {
+    "e5_manifest_sha256": "2d596439bdb775a53d08465c299eb65d294ad57e5e050dd50fdc508d2a70f174",
+    "start_manifest_sha256": "58ba382e9cd0b5bf1c4f3d5285cf205c96173100c1950ff2a83224e612c67dcc",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 109.2614115178585,
+    "merged_s": 129.47322765737772,
+    "total_s": 238.73564265295863
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 1.0,
+        "token_agreement": 1.0,
+        "n_agree_tokens": 42280,
+        "n_tokens": 42280,
+        "n_divergent_rows": 0,
+        "first_divergence": {
+         "n": 0,
+         "min": null,
+         "p25": null,
+         "median": null,
+         "p75": null,
+         "max": null
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 0,
+         "median": null,
+         "max": null,
+         "frac_lt_threshold": null,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 0,
+         "median": null,
+         "max": null,
+         "frac_lt_threshold": null,
+         "threshold": 2.0
+        },
+        "n_listed": 0
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.9571428571428572,
+        "n_disagreements": 1812,
+        "gap": {
+         "n": 1812,
+         "median": 0.060991764068603516,
+         "max": 0.6219244003295898,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 1812,
+         "median": 0.055768489837646484,
+         "max": 0.6219244003295898,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 500,
+        "max_abs_logit": 0.8925868272781372,
+        "max_abs_hidden": 1.125
+       }
+      }
+     },
+     "pass": false
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 1.0,
+        "token_agreement": 1.0,
+        "n_agree_tokens": 42280,
+        "n_tokens": 42280,
+        "n_divergent_rows": 0,
+        "first_divergence": {
+         "n": 0,
+         "min": null,
+         "p25": null,
+         "median": null,
+         "p75": null,
+         "max": null
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 0,
+         "median": null,
+         "max": null,
+         "frac_lt_threshold": null,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 0,
+         "median": null,
+         "max": null,
+         "frac_lt_threshold": null,
+         "threshold": 2.0
+        },
+        "n_listed": 0
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 1.0,
+        "n_disagreements": 0,
+        "gap": {
+         "n": 0,
+         "median": null,
+         "max": null,
+         "frac_lt_threshold": null,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 0,
+         "median": null,
+         "max": null,
+         "frac_lt_threshold": null,
+         "threshold": 2.0
+        },
+        "n_listed": 0
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 1.0,
+         "n_disagreements": 0,
+         "gap": {
+          "n": 0,
+          "median": null,
+          "max": null,
+          "frac_lt_threshold": null,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 0,
+          "median": null,
+          "max": null,
+          "frac_lt_threshold": null,
+          "threshold": 2.0
+         },
+         "n_listed": 0,
+         "max_abs_logit": 0.4694631099700928,
+         "max_abs_hidden": 1.125
+        }
+       }
+      }
+     },
+     "pass": true
+    }
+   }
+  },
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/base_warmup/qwen3.5-2b/n4000/seed1/merge_check.json",
+   "source_sha256": "041a9410dfb5bca7e9f3818ce8d92fd4263e4c770cecd15459c62dc5535adbcf",
+   "written_utc": "2026-10-15T20:57:34+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": false,
+   "failures": {
+    "restricted": [],
+    "merge": [
+     "merge/thinking_off：教师强制的 argmax_agreement 0.96329 < 0.98"
+    ]
+   },
+   "key": {
+    "e5_manifest_sha256": "52d7ce42ebc02dcf1f264a1b075a3a4557c450ca10b9cbcfa0c8bbbb983432fc",
+    "start_manifest_sha256": "e13b53a97ceec20637d00e645ac498556d6918861935819d18adffe7f381356c",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 102.23663449659944,
+    "merged_s": 124.9760456122458,
+    "total_s": 227.2140044607222
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 0.925,
+        "token_agreement": 0.9736518448438978,
+        "n_agree_tokens": 41166,
+        "n_tokens": 42280,
+        "n_divergent_rows": 3,
+        "first_divergence": {
+         "n": 3,
+         "min": 508,
+         "p25": 625.0,
+         "median": 742.0,
+         "p75": 774.5,
+         "max": 807
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 3,
+         "median": 0.02187490463256836,
+         "max": 0.028356075286865234,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 3,
+         "median": 0.02187490463256836,
+         "max": 0.028356075286865234,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 3
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.9632923368022706,
+        "n_disagreements": 1552,
+        "gap": {
+         "n": 1552,
+         "median": 0.05711650848388672,
+         "max": 0.45780277252197266,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 1552,
+         "median": 0.0520319938659668,
+         "max": 0.45780277252197266,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 500,
+        "max_abs_logit": 1.012102723121643,
+        "max_abs_hidden": 2.875
+       }
+      }
+     },
+     "pass": false
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 1.0,
+        "token_agreement": 1.0,
+        "n_agree_tokens": 42280,
+        "n_tokens": 42280,
+        "n_divergent_rows": 0,
+        "first_divergence": {
+         "n": 0,
+         "min": null,
+         "p25": null,
+         "median": null,
+         "p75": null,
+         "max": null
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 0,
+         "median": null,
+         "max": null,
+         "frac_lt_threshold": null,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 0,
+         "median": null,
+         "max": null,
+         "frac_lt_threshold": null,
+         "threshold": 2.0
+        },
+        "n_listed": 0
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 0.9999290444654683,
+        "n_disagreements": 3,
+        "gap": {
+         "n": 3,
+         "median": 0.0017898082733154297,
+         "max": 0.01304483413696289,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 3,
+         "median": 0.0017898082733154297,
+         "max": 0.01304483413696289,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 3
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 0.9998344370860928,
+         "n_disagreements": 7,
+         "gap": {
+          "n": 7,
+          "median": 0.028356552124023438,
+          "max": 0.05217695236206055,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 7,
+          "median": 0.028356552124023438,
+          "max": 0.05217695236206055,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "n_listed": 7,
+         "max_abs_logit": 0.6712363958358765,
+         "max_abs_hidden": 2.875
+        }
+       }
+      }
+     },
+     "pass": true
+    }
+   }
+  },
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/c3_warmup/qwen3.5-2b/n1000/seed0/merge_check.json",
+   "source_sha256": "c1f302c7cf15c6ffed91d9bece91e4d239fe79db360cca1bab95d927ced94cbf",
+   "written_utc": "2026-10-14T19:19:29+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": false,
+   "failures": {
+    "restricted": [
+     "restricted/thinking_off：关思考时受限解码与 generate_batch 的 exact_rows 0.8250 < 0.95"
+    ],
+    "merge": []
+   },
+   "key": {
+    "e5_manifest_sha256": "ef3341f513e53eb6fe45fc2126195016333a08ce22f1a7f3dd240d0dacfe35d1",
+    "start_manifest_sha256": "dca6a89d9a3e920ce75000cda5fecfd06ec95abbf187f1e0057306fc8ba538a5",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 102.45746510103345,
+    "merged_s": 125.00009240210056,
+    "total_s": 227.45903131365776
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 0.45,
+        "token_agreement": 0.7526253547776727,
+        "n_agree_tokens": 31821,
+        "n_tokens": 42280,
+        "n_divergent_rows": 22,
+        "first_divergence": {
+         "n": 22,
+         "min": 240,
+         "p25": 449.5,
+         "median": 578.5,
+         "p75": 725.25,
+         "max": 873
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 22,
+         "median": 0.17260777950286865,
+         "max": 0.48921966552734375,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 22,
+         "median": 0.17260777950286865,
+         "max": 0.48921966552734375,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 22
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.9827341532639546,
+        "n_disagreements": 730,
+        "gap": {
+         "n": 730,
+         "median": 0.11737394332885742,
+         "max": 1.1661691665649414,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 730,
+         "median": 0.1067342758178711,
+         "max": 0.5525970458984375,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 500,
+        "max_abs_logit": 1.5775734186172485,
+        "max_abs_hidden": 4.5
+       }
+      }
+     },
+     "pass": true
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 0.825,
+        "token_agreement": 0.9183065279091769,
+        "n_agree_tokens": 38826,
+        "n_tokens": 42280,
+        "n_divergent_rows": 7,
+        "first_divergence": {
+         "n": 7,
+         "min": 406,
+         "p25": 411.5,
+         "median": 478.0,
+         "p75": 666.0,
+         "max": 906
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 7,
+         "median": 0.08463621139526367,
+         "max": 0.5071659088134766,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 7,
+         "median": 0.08463621139526367,
+         "max": 0.5071659088134766,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 7
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 0.9993850520340587,
+        "n_disagreements": 26,
+        "gap": {
+         "n": 26,
+         "median": 0.05991625785827637,
+         "max": 0.38846302032470703,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 26,
+         "median": 0.05991625785827637,
+         "max": 0.38846302032470703,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 26
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 0.9992431409649952,
+         "n_disagreements": 32,
+         "gap": {
+          "n": 32,
+          "median": 0.18762171268463135,
+          "max": 0.48922276496887207,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 32,
+          "median": 0.18762171268463135,
+          "max": 0.48922276496887207,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "n_listed": 32,
+         "max_abs_logit": 1.079874038696289,
+         "max_abs_hidden": 4.5
+        }
+       }
+      }
+     },
+     "pass": false
+    }
+   }
+  },
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/c3_warmup/qwen3.5-2b/n1000/seed1/merge_check.json",
+   "source_sha256": "d8b1221ed315b2dce52205552b3dfd7c31481b5102e8b94afda8abc2568e9d5d",
+   "written_utc": "2026-10-15T12:31:35+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": false,
+   "failures": {
+    "restricted": [],
+    "merge": [
+     "merge/thinking_off：教师强制的 argmax_agreement 0.97214 < 0.98"
+    ]
+   },
+   "key": {
+    "e5_manifest_sha256": "a7a2eac74cfbd2c242ae2205e4c34902467ae0f52a63e290b698eccbad14382b",
+    "start_manifest_sha256": "e547056affbd7f0bc2d84985e0b71a59c41054418adbce4f142e9af19a7e03a4",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 104.27368457242846,
+    "merged_s": 126.78304751589894,
+    "total_s": 231.05827533453703
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 0.45,
+        "token_agreement": 0.7311731315042573,
+        "n_agree_tokens": 30914,
+        "n_tokens": 42280,
+        "n_divergent_rows": 22,
+        "first_divergence": {
+         "n": 22,
+         "min": 215,
+         "p25": 378.5,
+         "median": 493.5,
+         "p75": 684.25,
+         "max": 907
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 22,
+         "median": 0.1435527801513672,
+         "max": 0.3860454559326172,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 22,
+         "median": 0.1435527801513672,
+         "max": 0.3860454559326172,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 22
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.9721381267738883,
+        "n_disagreements": 1178,
+        "gap": {
+         "n": 1178,
+         "median": 0.08152580261230469,
+         "max": 0.8449697494506836,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 1178,
+         "median": 0.0776057243347168,
+         "max": 0.7453136444091797,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 500,
+        "max_abs_logit": 1.5529670715332031,
+        "max_abs_hidden": 1.859375
+       }
+      }
+     },
+     "pass": false
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 0.95,
+        "token_agreement": 0.9783349101229896,
+        "n_agree_tokens": 41364,
+        "n_tokens": 42280,
+        "n_divergent_rows": 2,
+        "first_divergence": {
+         "n": 2,
+         "min": 517,
+         "p25": 558.0,
+         "median": 599.0,
+         "p75": 640.0,
+         "max": 681
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 2,
+         "median": 0.24045610427856445,
+         "max": 0.43764209747314453,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 2,
+         "median": 0.24045610427856445,
+         "max": 0.43764209747314453,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 2
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 0.9991958372753075,
+        "n_disagreements": 34,
+        "gap": {
+         "n": 34,
+         "median": 0.05074310302734375,
+         "max": 0.6876344680786133,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 34,
+         "median": 0.05074310302734375,
+         "max": 0.6876344680786133,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 34
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 0.9993614001892147,
+         "n_disagreements": 27,
+         "gap": {
+          "n": 27,
+          "median": 0.13358044624328613,
+          "max": 0.9653134346008301,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 27,
+          "median": 0.13358044624328613,
+          "max": 0.649916410446167,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "n_listed": 27,
+         "max_abs_logit": 0.8851842880249023,
+         "max_abs_hidden": 1.859375
+        }
+       }
+      }
+     },
+     "pass": true
+    }
+   }
+  },
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/c3_warmup/qwen3.5-2b/n4000/seed0/merge_check.json",
+   "source_sha256": "d72cb49050039e11ed3ad01f5b116a1410495191b6973c0e7080c9447494d145",
+   "written_utc": "2026-10-15T03:37:29+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": false,
+   "failures": {
+    "restricted": [],
+    "merge": [
+     "merge/thinking_off：教师强制的 argmax_agreement 0.96585 < 0.98"
+    ]
+   },
+   "key": {
+    "e5_manifest_sha256": "210b4988a64f78d849ba5379dd6c8bfe99d96ef1feabe3a61c391469641d066d",
+    "start_manifest_sha256": "dca6a89d9a3e920ce75000cda5fecfd06ec95abbf187f1e0057306fc8ba538a5",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 103.6257412172854,
+    "merged_s": 125.81755624338984,
+    "total_s": 229.44479606673121
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 0.8,
+        "token_agreement": 0.9162251655629139,
+        "n_agree_tokens": 38738,
+        "n_tokens": 42280,
+        "n_divergent_rows": 8,
+        "first_divergence": {
+         "n": 8,
+         "min": 515,
+         "p25": 533.5,
+         "median": 548.0,
+         "p75": 701.25,
+         "max": 798
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 8,
+         "median": 0.023909926414489746,
+         "max": 0.10291099548339844,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 8,
+         "median": 0.023909926414489746,
+         "max": 0.10291099548339844,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 8
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.9658467360454115,
+        "n_disagreements": 1444,
+        "gap": {
+         "n": 1444,
+         "median": 0.06599140167236328,
+         "max": 0.7240219116210938,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 1444,
+         "median": 0.06241464614868164,
+         "max": 0.45026493072509766,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 500,
+        "max_abs_logit": 0.9210848808288574,
+        "max_abs_hidden": 2.46875
+       }
+      }
+     },
+     "pass": false
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 0.95,
+        "token_agreement": 0.9875118259224219,
+        "n_agree_tokens": 41752,
+        "n_tokens": 42280,
+        "n_divergent_rows": 2,
+        "first_divergence": {
+         "n": 2,
+         "min": 777,
+         "p25": 785.0,
+         "median": 793.0,
+         "p75": 801.0,
+         "max": 809
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 2,
+         "median": 0.030698418617248535,
+         "max": 0.04500293731689453,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 2,
+         "median": 0.030698418617248535,
+         "max": 0.04500293731689453,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 2
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 0.9998817407757805,
+        "n_disagreements": 5,
+        "gap": {
+         "n": 5,
+         "median": 0.019702434539794922,
+         "max": 0.06310367584228516,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 5,
+         "median": 0.019702434539794922,
+         "max": 0.06310367584228516,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 5
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 0.9998107852412488,
+         "n_disagreements": 8,
+         "gap": {
+          "n": 8,
+          "median": 0.029361486434936523,
+          "max": 0.10290718078613281,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 8,
+          "median": 0.029361486434936523,
+          "max": 0.10290718078613281,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "n_listed": 8,
+         "max_abs_logit": 0.5933394432067871,
+         "max_abs_hidden": 2.46875
+        }
+       }
+      }
+     },
+     "pass": true
+    }
+   }
+  },
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/c3_warmup/qwen3.5-2b/n4000/seed1/merge_check.json",
+   "source_sha256": "3ca1d6180a8aa091224126003e796bf659f0e13d5503cf6277ddde1a46b2675f",
+   "written_utc": "2026-10-15T18:50:24+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": false,
+   "failures": {
+    "restricted": [],
+    "merge": [
+     "merge/thinking_off：教师强制的 argmax_agreement 0.97992 < 0.98"
+    ]
+   },
+   "key": {
+    "e5_manifest_sha256": "7681747aceca195abf84054829bbbf1a544c9d4ece4f2cce7175769de2affa61",
+    "start_manifest_sha256": "e547056affbd7f0bc2d84985e0b71a59c41054418adbce4f142e9af19a7e03a4",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 102.5099922940135,
+    "merged_s": 124.91728163510561,
+    "total_s": 227.42871184647083
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 0.875,
+        "token_agreement": 0.9684957426679282,
+        "n_agree_tokens": 40948,
+        "n_tokens": 42280,
+        "n_divergent_rows": 5,
+        "first_divergence": {
+         "n": 5,
+         "min": 307,
+         "p25": 830.0,
+         "median": 832.0,
+         "p75": 976.0,
+         "max": 1008
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 5,
+         "median": 0.04653358459472656,
+         "max": 0.07021474838256836,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 5,
+         "median": 0.04653358459472656,
+         "max": 0.07021474838256836,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 5
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.9799195837275307,
+        "n_disagreements": 849,
+        "gap": {
+         "n": 849,
+         "median": 0.052639007568359375,
+         "max": 0.5235719680786133,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 849,
+         "median": 0.05111980438232422,
+         "max": 0.4134788513183594,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 500,
+        "max_abs_logit": 0.7012065649032593,
+        "max_abs_hidden": 1.015625
+       }
+      }
+     },
+     "pass": false
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 0.95,
+        "token_agreement": 0.988883632923368,
+        "n_agree_tokens": 41810,
+        "n_tokens": 42280,
+        "n_divergent_rows": 2,
+        "first_divergence": {
+         "n": 2,
+         "min": 636,
+         "p25": 729.0,
+         "median": 822.0,
+         "p75": 915.0,
+         "max": 1008
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 2,
+         "median": 0.01359713077545166,
+         "max": 0.014918804168701172,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 2,
+         "median": 0.01359713077545166,
+         "max": 0.014918804168701172,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 2
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 0.9998580889309366,
+        "n_disagreements": 6,
+        "gap": {
+         "n": 6,
+         "median": 0.009481668472290039,
+         "max": 0.01973724365234375,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 6,
+         "median": 0.009481668472290039,
+         "max": 0.01973724365234375,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 6
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 0.9997161778618733,
+         "n_disagreements": 12,
+         "gap": {
+          "n": 12,
+          "median": 0.04430580139160156,
+          "max": 0.10407876968383789,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 12,
+          "median": 0.04430580139160156,
+          "max": 0.10407876968383789,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "n_listed": 12,
+         "max_abs_logit": 0.46787452697753906,
+         "max_abs_hidden": 1.015625
+        }
+       }
+      }
+     },
+     "pass": true
+    }
+   }
+  },
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/e3b/qwen3.5-2b/n1000/seed0/merge_check.json",
+   "source_sha256": "1302c4403199b95931c2d8fbfd2f5e5323a69a1ee7ab79aa3a0278fdae5d2314",
+   "written_utc": "2026-10-14T23:20:19+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": false,
+   "failures": {
+    "restricted": [
+     "restricted/thinking_off：关思考时受限解码与 generate_batch 的 exact_rows 0.9000 < 0.95"
+    ],
+    "merge": []
+   },
+   "key": {
+    "e5_manifest_sha256": "c9d40666daeec41276f13ee2f24348dec8c4a3c159f590bf261b774ab3657dd1",
+    "start_manifest_sha256": "acb7f58d1ae3aa0c66ed7ba3c57b03d45131b6a3476b5f87b5211f451ceded30",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 104.71410133689642,
+    "merged_s": 126.70857772231102,
+    "total_s": 231.42411695420742
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 0.6,
+        "token_agreement": 0.8149952696310312,
+        "n_agree_tokens": 34458,
+        "n_tokens": 42280,
+        "n_divergent_rows": 16,
+        "first_divergence": {
+         "n": 16,
+         "min": 179,
+         "p25": 454.75,
+         "median": 598.5,
+         "p75": 681.0,
+         "max": 906
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 16,
+         "median": 0.18198585510253906,
+         "max": 0.6242923736572266,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 16,
+         "median": 0.18198585510253906,
+         "max": 0.6242923736572266,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 16
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.9902081362346263,
+        "n_disagreements": 414,
+        "gap": {
+         "n": 414,
+         "median": 0.11756038665771484,
+         "max": 0.5664997100830078,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 414,
+         "median": 0.10422420501708984,
+         "max": 0.46368980407714844,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 414,
+        "max_abs_logit": 1.292273759841919,
+        "max_abs_hidden": 2.0625
+       }
+      }
+     },
+     "pass": true
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 0.9,
+        "token_agreement": 0.9584910122989593,
+        "n_agree_tokens": 40525,
+        "n_tokens": 42280,
+        "n_divergent_rows": 4,
+        "first_divergence": {
+         "n": 4,
+         "min": 472,
+         "p25": 598.75,
+         "median": 659.5,
+         "p75": 679.0,
+         "max": 682
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 4,
+         "median": 0.06257224082946777,
+         "max": 0.2466602325439453,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 4,
+         "median": 0.06257224082946777,
+         "max": 0.2466602325439453,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 4
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 0.9997398297067172,
+        "n_disagreements": 11,
+        "gap": {
+         "n": 11,
+         "median": 0.06860542297363281,
+         "max": 0.3946065902709961,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 11,
+         "median": 0.06860542297363281,
+         "max": 0.3946065902709961,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 11
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 0.9995979186376537,
+         "n_disagreements": 17,
+         "gap": {
+          "n": 17,
+          "median": 0.18161773681640625,
+          "max": 0.624290943145752,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 17,
+          "median": 0.18161773681640625,
+          "max": 0.624290943145752,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "n_listed": 17,
+         "max_abs_logit": 0.8432865142822266,
+         "max_abs_hidden": 2.0625
+        }
+       }
+      }
+     },
+     "pass": false
+    }
+   }
+  },
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/e3b/qwen3.5-2b/n4000/seed0/merge_check.json",
+   "source_sha256": "c3dc0b3b89d39a83338831f2d68cda6ac1462e3aa2124750cded38e335277daf",
+   "written_utc": "2026-10-15T07:59:09+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": true,
+   "failures": {
+    "restricted": [],
+    "merge": []
+   },
+   "key": {
+    "e5_manifest_sha256": "b8e9f85b8751a8e97839d5ed851ccc1c6a9f50c8eefdac5a9a153355f2b5cbab",
+    "start_manifest_sha256": "acb7f58d1ae3aa0c66ed7ba3c57b03d45131b6a3476b5f87b5211f451ceded30",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 160.03539473935962,
+    "merged_s": 128.130075301975,
+    "total_s": 288.3026518188417
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 0.875,
+        "token_agreement": 0.9490775780510879,
+        "n_agree_tokens": 40127,
+        "n_tokens": 42280,
+        "n_divergent_rows": 5,
+        "first_divergence": {
+         "n": 5,
+         "min": 437,
+         "p25": 542.0,
+         "median": 582.0,
+         "p75": 768.0,
+         "max": 803
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 5,
+         "median": 0.04358673095703125,
+         "max": 0.1303234100341797,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 5,
+         "median": 0.04358673095703125,
+         "max": 0.1303234100341797,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 5
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.9901844843897823,
+        "n_disagreements": 415,
+        "gap": {
+         "n": 415,
+         "median": 0.04151725769042969,
+         "max": 0.17050886154174805,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 415,
+         "median": 0.039678096771240234,
+         "max": 0.17050886154174805,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 415,
+        "max_abs_logit": 0.6172689199447632,
+        "max_abs_hidden": 1.0625
+       }
+      }
+     },
+     "pass": true
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 0.975,
+        "token_agreement": 0.9855960264900663,
+        "n_agree_tokens": 41671,
+        "n_tokens": 42280,
+        "n_divergent_rows": 1,
+        "first_divergence": {
+         "n": 1,
+         "min": 448,
+         "p25": 448.0,
+         "median": 448.0,
+         "p75": 448.0,
+         "max": 448
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 1,
+         "median": 0.0057964324951171875,
+         "max": 0.0057964324951171875,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 1,
+         "median": 0.0057964324951171875,
+         "max": 0.0057964324951171875,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 1
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 0.9998817407757805,
+        "n_disagreements": 5,
+        "gap": {
+         "n": 5,
+         "median": 0.023929595947265625,
+         "max": 0.04540538787841797,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 5,
+         "median": 0.023929595947265625,
+         "max": 0.04540538787841797,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 5
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 0.9998107852412488,
+         "n_disagreements": 8,
+         "gap": {
+          "n": 8,
+          "median": 0.056020259857177734,
+          "max": 0.17025375366210938,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 8,
+          "median": 0.056020259857177734,
+          "max": 0.17025375366210938,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "n_listed": 8,
+         "max_abs_logit": 0.42203521728515625,
+         "max_abs_hidden": 1.0625
+        }
+       }
+      }
+     },
+     "pass": true
+    }
+   }
+  },
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/e3b_c3/qwen3.5-2b/n1000/seed0/merge_check.json",
+   "source_sha256": "6eb5a21b9b66578c86345736e612433fd8fe75591da16e0875c3ddae44309ffb",
+   "written_utc": "2026-10-14T17:05:07+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": false,
+   "failures": {
+    "restricted": [
+     "restricted/thinking_off：关思考时受限解码与 generate_batch 的 exact_rows 0.8250 < 0.95"
+    ],
+    "merge": []
+   },
+   "key": {
+    "e5_manifest_sha256": "b80f19148fa05130951e735ad6348f906a77c839acb74eba1ff81da8d9107503",
+    "start_manifest_sha256": "bf73188b8c88c7607de553d2a0256b8c9cfc1dcd5a8f6852032c95ee1fc70cd1",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 102.85764092952013,
+    "merged_s": 124.91630900278687,
+    "total_s": 227.77547676861286
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 0.475,
+        "token_agreement": 0.7285241248817408,
+        "n_agree_tokens": 30802,
+        "n_tokens": 42280,
+        "n_divergent_rows": 21,
+        "first_divergence": {
+         "n": 21,
+         "min": 283,
+         "p25": 318.0,
+         "median": 446.0,
+         "p75": 650.0,
+         "max": 926
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 21,
+         "median": 0.20007944107055664,
+         "max": 1.1876468658447266,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 21,
+         "median": 0.20007944107055664,
+         "max": 1.1876468658447266,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 21
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.9947492904446547,
+        "n_disagreements": 222,
+        "gap": {
+         "n": 222,
+         "median": 0.14490604400634766,
+         "max": 0.5739727020263672,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 222,
+         "median": 0.1307382583618164,
+         "max": 0.5396490097045898,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 222,
+        "max_abs_logit": 1.1327731609344482,
+        "max_abs_hidden": 2.375
+       }
+      }
+     },
+     "pass": true
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 0.825,
+        "token_agreement": 0.9082071901608325,
+        "n_agree_tokens": 38399,
+        "n_tokens": 42280,
+        "n_divergent_rows": 7,
+        "first_divergence": {
+         "n": 7,
+         "min": 283,
+         "p25": 381.0,
+         "median": 508.0,
+         "p75": 645.0,
+         "max": 675
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 7,
+         "median": 0.12301921844482422,
+         "max": 0.24576807022094727,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 7,
+         "median": 0.12301921844482422,
+         "max": 0.24576807022094727,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 7
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 0.9994560075685903,
+        "n_disagreements": 23,
+        "gap": {
+         "n": 23,
+         "median": 0.08623600006103516,
+         "max": 0.29561710357666016,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 23,
+         "median": 0.08623600006103516,
+         "max": 0.29561710357666016,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 23
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 0.9991958372753075,
+         "n_disagreements": 34,
+         "gap": {
+          "n": 34,
+          "median": 0.19469118118286133,
+          "max": 1.1876487731933594,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 34,
+          "median": 0.19469118118286133,
+          "max": 1.1876487731933594,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "n_listed": 34,
+         "max_abs_logit": 0.9921150207519531,
+         "max_abs_hidden": 2.375
+        }
+       }
+      }
+     },
+     "pass": false
+    }
+   }
+  },
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/e3b_c3/qwen3.5-2b/n1000/seed1/merge_check.json",
+   "source_sha256": "edf7fd6fb9a8ba80c8d67b1a5971c3d08b49f88e32d72921ef38b65199a33fd4",
+   "written_utc": "2026-10-15T10:26:17+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": false,
+   "failures": {
+    "restricted": [
+     "restricted/thinking_off：关思考时受限解码与 generate_batch 的 exact_rows 0.8750 < 0.95"
+    ],
+    "merge": []
+   },
+   "key": {
+    "e5_manifest_sha256": "b553a93bac13260203085f3d5b0504198e16d31f4f921634445136f8fbd3fbba",
+    "start_manifest_sha256": "7c72a5007e461cca1bbb474aaaa72ba701af850587337d5ba02ee5e7ecdbb90d",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 104.90977866947651,
+    "merged_s": 127.37277225404978,
+    "total_s": 232.28397078812122
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 0.625,
+        "token_agreement": 0.8077341532639546,
+        "n_agree_tokens": 34151,
+        "n_tokens": 42280,
+        "n_divergent_rows": 15,
+        "first_divergence": {
+         "n": 15,
+         "min": 154,
+         "p25": 447.5,
+         "median": 477.0,
+         "p75": 594.0,
+         "max": 874
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 15,
+         "median": 0.14868927001953125,
+         "max": 0.5126292705535889,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 15,
+         "median": 0.14868927001953125,
+         "max": 0.5126292705535889,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 15
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.994891201513718,
+        "n_disagreements": 216,
+        "gap": {
+         "n": 216,
+         "median": 0.1569819450378418,
+         "max": 0.7400779724121094,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 216,
+         "median": 0.14397478103637695,
+         "max": 0.7400779724121094,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 216,
+        "max_abs_logit": 1.4719905853271484,
+        "max_abs_hidden": 2.25
+       }
+      }
+     },
+     "pass": true
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 0.875,
+        "token_agreement": 0.9494323557237464,
+        "n_agree_tokens": 40142,
+        "n_tokens": 42280,
+        "n_divergent_rows": 5,
+        "first_divergence": {
+         "n": 5,
+         "min": 471,
+         "p25": 549.0,
+         "median": 550.0,
+         "p75": 705.0,
+         "max": 872
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 5,
+         "median": 0.24201583862304688,
+         "max": 0.34921836853027344,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 5,
+         "median": 0.24201583862304688,
+         "max": 0.34921836853027344,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 5
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 0.9995506149479659,
+        "n_disagreements": 19,
+        "gap": {
+         "n": 19,
+         "median": 0.03322792053222656,
+         "max": 0.3215627670288086,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 19,
+         "median": 0.03322792053222656,
+         "max": 0.3215627670288086,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 19
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 0.9995033112582782,
+         "n_disagreements": 21,
+         "gap": {
+          "n": 21,
+          "median": 0.1701202392578125,
+          "max": 0.958709716796875,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 21,
+          "median": 0.1701202392578125,
+          "max": 0.958709716796875,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "n_listed": 21,
+         "max_abs_logit": 0.8485202789306641,
+         "max_abs_hidden": 2.25
+        }
+       }
+      }
+     },
+     "pass": false
+    }
+   }
+  },
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/e3b_c3/qwen3.5-2b/n1000/seed2/merge_check.json",
+   "source_sha256": "35bea3d6b05ed5ca9845dac61007897beedec75f9a39a3a23302c9741aba9940",
+   "written_utc": "2026-10-15T23:00:57+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": false,
+   "failures": {
+    "restricted": [
+     "restricted/thinking_off：关思考时受限解码与 generate_batch 的 exact_rows 0.9250 < 0.95"
+    ],
+    "merge": []
+   },
+   "key": {
+    "e5_manifest_sha256": "18d0fdc3d8341feaf8e2dd05ec8c38914f093482c9bc29ba905ad2fc1ac9b9a7",
+    "start_manifest_sha256": "aaacbbab3e2f2ef352b51e80ec50004640b1364df2deb4a1c44bc888ac1d1b5d",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 104.1610482558608,
+    "merged_s": 126.1062238663435,
+    "total_s": 230.26868630200624
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 0.425,
+        "token_agreement": 0.6732024597918638,
+        "n_agree_tokens": 28463,
+        "n_tokens": 42280,
+        "n_divergent_rows": 23,
+        "first_divergence": {
+         "n": 23,
+         "min": 89,
+         "p25": 343.5,
+         "median": 450.0,
+         "p75": 542.0,
+         "max": 778
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 23,
+         "median": 0.19365692138671875,
+         "max": 0.49306678771972656,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 23,
+         "median": 0.19365692138671875,
+         "max": 0.49306678771972656,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 23
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.995837275307474,
+        "n_disagreements": 176,
+        "gap": {
+         "n": 176,
+         "median": 0.16158676147460938,
+         "max": 0.5862751007080078,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 176,
+         "median": 0.1383061408996582,
+         "max": 0.5862751007080078,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 176,
+        "max_abs_logit": 1.3182029724121094,
+        "max_abs_hidden": 2.19921875
+       }
+      }
+     },
+     "pass": true
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 0.925,
+        "token_agreement": 0.95879848628193,
+        "n_agree_tokens": 40538,
+        "n_tokens": 42280,
+        "n_divergent_rows": 3,
+        "first_divergence": {
+         "n": 3,
+         "min": 412,
+         "p25": 426.5,
+         "median": 441.0,
+         "p75": 508.5,
+         "max": 576
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 3,
+         "median": 0.04778289794921875,
+         "max": 0.09114646911621094,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 3,
+         "median": 0.04778289794921875,
+         "max": 0.09114646911621094,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 3
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 0.9993614001892147,
+        "n_disagreements": 27,
+        "gap": {
+         "n": 27,
+         "median": 0.08452033996582031,
+         "max": 0.687739372253418,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 27,
+         "median": 0.08452033996582031,
+         "max": 0.687739372253418,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 27
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 0.9990302743614002,
+         "n_disagreements": 41,
+         "gap": {
+          "n": 41,
+          "median": 0.16042423248291016,
+          "max": 0.44731569290161133,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 41,
+          "median": 0.16042423248291016,
+          "max": 0.44731569290161133,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "n_listed": 41,
+         "max_abs_logit": 0.7909460067749023,
+         "max_abs_hidden": 2.19921875
+        }
+       }
+      }
+     },
+     "pass": false
+    }
+   }
+  },
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/e3b_c3/qwen3.5-2b/n4000/seed0/merge_check.json",
+   "source_sha256": "9662701e201a0f8a94b5059c76caf83ba0d81a1afdb7700ea35c6dc026f23dc2",
+   "written_utc": "2026-10-15T01:14:02+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": true,
+   "failures": {
+    "restricted": [],
+    "merge": []
+   },
+   "key": {
+    "e5_manifest_sha256": "3fca0750dde954f6f86c0bbcca9ce32200db0ab98b1343a18b2c06d41951e341",
+    "start_manifest_sha256": "bf73188b8c88c7607de553d2a0256b8c9cfc1dcd5a8f6852032c95ee1fc70cd1",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 108.69976700097322,
+    "merged_s": 125.04948277398944,
+    "total_s": 233.75150203332305
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 0.8,
+        "token_agreement": 0.928476821192053,
+        "n_agree_tokens": 39256,
+        "n_tokens": 42280,
+        "n_divergent_rows": 8,
+        "first_divergence": {
+         "n": 8,
+         "min": 311,
+         "p25": 526.75,
+         "median": 772.5,
+         "p75": 829.5,
+         "max": 877
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 8,
+         "median": 0.0478978157043457,
+         "max": 0.10013055801391602,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 8,
+         "median": 0.0478978157043457,
+         "max": 0.10013055801391602,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 8
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.9950567644276254,
+        "n_disagreements": 209,
+        "gap": {
+         "n": 209,
+         "median": 0.03413248062133789,
+         "max": 0.21909809112548828,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 209,
+         "median": 0.03217744827270508,
+         "max": 0.21909809112548828,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 209,
+        "max_abs_logit": 0.6720528602600098,
+        "max_abs_hidden": 2.0
+       }
+      }
+     },
+     "pass": true
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 0.95,
+        "token_agreement": 0.9873226111636708,
+        "n_agree_tokens": 41744,
+        "n_tokens": 42280,
+        "n_divergent_rows": 2,
+        "first_divergence": {
+         "n": 2,
+         "min": 781,
+         "p25": 785.0,
+         "median": 789.0,
+         "p75": 793.0,
+         "max": 797
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 2,
+         "median": 0.035696983337402344,
+         "max": 0.0557103157043457,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 2,
+         "median": 0.035696983337402344,
+         "max": 0.0557103157043457,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 2
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 0.9998817407757805,
+        "n_disagreements": 5,
+        "gap": {
+         "n": 5,
+         "median": 0.004660129547119141,
+         "max": 0.049100399017333984,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 5,
+         "median": 0.004660129547119141,
+         "max": 0.049100399017333984,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 5
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 0.9998580889309366,
+         "n_disagreements": 6,
+         "gap": {
+          "n": 6,
+          "median": 0.04777932167053223,
+          "max": 0.06675004959106445,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 6,
+          "median": 0.04777932167053223,
+          "max": 0.06675004959106445,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "n_listed": 6,
+         "max_abs_logit": 0.4877927303314209,
+         "max_abs_hidden": 2.0
+        }
+       }
+      }
+     },
+     "pass": true
+    }
+   }
+  },
+  {
+   "path": "experiments/E5/0051_e5_main_hpcgpu07/trained/e3b_c3/qwen3.5-2b/n4000/seed1/merge_check.json",
+   "source_sha256": "67cf82d660691bfcd7b85c784a6c5cf73a4bda53ab7c052eb783df5d6c3807ea",
+   "written_utc": "2026-10-15T16:44:34+00:00",
+   "format": "visint-e5-stacked-merge-check/1",
+   "criteria_version": "v1",
+   "exact": false,
+   "error": null,
+   "pass": false,
+   "failures": {
+    "restricted": [
+     "restricted/thinking_off：关思考时受限解码与 generate_batch 的 exact_rows 0.8750 < 0.95"
+    ],
+    "merge": []
+   },
+   "key": {
+    "e5_manifest_sha256": "6e6aebc2a23df08ac69d15f50622657e462e4057045318972a75267b90971c38",
+    "start_manifest_sha256": "7c72a5007e461cca1bbb474aaaa72ba701af850587337d5ba02ee5e7ecdbb90d",
+    "n_per_task": 8,
+    "tasks": [
+     "rotation3d",
+     "viewpoint",
+     "occlusion",
+     "physics",
+     "imagery"
+    ],
+    "tiny": false,
+    "dtype": "bf16",
+    "batch_size": 64,
+    "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+   },
+   "timing_s": {
+    "unmerged_s": 104.5353046245873,
+    "merged_s": 126.87172751873732,
+    "total_s": 231.4084831252694
+   },
+   "checks": {
+    "merge": {
+     "mode": "e5_stacked",
+     "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "generate": {
+        "n_rows": 40,
+        "exact_rows": 0.85,
+        "token_agreement": 0.9274597918637654,
+        "n_agree_tokens": 39213,
+        "n_tokens": 42280,
+        "n_divergent_rows": 6,
+        "first_divergence": {
+         "n": 6,
+         "min": 208,
+         "p25": 395.75,
+         "median": 617.5,
+         "p75": 675.75,
+         "max": 815
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 6,
+         "median": 0.03085923194885254,
+         "max": 0.08186841011047363,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 6,
+         "median": 0.03085923194885254,
+         "max": 0.08186841011047363,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 6
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "argmax_agreement": 0.9959791863765374,
+        "n_disagreements": 170,
+        "gap": {
+         "n": 170,
+         "median": 0.032911062240600586,
+         "max": 0.27097034454345703,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 170,
+         "median": 0.03116440773010254,
+         "max": 0.27097034454345703,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 170,
+        "max_abs_logit": 0.9853684902191162,
+        "max_abs_hidden": 1.375
+       }
+      }
+     },
+     "pass": true
+    },
+    "restricted": {
+     "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+     "by_thinking": {
+      "thinking_off": {
+       "n_rows": 40,
+       "decode_vs_generate_batch": {
+        "n_rows": 40,
+        "exact_rows": 0.875,
+        "token_agreement": 0.9498344370860927,
+        "n_agree_tokens": 40159,
+        "n_tokens": 42280,
+        "n_divergent_rows": 5,
+        "first_divergence": {
+         "n": 5,
+         "min": 379,
+         "p25": 566.0,
+         "median": 648.0,
+         "p75": 773.0,
+         "max": 798
+        },
+        "n_divergence_without_gap": 0,
+        "gap": {
+         "n": 5,
+         "median": 0.036126136779785156,
+         "max": 0.051937103271484375,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 5,
+         "median": 0.036126136779785156,
+         "max": 0.051937103271484375,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 5
+       },
+       "teacher_forcing": {
+        "n_tokens": 42280,
+        "agreement": 0.9997871333964049,
+        "n_disagreements": 9,
+        "gap": {
+         "n": 9,
+         "median": 0.0328826904296875,
+         "max": 0.051937103271484375,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "top2_gap": {
+         "n": 9,
+         "median": 0.0328826904296875,
+         "max": 0.051937103271484375,
+         "frac_lt_threshold": 1.0,
+         "threshold": 2.0
+        },
+        "n_listed": 9
+       }
+      }
+     },
+     "across_merge": {
+      "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+      "by_thinking": {
+       "thinking_off": {
+        "n_rows": 40,
+        "teacher_forcing": {
+         "n_tokens": 42280,
+         "argmax_agreement": 0.9997871333964049,
+         "n_disagreements": 9,
+         "gap": {
+          "n": 9,
+          "median": 0.04461526870727539,
+          "max": 0.08186864852905273,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "top2_gap": {
+          "n": 9,
+          "median": 0.04461526870727539,
+          "max": 0.08186864852905273,
+          "frac_lt_threshold": 1.0,
+          "threshold": 2.0
+         },
+         "n_listed": 9,
+         "max_abs_logit": 0.985365629196167,
+         "max_abs_hidden": 1.375
+        }
+       }
+      }
+     },
+     "pass": false
+    }
+   }
+  }
+ ]
+}

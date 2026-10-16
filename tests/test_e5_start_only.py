@@ -430,7 +430,8 @@ def test_bad_start_refused(tmp_path):
 
 def test_checkpoint_mode_identical_to_a8b0e12(sharp, tmp_path, capsys):
     """E5 检查点的评测：新脚本加模块与改动前（a8b0e12）的脚本加模块（trained_eval、stack），在同一进程、同一组参数下，确定的输出
-    （README、config.yaml、metrics.json、predictions.jsonl）、评测前的合并核对（去掉墙钟）、运行记录的字段与打印的结果行逐字节相同。
+    （README、config.yaml、metrics.json、predictions.jsonl）、运行记录的字段与打印的结果行逐字节相同；评测前的合并核对（去掉墙钟）：DEV-0046
+    起判据是 e5-v2，改动前就有的字段逐个相同、v1 的判定照旧（v1_report_only）。
     E5 检查点从合成的起点训练（10 条的档：带 val 选择，运行身份里有 selection 一节）。"""
     for name, sha in SNAP_SHA256.items():
         assert _sha(SNAP / name) == sha, name
@@ -464,4 +465,10 @@ def test_checkpoint_mode_identical_to_a8b0e12(sharp, tmp_path, capsys):
     for m in (m0, m1):
         m.pop("timing_s")
         m.pop("written_utc")
-    assert m0 == m1 and m1["pass"] is True
+    # DEV-0046：判据改为 e5-v2（另有 v1_report_only、metric_level、previous）；改动前就有的字段照旧，v1 的判定照旧
+    assert m1["criteria_version"] == "e5-v2" and m0["pass"] is m1["pass"] is True
+    v1 = m1["v1_report_only"]
+    assert (v1["criteria_version"], v1["failures"], v1["pass"], v1["criteria"]) == \
+        (m0["criteria_version"], m0["failures"], m0["pass"], m0["criteria"])
+    same = set(m0) - {"criteria_version", "criteria", "failures", "pass", "rule"}
+    assert {k: m0[k] for k in same} == {k: m1[k] for k in same} and "checks" in same

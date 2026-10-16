@@ -21,6 +21,17 @@ v3 主比较的起点（D83-5）：base_warmup、e3b_c3、c3_warmup。e3b、e3a�
 
 顺序：读 e5_stack.json 与 E5 检查点 manifest（构造方式必须与 --model、--tiny 相符）→ 建 base、合并起点 LoRA、核对起点（manifest 的 sha256、
 权重指纹）→ load_trained(E5 检查点, merge=False) → 评测前的合并核对（不通过就不评测）→ 逐任务评测。
+评测前的合并核对（DEV-0046；规则见 src/e5/trained_eval.py 的模块说明）：判据 e5-v2（D96-1 = N34 的 (b′)）——判允许集合上的合并前后一致
+（restricted.across_merge）、受限教师强制与所有比较里分歧处的 gap；merge 的全词表教师强制一致率、decode_vs_generate_batch 的 exact_rows 等
+只报告；v1 的判定照算、只报告（merge_check.json 的 v1_report_only）。同一次核对里另做指标层面的合并前后比较（metric_level，D96-2，只报告、
+不影响判定）：同一批 val 样本，E5 LoRA 未合并与合并后各跑一次结构强制解码，E5 的正式评分逐行比较；总体差与两个标记在 stderr 打一行（出错时
+打一行警告）。已有的 merge_check.json 判据版本不同（v1）时先改名留存为 merge_check.v1.json（重名加 .1、.2…），再写新的。
+
+只做核对（DEV-0046；--check-only，只用于 --checkpoint）：
+    python scripts/eval_e5_trained.py --check-only --checkpoint <E5 训练叶目录>/ckpt/final --model qwen3.5-2b --out experiments/E5/<NNNN_slug>
+    # 加载 → 合并核对（e5-v2 + 指标层面）→ 写 <…>/seed<k>/merge_check.json → stdout 打一行摘要；不评任何任务、不建任何任务目录，已有的
+    # 任务输出一字节都不动。--task、--subset、--limit、--resume、--decode 等评测参数不起作用。退出码：通过 0，不过 1（与 --task 无关），出错 2。
+    # 用途：判据 v1 下已经评过 test 的运行补出 e5-v2 与指标层面的读数，不重评 test。
 小档（DEV-0038）：E5 检查点的 final/ 就是训练时 val 上选中的那一步；e5_stack.json 的 selection（规则、选中的步、分数）照记进
 config.yaml 的 checkpoint.selection。test 只在这个检查点上评一次。
 每档条数默认取配置的 eval.n_per_bin（test：每档 100 条，b 200 条，与零样本相同）；--n-per-bin 统一覆盖。批大小默认取配置的 eval.batch_size（64）；
@@ -40,7 +51,8 @@ config.yaml 的 checkpoint.selection。test 只在这个检查点上评一次。
 恢复起点的网格 token 行（src/e5/stack.load_start_only）→ 权重指纹必须等于参照 → 逐任务评测（与 E5 检查点的评测同一个 run_task）。
 没有 E5 LoRA，"E5 LoRA 合并前后"的核对跳过（写进运行身份与 README）。
 
-退出码：0 = 跑完；1 = 合并核对没有通过，拒绝评测；2 = 出错（报错先写进 <out>/trained/errors/；argparse 用法错误也是 2）。
+退出码：0 = 跑完（--check-only：核对通过）；1 = 合并核对没有通过，拒绝评测（--check-only：核对没有通过）；2 = 出错（报错先写进
+<out>/trained/errors/；argparse 用法错误也是 2）。
 """
 
 from __future__ import annotations
@@ -103,6 +115,9 @@ def parse_args(argv=None):
     p.add_argument("--n-resamples", type=int, help="bootstrap 次数（默认 src.constants.BOOTSTRAP_N_RESAMPLES；--tiny 取配置的 eval.tiny）")
     p.add_argument("--decode", choices=DECODE_MODES,
                    help="解码方式（默认取配置的 decode.mode：v3 是 structured，D83-3）；restricted 作诊断（与改动前逐字节相同）")
+    p.add_argument("--check-only", action="store_true",
+                   help="只做评测前的合并核对（判据 e5-v2 与指标层面的比较，DEV-0046）：写 merge_check.json、打印摘要，不评任何任务、不建任务"
+                        "目录；通过退出 0、不过退出 1（与 --task 无关）。只用于 --checkpoint")
     p.add_argument("--tiny", action="store_true", help="小型随机模型 + CPU fp32（开发机彩排）")
     p.add_argument("--config", default=str(CONFIG_PATH), help="E5 训练配置（默认 configs/e5_train.json，读其中的 eval 节）")
     p.add_argument("--device", help="默认：真模型 cuda，--tiny 时 cpu")
@@ -135,6 +150,8 @@ def parse_args(argv=None):
             p.error("--start-only 要给 --seed（起点训练叶目录 config.yaml 的 seed）")
         if a.merge_check_n_per_task is not None:
             p.error("--merge-check-n-per-task 只用于 --checkpoint：只评起点没有 E5 LoRA，不做 E5 LoRA 合并前后的核对")
+        if a.check_only:
+            p.error("--check-only 只用于 --checkpoint：只评起点没有 E5 LoRA，不做 E5 LoRA 合并前后的核对")
         a.data_root = a.data_root or os.environ.get("VISINT_DATA_ROOT")
         if not a.tiny and not a.data_root:
             p.error("--start-only 要给 --data-root（或设 VISINT_DATA_ROOT）：起点检查点的合并核对用 E1 的 grid16 开发子集")
@@ -184,6 +201,22 @@ def report(prefix: str, task: str, subset: str, m) -> None:
           f"parse_fail={m['parse']['failure_rate']} imagining={(m.get('gate') or {}).get('imagining')}")
 
 
+def check_line(prefix: str, summ) -> str:
+    """--check-only 打印的一行（stdout）：判据、是否通过、v1 的判定（只报告）、是否复用、指标层面的读数（只报告）、核对文件。"""
+    ml = summ.get("metric_level") or {}
+    fl = ml.get("flags") or {}
+
+    def f(x) -> str:
+        return "None" if x is None else f"{x:+.4f}"
+
+    prev = summ.get("previous") or {}
+    return (f"check-only {prefix} criteria={summ.get('criteria_version')} pass={summ.get('pass')} v1_pass={summ.get('v1_pass')} "
+            f"reused={summ.get('reused')} metric_level: iou_grid_diff={f(ml.get('iou_grid_diff'))} "
+            f"relief_error_diff={f(ml.get('relief_error_diff'))} identical={ml.get('n_identical')}/{ml.get('n')} "
+            f"flags.iou={fl.get('iou')} flags.relief={fl.get('relief')} error={ml.get('error') is not None} "
+            f"previous={prev.get('renamed_to')} file={summ.get('file')}")
+
+
 def cmd_run(a, argv) -> int:
     cfg = load_train_config(a.config)
     e, t, bs, subset, n_resamples = eval_settings(a, cfg)
@@ -220,12 +253,22 @@ def cmd_run(a, argv) -> int:
     key = {"e5_manifest_sha256": e5_sha, "start_manifest_sha256": stack["start"]["manifest_sha256"], "n_per_task": mc_n,
            "tasks": list(E5_TASKS), "tiny": a.tiny, "dtype": a.dtype, "batch_size": mc_bs, "config_sha256": cfg.sha256}
     exact = torch.device(a.device).type == "cpu" and DTYPES[a.dtype] == torch.float32
+    prefix = f"trained {start_kind} {a.model} {tag} seed{seed}"
     try:
         mc = TE.stacked_merge_check(ad, e5tok, prompt, n=n, n_per_task=mc_n, tasks=E5_TASKS, batch_size=mc_bs, tiny=a.tiny,
                                     exact=exact, key=key, out_json=mdir / TE.MERGE_CHECK)
     except MergeCheckFailed as err:
+        print(TE.metric_level_line(err.summary.get("metric_level")), file=sys.stderr)
+        if a.check_only:  # DEV-0046：只做核对
+            print(check_line(prefix, err.summary))
+            print(f"合并核对没有通过（--check-only）：{err}", file=sys.stderr)
+            return 1
         print(f"拒绝评测：{err}", file=sys.stderr)
         return 1
+    print(TE.metric_level_line(mc.get("metric_level")), file=sys.stderr)  # DEV-0046：指标层面的比较（只报告）
+    if a.check_only:  # DEV-0046：只做核对，不评任何任务、不建任务目录
+        print(check_line(prefix, mc))
+        return 0
     checkpoint = {"manifest_sha256": e5_sha, "train_identity_sha256": stack["identity_sha256"],
                   "start": {"kind": start_kind, "manifest_sha256": stack["start"]["manifest_sha256"]},
                   "lora": man.get("lora"), "build_spec": man.get("build_spec"), "data": stack["data"], "seed": seed}
@@ -245,7 +288,7 @@ def cmd_run(a, argv) -> int:
                            data_seed=data_seed, decode=decode)
         m = TE.run_task(ad, e5tok, prompt, cfg, spec, a.out, checkpoint=checkpoint, n=n, resume=a.resume, argv=argv,
                         run_extra=extra)
-        report(decode_prefix(f"trained {start_kind} {a.model} {tag} seed{seed}", decode), task, subset, m)
+        report(decode_prefix(prefix, decode), task, subset, m)
     return 0
 
 

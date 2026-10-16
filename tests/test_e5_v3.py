@@ -514,7 +514,8 @@ def test_restricted_identical_to_36bcbbf(sharp, tmp_path, capsys):
     """同一进程、同一组参数：改动前（36bcbbf）的脚本加模块对改动后的脚本加 --decode restricted。
     - 训练（10 条的档，带 val 选择）：两边用同一份配置（正式配置的 decode.mode 改成 restricted：旧脚本调用的是新的 resolve_run，它按配置
       取解码方式），训练日志、val 读数、运行身份、摘要、README、最终检查点、e5_stack.json（去掉训练叶目录的路径）逐字节相同；
-    - 训练后评测、只评起点：正式配置，确定的输出、合并核对（去掉墙钟）、打印的结果行逐字节相同。"""
+    - 训练后评测、只评起点：正式配置，确定的输出、打印的结果行逐字节相同；合并核对（去掉墙钟）：DEV-0046 起判据是 e5-v2，改动前就有的
+      字段逐个相同、v1 的判定照旧（v1_report_only）。"""
     for name, sha in SNAP_SHA256.items():
         assert _sha(SNAP / name) == sha, name
     old_vs = _load_path(SNAP / "val_select_36bcbbf.py", "_e5_val_select_36bcbbf")
@@ -575,7 +576,13 @@ def test_restricted_identical_to_36bcbbf(sharp, tmp_path, capsys):
             for m in (m0, m1):
                 m.pop("timing_s")
                 m.pop("written_utc")
-            assert m0 == m1 and m1["pass"] is True
+            # DEV-0046：判据改为 e5-v2（另有 v1_report_only、metric_level、previous）；改动前就有的字段照旧，v1 的判定照旧
+            assert m1["criteria_version"] == "e5-v2" and m0["pass"] is m1["pass"] is True
+            v1 = m1["v1_report_only"]
+            assert (v1["criteria_version"], v1["failures"], v1["pass"], v1["criteria"]) == \
+                (m0["criteria_version"], m0["failures"], m0["pass"], m0["criteria"])
+            same = set(m0) - {"criteria_version", "criteria", "failures", "pass", "rule"}
+            assert {k: m0[k] for k in same} == {k: m1[k] for k in same} and "checks" in same
 
 
 # ---------------------------------------------------------------------------
