@@ -1,0 +1,5742 @@
+{
+ "format": "visint-e5-stacked-merge-check/1",
+ "written_utc": "2026-10-14T21:18:40+00:00",
+ "key": {
+  "e5_manifest_sha256": "a43076b8cb6d03e943b7ffa79bd4a0cbca4bab52658da33fc5ded17beed78210",
+  "start_manifest_sha256": "58ba382e9cd0b5bf1c4f3d5285cf205c96173100c1950ff2a83224e612c67dcc",
+  "n_per_task": 8,
+  "tasks": [
+   "rotation3d",
+   "viewpoint",
+   "occlusion",
+   "physics",
+   "imagery"
+  ],
+  "tiny": false,
+  "dtype": "bf16",
+  "batch_size": 64,
+  "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+ },
+ "criteria_version": "v1",
+ "criteria": {
+  "version": "v1",
+  "status": "冻结：D50-3（依据 RUN-0021 实测冻结，2026-10-02）",
+  "exact": false,
+  "exact_reason": "GPU / bf16：判据 v1（查实现错误；数值噪声另记为噪声底）",
+  "per_thinking_mode": true,
+  "gap_definition": "不一致位置上两种实现所选两个 token 在参照 logits 上之差（见脚本说明）；top2_gap 只报告不判",
+  "restricted": {
+   "min_tf_agreement": 0.999,
+   "min_exact_rows_thinking_off": 0.95,
+   "max_gap": 2.0,
+   "rules": [
+    "teacher_forcing.agreement ≥ 0.999（两种开关）",
+    "thinking_off：decode_vs_generate_batch.exact_rows ≥ 0.95",
+    "teacher_forcing.gap.max < 2.0 且 decode_vs_generate_batch.gap.max < 2.0（两种开关；分歧算不出 gap 也判不过）"
+   ],
+   "report_only": [
+    "decode_vs_generate_batch.token_agreement",
+    "thinking_on 的 decode_vs_generate_batch.exact_rows",
+    "top2_gap"
+   ]
+  },
+  "merge": {
+   "min_tf_agreement": 0.98,
+   "max_median_gap": 0.5,
+   "rules": [
+    "teacher_forcing.argmax_agreement ≥ 0.98（两种开关）",
+    "teacher_forcing.gap.median ≤ 0.5（两种开关）"
+   ],
+   "report_only": [
+    "generate.*（逐位一致率 token_agreement、exact_rows、gap）",
+    "teacher_forcing.gap.max",
+    "top2_gap"
+   ]
+  },
+  "premise": {
+   "max_exact_rows_vs_base": 0.5,
+   "judged_modes": [
+    "thinking_on"
+   ],
+   "rules": [
+    "随机 LoRA：thinking_on 时 effect_vs_base.generate.exact_rows ≤ 0.5"
+   ],
+   "report_only": [
+    "thinking_off 的 effect_vs_base",
+    "effect_vs_base.teacher_forcing.argmax_agreement"
+   ]
+  },
+  "exact_rules": [
+   "CPU fp32：生成 exact_rows = token_agreement = 1，教师强制没有不一致的位置（restricted 与 merge 都是）"
+  ],
+  "restricted_grid": {
+   "applies_to": "--checkpoint 且检查点登记了网格 token：restricted 用检查点自己的网格 token 与 E3b 单轮评测的设置",
+   "by_thinking": "照 v1 的 restricted 一节（criteria.restricted，阈值不变）；只有 E3b 评测用的思考开关（restricted_inputs.thinking_modes）",
+   "across_merge": {
+    "min_tf_agreement": 0.98,
+    "max_median_gap": 0.5,
+    "rules": [
+     "across_merge.teacher_forcing.argmax_agreement ≥ 0.98",
+     "across_merge.teacher_forcing.gap.median ≤ 0.5"
+    ],
+    "report_only": [
+     "across_merge.teacher_forcing.gap.max",
+     "top2_gap",
+     "max_abs_logit",
+     "max_abs_hidden"
+    ],
+    "basis": "合并前后两侧的比较，数值噪声的来源与 merge 相同，所以照 v1 merge 一节的教师强制两条判（D50-3）"
+   },
+   "exact": false,
+   "exact_rules": [
+    "CPU fp32：across_merge 的教师强制没有不一致的位置"
+   ]
+  }
+ },
+ "checks": {
+  "merge": {
+   "mode": "e5_stacked",
+   "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+   "by_thinking": {
+    "thinking_off": {
+     "n_rows": 40,
+     "generate": {
+      "n_rows": 40,
+      "exact_rows": 0.625,
+      "token_agreement": 0.8284058656575213,
+      "n_agree_tokens": 35025,
+      "n_tokens": 42280,
+      "n_divergent_rows": 15,
+      "first_divergence": {
+       "n": 15,
+       "min": 347,
+       "p25": 445.0,
+       "median": 513.0,
+       "p75": 724.5,
+       "max": 908,
+       "histogram": {
+        "0-15": 0,
+        "16-31": 0,
+        "32-47": 0,
+        "48-63": 0,
+        "64-79": 0,
+        "80-95": 0,
+        "96-111": 0,
+        "112-127": 0,
+        "128-143": 0,
+        "144-159": 0,
+        "160-175": 0,
+        "176-191": 0,
+        "192-207": 0,
+        "208-223": 0,
+        "224-239": 0,
+        "240-255": 0,
+        "256-271": 0,
+        "272-287": 0,
+        "288-303": 0,
+        "304-319": 0,
+        "320-335": 0,
+        "336-351": 1,
+        "352-367": 0,
+        "368-383": 2,
+        "384-399": 0,
+        "400-415": 0,
+        "416-431": 0,
+        "432-447": 2,
+        "448-463": 0,
+        "464-479": 0,
+        "480-495": 2,
+        "496-511": 0,
+        "512-527": 1,
+        "528-543": 0,
+        "544-559": 0,
+        "560-575": 0,
+        "576-591": 1,
+        "592-607": 0,
+        "608-623": 1,
+        "624-639": 0,
+        "640-655": 0,
+        "656-671": 0,
+        "672-687": 0,
+        "688-703": 0,
+        "704-719": 1,
+        "720-735": 0,
+        "736-751": 1,
+        "752-767": 0,
+        "768-783": 1,
+        "784-799": 0,
+        "800-815": 1,
+        "816-831": 0,
+        "832-847": 0,
+        "848-863": 0,
+        "864-879": 0,
+        "880-895": 0,
+        "896-911": 1,
+        "912-927": 0,
+        "928-943": 0,
+        "944-959": 0,
+        "960-975": 0,
+        "976-991": 0,
+        "992-1007": 0,
+        "1008-1023": 0,
+        "1024-1039": 0,
+        "1040-1055": 0,
+        "1056-1056": 0
+       }
+      },
+      "n_divergence_without_gap": 0,
+      "gap": {
+       "n": 15,
+       "median": 0.09741449356079102,
+       "max": 0.35617876052856445,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "top2_gap": {
+       "n": 15,
+       "median": 0.09741449356079102,
+       "max": 0.22907352447509766,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "divergent_rows": [
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "first_divergence": 446,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.06142091751098633,
+        "top2_gap": 0.06142091751098633
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "first_divergence": 513,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.056005239486694336,
+        "top2_gap": 0.056005239486694336
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "first_divergence": 738,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.18906760215759277,
+        "top2_gap": 0.18906760215759277
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "first_divergence": 372,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.04915952682495117,
+        "top2_gap": 0.04915952682495117
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "first_divergence": 711,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.06890249252319336,
+        "top2_gap": 0.06890249252319336
+       },
+       {
+        "id": "imagery/val/1",
+        "thinking": false,
+        "first_divergence": 908,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.07454967498779297,
+        "top2_gap": 0.07454967498779297
+       },
+       {
+        "id": "rotation3d/val/0",
+        "thinking": false,
+        "first_divergence": 611,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.1711139678955078,
+        "top2_gap": 0.1711139678955078
+       },
+       {
+        "id": "rotation3d/val/1",
+        "thinking": false,
+        "first_divergence": 347,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.09741449356079102,
+        "top2_gap": 0.09741449356079102
+       },
+       {
+        "id": "rotation3d/val/3",
+        "thinking": false,
+        "first_divergence": 582,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.20096302032470703,
+        "top2_gap": 0.20096302032470703
+       },
+       {
+        "id": "viewpoint/val/0",
+        "thinking": false,
+        "first_divergence": 807,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.1263895034790039,
+        "top2_gap": 0.1263895034790039
+       },
+       {
+        "id": "viewpoint/val/1",
+        "thinking": false,
+        "first_divergence": 488,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.1815032958984375,
+        "top2_gap": 0.1815032958984375
+       },
+       {
+        "id": "viewpoint/val/2",
+        "thinking": false,
+        "first_divergence": 444,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.034512996673583984,
+        "top2_gap": 0.034512996673583984
+       },
+       {
+        "id": "viewpoint/val/3",
+        "thinking": false,
+        "first_divergence": 381,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.35617876052856445,
+        "top2_gap": 0.16966676712036133
+       },
+       {
+        "id": "viewpoint/val/5",
+        "thinking": false,
+        "first_divergence": 770,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.011965751647949219,
+        "top2_gap": 0.011965751647949219
+       },
+       {
+        "id": "viewpoint/val/7",
+        "thinking": false,
+        "first_divergence": 482,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.22907352447509766,
+        "top2_gap": 0.22907352447509766
+       }
+      ],
+      "n_listed": 15
+     },
+     "teacher_forcing": {
+      "n_tokens": 42280,
+      "argmax_agreement": 0.9702459791863766,
+      "n_disagreements": 1258,
+      "gap": {
+       "n": 1258,
+       "median": 0.12103652954101562,
+       "max": 0.5681304931640625,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "top2_gap": {
+       "n": 1258,
+       "median": 0.10700035095214844,
+       "max": 0.4920520782470703,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "disagreements": [
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 22,
+        "before": 248077,
+        "after": 6368,
+        "gap": 0.13617420196533203,
+        "top2_gap": 0.13617420196533203
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 42,
+        "before": 4675,
+        "after": 248077,
+        "gap": 0.01157379150390625,
+        "top2_gap": 0.01157379150390625
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 74,
+        "before": 121761,
+        "after": 248077,
+        "gap": 0.10009193420410156,
+        "top2_gap": 0.10009193420410156
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 109,
+        "before": 121761,
+        "after": 248077,
+        "gap": 0.0881967544555664,
+        "top2_gap": 0.05215930938720703
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 114,
+        "before": 248077,
+        "after": 29755,
+        "gap": 0.0890054702758789,
+        "top2_gap": 0.0890054702758789
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 138,
+        "before": 29755,
+        "after": 248077,
+        "gap": 0.0752410888671875,
+        "top2_gap": 0.0752410888671875
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 149,
+        "before": 248077,
+        "after": 5481,
+        "gap": 0.10329341888427734,
+        "top2_gap": 0.10329341888427734
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 182,
+        "before": 1388,
+        "after": 63536,
+        "gap": 0.36763763427734375,
+        "top2_gap": 0.36763763427734375
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 183,
+        "before": 248077,
+        "after": 63536,
+        "gap": 0.1971149444580078,
+        "top2_gap": 0.1971149444580078
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 209,
+        "before": 45811,
+        "after": 29755,
+        "gap": 0.045845985412597656,
+        "top2_gap": 0.045845985412597656
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 210,
+        "before": 29755,
+        "after": 191404,
+        "gap": 0.09856033325195312,
+        "top2_gap": 0.05164527893066406
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 214,
+        "before": 1388,
+        "after": 98183,
+        "gap": 0.14815902709960938,
+        "top2_gap": 0.14815902709960938
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 219,
+        "before": 17430,
+        "after": 34605,
+        "gap": 0.043102264404296875,
+        "top2_gap": 0.043102264404296875
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 243,
+        "before": 15806,
+        "after": 11345,
+        "gap": 0.19313812255859375,
+        "top2_gap": 0.19313812255859375
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 249,
+        "before": 1388,
+        "after": 15806,
+        "gap": 0.19630718231201172,
+        "top2_gap": 0.07418155670166016
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 253,
+        "before": 35759,
+        "after": 1388,
+        "gap": 0.0861053466796875,
+        "top2_gap": 0.0861053466796875
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 272,
+        "before": 74536,
+        "after": 99708,
+        "gap": 0.14374256134033203,
+        "top2_gap": 0.14374256134033203
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 305,
+        "before": 74536,
+        "after": 97059,
+        "gap": 0.2837076187133789,
+        "top2_gap": 0.131988525390625
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 312,
+        "before": 96020,
+        "after": 110789,
+        "gap": 0.15955257415771484,
+        "top2_gap": 0.15955257415771484
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 318,
+        "before": 17430,
+        "after": 96805,
+        "gap": 0.20712566375732422,
+        "top2_gap": 0.05052947998046875
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 319,
+        "before": 1388,
+        "after": 96914,
+        "gap": 0.20909404754638672,
+        "top2_gap": 0.20909404754638672
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 341,
+        "before": 97935,
+        "after": 30559,
+        "gap": 0.1258869171142578,
+        "top2_gap": 0.07622337341308594
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 342,
+        "before": 101698,
+        "after": 97448,
+        "gap": 0.10695648193359375,
+        "top2_gap": 0.10695648193359375
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 346,
+        "before": 97059,
+        "after": 98183,
+        "gap": 0.1158590316772461,
+        "top2_gap": 0.1158590316772461
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 357,
+        "before": 248077,
+        "after": 61614,
+        "gap": 0.014260292053222656,
+        "top2_gap": 0.014260292053222656
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 364,
+        "before": 29755,
+        "after": 45811,
+        "gap": 0.07455921173095703,
+        "top2_gap": 0.07455921173095703
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 373,
+        "before": 100553,
+        "after": 96112,
+        "gap": 0.040846824645996094,
+        "top2_gap": 0.040846824645996094
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 384,
+        "before": 98183,
+        "after": 96805,
+        "gap": 0.1288127899169922,
+        "top2_gap": 0.1288127899169922
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 411,
+        "before": 96020,
+        "after": 108586,
+        "gap": 0.35668087005615234,
+        "top2_gap": 0.16150760650634766
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 413,
+        "before": 97059,
+        "after": 1388,
+        "gap": 0.09552860260009766,
+        "top2_gap": 0.053030967712402344
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 415,
+        "before": 96695,
+        "after": 97605,
+        "gap": 0.12399673461914062,
+        "top2_gap": 0.12399673461914062
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 417,
+        "before": 22,
+        "after": 96805,
+        "gap": 0.2570352554321289,
+        "top2_gap": 0.10222053527832031
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 418,
+        "before": 96914,
+        "after": 96805,
+        "gap": 0.12433242797851562,
+        "top2_gap": 0.12433242797851562
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 434,
+        "before": 15806,
+        "after": 97059,
+        "gap": 0.12656402587890625,
+        "top2_gap": 0.12656402587890625
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 444,
+        "before": 111010,
+        "after": 736,
+        "gap": 0.1764993667602539,
+        "top2_gap": 0.028705596923828125
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 475,
+        "before": 56751,
+        "after": 42356,
+        "gap": 0.0732259750366211,
+        "top2_gap": 0.0732259750366211
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 476,
+        "before": 101912,
+        "after": 96007,
+        "gap": 0.4433002471923828,
+        "top2_gap": 0.4433002471923828
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 518,
+        "before": 462,
+        "after": 96330,
+        "gap": 0.2316150665283203,
+        "top2_gap": 0.10572338104248047
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 550,
+        "before": 45188,
+        "after": 101130,
+        "gap": 0.0760660171508789,
+        "top2_gap": 0.0760660171508789
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 574,
+        "before": 127781,
+        "after": 1091,
+        "gap": 0.10156917572021484,
+        "top2_gap": 0.10156917572021484
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 615,
+        "before": 56360,
+        "after": 25114,
+        "gap": 0.1457376480102539,
+        "top2_gap": 0.1457376480102539
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 616,
+        "before": 56360,
+        "after": 25114,
+        "gap": 0.2268362045288086,
+        "top2_gap": 0.2268362045288086
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 642,
+        "before": 127781,
+        "after": 248077,
+        "gap": 0.1002511978149414,
+        "top2_gap": 0.1002511978149414
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 644,
+        "before": 24434,
+        "after": 96382,
+        "gap": 0.1524648666381836,
+        "top2_gap": 0.14317703247070312
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 704,
+        "before": 248077,
+        "after": 36523,
+        "gap": 0.12844181060791016,
+        "top2_gap": 0.12844181060791016
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 740,
+        "before": 42356,
+        "after": 110789,
+        "gap": 0.1299753189086914,
+        "top2_gap": 0.1299753189086914
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 741,
+        "before": 66321,
+        "after": 127781,
+        "gap": 0.07123088836669922,
+        "top2_gap": 0.07123088836669922
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 783,
+        "before": 248077,
+        "after": 179418,
+        "gap": 0.1231069564819336,
+        "top2_gap": 0.1231069564819336
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 113,
+        "before": 248077,
+        "after": 47422,
+        "gap": 0.14135074615478516,
+        "top2_gap": 0.14135074615478516
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 120,
+        "before": 248077,
+        "after": 6368,
+        "gap": 0.028725624084472656,
+        "top2_gap": 0.028725624084472656
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 145,
+        "before": 248077,
+        "after": 47422,
+        "gap": 0.07311630249023438,
+        "top2_gap": 0.07311630249023438
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 159,
+        "before": 248077,
+        "after": 6368,
+        "gap": 0.07074260711669922,
+        "top2_gap": 0.07074260711669922
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 187,
+        "before": 248077,
+        "after": 6368,
+        "gap": 0.14089488983154297,
+        "top2_gap": 0.14089488983154297
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 204,
+        "before": 97956,
+        "after": 199960,
+        "gap": 0.06687450408935547,
+        "top2_gap": 0.06687450408935547
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 213,
+        "before": 52579,
+        "after": 99462,
+        "gap": 0.1788806915283203,
+        "top2_gap": 0.1788806915283203
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 245,
+        "before": 99144,
+        "after": 99462,
+        "gap": 0.09515666961669922,
+        "top2_gap": 0.09515666961669922
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 256,
+        "before": 248077,
+        "after": 6368,
+        "gap": 0.08238601684570312,
+        "top2_gap": 0.08238601684570312
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 259,
+        "before": 248077,
+        "after": 6368,
+        "gap": 0.04453277587890625,
+        "top2_gap": 0.04453277587890625
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 351,
+        "before": 6368,
+        "after": 132351,
+        "gap": 0.14213085174560547,
+        "top2_gap": 0.14213085174560547
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 376,
+        "before": 13573,
+        "after": 3773,
+        "gap": 0.05544757843017578,
+        "top2_gap": 0.04245758056640625
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 402,
+        "before": 97108,
+        "after": 21,
+        "gap": 0.12013721466064453,
+        "top2_gap": 0.12013721466064453
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 409,
+        "before": 13573,
+        "after": 12153,
+        "gap": 0.15604782104492188,
+        "top2_gap": 0.15604782104492188
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 411,
+        "before": 98615,
+        "after": 111583,
+        "gap": 0.17082595825195312,
+        "top2_gap": 0.17082595825195312
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 415,
+        "before": 98688,
+        "after": 6927,
+        "gap": 0.09833240509033203,
+        "top2_gap": 0.09833240509033203
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 457,
+        "before": 29623,
+        "after": 23070,
+        "gap": 0.20277881622314453,
+        "top2_gap": 0.033512115478515625
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 465,
+        "before": 97956,
+        "after": 97108,
+        "gap": 0.17471790313720703,
+        "top2_gap": 0.17471790313720703
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 476,
+        "before": 16612,
+        "after": 43193,
+        "gap": 0.2876710891723633,
+        "top2_gap": 0.2876710891723633
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 506,
+        "before": 98514,
+        "after": 31542,
+        "gap": 0.5681304931640625,
+        "top2_gap": 0.3644247055053711
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 579,
+        "before": 45188,
+        "after": 42928,
+        "gap": 0.3808326721191406,
+        "top2_gap": 0.3808326721191406
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 603,
+        "before": 37,
+        "after": 2990,
+        "gap": 0.17987823486328125,
+        "top2_gap": 0.17987823486328125
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 611,
+        "before": 79454,
+        "after": 41978,
+        "gap": 0.08191680908203125,
+        "top2_gap": 0.08191680908203125
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 617,
+        "before": 15806,
+        "after": 31947,
+        "gap": 0.14624691009521484,
+        "top2_gap": 0.14624691009521484
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 639,
+        "before": 41978,
+        "after": 25114,
+        "gap": 0.09927558898925781,
+        "top2_gap": 0.09927558898925781
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 650,
+        "before": 58681,
+        "after": 31947,
+        "gap": 0.12539005279541016,
+        "top2_gap": 0.12539005279541016
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 670,
+        "before": 41978,
+        "after": 17087,
+        "gap": 0.2386302947998047,
+        "top2_gap": 0.2386302947998047
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 680,
+        "before": 29193,
+        "after": 3595,
+        "gap": 0.38384437561035156,
+        "top2_gap": 0.2841014862060547
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 714,
+        "before": 248077,
+        "after": 23719,
+        "gap": 0.13661479949951172,
+        "top2_gap": 0.13661479949951172
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 778,
+        "before": 248077,
+        "after": 25842,
+        "gap": 0.1623697280883789,
+        "top2_gap": 0.1623697280883789
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 805,
+        "before": 11691,
+        "after": 95724,
+        "gap": 0.2447652816772461,
+        "top2_gap": 0.19959163665771484
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 806,
+        "before": 21151,
+        "after": 2809,
+        "gap": 0.10862159729003906,
+        "top2_gap": 0.10862159729003906
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 975,
+        "before": 248077,
+        "after": 97956,
+        "gap": 0.07786369323730469,
+        "top2_gap": 0.07786369323730469
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 1032,
+        "before": 248077,
+        "after": 97956,
+        "gap": 0.0876913070678711,
+        "top2_gap": 0.0876913070678711
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 1042,
+        "before": 248077,
+        "after": 97956,
+        "gap": 0.09711837768554688,
+        "top2_gap": 0.09711837768554688
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 66,
+        "before": 10399,
+        "after": 248077,
+        "gap": 0.08642196655273438,
+        "top2_gap": 0.08642196655273438
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 182,
+        "before": 248077,
+        "after": 99944,
+        "gap": 0.1624011993408203,
+        "top2_gap": 0.1624011993408203
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 309,
+        "before": 248077,
+        "after": 97610,
+        "gap": 0.05009174346923828,
+        "top2_gap": 0.03119659423828125
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 310,
+        "before": 97237,
+        "after": 74298,
+        "gap": 0.21095848083496094,
+        "top2_gap": 0.21095848083496094
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 371,
+        "before": 53312,
+        "after": 74536,
+        "gap": 0.35006046295166016,
+        "top2_gap": 0.35006046295166016
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 380,
+        "before": 96737,
+        "after": 97032,
+        "gap": 0.16931915283203125,
+        "top2_gap": 0.16931915283203125
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 381,
+        "before": 96737,
+        "after": 52616,
+        "gap": 0.16359329223632812,
+        "top2_gap": 0.16359329223632812
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 390,
+        "before": 248077,
+        "after": 20277,
+        "gap": 0.13718605041503906,
+        "top2_gap": 0.13718605041503906
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 402,
+        "before": 31930,
+        "after": 248077,
+        "gap": 0.09459304809570312,
+        "top2_gap": 0.09459304809570312
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 408,
+        "before": 112539,
+        "after": 111231,
+        "gap": 0.012237548828125,
+        "top2_gap": 0.012237548828125
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 456,
+        "before": 248077,
+        "after": 6368,
+        "gap": 0.037743568420410156,
+        "top2_gap": 0.037743568420410156
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 473,
+        "before": 248077,
+        "after": 96222,
+        "gap": 0.19852924346923828,
+        "top2_gap": 0.19852924346923828
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 474,
+        "before": 97610,
+        "after": 111231,
+        "gap": 0.12459087371826172,
+        "top2_gap": 0.12459087371826172
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 483,
+        "before": 458,
+        "after": 604,
+        "gap": 0.05963325500488281,
+        "top2_gap": 0.05963325500488281
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 513,
+        "before": 32861,
+        "after": 41978,
+        "gap": 0.30548095703125,
+        "top2_gap": 0.1382293701171875
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 607,
+        "before": 248077,
+        "after": 19004,
+        "gap": 0.06660747528076172,
+        "top2_gap": 0.06660747528076172
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 710,
+        "before": 408,
+        "after": 39797,
+        "gap": 0.11591625213623047,
+        "top2_gap": 0.11591625213623047
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 4,
+        "before": 248077,
+        "after": 6368,
+        "gap": 0.056845664978027344,
+        "top2_gap": 0.056845664978027344
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 182,
+        "before": 6368,
+        "after": 248077,
+        "gap": 0.06638622283935547,
+        "top2_gap": 0.06638622283935547
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 215,
+        "before": 92486,
+        "after": 6368,
+        "gap": 0.11246967315673828,
+        "top2_gap": 0.11246967315673828
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 274,
+        "before": 1748,
+        "after": 112396,
+        "gap": 0.289764404296875,
+        "top2_gap": 0.16173076629638672
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 310,
+        "before": 148380,
+        "after": 6368,
+        "gap": 0.4920520782470703,
+        "top2_gap": 0.4920520782470703
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 337,
+        "before": 3084,
+        "after": 60744,
+        "gap": 0.19635963439941406,
+        "top2_gap": 0.19635963439941406
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 338,
+        "before": 16261,
+        "after": 51520,
+        "gap": 0.016965866088867188,
+        "top2_gap": 0.016965866088867188
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 341,
+        "before": 148380,
+        "after": 112396,
+        "gap": 0.28242015838623047,
+        "top2_gap": 0.28242015838623047
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 370,
+        "before": 3084,
+        "after": 60744,
+        "gap": 0.042382240295410156,
+        "top2_gap": 0.042382240295410156
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 403,
+        "before": 3084,
+        "after": 60744,
+        "gap": 0.12949752807617188,
+        "top2_gap": 0.10315227508544922
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 406,
+        "before": 98204,
+        "after": 5331,
+        "gap": 0.051833152770996094,
+        "top2_gap": 0.051833152770996094
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 418,
+        "before": 12896,
+        "after": 248077,
+        "gap": 0.050156593322753906,
+        "top2_gap": 0.050156593322753906
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 468,
+        "before": 60744,
+        "after": 31930,
+        "gap": 0.11555862426757812,
+        "top2_gap": 0.10207271575927734
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 472,
+        "before": 5331,
+        "after": 58533,
+        "gap": 0.07651805877685547,
+        "top2_gap": 0.07651805877685547
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 481,
+        "before": 22,
+        "after": 101132,
+        "gap": 0.1912088394165039,
+        "top2_gap": 0.1912088394165039
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 495,
+        "before": 248077,
+        "after": 19004,
+        "gap": 0.03970623016357422,
+        "top2_gap": 0.03970623016357422
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 507,
+        "before": 148380,
+        "after": 102932,
+        "gap": 0.17039775848388672,
+        "top2_gap": 0.17039775848388672
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 536,
+        "before": 1565,
+        "after": 97059,
+        "gap": 0.016729354858398438,
+        "top2_gap": 0.016729354858398438
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 552,
+        "before": 248077,
+        "after": 96863,
+        "gap": 0.2402191162109375,
+        "top2_gap": 0.2402191162109375
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 605,
+        "before": 200674,
+        "after": 98364,
+        "gap": 0.09392166137695312,
+        "top2_gap": 0.09392166137695312
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 611,
+        "before": 1556,
+        "after": 41978,
+        "gap": 0.07848453521728516,
+        "top2_gap": 0.07848453521728516
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 612,
+        "before": 1556,
+        "after": 39915,
+        "gap": 0.0910806655883789,
+        "top2_gap": 0.0910806655883789
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 648,
+        "before": 179340,
+        "after": 166949,
+        "gap": 0.09774971008300781,
+        "top2_gap": 0.09774971008300781
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 712,
+        "before": 25114,
+        "after": 79454,
+        "gap": 0.08474063873291016,
+        "top2_gap": 0.08474063873291016
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 734,
+        "before": 10399,
+        "after": 6368,
+        "gap": 0.14930343627929688,
+        "top2_gap": 0.14930343627929688
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 743,
+        "before": 118422,
+        "after": 79454,
+        "gap": 0.1241750717163086,
+        "top2_gap": 0.1241750717163086
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 748,
+        "before": 59385,
+        "after": 133449,
+        "gap": 0.12436485290527344,
+        "top2_gap": 0.12436485290527344
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 771,
+        "before": 191201,
+        "after": 19569,
+        "gap": 0.1272430419921875,
+        "top2_gap": 0.1272430419921875
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 804,
+        "before": 152460,
+        "after": 446,
+        "gap": 0.1281270980834961,
+        "top2_gap": 0.08023357391357422
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 32,
+        "before": 248143,
+        "after": 96232,
+        "gap": 0.09084892272949219,
+        "top2_gap": 0.09084892272949219
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 36,
+        "before": 248077,
+        "after": 203709,
+        "gap": 0.05627155303955078,
+        "top2_gap": 0.05627155303955078
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 116,
+        "before": 248077,
+        "after": 6368,
+        "gap": 0.05488395690917969,
+        "top2_gap": 0.05488395690917969
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 151,
+        "before": 96695,
+        "after": 248077,
+        "gap": 0.11469459533691406,
+        "top2_gap": 0.11469459533691406
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 181,
+        "before": 15806,
+        "after": 248077,
+        "gap": 0.16981792449951172,
+        "top2_gap": 0.16981792449951172
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 182,
+        "before": 45696,
+        "after": 6368,
+        "gap": 0.2814197540283203,
+        "top2_gap": 0.1473827362060547
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 210,
+        "before": 78025,
+        "after": 248077,
+        "gap": 0.03854942321777344,
+        "top2_gap": 0.03854942321777344
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 211,
+        "before": 78025,
+        "after": 248077,
+        "gap": 0.12875843048095703,
+        "top2_gap": 0.12875843048095703
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 226,
+        "before": 248077,
+        "after": 6368,
+        "gap": 0.0653390884399414,
+        "top2_gap": 0.0653390884399414
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 280,
+        "before": 15806,
+        "after": 112200,
+        "gap": 0.12946319580078125,
+        "top2_gap": 0.12946319580078125
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 281,
+        "before": 45696,
+        "after": 96350,
+        "gap": 0.07334423065185547,
+        "top2_gap": 0.06495952606201172
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 282,
+        "before": 96350,
+        "after": 96695,
+        "gap": 0.11957740783691406,
+        "top2_gap": 0.11957740783691406
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 306,
+        "before": 97610,
+        "after": 248077,
+        "gap": 0.04901123046875,
+        "top2_gap": 0.04901123046875
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 307,
+        "before": 202292,
+        "after": 97610,
+        "gap": 0.10838508605957031,
+        "top2_gap": 0.10838508605957031
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 314,
+        "before": 96350,
+        "after": 118545,
+        "gap": 0.033400535583496094,
+        "top2_gap": 0.009840965270996094
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 315,
+        "before": 96350,
+        "after": 97059,
+        "gap": 0.1808919906616211,
+        "top2_gap": 0.16082286834716797
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 319,
+        "before": 122133,
+        "after": 248077,
+        "gap": 0.1266937255859375,
+        "top2_gap": 0.1266937255859375
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 338,
+        "before": 248077,
+        "after": 1748,
+        "gap": 0.08878326416015625,
+        "top2_gap": 0.08878326416015625
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 339,
+        "before": 97135,
+        "after": 97610,
+        "gap": 0.07962608337402344,
+        "top2_gap": 0.07962608337402344
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 340,
+        "before": 202292,
+        "after": 97610,
+        "gap": 0.02493762969970703,
+        "top2_gap": 0.02493762969970703
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 369,
+        "before": 98385,
+        "after": 248077,
+        "gap": 0.2899751663208008,
+        "top2_gap": 0.2899751663208008
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 376,
+        "before": 111200,
+        "after": 98358,
+        "gap": 0.09364986419677734,
+        "top2_gap": 0.04435253143310547
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 379,
+        "before": 116591,
+        "after": 112200,
+        "gap": 0.16241168975830078,
+        "top2_gap": 0.12255001068115234
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 380,
+        "before": 96737,
+        "after": 25546,
+        "gap": 0.1735687255859375,
+        "top2_gap": 0.09827995300292969
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 412,
+        "before": 99958,
+        "after": 115829,
+        "gap": 0.23708629608154297,
+        "top2_gap": 0.12257099151611328
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 436,
+        "before": 60744,
+        "after": 52851,
+        "gap": 0.062048912048339844,
+        "top2_gap": 0.062048912048339844
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 446,
+        "before": 96737,
+        "after": 25546,
+        "gap": 0.17731571197509766,
+        "top2_gap": 0.17731571197509766
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 453,
+        "before": 122133,
+        "after": 233221,
+        "gap": 0.1204538345336914,
+        "top2_gap": 0.10538101196289062
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 469,
+        "before": 233221,
+        "after": 52851,
+        "gap": 0.21463775634765625,
+        "top2_gap": 0.18268108367919922
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 479,
+        "before": 95779,
+        "after": 25546,
+        "gap": 0.28983306884765625,
+        "top2_gap": 0.28983306884765625
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 482,
+        "before": 9676,
+        "after": 120679,
+        "gap": 0.2054576873779297,
+        "top2_gap": 0.2054576873779297
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 538,
+        "before": 968,
+        "after": 248077,
+        "gap": 0.08775520324707031,
+        "top2_gap": 0.08775520324707031
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 542,
+        "before": 17281,
+        "after": 243219,
+        "gap": 0.12646484375,
+        "top2_gap": 0.12646484375
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 570,
+        "before": 968,
+        "after": 248077,
+        "gap": 0.09818744659423828,
+        "top2_gap": 0.09818744659423828
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 574,
+        "before": 38265,
+        "after": 22822,
+        "gap": 0.1650857925415039,
+        "top2_gap": 0.1650857925415039
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 585,
+        "before": 119249,
+        "after": 28971,
+        "gap": 0.22670555114746094,
+        "top2_gap": 0.22406768798828125
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 603,
+        "before": 968,
+        "after": 248077,
+        "gap": 0.022693634033203125,
+        "top2_gap": 0.022693634033203125
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 607,
+        "before": 97629,
+        "after": 51357,
+        "gap": 0.060538291931152344,
+        "top2_gap": 0.060538291931152344
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 635,
+        "before": 121761,
+        "after": 248077,
+        "gap": 0.08627891540527344,
+        "top2_gap": 0.08627891540527344
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 644,
+        "before": 52112,
+        "after": 41978,
+        "gap": 0.089813232421875,
+        "top2_gap": 0.089813232421875
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 652,
+        "before": 4575,
+        "after": 248077,
+        "gap": 0.05622291564941406,
+        "top2_gap": 0.05622291564941406
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 682,
+        "before": 25114,
+        "after": 140066,
+        "gap": 0.016053199768066406,
+        "top2_gap": 0.016053199768066406
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 686,
+        "before": 4575,
+        "after": 248077,
+        "gap": 0.07133960723876953,
+        "top2_gap": 0.07133960723876953
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 708,
+        "before": 98154,
+        "after": 6239,
+        "gap": 0.1497955322265625,
+        "top2_gap": 0.1497955322265625
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 742,
+        "before": 75,
+        "after": 1388,
+        "gap": 0.2367572784423828,
+        "top2_gap": 0.2367572784423828
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 70,
+        "before": 248077,
+        "after": 121761,
+        "gap": 0.08148860931396484,
+        "top2_gap": 0.08148860931396484
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 80,
+        "before": 6368,
+        "after": 248077,
+        "gap": 0.10064697265625,
+        "top2_gap": 0.10064697265625
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 144,
+        "before": 121761,
+        "after": 248077,
+        "gap": 0.06539440155029297,
+        "top2_gap": 0.06539440155029297
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 178,
+        "before": 154191,
+        "after": 121761,
+        "gap": 0.04220390319824219,
+        "top2_gap": 0.04220390319824219
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 206,
+        "before": 121761,
+        "after": 248077,
+        "gap": 0.13565921783447266,
+        "top2_gap": 0.13565921783447266
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 219,
+        "before": 74536,
+        "after": 248077,
+        "gap": 0.3303508758544922,
+        "top2_gap": 0.051959991455078125
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 243,
+        "before": 110745,
+        "after": 121761,
+        "gap": 0.06024360656738281,
+        "top2_gap": 0.03741168975830078
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 244,
+        "before": 99636,
+        "after": 100553,
+        "gap": 0.11305618286132812,
+        "top2_gap": 0.11305618286132812
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 248,
+        "before": 6368,
+        "after": 1388,
+        "gap": 0.1403188705444336,
+        "top2_gap": 0.1403188705444336
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 286,
+        "before": 31947,
+        "after": 22,
+        "gap": 0.2637901306152344,
+        "top2_gap": 0.08516693115234375
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 288,
+        "before": 108189,
+        "after": 248077,
+        "gap": 0.1667642593383789,
+        "top2_gap": 0.1667642593383789
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 301,
+        "before": 62593,
+        "after": 121761,
+        "gap": 0.17938995361328125,
+        "top2_gap": 0.17938995361328125
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 314,
+        "before": 11345,
+        "after": 1388,
+        "gap": 0.28980064392089844,
+        "top2_gap": 0.23656845092773438
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 316,
+        "before": 24,
+        "after": 1388,
+        "gap": 0.04885292053222656,
+        "top2_gap": 0.04885292053222656
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 317,
+        "before": 61413,
+        "after": 24,
+        "gap": 0.27390480041503906,
+        "top2_gap": 0.004588127136230469
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 321,
+        "before": 108189,
+        "after": 248077,
+        "gap": 0.1569051742553711,
+        "top2_gap": 0.1569051742553711
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 331,
+        "before": 44169,
+        "after": 121761,
+        "gap": 0.11101341247558594,
+        "top2_gap": 0.11101341247558594
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 342,
+        "before": 97551,
+        "after": 100553,
+        "gap": 0.19355487823486328,
+        "top2_gap": 0.10058021545410156
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 346,
+        "before": 15806,
+        "after": 19004,
+        "gap": 0.21549606323242188,
+        "top2_gap": 0.21549606323242188
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 350,
+        "before": 61413,
+        "after": 97935,
+        "gap": 0.3287820816040039,
+        "top2_gap": 0.1405467987060547
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 354,
+        "before": 108189,
+        "after": 31947,
+        "gap": 0.02008533477783203,
+        "top2_gap": 0.02008533477783203
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 358,
+        "before": 6368,
+        "after": 248077,
+        "gap": 0.06484127044677734,
+        "top2_gap": 0.06484127044677734
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 375,
+        "before": 98385,
+        "after": 100553,
+        "gap": 0.26338958740234375,
+        "top2_gap": 0.0906820297241211
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 377,
+        "before": 111200,
+        "after": 98623,
+        "gap": 0.0655670166015625,
+        "top2_gap": 0.0655670166015625
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 379,
+        "before": 96787,
+        "after": 98623,
+        "gap": 0.14159488677978516,
+        "top2_gap": 0.14159488677978516
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 384,
+        "before": 61413,
+        "after": 19724,
+        "gap": 0.2513761520385742,
+        "top2_gap": 0.2513761520385742
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 415,
+        "before": 24,
+        "after": 12,
+        "gap": 0.19221210479736328,
+        "top2_gap": 0.19221210479736328
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 418,
+        "before": 74536,
+        "after": 61413,
+        "gap": 0.10023307800292969,
+        "top2_gap": 0.10023307800292969
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 421,
+        "before": 74536,
+        "after": 248077,
+        "gap": 0.17247676849365234,
+        "top2_gap": 0.17247676849365234
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 454,
+        "before": 74536,
+        "after": 31947,
+        "gap": 0.19802188873291016,
+        "top2_gap": 0.19802188873291016
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 456,
+        "before": 74536,
+        "after": 47422,
+        "gap": 0.19788837432861328,
+        "top2_gap": 0.19788837432861328
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 457,
+        "before": 62808,
+        "after": 248077,
+        "gap": 0.10007953643798828,
+        "top2_gap": 0.043051719665527344
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 463,
+        "before": 130173,
+        "after": 44169,
+        "gap": 0.04782295227050781,
+        "top2_gap": 0.04782295227050781
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 473,
+        "before": 27124,
+        "after": 100553,
+        "gap": 0.21057796478271484,
+        "top2_gap": 0.21057796478271484
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 478,
+        "before": 27124,
+        "after": 33301,
+        "gap": 0.08546161651611328,
+        "top2_gap": 0.08546161651611328
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 518,
+        "before": 31947,
+        "after": 97935,
+        "gap": 0.07536506652832031,
+        "top2_gap": 0.07536506652832031
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 519,
+        "before": 98385,
+        "after": 31947,
+        "gap": 0.1292858123779297,
+        "top2_gap": 0.040993690490722656
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 537,
+        "before": 50188,
+        "after": 100553,
+        "gap": 0.08712577819824219,
+        "top2_gap": 0.08712577819824219
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 540,
+        "before": 77235,
+        "after": 28984,
+        "gap": 0.1435070037841797,
+        "top2_gap": 0.1435070037841797
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 545,
+        "before": 100656,
+        "after": 130908,
+        "gap": 0.028209686279296875,
+        "top2_gap": 0.028209686279296875
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 574,
+        "before": 27713,
+        "after": 3713,
+        "gap": 0.19156837463378906,
+        "top2_gap": 0.19156837463378906
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 583,
+        "before": 74536,
+        "after": 248077,
+        "gap": 0.06387805938720703,
+        "top2_gap": 0.05991840362548828
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 599,
+        "before": 74536,
+        "after": 248077,
+        "gap": 0.1101064682006836,
+        "top2_gap": 0.1101064682006836
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 607,
+        "before": 15015,
+        "after": 22008,
+        "gap": 0.3209981918334961,
+        "top2_gap": 0.061614990234375
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 614,
+        "before": 107747,
+        "after": 42928,
+        "gap": 0.2678346633911133,
+        "top2_gap": 0.2678346633911133
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 665,
+        "before": 248077,
+        "after": 74536,
+        "gap": 0.05633068084716797,
+        "top2_gap": 0.05633068084716797
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 717,
+        "before": 4575,
+        "after": 248077,
+        "gap": 0.07195377349853516,
+        "top2_gap": 0.07195377349853516
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 735,
+        "before": 74536,
+        "after": 1388,
+        "gap": 0.03351306915283203,
+        "top2_gap": 0.03351306915283203
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 773,
+        "before": 41978,
+        "after": 8258,
+        "gap": 0.12863445281982422,
+        "top2_gap": 0.12863445281982422
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 804,
+        "before": 73016,
+        "after": 53,
+        "gap": 0.19360733032226562,
+        "top2_gap": 0.19360733032226562
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 809,
+        "before": 41978,
+        "after": 79454,
+        "gap": 0.052402496337890625,
+        "top2_gap": 0.052402496337890625
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 813,
+        "before": 35759,
+        "after": 16186,
+        "gap": 0.08400726318359375,
+        "top2_gap": 0.049167633056640625
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 840,
+        "before": 19,
+        "after": 132351,
+        "gap": 0.2520103454589844,
+        "top2_gap": 0.2520103454589844
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 1006,
+        "before": 97956,
+        "after": 248077,
+        "gap": 0.07355213165283203,
+        "top2_gap": 0.07355213165283203
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 238,
+        "before": 248077,
+        "after": 6368,
+        "gap": 0.17569923400878906,
+        "top2_gap": 0.17569923400878906
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 268,
+        "before": 113066,
+        "after": 248077,
+        "gap": 0.016440391540527344,
+        "top2_gap": 0.016440391540527344
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 304,
+        "before": 147442,
+        "after": 6368,
+        "gap": 0.15149879455566406,
+        "top2_gap": 0.15149879455566406
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 305,
+        "before": 1748,
+        "after": 6368,
+        "gap": 0.35133934020996094,
+        "top2_gap": 0.35133934020996094
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 348,
+        "before": 119707,
+        "after": 97761,
+        "gap": 0.12512874603271484,
+        "top2_gap": 0.12512874603271484
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 350,
+        "before": 124420,
+        "after": 111768,
+        "gap": 0.18448638916015625,
+        "top2_gap": 0.10729694366455078
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 357,
+        "before": 15806,
+        "after": 248077,
+        "gap": 0.10282707214355469,
+        "top2_gap": 0.10282707214355469
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 370,
+        "before": 147442,
+        "after": 13614,
+        "gap": 0.04083824157714844,
+        "top2_gap": 0.04083824157714844
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 371,
+        "before": 1748,
+        "after": 120181,
+        "gap": 0.3920011520385742,
+        "top2_gap": 0.3920011520385742
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 380,
+        "before": 16,
+        "after": 97761,
+        "gap": 0.2789955139160156,
+        "top2_gap": 0.2789955139160156
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 385,
+        "before": 56751,
+        "after": 179418,
+        "gap": 0.1275634765625,
+        "top2_gap": 0.1275634765625
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 415,
+        "before": 119707,
+        "after": 99488,
+        "gap": 0.2672109603881836,
+        "top2_gap": 0.07807064056396484
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 416,
+        "before": 124420,
+        "after": 99488,
+        "gap": 0.2014932632446289,
+        "top2_gap": 0.2014932632446289
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 417,
+        "before": 56751,
+        "after": 179418,
+        "gap": 0.02048969268798828,
+        "top2_gap": 0.02048969268798828
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 419,
+        "before": 179418,
+        "after": 15806,
+        "gap": 0.058834075927734375,
+        "top2_gap": 0.058834075927734375
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 424,
+        "before": 248077,
+        "after": 15806,
+        "gap": 0.010496139526367188,
+        "top2_gap": 0.010496139526367188
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 442,
+        "before": 101764,
+        "after": 98462,
+        "gap": 0.24960899353027344,
+        "top2_gap": 0.24960899353027344
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 474,
+        "before": 169126,
+        "after": 17861,
+        "gap": 0.11619377136230469,
+        "top2_gap": 0.021890640258789062
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 498,
+        "before": 29623,
+        "after": 248077,
+        "gap": 0.11159610748291016,
+        "top2_gap": 0.11159610748291016
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 511,
+        "before": 179340,
+        "after": 100098,
+        "gap": 0.06670856475830078,
+        "top2_gap": 0.06670856475830078
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 539,
+        "before": 214474,
+        "after": 118677,
+        "gap": 0.30656909942626953,
+        "top2_gap": 0.2931070327758789
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 542,
+        "before": 131007,
+        "after": 25114,
+        "gap": 0.14254188537597656,
+        "top2_gap": 0.14254188537597656
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 547,
+        "before": 99799,
+        "after": 166949,
+        "gap": 0.2630300521850586,
+        "top2_gap": 0.2213764190673828
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 548,
+        "before": 33676,
+        "after": 5370,
+        "gap": 0.20839214324951172,
+        "top2_gap": 0.20839214324951172
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 566,
+        "before": 74536,
+        "after": 96448,
+        "gap": 0.19523143768310547,
+        "top2_gap": 0.08236885070800781
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 597,
+        "before": 29623,
+        "after": 248077,
+        "gap": 0.053404808044433594,
+        "top2_gap": 0.053404808044433594
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 601,
+        "before": 248077,
+        "after": 74536,
+        "gap": 0.010865211486816406,
+        "top2_gap": 0.010865211486816406
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 605,
+        "before": 96283,
+        "after": 125508,
+        "gap": 0.22583293914794922,
+        "top2_gap": 0.22583293914794922
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 611,
+        "before": 79454,
+        "after": 25114,
+        "gap": 0.10777568817138672,
+        "top2_gap": 0.10777568817138672
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 645,
+        "before": 79454,
+        "after": 25114,
+        "gap": 0.0399169921875,
+        "top2_gap": 0.021497726440429688
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 651,
+        "before": 248077,
+        "after": 29623,
+        "gap": 0.10263633728027344,
+        "top2_gap": 0.10263633728027344
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 677,
+        "before": 25114,
+        "after": 30249,
+        "gap": 0.02708911895751953,
+        "top2_gap": 0.02708911895751953
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 704,
+        "before": 1388,
+        "after": 49,
+        "gap": 0.16807079315185547,
+        "top2_gap": 0.060535430908203125
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 739,
+        "before": 783,
+        "after": 72638,
+        "gap": 0.15462398529052734,
+        "top2_gap": 0.09762191772460938
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 745,
+        "before": 25114,
+        "after": 43670,
+        "gap": 0.12218189239501953,
+        "top2_gap": 0.12218189239501953
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 772,
+        "before": 86635,
+        "after": 1388,
+        "gap": 0.2679576873779297,
+        "top2_gap": 0.2679576873779297
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 778,
+        "before": 248077,
+        "after": 179418,
+        "gap": 0.02712249755859375,
+        "top2_gap": 0.02712249755859375
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 31,
+        "before": 82050,
+        "after": 7379,
+        "gap": 0.1976909637451172,
+        "top2_gap": 0.12389087677001953
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 39,
+        "before": 204887,
+        "after": 248077,
+        "gap": 0.0963296890258789,
+        "top2_gap": 0.0963296890258789
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 45,
+        "before": 204887,
+        "after": 179418,
+        "gap": 0.10179328918457031,
+        "top2_gap": 0.10179328918457031
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 46,
+        "before": 179418,
+        "after": 204887,
+        "gap": 0.027317047119140625,
+        "top2_gap": 0.027317047119140625
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 78,
+        "before": 248077,
+        "after": 15806,
+        "gap": 0.09567928314208984,
+        "top2_gap": 0.09567928314208984
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 150,
+        "before": 248077,
+        "after": 15806,
+        "gap": 0.1412220001220703,
+        "top2_gap": 0.1412220001220703
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 171,
+        "before": 60744,
+        "after": 98888,
+        "gap": 0.3040313720703125,
+        "top2_gap": 0.3040313720703125
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 207,
+        "before": 97320,
+        "after": 36296,
+        "gap": 0.05966377258300781,
+        "top2_gap": 0.05966377258300781
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 217,
+        "before": 105342,
+        "after": 96112,
+        "gap": 0.09610652923583984,
+        "top2_gap": 0.09610652923583984
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 232,
+        "before": 248077,
+        "after": 11793,
+        "gap": 0.0772552490234375,
+        "top2_gap": 0.0772552490234375
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 266,
+        "before": 96112,
+        "after": 93854,
+        "gap": 0.12476825714111328,
+        "top2_gap": 0.12476825714111328
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 267,
+        "before": 96112,
+        "after": 29623,
+        "gap": 0.16231250762939453,
+        "top2_gap": 0.16231250762939453
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 309,
+        "before": 96112,
+        "after": 15806,
+        "gap": 0.18938255310058594,
+        "top2_gap": 0.18938255310058594
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 321,
+        "before": 39231,
+        "after": 96516,
+        "gap": 0.13996124267578125,
+        "top2_gap": 0.13996124267578125
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 330,
+        "before": 61413,
+        "after": 19004,
+        "gap": 0.1299448013305664,
+        "top2_gap": 0.051971435546875
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 331,
+        "before": 170929,
+        "after": 11793,
+        "gap": 0.21547603607177734,
+        "top2_gap": 0.21547603607177734
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 335,
+        "before": 96112,
+        "after": 98888,
+        "gap": 0.1089630126953125,
+        "top2_gap": 0.1089630126953125
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 339,
+        "before": 103787,
+        "after": 97320,
+        "gap": 0.11183357238769531,
+        "top2_gap": 0.11183357238769531
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 364,
+        "before": 170929,
+        "after": 11793,
+        "gap": 0.10602855682373047,
+        "top2_gap": 0.08483600616455078
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 368,
+        "before": 96112,
+        "after": 98888,
+        "gap": 0.1232004165649414,
+        "top2_gap": 0.1232004165649414
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 379,
+        "before": 100312,
+        "after": 194612,
+        "gap": 0.05415821075439453,
+        "top2_gap": 0.05415821075439453
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 401,
+        "before": 103440,
+        "after": 96214,
+        "gap": 0.09219551086425781,
+        "top2_gap": 0.09219551086425781
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 402,
+        "before": 101807,
+        "after": 99951,
+        "gap": 0.33354663848876953,
+        "top2_gap": 0.04456520080566406
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 412,
+        "before": 6516,
+        "after": 5259,
+        "gap": 0.14323711395263672,
+        "top2_gap": 0.14323711395263672
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 430,
+        "before": 248077,
+        "after": 179418,
+        "gap": 0.14928054809570312,
+        "top2_gap": 0.14928054809570312
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 434,
+        "before": 76385,
+        "after": 1686,
+        "gap": 0.1485586166381836,
+        "top2_gap": 0.09369087219238281
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 464,
+        "before": 23095,
+        "after": 2324,
+        "gap": 0.06780338287353516,
+        "top2_gap": 0.06780338287353516
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 500,
+        "before": 19,
+        "after": 16120,
+        "gap": 0.20372962951660156,
+        "top2_gap": 0.07294082641601562
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 502,
+        "before": 96207,
+        "after": 25114,
+        "gap": 0.2578582763671875,
+        "top2_gap": 0.248779296875
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 503,
+        "before": 56360,
+        "after": 25114,
+        "gap": 0.0583648681640625,
+        "top2_gap": 0.0583648681640625
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 599,
+        "before": 248077,
+        "after": 17289,
+        "gap": 0.06675052642822266,
+        "top2_gap": 0.06675052642822266
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 634,
+        "before": 71249,
+        "after": 151156,
+        "gap": 0.24212265014648438,
+        "top2_gap": 0.12521743774414062
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 635,
+        "before": 56360,
+        "after": 239632,
+        "gap": 0.45246315002441406,
+        "top2_gap": 0.45246315002441406
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 636,
+        "before": 7628,
+        "after": 239632,
+        "gap": 0.3564291000366211,
+        "top2_gap": 0.3564291000366211
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 676,
+        "before": 248077,
+        "after": 203709,
+        "gap": 0.07602214813232422,
+        "top2_gap": 0.07602214813232422
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 710,
+        "before": 51520,
+        "after": 248077,
+        "gap": 0.15676116943359375,
+        "top2_gap": 0.15676116943359375
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 711,
+        "before": 56751,
+        "after": 248077,
+        "gap": 0.18516159057617188,
+        "top2_gap": 0.18516159057617188
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 804,
+        "before": 248077,
+        "after": 37817,
+        "gap": 0.1098470687866211,
+        "top2_gap": 0.1098470687866211
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 872,
+        "before": 8266,
+        "after": 101262,
+        "gap": 0.30837535858154297,
+        "top2_gap": 0.30837535858154297
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 935,
+        "before": 203709,
+        "after": 248077,
+        "gap": 0.15067291259765625,
+        "top2_gap": 0.15067291259765625
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 340,
+        "before": 97610,
+        "after": 248077,
+        "gap": 0.12715625762939453,
+        "top2_gap": 0.12715625762939453
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 439,
+        "before": 97610,
+        "after": 82050,
+        "gap": 0.0940866470336914,
+        "top2_gap": 0.0940866470336914
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 473,
+        "before": 47305,
+        "after": 97610,
+        "gap": 0.1713237762451172,
+        "top2_gap": 0.1713237762451172
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 504,
+        "before": 244118,
+        "after": 248077,
+        "gap": 0.08519268035888672,
+        "top2_gap": 0.08519268035888672
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 508,
+        "before": 62,
+        "after": 248077,
+        "gap": 0.22071266174316406,
+        "top2_gap": 0.22071266174316406
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 544,
+        "before": 13605,
+        "after": 62,
+        "gap": 0.08823490142822266,
+        "top2_gap": 0.08823490142822266
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 574,
+        "before": 21026,
+        "after": 3430,
+        "gap": 0.15058040618896484,
+        "top2_gap": 0.15058040618896484
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 575,
+        "before": 62,
+        "after": 26324,
+        "gap": 0.10504913330078125,
+        "top2_gap": 0.10504913330078125
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 604,
+        "before": 97610,
+        "after": 61236,
+        "gap": 0.1254901885986328,
+        "top2_gap": 0.1254901885986328
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 611,
+        "before": 13605,
+        "after": 6368,
+        "gap": 0.18850135803222656,
+        "top2_gap": 0.03432273864746094
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 627,
+        "before": 6368,
+        "after": 248077,
+        "gap": 0.041892051696777344,
+        "top2_gap": 0.041892051696777344
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 645,
+        "before": 6368,
+        "after": 7850,
+        "gap": 0.09318065643310547,
+        "top2_gap": 0.09318065643310547
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 674,
+        "before": 30252,
+        "after": 26324,
+        "gap": 0.08447456359863281,
+        "top2_gap": 0.08447456359863281
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 677,
+        "before": 13605,
+        "after": 14152,
+        "gap": 0.15258121490478516,
+        "top2_gap": 0.15258121490478516
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 678,
+        "before": 3430,
+        "after": 7850,
+        "gap": 0.143310546875,
+        "top2_gap": 0.143310546875
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 680,
+        "before": 3430,
+        "after": 13605,
+        "gap": 0.042931556701660156,
+        "top2_gap": 0.030617713928222656
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 701,
+        "before": 86551,
+        "after": 96427,
+        "gap": 0.17341995239257812,
+        "top2_gap": 0.17341995239257812
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 703,
+        "before": 18614,
+        "after": 48280,
+        "gap": 0.19118785858154297,
+        "top2_gap": 0.14217090606689453
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 767,
+        "before": 6491,
+        "after": 96427,
+        "gap": 0.2273101806640625,
+        "top2_gap": 0.2273101806640625
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 786,
+        "before": 153179,
+        "after": 83764,
+        "gap": 0.037476539611816406,
+        "top2_gap": 0.037476539611816406
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 794,
+        "before": 99388,
+        "after": 96427,
+        "gap": 0.16128158569335938,
+        "top2_gap": 0.16128158569335938
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 797,
+        "before": 148445,
+        "after": 62971,
+        "gap": 0.06577014923095703,
+        "top2_gap": 0.04221534729003906
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 799,
+        "before": 27446,
+        "after": 3515,
+        "gap": 0.05277061462402344,
+        "top2_gap": 0.05277061462402344
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 829,
+        "before": 89706,
+        "after": 97984,
+        "gap": 0.11625289916992188,
+        "top2_gap": 0.11625289916992188
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 833,
+        "before": 31732,
+        "after": 42928,
+        "gap": 0.33763980865478516,
+        "top2_gap": 0.33763980865478516
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 834,
+        "before": 8961,
+        "after": 35197,
+        "gap": 0.4322090148925781,
+        "top2_gap": 0.2071857452392578
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 862,
+        "before": 133673,
+        "after": 28964,
+        "gap": 0.09156990051269531,
+        "top2_gap": 0.06561088562011719
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 868,
+        "before": 5468,
+        "after": 98385,
+        "gap": 0.5644474029541016,
+        "top2_gap": 0.24590396881103516
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 901,
+        "before": 3826,
+        "after": 1061,
+        "gap": 0.04027843475341797,
+        "top2_gap": 0.036319732666015625
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 910,
+        "before": 248077,
+        "after": 197338,
+        "gap": 0.10565376281738281,
+        "top2_gap": 0.10565376281738281
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 439,
+        "before": 248077,
+        "after": 82050,
+        "gap": 0.06449699401855469,
+        "top2_gap": 0.06449699401855469
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 446,
+        "before": 248077,
+        "after": 1019,
+        "gap": 0.026784896850585938,
+        "top2_gap": 0.026784896850585938
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 472,
+        "before": 248077,
+        "after": 82050,
+        "gap": 0.07498550415039062,
+        "top2_gap": 0.07498550415039062
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 506,
+        "before": 248077,
+        "after": 82050,
+        "gap": 0.17638206481933594,
+        "top2_gap": 0.17638206481933594
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 577,
+        "before": 248077,
+        "after": 114796,
+        "gap": 0.13695716857910156,
+        "top2_gap": 0.13695716857910156
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 644,
+        "before": 29755,
+        "after": 66770,
+        "gap": 0.1813812255859375,
+        "top2_gap": 0.17361831665039062
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 673,
+        "before": 248077,
+        "after": 13605,
+        "gap": 0.10388374328613281,
+        "top2_gap": 0.10388374328613281
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 706,
+        "before": 58581,
+        "after": 3232,
+        "gap": 0.1701822280883789,
+        "top2_gap": 0.11734199523925781
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 717,
+        "before": 34605,
+        "after": 162131,
+        "gap": 0.0641326904296875,
+        "top2_gap": 0.0641326904296875
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 750,
+        "before": 178909,
+        "after": 162131,
+        "gap": 0.06118011474609375,
+        "top2_gap": 0.0379638671875
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 762,
+        "before": 3508,
+        "after": 93854,
+        "gap": 0.14443206787109375,
+        "top2_gap": 0.08506584167480469
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 764,
+        "before": 50689,
+        "after": 95901,
+        "gap": 0.21612167358398438,
+        "top2_gap": 0.21612167358398438
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 766,
+        "before": 156386,
+        "after": 29755,
+        "gap": 0.2050457000732422,
+        "top2_gap": 0.2050457000732422
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 783,
+        "before": 178909,
+        "after": 96272,
+        "gap": 0.1722249984741211,
+        "top2_gap": 0.1722249984741211
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 806,
+        "before": 77648,
+        "after": 36098,
+        "gap": 0.05422782897949219,
+        "top2_gap": 0.05422782897949219
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 873,
+        "before": 248077,
+        "after": 12,
+        "gap": 0.18435001373291016,
+        "top2_gap": 0.10179519653320312
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 877,
+        "before": 8258,
+        "after": 38364,
+        "gap": 0.09001922607421875,
+        "top2_gap": 0.09001922607421875
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 904,
+        "before": 51520,
+        "after": 66770,
+        "gap": 0.20216655731201172,
+        "top2_gap": 0.20216655731201172
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 477,
+        "before": 13605,
+        "after": 248077,
+        "gap": 0.05248451232910156,
+        "top2_gap": 0.05248451232910156
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 506,
+        "before": 3508,
+        "after": 248077,
+        "gap": 0.13121986389160156,
+        "top2_gap": 0.13121986389160156
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 578,
+        "before": 6368,
+        "after": 248077,
+        "gap": 0.040579795837402344,
+        "top2_gap": 0.040579795837402344
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 600,
+        "before": 45175,
+        "after": 248077,
+        "gap": 0.07133293151855469,
+        "top2_gap": 0.07133293151855469
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 603,
+        "before": 3508,
+        "after": 248077,
+        "gap": 0.1273794174194336,
+        "top2_gap": 0.1273794174194336
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 606,
+        "before": 14118,
+        "after": 248077,
+        "gap": 0.12909603118896484,
+        "top2_gap": 0.12909603118896484
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 612,
+        "before": 248077,
+        "after": 6368,
+        "gap": 0.21078872680664062,
+        "top2_gap": 0.04302406311035156
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 613,
+        "before": 24781,
+        "after": 248077,
+        "gap": 0.03929615020751953,
+        "top2_gap": 0.03929615020751953
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 633,
+        "before": 45175,
+        "after": 96112,
+        "gap": 0.2751178741455078,
+        "top2_gap": 0.25841712951660156
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 636,
+        "before": 3508,
+        "after": 248077,
+        "gap": 0.11781787872314453,
+        "top2_gap": 0.11781787872314453
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 639,
+        "before": 14118,
+        "after": 248077,
+        "gap": 0.20130634307861328,
+        "top2_gap": 0.20130634307861328
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 647,
+        "before": 24781,
+        "after": 248077,
+        "gap": 0.07114028930664062,
+        "top2_gap": 0.07114028930664062
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 673,
+        "before": 9890,
+        "after": 58581,
+        "gap": 0.14766311645507812,
+        "top2_gap": 0.14766311645507812
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 688,
+        "before": 51520,
+        "after": 248077,
+        "gap": 0.11328506469726562,
+        "top2_gap": 0.11328506469726562
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 695,
+        "before": 248077,
+        "after": 233221,
+        "gap": 0.06456279754638672,
+        "top2_gap": 0.06456279754638672
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 705,
+        "before": 34455,
+        "after": 178909,
+        "gap": 0.11184310913085938,
+        "top2_gap": 0.11184310913085938
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 733,
+        "before": 17157,
+        "after": 96112,
+        "gap": 0.06001567840576172,
+        "top2_gap": 0.06001567840576172
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 746,
+        "before": 96695,
+        "after": 23315,
+        "gap": 0.04459095001220703,
+        "top2_gap": 0.04459095001220703
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 767,
+        "before": 17183,
+        "after": 66770,
+        "gap": 0.2737884521484375,
+        "top2_gap": 0.24416446685791016
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 770,
+        "before": 149041,
+        "after": 99388,
+        "gap": 0.13565349578857422,
+        "top2_gap": 0.13565349578857422
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 783,
+        "before": 178909,
+        "after": 232702,
+        "gap": 0.16408157348632812,
+        "top2_gap": 0.16408157348632812
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 802,
+        "before": 99286,
+        "after": 99388,
+        "gap": 0.11649894714355469,
+        "top2_gap": 0.11649894714355469
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 803,
+        "before": 25546,
+        "after": 99388,
+        "gap": 0.0699462890625,
+        "top2_gap": 0.0699462890625
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 875,
+        "before": 215809,
+        "after": 29222,
+        "gap": 0.09868621826171875,
+        "top2_gap": 0.09868621826171875
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 879,
+        "before": 39623,
+        "after": 203709,
+        "gap": 0.018158912658691406,
+        "top2_gap": 0.018158912658691406
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 900,
+        "before": 10399,
+        "after": 248077,
+        "gap": 0.13744354248046875,
+        "top2_gap": 0.13744354248046875
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 904,
+        "before": 38549,
+        "after": 220,
+        "gap": 0.17904090881347656,
+        "top2_gap": 0.17904090881347656
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 374,
+        "before": 82050,
+        "after": 248077,
+        "gap": 0.02486419677734375,
+        "top2_gap": 0.02486419677734375
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 500,
+        "before": 670,
+        "after": 248077,
+        "gap": 0.03334236145019531,
+        "top2_gap": 0.03334236145019531
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 673,
+        "before": 1243,
+        "after": 84135,
+        "gap": 0.2987337112426758,
+        "top2_gap": 0.2232685089111328
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 705,
+        "before": 43449,
+        "after": 84135,
+        "gap": 0.09602928161621094,
+        "top2_gap": 0.09602928161621094
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 706,
+        "before": 1243,
+        "after": 84135,
+        "gap": 0.19207286834716797,
+        "top2_gap": 0.19207286834716797
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 740,
+        "before": 84135,
+        "after": 13605,
+        "gap": 0.2567558288574219,
+        "top2_gap": 0.2567558288574219
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 741,
+        "before": 84135,
+        "after": 184423,
+        "gap": 0.07744598388671875,
+        "top2_gap": 0.07744598388671875
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 746,
+        "before": 22258,
+        "after": 29755,
+        "gap": 0.13054561614990234,
+        "top2_gap": 0.13054561614990234
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 772,
+        "before": 3430,
+        "after": 18614,
+        "gap": 0.20084285736083984,
+        "top2_gap": 0.17917633056640625
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 774,
+        "before": 184423,
+        "after": 84135,
+        "gap": 0.1533832550048828,
+        "top2_gap": 0.1533832550048828
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 775,
+        "before": 51520,
+        "after": 84135,
+        "gap": 0.15348052978515625,
+        "top2_gap": 0.15348052978515625
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 803,
+        "before": 58696,
+        "after": 47305,
+        "gap": 0.24509620666503906,
+        "top2_gap": 0.24509620666503906
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 806,
+        "before": 7820,
+        "after": 13605,
+        "gap": 0.03894519805908203,
+        "top2_gap": 0.03894519805908203
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 809,
+        "before": 51520,
+        "after": 29755,
+        "gap": 0.19693279266357422,
+        "top2_gap": 0.11702919006347656
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 846,
+        "before": 51520,
+        "after": 6516,
+        "gap": 0.07798004150390625,
+        "top2_gap": 0.07798004150390625
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 859,
+        "before": 79608,
+        "after": 31532,
+        "gap": 0.10512733459472656,
+        "top2_gap": 0.049508094787597656
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 866,
+        "before": 66770,
+        "after": 37005,
+        "gap": 0.33043766021728516,
+        "top2_gap": 0.33043766021728516
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 867,
+        "before": 96112,
+        "after": 151036,
+        "gap": 0.14780235290527344,
+        "top2_gap": 0.14780235290527344
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 870,
+        "before": 24720,
+        "after": 96695,
+        "gap": 0.10982322692871094,
+        "top2_gap": 0.10982322692871094
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 880,
+        "before": 58911,
+        "after": 126333,
+        "gap": 0.16610336303710938,
+        "top2_gap": 0.0650796890258789
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 972,
+        "before": 21,
+        "after": 58499,
+        "gap": 0.15704917907714844,
+        "top2_gap": 0.15704917907714844
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 229,
+        "before": 18642,
+        "after": 248077,
+        "gap": 0.10910224914550781,
+        "top2_gap": 0.10910224914550781
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 640,
+        "before": 62,
+        "after": 248077,
+        "gap": 0.04520416259765625,
+        "top2_gap": 0.04520416259765625
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 733,
+        "before": 3430,
+        "after": 248077,
+        "gap": 0.18033123016357422,
+        "top2_gap": 0.18033123016357422
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 777,
+        "before": 160719,
+        "after": 94318,
+        "gap": 0.19893169403076172,
+        "top2_gap": 0.19893169403076172
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 810,
+        "before": 22258,
+        "after": 84250,
+        "gap": 0.1151285171508789,
+        "top2_gap": 0.1151285171508789
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 812,
+        "before": 22258,
+        "after": 99878,
+        "gap": 0.08668136596679688,
+        "top2_gap": 0.08668136596679688
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 828,
+        "before": 96427,
+        "after": 153202,
+        "gap": 0.0748128890991211,
+        "top2_gap": 0.04163169860839844
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 835,
+        "before": 96112,
+        "after": 66770,
+        "gap": 0.028998374938964844,
+        "top2_gap": 0.028998374938964844
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 839,
+        "before": 99388,
+        "after": 7699,
+        "gap": 0.1896648406982422,
+        "top2_gap": 0.1896648406982422
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 844,
+        "before": 99055,
+        "after": 22258,
+        "gap": 0.12327098846435547,
+        "top2_gap": 0.12327098846435547
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 903,
+        "before": 16950,
+        "after": 96928,
+        "gap": 0.1434793472290039,
+        "top2_gap": 0.1434793472290039
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 909,
+        "before": 97763,
+        "after": 96926,
+        "gap": 0.3090248107910156,
+        "top2_gap": 0.3090248107910156
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 941,
+        "before": 97536,
+        "after": 96073,
+        "gap": 0.1337575912475586,
+        "top2_gap": 0.1337575912475586
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 942,
+        "before": 95726,
+        "after": 220,
+        "gap": 0.10260009765625,
+        "top2_gap": 0.10260009765625
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 945,
+        "before": 248077,
+        "after": 51520,
+        "gap": 0.03915119171142578,
+        "top2_gap": 0.03915119171142578
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 64,
+        "before": 6368,
+        "after": 248077,
+        "gap": 0.17127227783203125,
+        "top2_gap": 0.17127227783203125
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 406,
+        "before": 97610,
+        "after": 248077,
+        "gap": 0.06147193908691406,
+        "top2_gap": 0.06147193908691406
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 481,
+        "before": 248077,
+        "after": 164260,
+        "gap": 0.12301254272460938,
+        "top2_gap": 0.12301254272460938
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 506,
+        "before": 97610,
+        "after": 107785,
+        "gap": 0.13974571228027344,
+        "top2_gap": 0.1150827407836914
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 512,
+        "before": 45175,
+        "after": 6368,
+        "gap": 0.18758487701416016,
+        "top2_gap": 0.18758487701416016
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 539,
+        "before": 97610,
+        "after": 199683,
+        "gap": 0.15957164764404297,
+        "top2_gap": 0.10364913940429688
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 572,
+        "before": 6090,
+        "after": 199683,
+        "gap": 0.10268211364746094,
+        "top2_gap": 0.10268211364746094
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 579,
+        "before": 26801,
+        "after": 164260,
+        "gap": 0.26433372497558594,
+        "top2_gap": 0.12378406524658203
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 581,
+        "before": 26801,
+        "after": 248077,
+        "gap": 0.20717620849609375,
+        "top2_gap": 0.20717620849609375
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 582,
+        "before": 26801,
+        "after": 248077,
+        "gap": 0.26450061798095703,
+        "top2_gap": 0.26450061798095703
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 583,
+        "before": 26801,
+        "after": 248077,
+        "gap": 0.1905679702758789,
+        "top2_gap": 0.1905679702758789
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 599,
+        "before": 248077,
+        "after": 90168,
+        "gap": 0.040287017822265625,
+        "top2_gap": 0.040287017822265625
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 601,
+        "before": 199683,
+        "after": 29623,
+        "gap": 0.11623668670654297,
+        "top2_gap": 0.11623668670654297
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 611,
+        "before": 26801,
+        "after": 52062,
+        "gap": 0.35211658477783203,
+        "top2_gap": 0.35211658477783203
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 617,
+        "before": 82050,
+        "after": 248077,
+        "gap": 0.1235208511352539,
+        "top2_gap": 0.1235208511352539
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 644,
+        "before": 26801,
+        "after": 52062,
+        "gap": 0.24208641052246094,
+        "top2_gap": 0.24208641052246094
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 650,
+        "before": 45175,
+        "after": 82050,
+        "gap": 0.14244937896728516,
+        "top2_gap": 0.12183856964111328
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 667,
+        "before": 29623,
+        "after": 199683,
+        "gap": 0.0488739013671875,
+        "top2_gap": 0.0488739013671875
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 673,
+        "before": 111200,
+        "after": 6241,
+        "gap": 0.04010486602783203,
+        "top2_gap": 0.04010486602783203
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 676,
+        "before": 6241,
+        "after": 52062,
+        "gap": 0.44187450408935547,
+        "top2_gap": 0.44187450408935547
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 685,
+        "before": 62808,
+        "after": 248077,
+        "gap": 0.08206844329833984,
+        "top2_gap": 0.08086395263671875
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 698,
+        "before": 126086,
+        "after": 96427,
+        "gap": 0.1317462921142578,
+        "top2_gap": 0.01592731475830078
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 700,
+        "before": 199683,
+        "after": 29623,
+        "gap": 0.025518417358398438,
+        "top2_gap": 0.021546363830566406
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 705,
+        "before": 6090,
+        "after": 8873,
+        "gap": 0.11867046356201172,
+        "top2_gap": 0.0776519775390625
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 711,
+        "before": 26801,
+        "after": 96392,
+        "gap": 0.2995586395263672,
+        "top2_gap": 0.2995586395263672
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 732,
+        "before": 122871,
+        "after": 16,
+        "gap": 0.11469459533691406,
+        "top2_gap": 0.11469459533691406
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 736,
+        "before": 6090,
+        "after": 36098,
+        "gap": 0.14406204223632812,
+        "top2_gap": 0.14406204223632812
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 740,
+        "before": 66770,
+        "after": 6596,
+        "gap": 0.04561328887939453,
+        "top2_gap": 0.04561328887939453
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 754,
+        "before": 62808,
+        "after": 248077,
+        "gap": 0.09419822692871094,
+        "top2_gap": 0.068878173828125
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 760,
+        "before": 36304,
+        "after": 36431,
+        "gap": 0.04287433624267578,
+        "top2_gap": 0.04287433624267578
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 765,
+        "before": 122871,
+        "after": 16,
+        "gap": 0.08166122436523438,
+        "top2_gap": 0.08166122436523438
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 769,
+        "before": 6090,
+        "after": 36098,
+        "gap": 0.17286300659179688,
+        "top2_gap": 0.17286300659179688
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 803,
+        "before": 36523,
+        "after": 59552,
+        "gap": 0.18584060668945312,
+        "top2_gap": 0.18584060668945312
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 805,
+        "before": 120181,
+        "after": 49028,
+        "gap": 0.29023075103759766,
+        "top2_gap": 0.29023075103759766
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 806,
+        "before": 37788,
+        "after": 139423,
+        "gap": 0.09791278839111328,
+        "top2_gap": 0.09791278839111328
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 844,
+        "before": 54707,
+        "after": 121231,
+        "gap": 0.11536979675292969,
+        "top2_gap": 0.11536979675292969
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 863,
+        "before": 37005,
+        "after": 96863,
+        "gap": 0.15500259399414062,
+        "top2_gap": 0.15500259399414062
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 917,
+        "before": 248077,
+        "after": 16,
+        "gap": 0.07165813446044922,
+        "top2_gap": 0.07165813446044922
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 473,
+        "before": 248077,
+        "after": 97935,
+        "gap": 0.06136512756347656,
+        "top2_gap": 0.06136512756347656
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 605,
+        "before": 149041,
+        "after": 97935,
+        "gap": 0.2689504623413086,
+        "top2_gap": 0.2689504623413086
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 664,
+        "before": 18894,
+        "after": 97610,
+        "gap": 0.07206439971923828,
+        "top2_gap": 0.07206439971923828
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 673,
+        "before": 145211,
+        "after": 248077,
+        "gap": 0.04821014404296875,
+        "top2_gap": 0.04821014404296875
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 676,
+        "before": 33287,
+        "after": 51520,
+        "gap": 0.10086727142333984,
+        "top2_gap": 0.014080047607421875
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 696,
+        "before": 248077,
+        "after": 126634,
+        "gap": 0.1805868148803711,
+        "top2_gap": 0.08584976196289062
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 697,
+        "before": 18894,
+        "after": 97610,
+        "gap": 0.17739009857177734,
+        "top2_gap": 0.17739009857177734
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 703,
+        "before": 97935,
+        "after": 96222,
+        "gap": 0.2439422607421875,
+        "top2_gap": 0.24178791046142578
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 766,
+        "before": 120354,
+        "after": 148795,
+        "gap": 0.06894254684448242,
+        "top2_gap": 0.06894254684448242
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 774,
+        "before": 111200,
+        "after": 74298,
+        "gap": 0.25940990447998047,
+        "top2_gap": 0.25940990447998047
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 777,
+        "before": 246720,
+        "after": 15806,
+        "gap": 0.12061500549316406,
+        "top2_gap": 0.12061500549316406
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 784,
+        "before": 153202,
+        "after": 248077,
+        "gap": 0.1875143051147461,
+        "top2_gap": 0.1875143051147461
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 814,
+        "before": 47813,
+        "after": 26801,
+        "gap": 0.07301902770996094,
+        "top2_gap": 0.07301902770996094
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 829,
+        "before": 95974,
+        "after": 126634,
+        "gap": 0.3480062484741211,
+        "top2_gap": 0.3480062484741211
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 834,
+        "before": 95974,
+        "after": 97795,
+        "gap": 0.27311134338378906,
+        "top2_gap": 0.27311134338378906
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 901,
+        "before": 18,
+        "after": 22008,
+        "gap": 0.10784435272216797,
+        "top2_gap": 0.10784435272216797
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 911,
+        "before": 203709,
+        "after": 248077,
+        "gap": 0.09856224060058594,
+        "top2_gap": 0.09856224060058594
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 912,
+        "before": 203709,
+        "after": 248077,
+        "gap": 0.20760726928710938,
+        "top2_gap": 0.20760726928710938
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 1005,
+        "before": 51520,
+        "after": 248077,
+        "gap": 0.12038993835449219,
+        "top2_gap": 0.12038993835449219
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 390,
+        "before": 248077,
+        "after": 6368,
+        "gap": 0.11144828796386719,
+        "top2_gap": 0.11144828796386719
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 408,
+        "before": 31871,
+        "after": 36098,
+        "gap": 0.2027425765991211,
+        "top2_gap": 0.10533618927001953
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 415,
+        "before": 12218,
+        "after": 100553,
+        "gap": 0.11184215545654297,
+        "top2_gap": 0.10576820373535156
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 441,
+        "before": 96112,
+        "after": 36098,
+        "gap": 0.07424736022949219,
+        "top2_gap": 0.07424736022949219
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 442,
+        "before": 17861,
+        "after": 2270,
+        "gap": 0.08285903930664062,
+        "top2_gap": 0.04035186767578125
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 451,
+        "before": 77265,
+        "after": 96705,
+        "gap": 0.03275012969970703,
+        "top2_gap": 0.03275012969970703
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 452,
+        "before": 105342,
+        "after": 153202,
+        "gap": 0.05853748321533203,
+        "top2_gap": 0.05853748321533203
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 467,
+        "before": 10325,
+        "after": 96427,
+        "gap": 0.1535205841064453,
+        "top2_gap": 0.0050811767578125
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 469,
+        "before": 97766,
+        "after": 248077,
+        "gap": 0.07512187957763672,
+        "top2_gap": 0.06270790100097656
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 474,
+        "before": 17861,
+        "after": 36098,
+        "gap": 0.18736553192138672,
+        "top2_gap": 0.18736553192138672
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 486,
+        "before": 148445,
+        "after": 96705,
+        "gap": 0.1087789535522461,
+        "top2_gap": 0.1087789535522461
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 487,
+        "before": 179418,
+        "after": 96705,
+        "gap": 0.137725830078125,
+        "top2_gap": 0.137725830078125
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 488,
+        "before": 63035,
+        "after": 66770,
+        "gap": 0.24407196044921875,
+        "top2_gap": 0.17582321166992188
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 556,
+        "before": 16,
+        "after": 97398,
+        "gap": 0.17205524444580078,
+        "top2_gap": 0.17205524444580078
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 562,
+        "before": 248077,
+        "after": 79608,
+        "gap": 0.05017852783203125,
+        "top2_gap": 0.05017852783203125
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 574,
+        "before": 17861,
+        "after": 21026,
+        "gap": 0.18531131744384766,
+        "top2_gap": 0.18531131744384766
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 575,
+        "before": 2270,
+        "after": 516,
+        "gap": 0.09120750427246094,
+        "top2_gap": 0.09120750427246094
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 602,
+        "before": 102988,
+        "after": 61055,
+        "gap": 0.28975391387939453,
+        "top2_gap": 0.28975391387939453
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 607,
+        "before": 49024,
+        "after": 21026,
+        "gap": 0.09022712707519531,
+        "top2_gap": 0.09022712707519531
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 616,
+        "before": 77265,
+        "after": 96293,
+        "gap": 0.07073116302490234,
+        "top2_gap": 0.07073116302490234
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 635,
+        "before": 102988,
+        "after": 61055,
+        "gap": 0.37790775299072266,
+        "top2_gap": 0.15678024291992188
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 645,
+        "before": 56147,
+        "after": 2270,
+        "gap": 0.12290477752685547,
+        "top2_gap": 0.08691024780273438
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 680,
+        "before": 93079,
+        "after": 96293,
+        "gap": 0.13034439086914062,
+        "top2_gap": 0.13034439086914062
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 690,
+        "before": 105342,
+        "after": 248077,
+        "gap": 0.11407184600830078,
+        "top2_gap": 0.11407184600830078
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 695,
+        "before": 162675,
+        "after": 98129,
+        "gap": 0.07201671600341797,
+        "top2_gap": 0.07201671600341797
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 699,
+        "before": 96112,
+        "after": 110169,
+        "gap": 0.11054611206054688,
+        "top2_gap": 0.11054611206054688
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 735,
+        "before": 47813,
+        "after": 12896,
+        "gap": 0.06675338745117188,
+        "top2_gap": 0.06675338745117188
+       }
+      ],
+      "n_listed": 500,
+      "max_abs_logit": 1.2827465534210205,
+      "max_abs_hidden": 3.4921875
+     }
+    }
+   },
+   "pass": false
+  },
+  "restricted": {
+   "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+   "by_thinking": {
+    "thinking_off": {
+     "n_rows": 40,
+     "decode_vs_generate_batch": {
+      "n_rows": 40,
+      "exact_rows": 0.9,
+      "token_agreement": 0.944678334910123,
+      "n_agree_tokens": 39941,
+      "n_tokens": 42280,
+      "n_divergent_rows": 4,
+      "first_divergence": {
+       "n": 4,
+       "min": 347,
+       "p25": 373.25,
+       "median": 413.5,
+       "p75": 512.5,
+       "max": 715,
+       "histogram": {
+        "0-15": 0,
+        "16-31": 0,
+        "32-47": 0,
+        "48-63": 0,
+        "64-79": 0,
+        "80-95": 0,
+        "96-111": 0,
+        "112-127": 0,
+        "128-143": 0,
+        "144-159": 0,
+        "160-175": 0,
+        "176-191": 0,
+        "192-207": 0,
+        "208-223": 0,
+        "224-239": 0,
+        "240-255": 0,
+        "256-271": 0,
+        "272-287": 0,
+        "288-303": 0,
+        "304-319": 0,
+        "320-335": 0,
+        "336-351": 1,
+        "352-367": 0,
+        "368-383": 1,
+        "384-399": 0,
+        "400-415": 0,
+        "416-431": 0,
+        "432-447": 1,
+        "448-463": 0,
+        "464-479": 0,
+        "480-495": 0,
+        "496-511": 0,
+        "512-527": 0,
+        "528-543": 0,
+        "544-559": 0,
+        "560-575": 0,
+        "576-591": 0,
+        "592-607": 0,
+        "608-623": 0,
+        "624-639": 0,
+        "640-655": 0,
+        "656-671": 0,
+        "672-687": 0,
+        "688-703": 0,
+        "704-719": 1,
+        "720-735": 0,
+        "736-751": 0,
+        "752-767": 0,
+        "768-783": 0,
+        "784-799": 0,
+        "800-815": 0,
+        "816-831": 0,
+        "832-847": 0,
+        "848-863": 0,
+        "864-879": 0,
+        "880-895": 0,
+        "896-911": 0,
+        "912-927": 0,
+        "928-943": 0,
+        "944-959": 0,
+        "960-975": 0,
+        "976-991": 0,
+        "992-1007": 0,
+        "1008-1023": 0,
+        "1024-1039": 0,
+        "1040-1055": 0,
+        "1056-1056": 0
+       }
+      },
+      "n_divergence_without_gap": 0,
+      "gap": {
+       "n": 4,
+       "median": 0.03591632843017578,
+       "max": 0.13982391357421875,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "top2_gap": {
+       "n": 4,
+       "median": 0.03591632843017578,
+       "max": 0.13982391357421875,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "divergent_rows": [
+       {
+        "id": "rotation3d/val/1",
+        "thinking": false,
+        "first_divergence": 347,
+        "len_generate_batch": 1057,
+        "len_restricted": 1057,
+        "gap": 0.015636444091796875,
+        "top2_gap": 0.015636444091796875
+       },
+       {
+        "id": "rotation3d/val/4",
+        "thinking": false,
+        "first_divergence": 445,
+        "len_generate_batch": 1057,
+        "len_restricted": 1057,
+        "gap": 0.05234813690185547,
+        "top2_gap": 0.05234813690185547
+       },
+       {
+        "id": "viewpoint/val/1",
+        "thinking": false,
+        "first_divergence": 715,
+        "len_generate_batch": 1057,
+        "len_restricted": 1057,
+        "gap": 0.13982391357421875,
+        "top2_gap": 0.13982391357421875
+       },
+       {
+        "id": "viewpoint/val/6",
+        "thinking": false,
+        "first_divergence": 382,
+        "len_generate_batch": 1057,
+        "len_restricted": 1057,
+        "gap": 0.019484519958496094,
+        "top2_gap": 0.019484519958496094
+       }
+      ],
+      "n_listed": 4
+     },
+     "teacher_forcing": {
+      "n_tokens": 42280,
+      "agreement": 0.9994087038789026,
+      "n_disagreements": 25,
+      "gap": {
+       "n": 25,
+       "median": 0.06104850769042969,
+       "max": 0.5118303298950195,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "top2_gap": {
+       "n": 25,
+       "median": 0.06104850769042969,
+       "max": 0.5118303298950195,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "disagreements": [
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 450,
+        "decoded": 248077,
+        "argmax": 248078,
+        "gap": 0.06226825714111328,
+        "top2_gap": 0.06226825714111328
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 651,
+        "decoded": 248078,
+        "argmax": 248077,
+        "gap": 0.057126522064208984,
+        "top2_gap": 0.057126522064208984
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 544,
+        "decoded": 248078,
+        "argmax": 248077,
+        "gap": 0.032193899154663086,
+        "top2_gap": 0.032193899154663086
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 816,
+        "decoded": 248078,
+        "argmax": 248077,
+        "gap": 0.5118303298950195,
+        "top2_gap": 0.5118303298950195
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 738,
+        "decoded": 248078,
+        "argmax": 248077,
+        "gap": 0.18906760215759277,
+        "top2_gap": 0.18906760215759277
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 372,
+        "decoded": 248077,
+        "argmax": 248078,
+        "gap": 0.04915952682495117,
+        "top2_gap": 0.04915952682495117
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 375,
+        "decoded": 248078,
+        "argmax": 248077,
+        "gap": 0.005541801452636719,
+        "top2_gap": 0.005541801452636719
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 412,
+        "decoded": 248077,
+        "argmax": 248078,
+        "gap": 0.10538244247436523,
+        "top2_gap": 0.10538244247436523
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 711,
+        "decoded": 248077,
+        "argmax": 248078,
+        "gap": 0.06890249252319336,
+        "top2_gap": 0.06890249252319336
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 847,
+        "decoded": 248078,
+        "argmax": 248077,
+        "gap": 0.32636165618896484,
+        "top2_gap": 0.32636165618896484
+       },
+       {
+        "id": "imagery/val/1",
+        "thinking": false,
+        "pos": 908,
+        "decoded": 248078,
+        "argmax": 248077,
+        "gap": 0.03959369659423828,
+        "top2_gap": 0.03959369659423828
+       },
+       {
+        "id": "imagery/val/6",
+        "thinking": false,
+        "pos": 735,
+        "decoded": 248078,
+        "argmax": 248077,
+        "gap": 0.004752397537231445,
+        "top2_gap": 0.004752397537231445
+       },
+       {
+        "id": "rotation3d/val/0",
+        "thinking": false,
+        "pos": 582,
+        "decoded": 248113,
+        "argmax": 248114,
+        "gap": 0.008708953857421875,
+        "top2_gap": 0.008708953857421875
+       },
+       {
+        "id": "rotation3d/val/0",
+        "thinking": false,
+        "pos": 611,
+        "decoded": 248108,
+        "argmax": 248107,
+        "gap": 0.13628387451171875,
+        "top2_gap": 0.13628387451171875
+       },
+       {
+        "id": "rotation3d/val/1",
+        "thinking": false,
+        "pos": 347,
+        "decoded": 248114,
+        "argmax": 248077,
+        "gap": 0.015636444091796875,
+        "top2_gap": 0.015636444091796875
+       },
+       {
+        "id": "rotation3d/val/4",
+        "thinking": false,
+        "pos": 703,
+        "decoded": 248077,
+        "argmax": 248113,
+        "gap": 0.08238601684570312,
+        "top2_gap": 0.08238601684570312
+       },
+       {
+        "id": "rotation3d/val/6",
+        "thinking": false,
+        "pos": 744,
+        "decoded": 248108,
+        "argmax": 248109,
+        "gap": 0.006093025207519531,
+        "top2_gap": 0.006093025207519531
+       },
+       {
+        "id": "viewpoint/val/0",
+        "thinking": false,
+        "pos": 507,
+        "decoded": 248077,
+        "argmax": 248108,
+        "gap": 0.2762489318847656,
+        "top2_gap": 0.2762489318847656
+       },
+       {
+        "id": "viewpoint/val/2",
+        "thinking": false,
+        "pos": 511,
+        "decoded": 248118,
+        "argmax": 248119,
+        "gap": 0.21233272552490234,
+        "top2_gap": 0.21233272552490234
+       },
+       {
+        "id": "viewpoint/val/2",
+        "thinking": false,
+        "pos": 522,
+        "decoded": 248108,
+        "argmax": 248107,
+        "gap": 0.1269969940185547,
+        "top2_gap": 0.1269969940185547
+       },
+       {
+        "id": "viewpoint/val/3",
+        "thinking": false,
+        "pos": 380,
+        "decoded": 248121,
+        "argmax": 248123,
+        "gap": 0.06104850769042969,
+        "top2_gap": 0.06104850769042969
+       },
+       {
+        "id": "viewpoint/val/3",
+        "thinking": false,
+        "pos": 381,
+        "decoded": 248077,
+        "argmax": 248120,
+        "gap": 0.29727745056152344,
+        "top2_gap": 0.16966676712036133
+       },
+       {
+        "id": "viewpoint/val/4",
+        "thinking": false,
+        "pos": 671,
+        "decoded": 248112,
+        "argmax": 248113,
+        "gap": 0.0005550384521484375,
+        "top2_gap": 0.0005550384521484375
+       },
+       {
+        "id": "viewpoint/val/6",
+        "thinking": false,
+        "pos": 422,
+        "decoded": 248077,
+        "argmax": 248110,
+        "gap": 0.007266044616699219,
+        "top2_gap": 0.007266044616699219
+       },
+       {
+        "id": "viewpoint/val/7",
+        "thinking": false,
+        "pos": 445,
+        "decoded": 248117,
+        "argmax": 248118,
+        "gap": 0.007044792175292969,
+        "top2_gap": 0.007044792175292969
+       }
+      ],
+      "n_listed": 25
+     }
+    }
+   },
+   "across_merge": {
+    "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+    "by_thinking": {
+     "thinking_off": {
+      "n_rows": 40,
+      "teacher_forcing": {
+       "n_tokens": 42280,
+       "argmax_agreement": 0.9992904446546831,
+       "n_disagreements": 30,
+       "gap": {
+        "n": 30,
+        "median": 0.14770090579986572,
+        "max": 0.40164923667907715,
+        "frac_lt_threshold": 1.0,
+        "threshold": 2.0
+       },
+       "top2_gap": {
+        "n": 30,
+        "median": 0.14770090579986572,
+        "max": 0.40164923667907715,
+        "frac_lt_threshold": 1.0,
+        "threshold": 2.0
+       },
+       "disagreements": [
+        {
+         "id": "occlusion/val/0",
+         "thinking": false,
+         "pos": 446,
+         "unmerged": 248077,
+         "merged": 248078,
+         "gap": 0.09467816352844238,
+         "top2_gap": 0.09467816352844238
+        },
+        {
+         "id": "occlusion/val/2",
+         "thinking": false,
+         "pos": 446,
+         "unmerged": 248077,
+         "merged": 248078,
+         "gap": 0.06142234802246094,
+         "top2_gap": 0.06142234802246094
+        },
+        {
+         "id": "occlusion/val/4",
+         "thinking": false,
+         "pos": 584,
+         "unmerged": 248077,
+         "merged": 248078,
+         "gap": 0.40164923667907715,
+         "top2_gap": 0.40164923667907715
+        },
+        {
+         "id": "occlusion/val/7",
+         "thinking": false,
+         "pos": 539,
+         "unmerged": 248077,
+         "merged": 248078,
+         "gap": 0.17992353439331055,
+         "top2_gap": 0.17992353439331055
+        },
+        {
+         "id": "physics/val/1",
+         "thinking": false,
+         "pos": 810,
+         "unmerged": 248077,
+         "merged": 248078,
+         "gap": 0.14774012565612793,
+         "top2_gap": 0.14774012565612793
+        },
+        {
+         "id": "physics/val/2",
+         "thinking": false,
+         "pos": 805,
+         "unmerged": 248077,
+         "merged": 248078,
+         "gap": 0.1427912712097168,
+         "top2_gap": 0.1427912712097168
+        },
+        {
+         "id": "physics/val/7",
+         "thinking": false,
+         "pos": 711,
+         "unmerged": 248077,
+         "merged": 248078,
+         "gap": 0.06890249252319336,
+         "top2_gap": 0.06890249252319336
+        },
+        {
+         "id": "imagery/val/1",
+         "thinking": false,
+         "pos": 1005,
+         "unmerged": 248078,
+         "merged": 248077,
+         "gap": 0.02640533447265625,
+         "top2_gap": 0.02640533447265625
+        },
+        {
+         "id": "imagery/val/6",
+         "thinking": false,
+         "pos": 735,
+         "unmerged": 248078,
+         "merged": 248077,
+         "gap": 0.08598780632019043,
+         "top2_gap": 0.08598780632019043
+        },
+        {
+         "id": "rotation3d/val/0",
+         "thinking": false,
+         "pos": 582,
+         "unmerged": 248113,
+         "merged": 248114,
+         "gap": 0.08113956451416016,
+         "top2_gap": 0.08113956451416016
+        },
+        {
+         "id": "rotation3d/val/0",
+         "thinking": false,
+         "pos": 737,
+         "unmerged": 248111,
+         "merged": 248112,
+         "gap": 0.30240345001220703,
+         "top2_gap": 0.30240345001220703
+        },
+        {
+         "id": "rotation3d/val/1",
+         "thinking": false,
+         "pos": 604,
+         "unmerged": 248113,
+         "merged": 248077,
+         "gap": 0.1629199981689453,
+         "top2_gap": 0.1629199981689453
+        },
+        {
+         "id": "rotation3d/val/1",
+         "thinking": false,
+         "pos": 613,
+         "unmerged": 248109,
+         "merged": 248110,
+         "gap": 0.1610107421875,
+         "top2_gap": 0.1610107421875
+        },
+        {
+         "id": "viewpoint/val/0",
+         "thinking": false,
+         "pos": 507,
+         "unmerged": 248077,
+         "merged": 248108,
+         "gap": 0.276247501373291,
+         "top2_gap": 0.276247501373291
+        },
+        {
+         "id": "viewpoint/val/1",
+         "thinking": false,
+         "pos": 641,
+         "unmerged": 248112,
+         "merged": 248111,
+         "gap": 0.3194417953491211,
+         "top2_gap": 0.3194417953491211
+        },
+        {
+         "id": "viewpoint/val/1",
+         "thinking": false,
+         "pos": 643,
+         "unmerged": 248109,
+         "merged": 248110,
+         "gap": 0.13940811157226562,
+         "top2_gap": 0.13940811157226562
+        },
+        {
+         "id": "viewpoint/val/3",
+         "thinking": false,
+         "pos": 380,
+         "unmerged": 248121,
+         "merged": 248123,
+         "gap": 0.13886260986328125,
+         "top2_gap": 0.13886260986328125
+        },
+        {
+         "id": "viewpoint/val/3",
+         "thinking": false,
+         "pos": 404,
+         "unmerged": 248077,
+         "merged": 248118,
+         "gap": 0.14766168594360352,
+         "top2_gap": 0.14766168594360352
+        },
+        {
+         "id": "viewpoint/val/3",
+         "thinking": false,
+         "pos": 577,
+         "unmerged": 248108,
+         "merged": 248107,
+         "gap": 0.072662353515625,
+         "top2_gap": 0.072662353515625
+        },
+        {
+         "id": "viewpoint/val/3",
+         "thinking": false,
+         "pos": 582,
+         "unmerged": 248110,
+         "merged": 248111,
+         "gap": 0.16109657287597656,
+         "top2_gap": 0.16109657287597656
+        },
+        {
+         "id": "viewpoint/val/3",
+         "thinking": false,
+         "pos": 739,
+         "unmerged": 248107,
+         "merged": 248106,
+         "gap": 0.008230209350585938,
+         "top2_gap": 0.008230209350585938
+        },
+        {
+         "id": "viewpoint/val/3",
+         "thinking": false,
+         "pos": 838,
+         "unmerged": 248077,
+         "merged": 248110,
+         "gap": 0.2753257751464844,
+         "top2_gap": 0.2753257751464844
+        },
+        {
+         "id": "viewpoint/val/4",
+         "thinking": false,
+         "pos": 671,
+         "unmerged": 248112,
+         "merged": 248113,
+         "gap": 0.1261730194091797,
+         "top2_gap": 0.1261730194091797
+        },
+        {
+         "id": "viewpoint/val/4",
+         "thinking": false,
+         "pos": 716,
+         "unmerged": 248108,
+         "merged": 248109,
+         "gap": 0.24696922302246094,
+         "top2_gap": 0.24696922302246094
+        },
+        {
+         "id": "viewpoint/val/5",
+         "thinking": false,
+         "pos": 770,
+         "unmerged": 248106,
+         "merged": 248105,
+         "gap": 0.011966705322265625,
+         "top2_gap": 0.011966705322265625
+        },
+        {
+         "id": "viewpoint/val/5",
+         "thinking": false,
+         "pos": 804,
+         "unmerged": 248108,
+         "merged": 248107,
+         "gap": 0.3161458969116211,
+         "top2_gap": 0.3161458969116211
+        },
+        {
+         "id": "viewpoint/val/6",
+         "thinking": false,
+         "pos": 381,
+         "unmerged": 248118,
+         "merged": 248077,
+         "gap": 0.0924215316772461,
+         "top2_gap": 0.0924215316772461
+        },
+        {
+         "id": "viewpoint/val/6",
+         "thinking": false,
+         "pos": 422,
+         "unmerged": 248077,
+         "merged": 248110,
+         "gap": 0.2726163864135742,
+         "top2_gap": 0.2726163864135742
+        },
+        {
+         "id": "viewpoint/val/6",
+         "thinking": false,
+         "pos": 776,
+         "unmerged": 248112,
+         "merged": 248113,
+         "gap": 0.22284555435180664,
+         "top2_gap": 0.22284555435180664
+        },
+        {
+         "id": "viewpoint/val/7",
+         "thinking": false,
+         "pos": 770,
+         "unmerged": 248110,
+         "merged": 248111,
+         "gap": 0.1530475616455078,
+         "top2_gap": 0.1530475616455078
+        }
+       ],
+       "n_listed": 30,
+       "max_abs_logit": 1.0646238327026367,
+       "max_abs_hidden": 3.4921875
+      }
+     }
+    }
+   },
+   "pass": false
+  }
+ },
+ "failures": {
+  "restricted": [
+   "restricted/thinking_off：关思考时受限解码与 generate_batch 的 exact_rows 0.9000 < 0.95"
+  ],
+  "merge": [
+   "merge/thinking_off：教师强制的 argmax_agreement 0.97025 < 0.98"
+  ]
+ },
+ "pass": false,
+ "data": {
+  "subset": "dev",
+  "split": "val",
+  "n_per_task": 8,
+  "tasks": [
+   "rotation3d",
+   "viewpoint",
+   "occlusion",
+   "physics",
+   "imagery"
+  ],
+  "n": 40,
+  "sample_ids": [
+   "rotation3d/val/0",
+   "rotation3d/val/1",
+   "rotation3d/val/2",
+   "rotation3d/val/3",
+   "rotation3d/val/4",
+   "rotation3d/val/5",
+   "rotation3d/val/6",
+   "rotation3d/val/7",
+   "viewpoint/val/0",
+   "viewpoint/val/1",
+   "viewpoint/val/2",
+   "viewpoint/val/3",
+   "viewpoint/val/4",
+   "viewpoint/val/5",
+   "viewpoint/val/6",
+   "viewpoint/val/7",
+   "occlusion/val/0",
+   "occlusion/val/1",
+   "occlusion/val/2",
+   "occlusion/val/3",
+   "occlusion/val/4",
+   "occlusion/val/5",
+   "occlusion/val/6",
+   "occlusion/val/7",
+   "physics/val/0",
+   "physics/val/1",
+   "physics/val/2",
+   "physics/val/3",
+   "physics/val/4",
+   "physics/val/5",
+   "physics/val/6",
+   "physics/val/7",
+   "imagery/val/0",
+   "imagery/val/1",
+   "imagery/val/2",
+   "imagery/val/3",
+   "imagery/val/4",
+   "imagery/val/5",
+   "imagery/val/6",
+   "imagery/val/7"
+  ],
+  "n_runs": 2
+ },
+ "generation": {
+  "max_new_tokens": 1057,
+  "enable_thinking": false,
+  "batch_size": 64
+ },
+ "timing_s": {
+  "unmerged_s": 103.65883146971464,
+  "merged_s": 126.046068508178,
+  "total_s": 229.70642948895693
+ },
+ "error": null,
+ "rule": "src/e5/trained_eval.py 的模块说明：起点 LoRA 合并之后，E5 LoRA 合并前（A）对合并后（B），原地合并；判据 v1（D50-3）= scripts/check_training_interfaces.py 的 judge",
+ "allowed": {
+  "scope": "task",
+  "stop": 248046,
+  "row": 248143,
+  "binary": {
+   "value_ids": [
+    248077,
+    248078
+   ],
+   "allowed": [
+    248046,
+    248077,
+    248078,
+    248143
+   ],
+   "values": "0 / 1 → E3b mask token 0 / 1"
+  },
+  "relief": {
+   "value_ids": [
+    248077,
+    248095,
+    248096,
+    248097,
+    248098,
+    248099,
+    248100,
+    248101,
+    248102,
+    248103,
+    248104,
+    248105,
+    248106,
+    248107,
+    248108,
+    248109,
+    248110,
+    248111,
+    248112,
+    248113,
+    248114,
+    248115,
+    248116,
+    248117,
+    248118,
+    248119,
+    248120,
+    248121,
+    248122,
+    248123,
+    248124,
+    248125,
+    248126
+   ],
+   "allowed": [
+    248046,
+    248077,
+    248095,
+    248096,
+    248097,
+    248098,
+    248099,
+    248100,
+    248101,
+    248102,
+    248103,
+    248104,
+    248105,
+    248106,
+    248107,
+    248108,
+    248109,
+    248110,
+    248111,
+    248112,
+    248113,
+    248114,
+    248115,
+    248116,
+    248117,
+    248118,
+    248119,
+    248120,
+    248121,
+    248122,
+    248123,
+    248124,
+    248125,
+    248126,
+    248143
+   ],
+   "depth_bins": [
+    16,
+    47
+   ],
+   "offset": 16,
+   "values": "起伏代码 0（背景）→ mask token 0；代码 k + 1（起伏档 k）→ depth token 第 offset + k 档"
+  }
+ }
+}
