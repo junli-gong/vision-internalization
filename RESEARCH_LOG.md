@@ -1358,3 +1358,4 @@
 - 10-16 02:45 UTC：RUN-0051 补充 1 发给 a100-69（f4d4f53b；切到 f703d7db）。07 主驱动暂停 → 切 wt0051 → 节点上跑新增的测试 → reeval.sh 补评（约 9 小时，上限 14）→ 删暂停文件、主驱动接着跑。
 - 10-16 02:38 UTC 心跳：两条 RUNNING。06 在 ttext_c3_s2_eval（3.6 小时，日志 02:31 有更新；train.pause.hpcgpu06 是 RUN-0052 评测自己的认领，正常）。07：a100-69 已按补充 1 写了 train.pause.hpcgpu07（02:37），主驱动还在 base_warmup_n1000_s2 的段里（85 分钟），这段跑完就会停在闸口。同步 ok。
 - 10-16 02:45 UTC 心跳：两条 RUNNING；06 在 ttext_c3_s2_eval（3.7 小时，日志 02:42 有更新）；07 主驱动在 base_warmup_n1000_s2（90 分钟），暂停文件已在，等这段跑完；wt0051 还在 07d677df（等暂停后切）。同步 ok。
+- 10-16 03:15 UTC：06 的 RUN-0052 ttext_c3_s2_eval 完成（rc=0，3.98 小时），接 ttext_c3_s2_debiased；4B 的 T 文本只差去偏、free、对调三小步（约 45 分钟）。07 主驱动已暂停（base_warmup_n1000_s2 训完后停在闸口），wt0051 已切到 f703d7db；a100-69 接下来在节点上跑测试、再起 reeval.sh。两条 RUNNING，同步 ok。
