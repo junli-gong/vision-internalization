@@ -1389,3 +1389,4 @@
 - 10-16 07:57 UTC：06 的 RUN-0052 ttext_base_s0_eval 完成（rc=0，3.65 小时），接 ttext_base_s0_debiased。07 reeval.sh 完成 8 条，在第 9 条 eval_base_warmup_n1000_s1；补评无失败。两条 RUNNING，同步 ok。
 - 10-16 08:15 UTC 心跳：两条 RUNNING；06 的 ttext_base_s0_debiased、free 完成，在 letter_swap；07 reeval.sh 完成 9 条，在第 10 条 eval_e3b_c3_n4000_s1；补评无失败。同步 ok。
 - **10-16 08:15 UTC：RUN-0052 段 a 完成**（hpcgpu06，0 步失败；10-14 13:21 起共 42.9 小时，预估 42）。4B 的 T 文本（C3、E3b+C3、基座）与 E3b+C3 网格齐了。08:15 起 E3b × 3 的训练（e3b_s0 第 1 段）。复核 2：第一段跑完后看每步耗时中位数，比 11.1 s 慢 15% 以上就停。07 reeval.sh 完成 10 条，在第 11 条 eval_c3_warmup_n4000_s1。两条 RUNNING，同步 ok。
+- 10-16 09:16 UTC：RUN-0052 复核 2（E3b 第一段，hpcgpu06）：e3b_s0 第 170–240 步每步 10.75–11.97 s，中位约 11.5 s，比预估 11.1 s 慢约 4%，在 15% 以内，照跑。按此每个种子 4000 步约 12.8 小时，3 个种子约 39 小时，加段 b 的评测约 10 小时，约 10-18 10:00 UTC 跑完。07 reeval.sh 完成 11 条，在第 12 条 eval_base_warmup_n4000_s1。两条 RUNNING，同步 ok。
