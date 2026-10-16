@@ -440,6 +440,29 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 - 主驱动 `done.txt` 45 行（暂停时 30 行 + 补评的 14 个 + eval_base_warmup_n1000_s2）；`failed.txt` 仍是 14 行（v1 时的记录，没有删改）。
 - 11:41:54Z 心跳：`running e3b_n1000_s2`。
 
+### 恢复后（e5-v2 下）small_s2 的进度（10-16 23:07Z 读）
+
+- 驱动日志（"完成"行原文摘要）：
+  - 11:21:54Z eval_base_warmup_n1000_s2 完成
+  - 13:13:34Z e3b_n1000_s2 完成（检查点 131,087 KB）；13:50:23Z eval_e3b_n1000_s2 完成
+  - 15:43:02Z e3b_c3_n4000_s2 完成（131,087 KB）；16:22:53Z eval_e3b_c3_n4000_s2 完成
+  - 18:12:39Z c3_warmup_n4000_s2 完成（131,103 KB）；18:46:40Z eval_c3_warmup_n4000_s2 完成
+  - 20:35:22Z base_warmup_n4000_s2 完成（131,091 KB）；21:07:22Z eval_base_warmup_n4000_s2 完成
+  - 22:56:33Z e3b_n4000_s2 完成（131,087 KB）；23:06:33Z 心跳 `running eval_e3b_n4000_s2`
+- 恢复后没有新的被拒：主驱动 `failed.txt` 仍是 14 行（v1 时的）。
+- 种子 2 各运行的核对文件（e5-v2；metric_level 只报告；B − A 的总体差，val 40 行）：
+
+| 运行 | 核对写于 | 判据 | pass | v1 判定（只报告） | metric_level | flag iou | flag relief | iou_grid 差 | 起伏误差差 | 预测相同行 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| e3b_c3 n1000 s2 | 09:42:54Z（补评） | e5-v2 | True | False | done | False | True | +0.00053 | −0.09658 | 16 |
+| c3_warmup n1000 s2 | 10:14:06Z（补评） | e5-v2 | True | False | done | False | True | −0.00302 | −0.09276 | 16 |
+| base_warmup n1000 s2 | 10:58:32Z | e5-v2 | True | False | done | False | False | +0.00071 | −0.00354 | 23 |
+| e3b n1000 s2 | 13:24:38Z | e5-v2 | True | False | done | False | True | +0.00709 | +0.06390 | 25 |
+| e3b_c3 n4000 s2 | 15:57:02Z | e5-v2 | True | True | done | False | True | +0.00204 | −0.18337 | 36 |
+| c3_warmup n4000 s2 | 18:22:53Z | e5-v2 | True | True | done | False | None | −0.00272 | None | 35 |
+| base_warmup n4000 s2 | 20:43:56Z | e5-v2 | True | False | done | False | None | 0.0 | None | 40 |
+| e3b n4000 s2 | 23:07:20Z | e5-v2 | True | True | done | **True** | None | −0.01386 | None | 36 |
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
