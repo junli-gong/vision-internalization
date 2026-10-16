@@ -398,6 +398,48 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 - timing_s：unmerged 134.2 s，merged 125.0 s，total 422.0 s。
 - 已发管理员（只核对摘要，不含 test 分数）。
 
+### 补评跑完
+
+- 驱动日志末尾原文：
+  - `2026-10-16T10:51:45Z mcheck_e3b_n4000_s0 完成`
+  - `2026-10-16T10:51:46Z 删掉主驱动的暂停文件 /home/mail/chenyuma/visint/logs/train.pause.hpcgpu07：主驱动接着跑（新判据 e5-v2）`
+  - `2026-10-16T10:51:46Z 队列跑完：完成 16 条，失败 0 条`
+- 心跳 `train_0051r-hpcgpu07.status`：`2026-10-16T10:51:46Z done 0051r-hpcgpu07`。
+- 补评脚本墙钟：03:31:06Z – 10:51:46Z，26440 s（7.34 h）。上限 14 h。
+- `reeval_e5v2/driver/failed.txt`：不存在（没有失败）。`reeval_e5v2/driver/done.txt` 16 行。
+- `$VI/logs/train.pause.hpcgpu07` 已不存在（11:45Z 查）。
+- `summary.tsv` 原文（制表符换成表格；`metric_error` 列都是空串，写作"（空）"；base_warmup_n4000_s0 的 `d_relief_error` 是空串）：
+
+| kind | tag | criteria_version | pass_e5v2 | pass_v1_report_only | metric_status | metric_error | d_iou_grid_all | d_iou_grid_binary | d_relief_error | flag_iou | flag_relief | n_rows | n_identical | previous |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| reeval | e3b_c3_n1000_s0 | e5-v2 | True | False | done | （空） | -0.004598861179948233 | -0.004188249974329705 | 0.059562488517258316 | False | True | 40 | 21 | merge_check.v1.json |
+| reeval | c3_warmup_n1000_s0 | e5-v2 | True | False | done | （空） | 0.00218260736620407 | 0.0010769489757846695 | 0.017121349868830293 | False | False | 40 | 18 | merge_check.v1.json |
+| reeval | base_warmup_n1000_s0 | e5-v2 | True | False | done | （空） | -0.013901798468439669 | -0.009202124973415035 | 0.0479762990726158 | True | True | 40 | 23 | merge_check.v1.json |
+| reeval | e3b_n1000_s0 | e5-v2 | True | False | done | （空） | -0.0020743173209399335 | -0.007703318637289958 | 0.04800085736704718 | False | True | 40 | 23 | merge_check.v1.json |
+| reeval | c3_warmup_n4000_s0 | e5-v2 | True | False | done | （空） | -0.002219672982324103 | -0.002026890398228065 | 0.036017467733472586 | False | True | 40 | 33 | merge_check.v1.json |
+| reeval | base_warmup_n4000_s0 | e5-v2 | True | False | done | （空） | 0.0 | 0.0 | （空） | False | None | 40 | 40 | merge_check.v1.json |
+| reeval | e3b_c3_n1000_s1 | e5-v2 | True | False | done | （空） | -0.00014440841919410863 | -0.0036134520858152053 | -0.05357530142646283 | False | True | 40 | 25 | merge_check.v1.json |
+| reeval | c3_warmup_n1000_s1 | e5-v2 | True | False | done | （空） | -0.011498228071617433 | -0.009252063819812362 | 0.08827776170801371 | True | True | 40 | 20 | merge_check.v1.json |
+| reeval | base_warmup_n1000_s1 | e5-v2 | True | False | done | （空） | 0.004059430065927155 | -0.0006779421827273618 | 0.10691560279311885 | False | True | 40 | 21 | merge_check.v1.json |
+| reeval | e3b_c3_n4000_s1 | e5-v2 | True | False | done | （空） | -0.00559092663373828 | -0.011477857564953786 | 0.005909008284409767 | False | False | 40 | 30 | merge_check.v1.json |
+| reeval | c3_warmup_n4000_s1 | e5-v2 | True | False | done | （空） | 0.0006085423666096768 | 0.0010142372776827668 | 0.0 | False | False | 40 | 34 | merge_check.v1.json |
+| reeval | base_warmup_n4000_s1 | e5-v2 | True | False | done | （空） | -0.004444896380175568 | -0.004320987654320985 | 0.0702895363792777 | False | True | 40 | 37 | merge_check.v1.json |
+| reeval | e3b_c3_n1000_s2 | e5-v2 | True | False | done | （空） | 0.0005332569817451116 | 0.0037660037011253422 | -0.0965767014422454 | False | True | 40 | 16 | merge_check.v1.json |
+| reeval | c3_warmup_n1000_s2 | e5-v2 | True | False | done | （空） | -0.003017383370415877 | 0.002605989813063217 | -0.09276389220030978 | False | True | 40 | 16 | merge_check.v1.json |
+| check | e3b_c3_n4000_s0 | e5-v2 | True | True | done | （空） | -0.00518220275574055 | -0.008637004592900899 | 0.0 | False | False | 40 | 34 | merge_check.v1.json |
+| check | e3b_n4000_s0 | e5-v2 | True | True | done | （空） | 0.0041304117904813475 | 0.004470896821883397 | -0.03796600177884102 | False | True | 40 | 34 | merge_check.v1.json |
+
+- 计数（由上表）：pass_e5v2 True 16 / 16；pass_v1_report_only True 2 / 16（两个 check 行）；metric_status done 16 / 16；flag_iou True 2 个；flag_relief True 11 个。
+
+### 主驱动恢复
+
+- 主驱动 step 157297.84 一直在（暂停期间没有杀、没有重启）。
+- 恢复后第一条：`eval_base_warmup_n1000_s2`（暂停前已训练完的那个）。`2026-10-16T11:21:54Z eval_base_warmup_n1000_s2 完成`，chunk wall_s 1807。
+  - 核对文件 `trained/base_warmup/qwen3.5-2b/n1000/seed2/merge_check.json` 写于 10:58:32Z：criteria_version e5-v2，pass True，failures `{"merge": [], "restricted": []}`，v1_report_only.pass False。
+  - stderr 那一行原文（`driver/logs/eval_base_warmup_n1000_s2.log` 第 5 行）：`[合并核对·指标层面，只报告] 总体 iou_grid 差（B − A）+0.0007，起伏误差差 -0.0035；预测相同 23/40 行；flags.iou=False flags.relief=False`
+- 主驱动 `done.txt` 45 行（暂停时 30 行 + 补评的 14 个 + eval_base_warmup_n1000_s2）；`failed.txt` 仍是 14 行（v1 时的记录，没有删改）。
+- 11:41:54Z 心跳：`running e3b_n1000_s2`。
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
