@@ -1,0 +1,5281 @@
+{
+ "format": "visint-e5-stacked-merge-check/1",
+ "written_utc": "2026-10-15T03:37:29+00:00",
+ "key": {
+  "e5_manifest_sha256": "210b4988a64f78d849ba5379dd6c8bfe99d96ef1feabe3a61c391469641d066d",
+  "start_manifest_sha256": "dca6a89d9a3e920ce75000cda5fecfd06ec95abbf187f1e0057306fc8ba538a5",
+  "n_per_task": 8,
+  "tasks": [
+   "rotation3d",
+   "viewpoint",
+   "occlusion",
+   "physics",
+   "imagery"
+  ],
+  "tiny": false,
+  "dtype": "bf16",
+  "batch_size": 64,
+  "config_sha256": "e7f28997935f7281a6d0f4fe1d29132cc2d14e4b500000f00882dd7b2b2b94c3"
+ },
+ "criteria_version": "v1",
+ "criteria": {
+  "version": "v1",
+  "status": "冻结：D50-3（依据 RUN-0021 实测冻结，2026-10-02）",
+  "exact": false,
+  "exact_reason": "GPU / bf16：判据 v1（查实现错误；数值噪声另记为噪声底）",
+  "per_thinking_mode": true,
+  "gap_definition": "不一致位置上两种实现所选两个 token 在参照 logits 上之差（见脚本说明）；top2_gap 只报告不判",
+  "restricted": {
+   "min_tf_agreement": 0.999,
+   "min_exact_rows_thinking_off": 0.95,
+   "max_gap": 2.0,
+   "rules": [
+    "teacher_forcing.agreement ≥ 0.999（两种开关）",
+    "thinking_off：decode_vs_generate_batch.exact_rows ≥ 0.95",
+    "teacher_forcing.gap.max < 2.0 且 decode_vs_generate_batch.gap.max < 2.0（两种开关；分歧算不出 gap 也判不过）"
+   ],
+   "report_only": [
+    "decode_vs_generate_batch.token_agreement",
+    "thinking_on 的 decode_vs_generate_batch.exact_rows",
+    "top2_gap"
+   ]
+  },
+  "merge": {
+   "min_tf_agreement": 0.98,
+   "max_median_gap": 0.5,
+   "rules": [
+    "teacher_forcing.argmax_agreement ≥ 0.98（两种开关）",
+    "teacher_forcing.gap.median ≤ 0.5（两种开关）"
+   ],
+   "report_only": [
+    "generate.*（逐位一致率 token_agreement、exact_rows、gap）",
+    "teacher_forcing.gap.max",
+    "top2_gap"
+   ]
+  },
+  "premise": {
+   "max_exact_rows_vs_base": 0.5,
+   "judged_modes": [
+    "thinking_on"
+   ],
+   "rules": [
+    "随机 LoRA：thinking_on 时 effect_vs_base.generate.exact_rows ≤ 0.5"
+   ],
+   "report_only": [
+    "thinking_off 的 effect_vs_base",
+    "effect_vs_base.teacher_forcing.argmax_agreement"
+   ]
+  },
+  "exact_rules": [
+   "CPU fp32：生成 exact_rows = token_agreement = 1，教师强制没有不一致的位置（restricted 与 merge 都是）"
+  ],
+  "restricted_grid": {
+   "applies_to": "--checkpoint 且检查点登记了网格 token：restricted 用检查点自己的网格 token 与 E3b 单轮评测的设置",
+   "by_thinking": "照 v1 的 restricted 一节（criteria.restricted，阈值不变）；只有 E3b 评测用的思考开关（restricted_inputs.thinking_modes）",
+   "across_merge": {
+    "min_tf_agreement": 0.98,
+    "max_median_gap": 0.5,
+    "rules": [
+     "across_merge.teacher_forcing.argmax_agreement ≥ 0.98",
+     "across_merge.teacher_forcing.gap.median ≤ 0.5"
+    ],
+    "report_only": [
+     "across_merge.teacher_forcing.gap.max",
+     "top2_gap",
+     "max_abs_logit",
+     "max_abs_hidden"
+    ],
+    "basis": "合并前后两侧的比较，数值噪声的来源与 merge 相同，所以照 v1 merge 一节的教师强制两条判（D50-3）"
+   },
+   "exact": false,
+   "exact_rules": [
+    "CPU fp32：across_merge 的教师强制没有不一致的位置"
+   ]
+  }
+ },
+ "checks": {
+  "merge": {
+   "mode": "e5_stacked",
+   "compared": "E5 LoRA 未合并（起点已合并）vs 合并后；生成 = 两侧各自的 generate_restricted，教师强制的目标 = 合并前受限解码的序列，logits 在全词表上比较",
+   "by_thinking": {
+    "thinking_off": {
+     "n_rows": 40,
+     "generate": {
+      "n_rows": 40,
+      "exact_rows": 0.8,
+      "token_agreement": 0.9162251655629139,
+      "n_agree_tokens": 38738,
+      "n_tokens": 42280,
+      "n_divergent_rows": 8,
+      "first_divergence": {
+       "n": 8,
+       "min": 515,
+       "p25": 533.5,
+       "median": 548.0,
+       "p75": 701.25,
+       "max": 798,
+       "histogram": {
+        "0-15": 0,
+        "16-31": 0,
+        "32-47": 0,
+        "48-63": 0,
+        "64-79": 0,
+        "80-95": 0,
+        "96-111": 0,
+        "112-127": 0,
+        "128-143": 0,
+        "144-159": 0,
+        "160-175": 0,
+        "176-191": 0,
+        "192-207": 0,
+        "208-223": 0,
+        "224-239": 0,
+        "240-255": 0,
+        "256-271": 0,
+        "272-287": 0,
+        "288-303": 0,
+        "304-319": 0,
+        "320-335": 0,
+        "336-351": 0,
+        "352-367": 0,
+        "368-383": 0,
+        "384-399": 0,
+        "400-415": 0,
+        "416-431": 0,
+        "432-447": 0,
+        "448-463": 0,
+        "464-479": 0,
+        "480-495": 0,
+        "496-511": 0,
+        "512-527": 2,
+        "528-543": 1,
+        "544-559": 2,
+        "560-575": 0,
+        "576-591": 0,
+        "592-607": 0,
+        "608-623": 0,
+        "624-639": 0,
+        "640-655": 0,
+        "656-671": 0,
+        "672-687": 1,
+        "688-703": 0,
+        "704-719": 0,
+        "720-735": 0,
+        "736-751": 0,
+        "752-767": 0,
+        "768-783": 1,
+        "784-799": 1,
+        "800-815": 0,
+        "816-831": 0,
+        "832-847": 0,
+        "848-863": 0,
+        "864-879": 0,
+        "880-895": 0,
+        "896-911": 0,
+        "912-927": 0,
+        "928-943": 0,
+        "944-959": 0,
+        "960-975": 0,
+        "976-991": 0,
+        "992-1007": 0,
+        "1008-1023": 0,
+        "1024-1039": 0,
+        "1040-1055": 0,
+        "1056-1056": 0
+       }
+      },
+      "n_divergence_without_gap": 0,
+      "gap": {
+       "n": 8,
+       "median": 0.023909926414489746,
+       "max": 0.10291099548339844,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "top2_gap": {
+       "n": 8,
+       "median": 0.023909926414489746,
+       "max": 0.10291099548339844,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "divergent_rows": [
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "first_divergence": 550,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.01349329948425293,
+        "top2_gap": 0.01349329948425293
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "first_divergence": 539,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.011282682418823242,
+        "top2_gap": 0.011282682418823242
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "first_divergence": 678,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.008797883987426758,
+        "top2_gap": 0.008797883987426758
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "first_divergence": 771,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.028479337692260742,
+        "top2_gap": 0.028479337692260742
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "first_divergence": 798,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.01934051513671875,
+        "top2_gap": 0.01934051513671875
+       },
+       {
+        "id": "rotation3d/val/3",
+        "thinking": false,
+        "first_divergence": 517,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.10291099548339844,
+        "top2_gap": 0.10291099548339844
+       },
+       {
+        "id": "rotation3d/val/4",
+        "thinking": false,
+        "first_divergence": 546,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.038085222244262695,
+        "top2_gap": 0.038085222244262695
+       },
+       {
+        "id": "viewpoint/val/2",
+        "thinking": false,
+        "first_divergence": 515,
+        "len_before": 1057,
+        "len_after": 1057,
+        "gap": 0.030251502990722656,
+        "top2_gap": 0.030251502990722656
+       }
+      ],
+      "n_listed": 8
+     },
+     "teacher_forcing": {
+      "n_tokens": 42280,
+      "argmax_agreement": 0.9658467360454115,
+      "n_disagreements": 1444,
+      "gap": {
+       "n": 1444,
+       "median": 0.06599140167236328,
+       "max": 0.7240219116210938,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "top2_gap": {
+       "n": 1444,
+       "median": 0.06241464614868164,
+       "max": 0.45026493072509766,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "disagreements": [
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 14,
+        "before": 868,
+        "after": 72412,
+        "gap": 0.06986236572265625,
+        "top2_gap": 0.06986236572265625
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 66,
+        "before": 18,
+        "after": 571,
+        "gap": 0.1644287109375,
+        "top2_gap": 0.1644287109375
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 264,
+        "before": 248077,
+        "after": 9771,
+        "gap": 0.050075531005859375,
+        "top2_gap": 0.050075531005859375
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 430,
+        "before": 1089,
+        "after": 248077,
+        "gap": 0.09092140197753906,
+        "top2_gap": 0.09092140197753906
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 448,
+        "before": 158023,
+        "after": 20936,
+        "gap": 0.031241416931152344,
+        "top2_gap": 0.031241416931152344
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 480,
+        "before": 279,
+        "after": 20936,
+        "gap": 0.05659627914428711,
+        "top2_gap": 0.051996707916259766
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 583,
+        "before": 604,
+        "after": 65138,
+        "gap": 0.16160249710083008,
+        "top2_gap": 0.16160249710083008
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 586,
+        "before": 34346,
+        "after": 155194,
+        "gap": 0.04560708999633789,
+        "top2_gap": 0.030802249908447266
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 606,
+        "before": 604,
+        "after": 1089,
+        "gap": 0.05496406555175781,
+        "top2_gap": 0.05496406555175781
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 619,
+        "before": 34346,
+        "after": 155194,
+        "gap": 0.029992103576660156,
+        "top2_gap": 0.018329143524169922
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 651,
+        "before": 158023,
+        "after": 20936,
+        "gap": 0.023255348205566406,
+        "top2_gap": 0.012324333190917969
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 684,
+        "before": 79870,
+        "after": 20936,
+        "gap": 0.0443577766418457,
+        "top2_gap": 0.02645111083984375
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 685,
+        "before": 70509,
+        "after": 34346,
+        "gap": 0.02358531951904297,
+        "top2_gap": 0.02358531951904297
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 756,
+        "before": 248077,
+        "after": 1089,
+        "gap": 0.013056755065917969,
+        "top2_gap": 0.013056755065917969
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 769,
+        "before": 1089,
+        "after": 326,
+        "gap": 0.1389484405517578,
+        "top2_gap": 0.1389484405517578
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 802,
+        "before": 1089,
+        "after": 326,
+        "gap": 0.1821756362915039,
+        "top2_gap": 0.1821756362915039
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 834,
+        "before": 1089,
+        "after": 326,
+        "gap": 0.10521125793457031,
+        "top2_gap": 0.10521125793457031
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 851,
+        "before": 229,
+        "after": 199249,
+        "gap": 0.03230905532836914,
+        "top2_gap": 0.03230905532836914
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 880,
+        "before": 96681,
+        "after": 19862,
+        "gap": 0.05084419250488281,
+        "top2_gap": 0.05084419250488281
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 902,
+        "before": 1089,
+        "after": 248077,
+        "gap": 0.12038898468017578,
+        "top2_gap": 0.12038898468017578
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 917,
+        "before": 21,
+        "after": 3148,
+        "gap": 0.0914306640625,
+        "top2_gap": 0.09053230285644531
+       },
+       {
+        "id": "occlusion/val/0",
+        "thinking": false,
+        "pos": 972,
+        "before": 248077,
+        "after": 136368,
+        "gap": 0.11030864715576172,
+        "top2_gap": 0.11030864715576172
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 12,
+        "before": 9771,
+        "after": 248077,
+        "gap": 0.10351181030273438,
+        "top2_gap": 0.10351181030273438
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 13,
+        "before": 9771,
+        "after": 248077,
+        "gap": 0.12962913513183594,
+        "top2_gap": 0.12962913513183594
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 144,
+        "before": 248077,
+        "after": 1089,
+        "gap": 0.0937814712524414,
+        "top2_gap": 0.0937814712524414
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 214,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.08016777038574219,
+        "top2_gap": 0.08016777038574219
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 247,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.08178043365478516,
+        "top2_gap": 0.08178043365478516
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 445,
+        "before": 1089,
+        "after": 24214,
+        "gap": 0.035880088806152344,
+        "top2_gap": 0.035880088806152344
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 478,
+        "before": 1089,
+        "after": 24214,
+        "gap": 0.026287555694580078,
+        "top2_gap": 0.026287555694580078
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 484,
+        "before": 86385,
+        "after": 15172,
+        "gap": 0.04474639892578125,
+        "top2_gap": 0.022031784057617188
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 507,
+        "before": 279,
+        "after": 604,
+        "gap": 0.029970645904541016,
+        "top2_gap": 0.029970645904541016
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 508,
+        "before": 279,
+        "after": 604,
+        "gap": 0.03442859649658203,
+        "top2_gap": 0.03442859649658203
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 512,
+        "before": 24214,
+        "after": 233449,
+        "gap": 0.003353118896484375,
+        "top2_gap": 0.003353118896484375
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 543,
+        "before": 604,
+        "after": 279,
+        "gap": 0.09844493865966797,
+        "top2_gap": 0.09844493865966797
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 544,
+        "before": 604,
+        "after": 279,
+        "gap": 0.08149194717407227,
+        "top2_gap": 0.08149194717407227
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 545,
+        "before": 40404,
+        "after": 69453,
+        "gap": 0.08915376663208008,
+        "top2_gap": 0.06861019134521484
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 548,
+        "before": 223302,
+        "after": 26823,
+        "gap": 0.0780339241027832,
+        "top2_gap": 0.0780339241027832
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 617,
+        "before": 8762,
+        "after": 10685,
+        "gap": 0.09452629089355469,
+        "top2_gap": 0.09452629089355469
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 693,
+        "before": 14342,
+        "after": 1089,
+        "gap": 0.07448768615722656,
+        "top2_gap": 0.07448768615722656
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 747,
+        "before": 882,
+        "after": 26823,
+        "gap": 0.0400390625,
+        "top2_gap": 0.0400390625
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 753,
+        "before": 155875,
+        "after": 248077,
+        "gap": 0.020364761352539062,
+        "top2_gap": 0.020364761352539062
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 761,
+        "before": 1089,
+        "after": 11,
+        "gap": 0.07645225524902344,
+        "top2_gap": 0.07645225524902344
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 768,
+        "before": 1089,
+        "after": 604,
+        "gap": 0.01756000518798828,
+        "top2_gap": 0.01756000518798828
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 797,
+        "before": 1089,
+        "after": 11,
+        "gap": 0.042077064514160156,
+        "top2_gap": 0.042077064514160156
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 893,
+        "before": 248077,
+        "after": 1089,
+        "gap": 0.07448768615722656,
+        "top2_gap": 0.07448768615722656
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 895,
+        "before": 248077,
+        "after": 1089,
+        "gap": 0.04216575622558594,
+        "top2_gap": 0.04216575622558594
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 916,
+        "before": 1089,
+        "after": 248077,
+        "gap": 0.036789894104003906,
+        "top2_gap": 0.036789894104003906
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 931,
+        "before": 248077,
+        "after": 136368,
+        "gap": 0.05884361267089844,
+        "top2_gap": 0.05884361267089844
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 932,
+        "before": 26881,
+        "after": 136368,
+        "gap": 0.0722341537475586,
+        "top2_gap": 0.0722341537475586
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 939,
+        "before": 28727,
+        "after": 149576,
+        "gap": 0.07177257537841797,
+        "top2_gap": 0.07177257537841797
+       },
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "pos": 1041,
+        "before": 84596,
+        "after": 248077,
+        "gap": 0.09595108032226562,
+        "top2_gap": 0.04894542694091797
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 10,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.045105934143066406,
+        "top2_gap": 0.045105934143066406
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 11,
+        "before": 86385,
+        "after": 9771,
+        "gap": 0.06434345245361328,
+        "top2_gap": 0.06434345245361328
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 12,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.035797119140625,
+        "top2_gap": 0.035797119140625
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 34,
+        "before": 1089,
+        "after": 13,
+        "gap": 0.031752586364746094,
+        "top2_gap": 0.031752586364746094
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 391,
+        "before": 14342,
+        "after": 248077,
+        "gap": 0.08864974975585938,
+        "top2_gap": 0.08864974975585938
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 480,
+        "before": 165153,
+        "after": 164277,
+        "gap": 0.04880857467651367,
+        "top2_gap": 0.04880857467651367
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 498,
+        "before": 248077,
+        "after": 1089,
+        "gap": 0.025293350219726562,
+        "top2_gap": 0.025293350219726562
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 518,
+        "before": 164277,
+        "after": 35756,
+        "gap": 0.0173187255859375,
+        "top2_gap": 0.0173187255859375
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 519,
+        "before": 164277,
+        "after": 35756,
+        "gap": 0.01067972183227539,
+        "top2_gap": 0.01067972183227539
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 547,
+        "before": 604,
+        "after": 6312,
+        "gap": 0.09052705764770508,
+        "top2_gap": 0.09052705764770508
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 584,
+        "before": 70684,
+        "after": 8,
+        "gap": 0.0746908187866211,
+        "top2_gap": 0.062252044677734375
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 588,
+        "before": 9760,
+        "after": 65138,
+        "gap": 0.04958915710449219,
+        "top2_gap": 0.04958915710449219
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 614,
+        "before": 60583,
+        "after": 79870,
+        "gap": 0.06450271606445312,
+        "top2_gap": 0.06450271606445312
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 654,
+        "before": 87343,
+        "after": 87135,
+        "gap": 0.07881927490234375,
+        "top2_gap": 0.07881927490234375
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 675,
+        "before": 24214,
+        "after": 71111,
+        "gap": 0.04592609405517578,
+        "top2_gap": 0.04592609405517578
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 681,
+        "before": 64209,
+        "after": 164356,
+        "gap": 0.04981422424316406,
+        "top2_gap": 0.041464805603027344
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 688,
+        "before": 31741,
+        "after": 12656,
+        "gap": 0.0024747848510742188,
+        "top2_gap": 0.0024747848510742188
+       },
+       {
+        "id": "occlusion/val/2",
+        "thinking": false,
+        "pos": 750,
+        "before": 64209,
+        "after": 199249,
+        "gap": 0.023221969604492188,
+        "top2_gap": 0.023221969604492188
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 2,
+        "before": 248077,
+        "after": 86385,
+        "gap": 0.04821491241455078,
+        "top2_gap": 0.04821491241455078
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 14,
+        "before": 86385,
+        "after": 273,
+        "gap": 0.042138099670410156,
+        "top2_gap": 0.042138099670410156
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 34,
+        "before": 18,
+        "after": 1370,
+        "gap": 0.09380435943603516,
+        "top2_gap": 0.09380435943603516
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 52,
+        "before": 86385,
+        "after": 3546,
+        "gap": 0.023347854614257812,
+        "top2_gap": 0.023347854614257812
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 118,
+        "before": 78336,
+        "after": 25553,
+        "gap": 0.08296394348144531,
+        "top2_gap": 0.08296394348144531
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 123,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.09175872802734375,
+        "top2_gap": 0.09175872802734375
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 157,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.06282615661621094,
+        "top2_gap": 0.06282615661621094
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 176,
+        "before": 25553,
+        "after": 248077,
+        "gap": 0.07994842529296875,
+        "top2_gap": 0.07994842529296875
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 189,
+        "before": 248077,
+        "after": 196118,
+        "gap": 0.09483718872070312,
+        "top2_gap": 0.09483718872070312
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 191,
+        "before": 248077,
+        "after": 86385,
+        "gap": 0.03870964050292969,
+        "top2_gap": 0.03870964050292969
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 299,
+        "before": 3546,
+        "after": 248077,
+        "gap": 0.06118583679199219,
+        "top2_gap": 0.06118583679199219
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 302,
+        "before": 155875,
+        "after": 248077,
+        "gap": 0.044699668884277344,
+        "top2_gap": 0.044699668884277344
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 324,
+        "before": 78336,
+        "after": 248077,
+        "gap": 0.022782325744628906,
+        "top2_gap": 0.022782325744628906
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 332,
+        "before": 3546,
+        "after": 248077,
+        "gap": 0.035637855529785156,
+        "top2_gap": 0.035637855529785156
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 334,
+        "before": 155875,
+        "after": 248077,
+        "gap": 0.09668540954589844,
+        "top2_gap": 0.09668540954589844
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 336,
+        "before": 155875,
+        "after": 4584,
+        "gap": 0.08542156219482422,
+        "top2_gap": 0.08542156219482422
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 367,
+        "before": 21371,
+        "after": 155875,
+        "gap": 0.08867931365966797,
+        "top2_gap": 0.08867931365966797
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 370,
+        "before": 14342,
+        "after": 4584,
+        "gap": 0.047893524169921875,
+        "top2_gap": 0.01888275146484375
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 384,
+        "before": 3546,
+        "after": 78336,
+        "gap": 0.046700477600097656,
+        "top2_gap": 0.046700477600097656
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 387,
+        "before": 248077,
+        "after": 196118,
+        "gap": 0.03205680847167969,
+        "top2_gap": 0.03205680847167969
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 388,
+        "before": 248077,
+        "after": 196118,
+        "gap": 0.019433975219726562,
+        "top2_gap": 0.019433975219726562
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 406,
+        "before": 786,
+        "after": 14342,
+        "gap": 0.06390905380249023,
+        "top2_gap": 0.06390905380249023
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 434,
+        "before": 14342,
+        "after": 21371,
+        "gap": 0.048926353454589844,
+        "top2_gap": 0.048926353454589844
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 468,
+        "before": 6616,
+        "after": 14342,
+        "gap": 0.06040477752685547,
+        "top2_gap": 0.06040477752685547
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 470,
+        "before": 6616,
+        "after": 90572,
+        "gap": 0.013651847839355469,
+        "top2_gap": 0.013651847839355469
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 476,
+        "before": 882,
+        "after": 26823,
+        "gap": 0.024866104125976562,
+        "top2_gap": 0.024866104125976562
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 478,
+        "before": 882,
+        "after": 26823,
+        "gap": 0.009610176086425781,
+        "top2_gap": 0.009610176086425781
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 483,
+        "before": 86385,
+        "after": 232364,
+        "gap": 0.07224273681640625,
+        "top2_gap": 0.07224273681640625
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 508,
+        "before": 462,
+        "after": 4315,
+        "gap": 0.038474082946777344,
+        "top2_gap": 0.038474082946777344
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 562,
+        "before": 1089,
+        "after": 248077,
+        "gap": 0.056860923767089844,
+        "top2_gap": 0.056860923767089844
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 568,
+        "before": 66063,
+        "after": 232364,
+        "gap": 0.03263378143310547,
+        "top2_gap": 0.03263378143310547
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 574,
+        "before": 24927,
+        "after": 64209,
+        "gap": 0.1648387908935547,
+        "top2_gap": 0.1648387908935547
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 576,
+        "before": 24927,
+        "after": 64209,
+        "gap": 0.06771087646484375,
+        "top2_gap": 0.06771087646484375
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 583,
+        "before": 12085,
+        "after": 248077,
+        "gap": 0.0069427490234375,
+        "top2_gap": 0.0069427490234375
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 584,
+        "before": 12085,
+        "after": 248077,
+        "gap": 0.009828567504882812,
+        "top2_gap": 0.009828567504882812
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 585,
+        "before": 248077,
+        "after": 12085,
+        "gap": 0.016104698181152344,
+        "top2_gap": 0.016104698181152344
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 602,
+        "before": 74383,
+        "after": 19933,
+        "gap": 0.03557586669921875,
+        "top2_gap": 0.03557586669921875
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 675,
+        "before": 64209,
+        "after": 164356,
+        "gap": 0.09369659423828125,
+        "top2_gap": 0.09369659423828125
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 735,
+        "before": 64209,
+        "after": 235245,
+        "gap": 0.028440475463867188,
+        "top2_gap": 0.028440475463867188
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 737,
+        "before": 29967,
+        "after": 164356,
+        "gap": 0.03425025939941406,
+        "top2_gap": 0.03425025939941406
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 773,
+        "before": 29967,
+        "after": 235245,
+        "gap": 0.08023452758789062,
+        "top2_gap": 0.08023452758789062
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 798,
+        "before": 189921,
+        "after": 207940,
+        "gap": 0.15132522583007812,
+        "top2_gap": 0.15132522583007812
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 833,
+        "before": 235245,
+        "after": 48125,
+        "gap": 0.1499185562133789,
+        "top2_gap": 0.1499185562133789
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 834,
+        "before": 64209,
+        "after": 29967,
+        "gap": 0.023614883422851562,
+        "top2_gap": 0.023614883422851562
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 872,
+        "before": 29967,
+        "after": 235245,
+        "gap": 0.06245231628417969,
+        "top2_gap": 0.06245231628417969
+       },
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 908,
+        "before": 40287,
+        "after": 184308,
+        "gap": 0.15186500549316406,
+        "top2_gap": 0.15186500549316406
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 41,
+        "before": 248077,
+        "after": 86385,
+        "gap": 0.0457611083984375,
+        "top2_gap": 0.0457611083984375
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 48,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.03697967529296875,
+        "top2_gap": 0.03697967529296875
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 109,
+        "before": 248077,
+        "after": 86385,
+        "gap": 0.044411659240722656,
+        "top2_gap": 0.044411659240722656
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 165,
+        "before": 248077,
+        "after": 196118,
+        "gap": 0.0064239501953125,
+        "top2_gap": 0.0064239501953125
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 218,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.10332965850830078,
+        "top2_gap": 0.10332965850830078
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 219,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.10003852844238281,
+        "top2_gap": 0.10003852844238281
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 223,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.0800933837890625,
+        "top2_gap": 0.0800933837890625
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 513,
+        "before": 882,
+        "after": 509,
+        "gap": 0.026340484619140625,
+        "top2_gap": 0.026340484619140625
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 518,
+        "before": 6656,
+        "after": 29859,
+        "gap": 0.023767471313476562,
+        "top2_gap": 0.023767471313476562
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 531,
+        "before": 248077,
+        "after": 11,
+        "gap": 0.1127939224243164,
+        "top2_gap": 0.1127939224243164
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 541,
+        "before": 462,
+        "after": 604,
+        "gap": 0.014252185821533203,
+        "top2_gap": 0.014252185821533203
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 580,
+        "before": 26823,
+        "after": 509,
+        "gap": 0.03373575210571289,
+        "top2_gap": 0.03373575210571289
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 585,
+        "before": 29859,
+        "after": 6656,
+        "gap": 0.0429534912109375,
+        "top2_gap": 0.0429534912109375
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 595,
+        "before": 1089,
+        "after": 11,
+        "gap": 0.07337760925292969,
+        "top2_gap": 0.07337760925292969
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 737,
+        "before": 8762,
+        "after": 71111,
+        "gap": 0.08888626098632812,
+        "top2_gap": 0.07737064361572266
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 770,
+        "before": 248077,
+        "after": 165785,
+        "gap": 0.08691596984863281,
+        "top2_gap": 0.08691596984863281
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 775,
+        "before": 74444,
+        "after": 187744,
+        "gap": 0.04485607147216797,
+        "top2_gap": 0.04485607147216797
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 839,
+        "before": 9760,
+        "after": 81496,
+        "gap": 0.050411224365234375,
+        "top2_gap": 0.050411224365234375
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 877,
+        "before": 74444,
+        "after": 164356,
+        "gap": 0.057361602783203125,
+        "top2_gap": 0.057361602783203125
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 909,
+        "before": 74444,
+        "after": 164356,
+        "gap": 0.04619789123535156,
+        "top2_gap": 0.04619789123535156
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 914,
+        "before": 164356,
+        "after": 74444,
+        "gap": 0.06360816955566406,
+        "top2_gap": 0.06360816955566406
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 916,
+        "before": 3226,
+        "after": 62194,
+        "gap": 0.019873619079589844,
+        "top2_gap": 0.019873619079589844
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 13,
+        "before": 248077,
+        "after": 196118,
+        "gap": 0.04682636260986328,
+        "top2_gap": 0.04682636260986328
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 18,
+        "before": 86385,
+        "after": 196118,
+        "gap": 0.017287254333496094,
+        "top2_gap": 0.017287254333496094
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 24,
+        "before": 86385,
+        "after": 868,
+        "gap": 0.06593704223632812,
+        "top2_gap": 0.06593704223632812
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 66,
+        "before": 196118,
+        "after": 28405,
+        "gap": 0.14583301544189453,
+        "top2_gap": 0.14583301544189453
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 215,
+        "before": 58890,
+        "after": 56804,
+        "gap": 0.0111236572265625,
+        "top2_gap": 0.0111236572265625
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 219,
+        "before": 248077,
+        "after": 196118,
+        "gap": 0.038242340087890625,
+        "top2_gap": 0.038242340087890625
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 249,
+        "before": 58890,
+        "after": 56804,
+        "gap": 0.05864286422729492,
+        "top2_gap": 0.03546857833862305
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 283,
+        "before": 58890,
+        "after": 56804,
+        "gap": 0.04627704620361328,
+        "top2_gap": 0.020179271697998047
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 323,
+        "before": 248077,
+        "after": 24214,
+        "gap": 0.006846427917480469,
+        "top2_gap": 0.006846427917480469
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 441,
+        "before": 175771,
+        "after": 27482,
+        "gap": 0.05133056640625,
+        "top2_gap": 0.05133056640625
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 541,
+        "before": 16984,
+        "after": 51263,
+        "gap": 0.10526275634765625,
+        "top2_gap": 0.10526275634765625
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 545,
+        "before": 199249,
+        "after": 64209,
+        "gap": 0.2780179977416992,
+        "top2_gap": 0.1919879913330078
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 552,
+        "before": 248077,
+        "after": 84596,
+        "gap": 0.020269393920898438,
+        "top2_gap": 0.020269393920898438
+       },
+       {
+        "id": "occlusion/val/5",
+        "thinking": false,
+        "pos": 573,
+        "before": 48068,
+        "after": 79870,
+        "gap": 0.043091773986816406,
+        "top2_gap": 0.043091773986816406
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 42,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.014825820922851562,
+        "top2_gap": 0.014825820922851562
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 255,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.04194831848144531,
+        "top2_gap": 0.04194831848144531
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 283,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.040884971618652344,
+        "top2_gap": 0.040884971618652344
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 316,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.04600811004638672,
+        "top2_gap": 0.04600811004638672
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 320,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.04234600067138672,
+        "top2_gap": 0.04234600067138672
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 349,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.040642738342285156,
+        "top2_gap": 0.040642738342285156
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 381,
+        "before": 14342,
+        "after": 248077,
+        "gap": 0.04337787628173828,
+        "top2_gap": 0.04337787628173828
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 383,
+        "before": 248077,
+        "after": 14342,
+        "gap": 0.05096149444580078,
+        "top2_gap": 0.05096149444580078
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 386,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.08988666534423828,
+        "top2_gap": 0.08988666534423828
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 414,
+        "before": 11,
+        "after": 58890,
+        "gap": 0.08825969696044922,
+        "top2_gap": 0.08825969696044922
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 441,
+        "before": 279,
+        "after": 882,
+        "gap": 0.031752586364746094,
+        "top2_gap": 0.031752586364746094
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 446,
+        "before": 11,
+        "after": 882,
+        "gap": 0.04276561737060547,
+        "top2_gap": 0.04276561737060547
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 464,
+        "before": 1089,
+        "after": 248077,
+        "gap": 0.1523914337158203,
+        "top2_gap": 0.1523914337158203
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 474,
+        "before": 279,
+        "after": 436,
+        "gap": 0.024881362915039062,
+        "top2_gap": 0.024881362915039062
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 500,
+        "before": 11,
+        "after": 21371,
+        "gap": 0.0819406509399414,
+        "top2_gap": 0.0819406509399414
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 533,
+        "before": 11,
+        "after": 1089,
+        "gap": 0.043129920959472656,
+        "top2_gap": 0.04274463653564453
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 600,
+        "before": 604,
+        "after": 279,
+        "gap": 0.1093897819519043,
+        "top2_gap": 0.1093897819519043
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 627,
+        "before": 14342,
+        "after": 248077,
+        "gap": 0.06896209716796875,
+        "top2_gap": 0.06896209716796875
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 639,
+        "before": 604,
+        "after": 436,
+        "gap": 0.030618667602539062,
+        "top2_gap": 0.030618667602539062
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 660,
+        "before": 248077,
+        "after": 14342,
+        "gap": 0.022436141967773438,
+        "top2_gap": 0.022436141967773438
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 675,
+        "before": 604,
+        "after": 436,
+        "gap": 0.012647628784179688,
+        "top2_gap": 0.012647628784179688
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 749,
+        "before": 170795,
+        "after": 12485,
+        "gap": 0.02359914779663086,
+        "top2_gap": 0.012418746948242188
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 751,
+        "before": 24214,
+        "after": 40502,
+        "gap": 0.0380401611328125,
+        "top2_gap": 0.0380401611328125
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 815,
+        "before": 22,
+        "after": 23,
+        "gap": 0.0171051025390625,
+        "top2_gap": 0.0171051025390625
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 848,
+        "before": 23,
+        "after": 17719,
+        "gap": 0.2155461311340332,
+        "top2_gap": 0.2155461311340332
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 867,
+        "before": 189187,
+        "after": 21371,
+        "gap": 0.05727863311767578,
+        "top2_gap": 0.05727863311767578
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 912,
+        "before": 89222,
+        "after": 74444,
+        "gap": 0.05596446990966797,
+        "top2_gap": 0.05596446990966797
+       },
+       {
+        "id": "occlusion/val/6",
+        "thinking": false,
+        "pos": 942,
+        "before": 18475,
+        "after": 12020,
+        "gap": 0.06457233428955078,
+        "top2_gap": 0.010527610778808594
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 44,
+        "before": 58890,
+        "after": 71815,
+        "gap": 0.1808929443359375,
+        "top2_gap": 0.1808929443359375
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 62,
+        "before": 9771,
+        "after": 86385,
+        "gap": 0.034340858459472656,
+        "top2_gap": 0.034340858459472656
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 66,
+        "before": 14342,
+        "after": 196118,
+        "gap": 0.10604476928710938,
+        "top2_gap": 0.10604476928710938
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 69,
+        "before": 175771,
+        "after": 12020,
+        "gap": 0.06352043151855469,
+        "top2_gap": 0.06352043151855469
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 117,
+        "before": 86385,
+        "after": 8762,
+        "gap": 0.03047943115234375,
+        "top2_gap": 0.03047943115234375
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 281,
+        "before": 39578,
+        "after": 8762,
+        "gap": 0.12133121490478516,
+        "top2_gap": 0.12133121490478516
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 298,
+        "before": 150456,
+        "after": 22,
+        "gap": 0.08017683029174805,
+        "top2_gap": 0.08017683029174805
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 305,
+        "before": 11,
+        "after": 22,
+        "gap": 0.08931732177734375,
+        "top2_gap": 0.08931732177734375
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 324,
+        "before": 86385,
+        "after": 12085,
+        "gap": 0.06615829467773438,
+        "top2_gap": 0.06615829467773438
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 326,
+        "before": 86385,
+        "after": 25572,
+        "gap": 0.011587142944335938,
+        "top2_gap": 0.011587142944335938
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 341,
+        "before": 74444,
+        "after": 23,
+        "gap": 0.7240219116210938,
+        "top2_gap": 0.2560901641845703
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 402,
+        "before": 378,
+        "after": 604,
+        "gap": 0.15870952606201172,
+        "top2_gap": 0.15870952606201172
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 411,
+        "before": 69833,
+        "after": 15172,
+        "gap": 0.022849082946777344,
+        "top2_gap": 0.022849082946777344
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 432,
+        "before": 21371,
+        "after": 154822,
+        "gap": 0.08340978622436523,
+        "top2_gap": 0.08340978622436523
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 434,
+        "before": 32188,
+        "after": 1900,
+        "gap": 0.13027191162109375,
+        "top2_gap": 0.048392295837402344
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 441,
+        "before": 1455,
+        "after": 110,
+        "gap": 0.08489131927490234,
+        "top2_gap": 0.08489131927490234
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 467,
+        "before": 32188,
+        "after": 1900,
+        "gap": 0.24743175506591797,
+        "top2_gap": 0.24743175506591797
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 474,
+        "before": 1455,
+        "after": 2543,
+        "gap": 0.10459423065185547,
+        "top2_gap": 0.07701587677001953
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 482,
+        "before": 8762,
+        "after": 248077,
+        "gap": 0.07454872131347656,
+        "top2_gap": 0.07454872131347656
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 497,
+        "before": 1089,
+        "after": 148367,
+        "gap": 0.05986499786376953,
+        "top2_gap": 0.05986499786376953
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 502,
+        "before": 199249,
+        "after": 8870,
+        "gap": 0.036385536193847656,
+        "top2_gap": 0.036385536193847656
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 512,
+        "before": 248077,
+        "after": 15172,
+        "gap": 0.058236122131347656,
+        "top2_gap": 0.058236122131347656
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 529,
+        "before": 299,
+        "after": 248077,
+        "gap": 0.05059623718261719,
+        "top2_gap": 0.05059623718261719
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 536,
+        "before": 199249,
+        "after": 89222,
+        "gap": 0.12144756317138672,
+        "top2_gap": 0.12144756317138672
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 541,
+        "before": 1089,
+        "after": 69833,
+        "gap": 0.039305686950683594,
+        "top2_gap": 0.039305686950683594
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 567,
+        "before": 32188,
+        "after": 164277,
+        "gap": 0.11147832870483398,
+        "top2_gap": 0.11147832870483398
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 602,
+        "before": 89222,
+        "after": 199249,
+        "gap": 0.07181739807128906,
+        "top2_gap": 0.07181739807128906
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 604,
+        "before": 114622,
+        "after": 74444,
+        "gap": 0.049139976501464844,
+        "top2_gap": 0.049139976501464844
+       },
+       {
+        "id": "occlusion/val/7",
+        "thinking": false,
+        "pos": 635,
+        "before": 8266,
+        "after": 27593,
+        "gap": 0.09897994995117188,
+        "top2_gap": 0.09897994995117188
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 22,
+        "before": 868,
+        "after": 86385,
+        "gap": 0.1153717041015625,
+        "top2_gap": 0.1153717041015625
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 24,
+        "before": 868,
+        "after": 898,
+        "gap": 0.23771286010742188,
+        "top2_gap": 0.23771286010742188
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 37,
+        "before": 868,
+        "after": 248077,
+        "gap": 0.05713653564453125,
+        "top2_gap": 0.05713653564453125
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 41,
+        "before": 86385,
+        "after": 3546,
+        "gap": 0.1079559326171875,
+        "top2_gap": 0.09547042846679688
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 61,
+        "before": 17133,
+        "after": 86385,
+        "gap": 0.11662864685058594,
+        "top2_gap": 0.11662864685058594
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 210,
+        "before": 86385,
+        "after": 25553,
+        "gap": 0.06632423400878906,
+        "top2_gap": 0.06632423400878906
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 244,
+        "before": 86385,
+        "after": 25553,
+        "gap": 0.038440704345703125,
+        "top2_gap": 0.038440704345703125
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 245,
+        "before": 86385,
+        "after": 25553,
+        "gap": 0.050159454345703125,
+        "top2_gap": 0.050159454345703125
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 246,
+        "before": 86385,
+        "after": 25553,
+        "gap": 0.04444122314453125,
+        "top2_gap": 0.04444122314453125
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 248,
+        "before": 86385,
+        "after": 25553,
+        "gap": 0.0402069091796875,
+        "top2_gap": 0.0402069091796875
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 277,
+        "before": 86385,
+        "after": 25553,
+        "gap": 0.017286300659179688,
+        "top2_gap": 0.017286300659179688
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 327,
+        "before": 86385,
+        "after": 3546,
+        "gap": 0.10178375244140625,
+        "top2_gap": 0.10178375244140625
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 335,
+        "before": 25553,
+        "after": 25842,
+        "gap": 0.05350303649902344,
+        "top2_gap": 0.05350303649902344
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 352,
+        "before": 86385,
+        "after": 3546,
+        "gap": 0.06870460510253906,
+        "top2_gap": 0.06870460510253906
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 365,
+        "before": 248077,
+        "after": 155875,
+        "gap": 0.03978919982910156,
+        "top2_gap": 0.03978919982910156
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 375,
+        "before": 25553,
+        "after": 3546,
+        "gap": 0.07797431945800781,
+        "top2_gap": 0.07797431945800781
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 386,
+        "before": 3546,
+        "after": 86385,
+        "gap": 0.11299514770507812,
+        "top2_gap": 0.11299514770507812
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 389,
+        "before": 86385,
+        "after": 3546,
+        "gap": 0.05900382995605469,
+        "top2_gap": 0.05900382995605469
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 408,
+        "before": 3546,
+        "after": 25553,
+        "gap": 0.043580055236816406,
+        "top2_gap": 0.043580055236816406
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 430,
+        "before": 155875,
+        "after": 248077,
+        "gap": 0.020760536193847656,
+        "top2_gap": 0.020760536193847656
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 432,
+        "before": 25842,
+        "after": 16231,
+        "gap": 0.06931400299072266,
+        "top2_gap": 0.06931400299072266
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 437,
+        "before": 16231,
+        "after": 25842,
+        "gap": 0.028972625732421875,
+        "top2_gap": 0.028972625732421875
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 460,
+        "before": 3546,
+        "after": 248077,
+        "gap": 0.04741382598876953,
+        "top2_gap": 0.04741382598876953
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 466,
+        "before": 25842,
+        "after": 16231,
+        "gap": 0.11261940002441406,
+        "top2_gap": 0.11261940002441406
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 467,
+        "before": 25842,
+        "after": 16231,
+        "gap": 0.07470512390136719,
+        "top2_gap": 0.07470512390136719
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 506,
+        "before": 21090,
+        "after": 16231,
+        "gap": 0.02389240264892578,
+        "top2_gap": 0.02389240264892578
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 525,
+        "before": 3546,
+        "after": 248077,
+        "gap": 0.0920572280883789,
+        "top2_gap": 0.0920572280883789
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 610,
+        "before": 21090,
+        "after": 3546,
+        "gap": 0.0763559341430664,
+        "top2_gap": 0.0763559341430664
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 644,
+        "before": 21090,
+        "after": 3546,
+        "gap": 0.10851383209228516,
+        "top2_gap": 0.10851383209228516
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 685,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.05937671661376953,
+        "top2_gap": 0.05937671661376953
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 707,
+        "before": 220,
+        "after": 882,
+        "gap": 0.01609039306640625,
+        "top2_gap": 0.01609039306640625
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 729,
+        "before": 279,
+        "after": 1089,
+        "gap": 0.15877914428710938,
+        "top2_gap": 0.15877914428710938
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 808,
+        "before": 133056,
+        "after": 248077,
+        "gap": 0.13854026794433594,
+        "top2_gap": 0.12044906616210938
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 836,
+        "before": 22,
+        "after": 17,
+        "gap": 0.11857986450195312,
+        "top2_gap": 0.11857986450195312
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 902,
+        "before": 92958,
+        "after": 9760,
+        "gap": 0.037560462951660156,
+        "top2_gap": 0.037560462951660156
+       },
+       {
+        "id": "physics/val/0",
+        "thinking": false,
+        "pos": 968,
+        "before": 248077,
+        "after": 21,
+        "gap": 0.08290481567382812,
+        "top2_gap": 0.08290481567382812
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 1,
+        "before": 189921,
+        "after": 3546,
+        "gap": 0.06515026092529297,
+        "top2_gap": 0.06515026092529297
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 57,
+        "before": 248077,
+        "after": 86385,
+        "gap": 0.025054931640625,
+        "top2_gap": 0.025054931640625
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 67,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.08463859558105469,
+        "top2_gap": 0.08463859558105469
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 108,
+        "before": 248077,
+        "after": 86385,
+        "gap": 0.04822540283203125,
+        "top2_gap": 0.04822540283203125
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 163,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.10059547424316406,
+        "top2_gap": 0.10059547424316406
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 205,
+        "before": 248077,
+        "after": 86385,
+        "gap": 0.046036720275878906,
+        "top2_gap": 0.046036720275878906
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 234,
+        "before": 248077,
+        "after": 36530,
+        "gap": 0.03013896942138672,
+        "top2_gap": 0.03013896942138672
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 273,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.015574455261230469,
+        "top2_gap": 0.015574455261230469
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 414,
+        "before": 86385,
+        "after": 3546,
+        "gap": 0.1091623306274414,
+        "top2_gap": 0.1091623306274414
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 423,
+        "before": 86385,
+        "after": 3546,
+        "gap": 0.09811782836914062,
+        "top2_gap": 0.09811782836914062
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 447,
+        "before": 86385,
+        "after": 3546,
+        "gap": 0.0642852783203125,
+        "top2_gap": 0.0642852783203125
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 484,
+        "before": 86385,
+        "after": 3546,
+        "gap": 0.037471771240234375,
+        "top2_gap": 0.037471771240234375
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 488,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.06966400146484375,
+        "top2_gap": 0.06966400146484375
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 508,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.07309341430664062,
+        "top2_gap": 0.07309341430664062
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 509,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.05413341522216797,
+        "top2_gap": 0.05413341522216797
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 511,
+        "before": 3546,
+        "after": 248077,
+        "gap": 0.012730598449707031,
+        "top2_gap": 0.012730598449707031
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 520,
+        "before": 3546,
+        "after": 248077,
+        "gap": 0.01710796356201172,
+        "top2_gap": 0.01710796356201172
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 541,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.05885791778564453,
+        "top2_gap": 0.05885791778564453
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 543,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.05304145812988281,
+        "top2_gap": 0.05304145812988281
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 544,
+        "before": 3546,
+        "after": 248077,
+        "gap": 0.019817352294921875,
+        "top2_gap": 0.019817352294921875
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 574,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.03376197814941406,
+        "top2_gap": 0.03376197814941406
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 575,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.03030872344970703,
+        "top2_gap": 0.03030872344970703
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 608,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.10798263549804688,
+        "top2_gap": 0.10798263549804688
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 609,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.00684356689453125,
+        "top2_gap": 0.00684356689453125
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 642,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.10964012145996094,
+        "top2_gap": 0.10964012145996094
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 648,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.09099197387695312,
+        "top2_gap": 0.09099197387695312
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 713,
+        "before": 1158,
+        "after": 58890,
+        "gap": 0.13746070861816406,
+        "top2_gap": 0.03104686737060547
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 745,
+        "before": 220,
+        "after": 882,
+        "gap": 0.04209756851196289,
+        "top2_gap": 0.04209756851196289
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 781,
+        "before": 91135,
+        "after": 1158,
+        "gap": 0.05434417724609375,
+        "top2_gap": 0.05434417724609375
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 849,
+        "before": 96010,
+        "after": 1089,
+        "gap": 0.13336944580078125,
+        "top2_gap": 0.13336944580078125
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 875,
+        "before": 427,
+        "after": 61984,
+        "gap": 0.07026481628417969,
+        "top2_gap": 0.07026481628417969
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 911,
+        "before": 235245,
+        "after": 64209,
+        "gap": 0.05170440673828125,
+        "top2_gap": 0.05170440673828125
+       },
+       {
+        "id": "physics/val/1",
+        "thinking": false,
+        "pos": 942,
+        "before": 185976,
+        "after": 156781,
+        "gap": 0.046810150146484375,
+        "top2_gap": 0.046810150146484375
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 1,
+        "before": 189921,
+        "after": 3546,
+        "gap": 0.10390090942382812,
+        "top2_gap": 0.10390090942382812
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 22,
+        "before": 868,
+        "after": 86385,
+        "gap": 0.1405658721923828,
+        "top2_gap": 0.1405658721923828
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 78,
+        "before": 17133,
+        "after": 86385,
+        "gap": 0.05340385437011719,
+        "top2_gap": 0.05340385437011719
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 79,
+        "before": 86385,
+        "after": 17133,
+        "gap": 0.06441879272460938,
+        "top2_gap": 0.06441879272460938
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 81,
+        "before": 17133,
+        "after": 86385,
+        "gap": 0.04306793212890625,
+        "top2_gap": 0.04306793212890625
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 83,
+        "before": 17133,
+        "after": 86385,
+        "gap": 0.063079833984375,
+        "top2_gap": 0.063079833984375
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 85,
+        "before": 17133,
+        "after": 86385,
+        "gap": 0.2364826202392578,
+        "top2_gap": 0.2364826202392578
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 86,
+        "before": 17133,
+        "after": 86385,
+        "gap": 0.028177261352539062,
+        "top2_gap": 0.028177261352539062
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 301,
+        "before": 248077,
+        "after": 17133,
+        "gap": 0.05800437927246094,
+        "top2_gap": 0.05800437927246094
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 317,
+        "before": 27666,
+        "after": 17133,
+        "gap": 0.029943466186523438,
+        "top2_gap": 0.029943466186523438
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 321,
+        "before": 27666,
+        "after": 17133,
+        "gap": 0.06414031982421875,
+        "top2_gap": 0.06414031982421875
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 328,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.07980918884277344,
+        "top2_gap": 0.07980918884277344
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 356,
+        "before": 86385,
+        "after": 27666,
+        "gap": 0.03987693786621094,
+        "top2_gap": 0.03987693786621094
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 538,
+        "before": 248077,
+        "after": 27666,
+        "gap": 0.04398536682128906,
+        "top2_gap": 0.04398536682128906
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 607,
+        "before": 248077,
+        "after": 27666,
+        "gap": 0.0630502700805664,
+        "top2_gap": 0.0630502700805664
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 617,
+        "before": 248077,
+        "after": 27666,
+        "gap": 0.05806255340576172,
+        "top2_gap": 0.05806255340576172
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 667,
+        "before": 316,
+        "after": 248077,
+        "gap": 0.05692768096923828,
+        "top2_gap": 0.05692768096923828
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 671,
+        "before": 1881,
+        "after": 248077,
+        "gap": 0.0459747314453125,
+        "top2_gap": 0.011416435241699219
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 767,
+        "before": 326,
+        "after": 264,
+        "gap": 0.04983329772949219,
+        "top2_gap": 0.04983329772949219
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 859,
+        "before": 1089,
+        "after": 11,
+        "gap": 0.1128091812133789,
+        "top2_gap": 0.1128091812133789
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 994,
+        "before": 26881,
+        "after": 326,
+        "gap": 0.06711387634277344,
+        "top2_gap": 0.06711387634277344
+       },
+       {
+        "id": "physics/val/2",
+        "thinking": false,
+        "pos": 1013,
+        "before": 13674,
+        "after": 40020,
+        "gap": 0.050624847412109375,
+        "top2_gap": 0.050624847412109375
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 10,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.051308631896972656,
+        "top2_gap": 0.051308631896972656
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 20,
+        "before": 868,
+        "after": 86385,
+        "gap": 0.024542808532714844,
+        "top2_gap": 0.024542808532714844
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 29,
+        "before": 86385,
+        "after": 14961,
+        "gap": 0.037604331970214844,
+        "top2_gap": 0.025384902954101562
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 112,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.07404136657714844,
+        "top2_gap": 0.07404136657714844
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 136,
+        "before": 9771,
+        "after": 248077,
+        "gap": 0.025750160217285156,
+        "top2_gap": 0.025750160217285156
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 168,
+        "before": 36530,
+        "after": 248077,
+        "gap": 0.027498245239257812,
+        "top2_gap": 0.027498245239257812
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 183,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.09220695495605469,
+        "top2_gap": 0.09220695495605469
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 190,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.053852081298828125,
+        "top2_gap": 0.053852081298828125
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 198,
+        "before": 248077,
+        "after": 155875,
+        "gap": 0.027929306030273438,
+        "top2_gap": 0.027929306030273438
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 205,
+        "before": 9771,
+        "after": 248077,
+        "gap": 0.011531829833984375,
+        "top2_gap": 0.011531829833984375
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 233,
+        "before": 248077,
+        "after": 36530,
+        "gap": 0.07718849182128906,
+        "top2_gap": 0.07718849182128906
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 237,
+        "before": 9771,
+        "after": 248077,
+        "gap": 0.10559654235839844,
+        "top2_gap": 0.10559654235839844
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 250,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.059958457946777344,
+        "top2_gap": 0.059958457946777344
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 251,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.07921028137207031,
+        "top2_gap": 0.07921028137207031
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 255,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.03129768371582031,
+        "top2_gap": 0.03129768371582031
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 256,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.029294967651367188,
+        "top2_gap": 0.029294967651367188
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 747,
+        "before": 248077,
+        "after": 14342,
+        "gap": 0.06448936462402344,
+        "top2_gap": 0.06448936462402344
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 770,
+        "before": 50579,
+        "after": 248077,
+        "gap": 0.1263275146484375,
+        "top2_gap": 0.08462047576904297
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 776,
+        "before": 220,
+        "after": 58890,
+        "gap": 0.2504463195800781,
+        "top2_gap": 0.2504463195800781
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 832,
+        "before": 220,
+        "after": 50579,
+        "gap": 0.40534114837646484,
+        "top2_gap": 0.10805988311767578
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 883,
+        "before": 220,
+        "after": 24214,
+        "gap": 0.1065511703491211,
+        "top2_gap": 0.1065511703491211
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 886,
+        "before": 25842,
+        "after": 248077,
+        "gap": 0.022035598754882812,
+        "top2_gap": 0.022035598754882812
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 895,
+        "before": 326,
+        "after": 20739,
+        "gap": 0.15311622619628906,
+        "top2_gap": 0.15311622619628906
+       },
+       {
+        "id": "physics/val/3",
+        "thinking": false,
+        "pos": 917,
+        "before": 20660,
+        "after": 24214,
+        "gap": 0.024049758911132812,
+        "top2_gap": 0.024049758911132812
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 22,
+        "before": 868,
+        "after": 86385,
+        "gap": 0.10534000396728516,
+        "top2_gap": 0.10534000396728516
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 23,
+        "before": 868,
+        "after": 323,
+        "gap": 0.024301528930664062,
+        "top2_gap": 0.024301528930664062
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 63,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.079376220703125,
+        "top2_gap": 0.079376220703125
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 72,
+        "before": 248077,
+        "after": 86385,
+        "gap": 0.037039756774902344,
+        "top2_gap": 0.037039756774902344
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 89,
+        "before": 248077,
+        "after": 86385,
+        "gap": 0.06250953674316406,
+        "top2_gap": 0.06250953674316406
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 98,
+        "before": 1816,
+        "after": 248143,
+        "gap": 0.11035537719726562,
+        "top2_gap": 0.11035537719726562
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 170,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.02399921417236328,
+        "top2_gap": 0.02399921417236328
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 205,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.04124641418457031,
+        "top2_gap": 0.04124641418457031
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 310,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.06273365020751953,
+        "top2_gap": 0.06273365020751953
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 347,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.0453643798828125,
+        "top2_gap": 0.0453643798828125
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 423,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.021331787109375,
+        "top2_gap": 0.021331787109375
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 424,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.03107452392578125,
+        "top2_gap": 0.03107452392578125
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 454,
+        "before": 248077,
+        "after": 86385,
+        "gap": 0.06815719604492188,
+        "top2_gap": 0.06815719604492188
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 858,
+        "before": 14342,
+        "after": 248077,
+        "gap": 0.035076141357421875,
+        "top2_gap": 0.035076141357421875
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 861,
+        "before": 20739,
+        "after": 248077,
+        "gap": 0.043877601623535156,
+        "top2_gap": 0.043877601623535156
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 863,
+        "before": 20739,
+        "after": 248077,
+        "gap": 0.09641838073730469,
+        "top2_gap": 0.09641838073730469
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 865,
+        "before": 20739,
+        "after": 28405,
+        "gap": 0.05888080596923828,
+        "top2_gap": 0.035935401916503906
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 867,
+        "before": 20739,
+        "after": 28405,
+        "gap": 0.11461925506591797,
+        "top2_gap": 0.11461925506591797
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 868,
+        "before": 20739,
+        "after": 28405,
+        "gap": 0.13152503967285156,
+        "top2_gap": 0.11157798767089844
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 899,
+        "before": 20739,
+        "after": 28405,
+        "gap": 0.08123588562011719,
+        "top2_gap": 0.08123588562011719
+       },
+       {
+        "id": "physics/val/4",
+        "thinking": false,
+        "pos": 1015,
+        "before": 1190,
+        "after": 1526,
+        "gap": 0.047698974609375,
+        "top2_gap": 0.047698974609375
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 55,
+        "before": 248077,
+        "after": 9771,
+        "gap": 0.06011962890625,
+        "top2_gap": 0.06011962890625
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 61,
+        "before": 248077,
+        "after": 9771,
+        "gap": 0.01821136474609375,
+        "top2_gap": 0.01821136474609375
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 62,
+        "before": 248077,
+        "after": 9771,
+        "gap": 0.09584617614746094,
+        "top2_gap": 0.09584617614746094
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 82,
+        "before": 248077,
+        "after": 9771,
+        "gap": 0.02593231201171875,
+        "top2_gap": 0.02593231201171875
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 113,
+        "before": 86385,
+        "after": 9771,
+        "gap": 0.09253501892089844,
+        "top2_gap": 0.09253501892089844
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 122,
+        "before": 248077,
+        "after": 86385,
+        "gap": 0.039310455322265625,
+        "top2_gap": 0.039310455322265625
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 147,
+        "before": 86385,
+        "after": 9771,
+        "gap": 0.03791522979736328,
+        "top2_gap": 0.03791522979736328
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 153,
+        "before": 86385,
+        "after": 9771,
+        "gap": 0.06752967834472656,
+        "top2_gap": 0.06752967834472656
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 156,
+        "before": 86385,
+        "after": 9771,
+        "gap": 0.04793548583984375,
+        "top2_gap": 0.04793548583984375
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 165,
+        "before": 248077,
+        "after": 9771,
+        "gap": 0.07798004150390625,
+        "top2_gap": 0.07798004150390625
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 187,
+        "before": 27666,
+        "after": 86385,
+        "gap": 0.07490158081054688,
+        "top2_gap": 0.07490158081054688
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 188,
+        "before": 86385,
+        "after": 9771,
+        "gap": 0.11009407043457031,
+        "top2_gap": 0.11009407043457031
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 223,
+        "before": 86385,
+        "after": 9771,
+        "gap": 0.07680511474609375,
+        "top2_gap": 0.07680511474609375
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 248,
+        "before": 360,
+        "after": 9771,
+        "gap": 0.010618209838867188,
+        "top2_gap": 0.010618209838867188
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 287,
+        "before": 27666,
+        "after": 9771,
+        "gap": 0.04549980163574219,
+        "top2_gap": 0.04549980163574219
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 312,
+        "before": 9771,
+        "after": 248077,
+        "gap": 0.05800151824951172,
+        "top2_gap": 0.05800151824951172
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 313,
+        "before": 248077,
+        "after": 9771,
+        "gap": 0.060736656188964844,
+        "top2_gap": 0.03843116760253906
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 314,
+        "before": 27666,
+        "after": 9771,
+        "gap": 0.18337154388427734,
+        "top2_gap": 0.18337154388427734
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 318,
+        "before": 27666,
+        "after": 9771,
+        "gap": 0.2516345977783203,
+        "top2_gap": 0.2516345977783203
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 320,
+        "before": 9771,
+        "after": 27666,
+        "gap": 0.049407958984375,
+        "top2_gap": 0.049407958984375
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 345,
+        "before": 248077,
+        "after": 9771,
+        "gap": 0.08618927001953125,
+        "top2_gap": 0.08618927001953125
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 346,
+        "before": 27666,
+        "after": 248077,
+        "gap": 0.0679311752319336,
+        "top2_gap": 0.0679311752319336
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 348,
+        "before": 27666,
+        "after": 9771,
+        "gap": 0.10382080078125,
+        "top2_gap": 0.10382080078125
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 366,
+        "before": 248077,
+        "after": 9771,
+        "gap": 0.04044914245605469,
+        "top2_gap": 0.04044914245605469
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 382,
+        "before": 27666,
+        "after": 9771,
+        "gap": 0.05116081237792969,
+        "top2_gap": 0.05116081237792969
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 409,
+        "before": 248077,
+        "after": 9771,
+        "gap": 0.0438385009765625,
+        "top2_gap": 0.0438385009765625
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 420,
+        "before": 27666,
+        "after": 36530,
+        "gap": 0.10540199279785156,
+        "top2_gap": 0.06173515319824219
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 431,
+        "before": 248077,
+        "after": 9771,
+        "gap": 0.05598163604736328,
+        "top2_gap": 0.05598163604736328
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 441,
+        "before": 248077,
+        "after": 9771,
+        "gap": 0.019563674926757812,
+        "top2_gap": 0.019563674926757812
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 454,
+        "before": 248077,
+        "after": 36530,
+        "gap": 0.07345390319824219,
+        "top2_gap": 0.0626230239868164
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 485,
+        "before": 27666,
+        "after": 36530,
+        "gap": 0.12488174438476562,
+        "top2_gap": 0.12488174438476562
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 486,
+        "before": 248077,
+        "after": 36530,
+        "gap": 0.09141063690185547,
+        "top2_gap": 0.09141063690185547
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 504,
+        "before": 248077,
+        "after": 9771,
+        "gap": 0.05205535888671875,
+        "top2_gap": 0.05205535888671875
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 518,
+        "before": 27666,
+        "after": 248077,
+        "gap": 0.06266403198242188,
+        "top2_gap": 0.06266403198242188
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 580,
+        "before": 248077,
+        "after": 27666,
+        "gap": 0.02547454833984375,
+        "top2_gap": 0.02547454833984375
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 731,
+        "before": 1089,
+        "after": 248077,
+        "gap": 0.10971450805664062,
+        "top2_gap": 0.10971450805664062
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 741,
+        "before": 11,
+        "after": 1367,
+        "gap": 0.09608078002929688,
+        "top2_gap": 0.09608078002929688
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 777,
+        "before": 279,
+        "after": 264,
+        "gap": 0.03198814392089844,
+        "top2_gap": 0.03198814392089844
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 796,
+        "before": 11,
+        "after": 1089,
+        "gap": 0.24828147888183594,
+        "top2_gap": 0.24828147888183594
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 798,
+        "before": 641,
+        "after": 11,
+        "gap": 0.12212467193603516,
+        "top2_gap": 0.12212467193603516
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 862,
+        "before": 326,
+        "after": 13,
+        "gap": 0.30069828033447266,
+        "top2_gap": 0.30069828033447266
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 882,
+        "before": 58890,
+        "after": 12801,
+        "gap": 0.06264114379882812,
+        "top2_gap": 0.06264114379882812
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 947,
+        "before": 326,
+        "after": 136368,
+        "gap": 0.19512176513671875,
+        "top2_gap": 0.19512176513671875
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 949,
+        "before": 58890,
+        "after": 226526,
+        "gap": 0.04446601867675781,
+        "top2_gap": 0.04446601867675781
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 984,
+        "before": 248077,
+        "after": 14342,
+        "gap": 0.049625396728515625,
+        "top2_gap": 0.049625396728515625
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 1025,
+        "before": 11,
+        "after": 1089,
+        "gap": 0.05276298522949219,
+        "top2_gap": 0.05276298522949219
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 1027,
+        "before": 326,
+        "after": 11,
+        "gap": 0.11645793914794922,
+        "top2_gap": 0.10691452026367188
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 1028,
+        "before": 326,
+        "after": 13,
+        "gap": 0.07959270477294922,
+        "top2_gap": 0.07959270477294922
+       },
+       {
+        "id": "physics/val/5",
+        "thinking": false,
+        "pos": 1051,
+        "before": 14342,
+        "after": 21371,
+        "gap": 0.08014202117919922,
+        "top2_gap": 0.08014202117919922
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 78,
+        "before": 17133,
+        "after": 868,
+        "gap": 0.09012222290039062,
+        "top2_gap": 0.09012222290039062
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 93,
+        "before": 86385,
+        "after": 27666,
+        "gap": 0.08713912963867188,
+        "top2_gap": 0.08713912963867188
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 94,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.07454299926757812,
+        "top2_gap": 0.07454299926757812
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 95,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.1243896484375,
+        "top2_gap": 0.07361793518066406
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 101,
+        "before": 248077,
+        "after": 36530,
+        "gap": 0.0640106201171875,
+        "top2_gap": 0.0640106201171875
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 114,
+        "before": 17133,
+        "after": 27666,
+        "gap": 0.04708099365234375,
+        "top2_gap": 0.04708099365234375
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 133,
+        "before": 155875,
+        "after": 248077,
+        "gap": 0.03828239440917969,
+        "top2_gap": 0.03828239440917969
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 148,
+        "before": 17133,
+        "after": 27666,
+        "gap": 0.06335258483886719,
+        "top2_gap": 0.06335258483886719
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 153,
+        "before": 27666,
+        "after": 17133,
+        "gap": 0.018798828125,
+        "top2_gap": 0.018798828125
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 156,
+        "before": 86385,
+        "after": 17133,
+        "gap": 0.0723114013671875,
+        "top2_gap": 0.0723114013671875
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 175,
+        "before": 27666,
+        "after": 17133,
+        "gap": 0.05784893035888672,
+        "top2_gap": 0.05784893035888672
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 181,
+        "before": 27666,
+        "after": 17133,
+        "gap": 0.05498504638671875,
+        "top2_gap": 0.05498504638671875
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 183,
+        "before": 27666,
+        "after": 17133,
+        "gap": 0.044719696044921875,
+        "top2_gap": 0.044719696044921875
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 189,
+        "before": 86385,
+        "after": 17133,
+        "gap": 0.038066864013671875,
+        "top2_gap": 0.038066864013671875
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 190,
+        "before": 86385,
+        "after": 17133,
+        "gap": 0.1462078094482422,
+        "top2_gap": 0.1462078094482422
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 197,
+        "before": 248143,
+        "after": 1816,
+        "gap": 0.06712913513183594,
+        "top2_gap": 0.06712913513183594
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 213,
+        "before": 27666,
+        "after": 17133,
+        "gap": 0.028860092163085938,
+        "top2_gap": 0.028860092163085938
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 214,
+        "before": 27666,
+        "after": 17133,
+        "gap": 0.0399627685546875,
+        "top2_gap": 0.0399627685546875
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 222,
+        "before": 86385,
+        "after": 17133,
+        "gap": 0.11954879760742188,
+        "top2_gap": 0.11954879760742188
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 228,
+        "before": 86385,
+        "after": 3546,
+        "gap": 0.05825996398925781,
+        "top2_gap": 0.05825996398925781
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 249,
+        "before": 27666,
+        "after": 17133,
+        "gap": 0.0424957275390625,
+        "top2_gap": 0.0424957275390625
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 254,
+        "before": 86385,
+        "after": 17133,
+        "gap": 0.09714126586914062,
+        "top2_gap": 0.09714126586914062
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 271,
+        "before": 17133,
+        "after": 248077,
+        "gap": 0.04118919372558594,
+        "top2_gap": 0.04118919372558594
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 319,
+        "before": 86385,
+        "after": 27666,
+        "gap": 0.07024097442626953,
+        "top2_gap": 0.07024097442626953
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 325,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.08526039123535156,
+        "top2_gap": 0.08526039123535156
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 353,
+        "before": 86385,
+        "after": 27666,
+        "gap": 0.18654537200927734,
+        "top2_gap": 0.18654537200927734
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 386,
+        "before": 86385,
+        "after": 27666,
+        "gap": 0.20900440216064453,
+        "top2_gap": 0.14366531372070312
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 393,
+        "before": 3546,
+        "after": 248077,
+        "gap": 0.03484630584716797,
+        "top2_gap": 0.03484630584716797
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 476,
+        "before": 3546,
+        "after": 27666,
+        "gap": 0.06721210479736328,
+        "top2_gap": 0.06721210479736328
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 481,
+        "before": 27666,
+        "after": 3546,
+        "gap": 0.07684135437011719,
+        "top2_gap": 0.07684135437011719
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 482,
+        "before": 27666,
+        "after": 3546,
+        "gap": 0.09652137756347656,
+        "top2_gap": 0.09652137756347656
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 505,
+        "before": 27666,
+        "after": 248077,
+        "gap": 0.04970359802246094,
+        "top2_gap": 0.04970359802246094
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 506,
+        "before": 248077,
+        "after": 27666,
+        "gap": 0.10626792907714844,
+        "top2_gap": 0.10626792907714844
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 513,
+        "before": 27666,
+        "after": 3546,
+        "gap": 0.03950023651123047,
+        "top2_gap": 0.03950023651123047
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 541,
+        "before": 27666,
+        "after": 3546,
+        "gap": 0.14853382110595703,
+        "top2_gap": 0.07712364196777344
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 613,
+        "before": 248077,
+        "after": 3546,
+        "gap": 0.019067764282226562,
+        "top2_gap": 0.019067764282226562
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 669,
+        "before": 279,
+        "after": 248077,
+        "gap": 0.11652088165283203,
+        "top2_gap": 0.11652088165283203
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 726,
+        "before": 14342,
+        "after": 248077,
+        "gap": 0.03777503967285156,
+        "top2_gap": 0.03777503967285156
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 776,
+        "before": 220,
+        "after": 288,
+        "gap": 0.05981636047363281,
+        "top2_gap": 0.05981636047363281
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 792,
+        "before": 14342,
+        "after": 2310,
+        "gap": 0.1603565216064453,
+        "top2_gap": 0.1603565216064453
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 807,
+        "before": 220,
+        "after": 710,
+        "gap": 0.025274276733398438,
+        "top2_gap": 0.025274276733398438
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 830,
+        "before": 426,
+        "after": 326,
+        "gap": 0.07321643829345703,
+        "top2_gap": 0.07321643829345703
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 858,
+        "before": 14342,
+        "after": 2310,
+        "gap": 0.07867431640625,
+        "top2_gap": 0.07867431640625
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 867,
+        "before": 151438,
+        "after": 248077,
+        "gap": 0.07215023040771484,
+        "top2_gap": 0.07215023040771484
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 895,
+        "before": 61984,
+        "after": 274,
+        "gap": 0.11900901794433594,
+        "top2_gap": 0.11900901794433594
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 929,
+        "before": 29967,
+        "after": 64209,
+        "gap": 0.13561439514160156,
+        "top2_gap": 0.13561439514160156
+       },
+       {
+        "id": "physics/val/6",
+        "thinking": false,
+        "pos": 958,
+        "before": 248077,
+        "after": 12196,
+        "gap": 0.14714622497558594,
+        "top2_gap": 0.14714622497558594
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 10,
+        "before": 86385,
+        "after": 28405,
+        "gap": 0.06697368621826172,
+        "top2_gap": 0.06697368621826172
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 14,
+        "before": 86385,
+        "after": 28405,
+        "gap": 0.09135818481445312,
+        "top2_gap": 0.09135818481445312
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 88,
+        "before": 868,
+        "after": 72412,
+        "gap": 0.09400558471679688,
+        "top2_gap": 0.09400558471679688
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 110,
+        "before": 86385,
+        "after": 360,
+        "gap": 0.19277572631835938,
+        "top2_gap": 0.12417125701904297
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 111,
+        "before": 86,
+        "after": 86385,
+        "gap": 0.007437705993652344,
+        "top2_gap": 0.007437705993652344
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 112,
+        "before": 86385,
+        "after": 86,
+        "gap": 0.07642936706542969,
+        "top2_gap": 0.029163360595703125
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 117,
+        "before": 86,
+        "after": 8884,
+        "gap": 0.03331756591796875,
+        "top2_gap": 0.03331756591796875
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 139,
+        "before": 360,
+        "after": 36530,
+        "gap": 0.0625762939453125,
+        "top2_gap": 0.0625762939453125
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 147,
+        "before": 86,
+        "after": 72412,
+        "gap": 0.10479450225830078,
+        "top2_gap": 0.10479450225830078
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 186,
+        "before": 86,
+        "after": 86385,
+        "gap": 0.03302192687988281,
+        "top2_gap": 0.03302192687988281
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 205,
+        "before": 86,
+        "after": 86385,
+        "gap": 0.062198638916015625,
+        "top2_gap": 0.062198638916015625
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 237,
+        "before": 86,
+        "after": 36530,
+        "gap": 0.17128753662109375,
+        "top2_gap": 0.09916877746582031
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 264,
+        "before": 9771,
+        "after": 248077,
+        "gap": 0.042855262756347656,
+        "top2_gap": 0.042855262756347656
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 289,
+        "before": 86,
+        "after": 360,
+        "gap": 0.18747615814208984,
+        "top2_gap": 0.1122884750366211
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 301,
+        "before": 86385,
+        "after": 36530,
+        "gap": 0.11598873138427734,
+        "top2_gap": 0.10731315612792969
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 303,
+        "before": 86,
+        "after": 86385,
+        "gap": 0.07036113739013672,
+        "top2_gap": 0.07036113739013672
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 304,
+        "before": 86,
+        "after": 86385,
+        "gap": 0.05044364929199219,
+        "top2_gap": 0.05044364929199219
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 322,
+        "before": 86,
+        "after": 360,
+        "gap": 0.05478668212890625,
+        "top2_gap": 0.05478668212890625
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 344,
+        "before": 86,
+        "after": 8884,
+        "gap": 0.1244964599609375,
+        "top2_gap": 0.1244964599609375
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 390,
+        "before": 248077,
+        "after": 360,
+        "gap": 0.06815242767333984,
+        "top2_gap": 0.06815242767333984
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 399,
+        "before": 3546,
+        "after": 248077,
+        "gap": 0.11200809478759766,
+        "top2_gap": 0.11200809478759766
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 405,
+        "before": 3546,
+        "after": 86385,
+        "gap": 0.03800010681152344,
+        "top2_gap": 0.03800010681152344
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 432,
+        "before": 3546,
+        "after": 248077,
+        "gap": 0.08941268920898438,
+        "top2_gap": 0.08941268920898438
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 494,
+        "before": 1816,
+        "after": 248143,
+        "gap": 0.01683807373046875,
+        "top2_gap": 0.01683807373046875
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 518,
+        "before": 7881,
+        "after": 20667,
+        "gap": 0.07137584686279297,
+        "top2_gap": 0.07137584686279297
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 547,
+        "before": 273,
+        "after": 21,
+        "gap": 0.3950386047363281,
+        "top2_gap": 0.2569103240966797
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 548,
+        "before": 273,
+        "after": 21,
+        "gap": 0.3689155578613281,
+        "top2_gap": 0.084808349609375
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 577,
+        "before": 24,
+        "after": 21,
+        "gap": 0.046753883361816406,
+        "top2_gap": 0.046753883361816406
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 578,
+        "before": 24,
+        "after": 21,
+        "gap": 0.07606029510498047,
+        "top2_gap": 0.07606029510498047
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 579,
+        "before": 220,
+        "after": 21,
+        "gap": 0.22521209716796875,
+        "top2_gap": 0.1293354034423828
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 580,
+        "before": 220,
+        "after": 21,
+        "gap": 0.11326217651367188,
+        "top2_gap": 0.11326217651367188
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 582,
+        "before": 220,
+        "after": 21,
+        "gap": 0.18402576446533203,
+        "top2_gap": 0.052025794982910156
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 612,
+        "before": 24,
+        "after": 21,
+        "gap": 0.056296348571777344,
+        "top2_gap": 0.056296348571777344
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 614,
+        "before": 220,
+        "after": 21,
+        "gap": 0.29883384704589844,
+        "top2_gap": 0.09502696990966797
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 615,
+        "before": 279,
+        "after": 22,
+        "gap": 0.28014469146728516,
+        "top2_gap": 0.15857887268066406
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 651,
+        "before": 279,
+        "after": 449,
+        "gap": 0.0749669075012207,
+        "top2_gap": 0.0749669075012207
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 682,
+        "before": 449,
+        "after": 22,
+        "gap": 0.0426788330078125,
+        "top2_gap": 0.03551197052001953
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 747,
+        "before": 22,
+        "after": 326,
+        "gap": 0.05561542510986328,
+        "top2_gap": 0.05561542510986328
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 770,
+        "before": 248077,
+        "after": 4584,
+        "gap": 0.0755624771118164,
+        "top2_gap": 0.0755624771118164
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 836,
+        "before": 248077,
+        "after": 25618,
+        "gap": 0.02959918975830078,
+        "top2_gap": 0.02959918975830078
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 901,
+        "before": 14342,
+        "after": 25618,
+        "gap": 0.017076492309570312,
+        "top2_gap": 0.017076492309570312
+       },
+       {
+        "id": "physics/val/7",
+        "thinking": false,
+        "pos": 1007,
+        "before": 22,
+        "after": 326,
+        "gap": 0.10851860046386719,
+        "top2_gap": 0.10851860046386719
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 32,
+        "before": 21521,
+        "after": 82,
+        "gap": 0.06605148315429688,
+        "top2_gap": 0.06605148315429688
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 184,
+        "before": 24,
+        "after": 248077,
+        "gap": 0.07382965087890625,
+        "top2_gap": 0.07382965087890625
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 236,
+        "before": 24,
+        "after": 248077,
+        "gap": 0.09861183166503906,
+        "top2_gap": 0.09861183166503906
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 464,
+        "before": 248077,
+        "after": 1089,
+        "gap": 0.08257389068603516,
+        "top2_gap": 0.08257389068603516
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 552,
+        "before": 15,
+        "after": 22,
+        "gap": 0.047664642333984375,
+        "top2_gap": 0.047664642333984375
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 554,
+        "before": 15,
+        "after": 22,
+        "gap": 0.060135841369628906,
+        "top2_gap": 0.060135841369628906
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 585,
+        "before": 15,
+        "after": 22,
+        "gap": 0.0631418228149414,
+        "top2_gap": 0.0631418228149414
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 595,
+        "before": 248077,
+        "after": 1089,
+        "gap": 0.03766632080078125,
+        "top2_gap": 0.03766632080078125
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 618,
+        "before": 15,
+        "after": 22,
+        "gap": 0.06124401092529297,
+        "top2_gap": 0.06124401092529297
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 660,
+        "before": 14342,
+        "after": 248077,
+        "gap": 0.1189718246459961,
+        "top2_gap": 0.1189718246459961
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 780,
+        "before": 24,
+        "after": 22,
+        "gap": 0.03275585174560547,
+        "top2_gap": 0.03275585174560547
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 913,
+        "before": 24,
+        "after": 22,
+        "gap": 0.02797985076904297,
+        "top2_gap": 0.02797985076904297
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 965,
+        "before": 24,
+        "after": 21,
+        "gap": 0.08008003234863281,
+        "top2_gap": 0.08008003234863281
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 1032,
+        "before": 24,
+        "after": 21,
+        "gap": 0.046721458435058594,
+        "top2_gap": 0.046721458435058594
+       },
+       {
+        "id": "imagery/val/0",
+        "thinking": false,
+        "pos": 1047,
+        "before": 22,
+        "after": 24,
+        "gap": 0.018110275268554688,
+        "top2_gap": 0.018110275268554688
+       },
+       {
+        "id": "imagery/val/1",
+        "thinking": false,
+        "pos": 145,
+        "before": 86385,
+        "after": 248077,
+        "gap": 0.09642601013183594,
+        "top2_gap": 0.09642601013183594
+       },
+       {
+        "id": "imagery/val/1",
+        "thinking": false,
+        "pos": 164,
+        "before": 856,
+        "after": 248143,
+        "gap": 0.11021614074707031,
+        "top2_gap": 0.11021614074707031
+       },
+       {
+        "id": "imagery/val/1",
+        "thinking": false,
+        "pos": 168,
+        "before": 248077,
+        "after": 1089,
+        "gap": 0.11667442321777344,
+        "top2_gap": 0.11667442321777344
+       }
+      ],
+      "n_listed": 500,
+      "max_abs_logit": 0.9210848808288574,
+      "max_abs_hidden": 2.46875
+     }
+    }
+   },
+   "pass": false
+  },
+  "restricted": {
+   "on_model": "合并后（起点 LoRA 与 E5 LoRA 都已合并）",
+   "by_thinking": {
+    "thinking_off": {
+     "n_rows": 40,
+     "decode_vs_generate_batch": {
+      "n_rows": 40,
+      "exact_rows": 0.95,
+      "token_agreement": 0.9875118259224219,
+      "n_agree_tokens": 41752,
+      "n_tokens": 42280,
+      "n_divergent_rows": 2,
+      "first_divergence": {
+       "n": 2,
+       "min": 777,
+       "p25": 785.0,
+       "median": 793.0,
+       "p75": 801.0,
+       "max": 809,
+       "histogram": {
+        "0-15": 0,
+        "16-31": 0,
+        "32-47": 0,
+        "48-63": 0,
+        "64-79": 0,
+        "80-95": 0,
+        "96-111": 0,
+        "112-127": 0,
+        "128-143": 0,
+        "144-159": 0,
+        "160-175": 0,
+        "176-191": 0,
+        "192-207": 0,
+        "208-223": 0,
+        "224-239": 0,
+        "240-255": 0,
+        "256-271": 0,
+        "272-287": 0,
+        "288-303": 0,
+        "304-319": 0,
+        "320-335": 0,
+        "336-351": 0,
+        "352-367": 0,
+        "368-383": 0,
+        "384-399": 0,
+        "400-415": 0,
+        "416-431": 0,
+        "432-447": 0,
+        "448-463": 0,
+        "464-479": 0,
+        "480-495": 0,
+        "496-511": 0,
+        "512-527": 0,
+        "528-543": 0,
+        "544-559": 0,
+        "560-575": 0,
+        "576-591": 0,
+        "592-607": 0,
+        "608-623": 0,
+        "624-639": 0,
+        "640-655": 0,
+        "656-671": 0,
+        "672-687": 0,
+        "688-703": 0,
+        "704-719": 0,
+        "720-735": 0,
+        "736-751": 0,
+        "752-767": 0,
+        "768-783": 1,
+        "784-799": 0,
+        "800-815": 1,
+        "816-831": 0,
+        "832-847": 0,
+        "848-863": 0,
+        "864-879": 0,
+        "880-895": 0,
+        "896-911": 0,
+        "912-927": 0,
+        "928-943": 0,
+        "944-959": 0,
+        "960-975": 0,
+        "976-991": 0,
+        "992-1007": 0,
+        "1008-1023": 0,
+        "1024-1039": 0,
+        "1040-1055": 0,
+        "1056-1056": 0
+       }
+      },
+      "n_divergence_without_gap": 0,
+      "gap": {
+       "n": 2,
+       "median": 0.030698418617248535,
+       "max": 0.04500293731689453,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "top2_gap": {
+       "n": 2,
+       "median": 0.030698418617248535,
+       "max": 0.04500293731689453,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "divergent_rows": [
+       {
+        "id": "occlusion/val/1",
+        "thinking": false,
+        "first_divergence": 809,
+        "len_generate_batch": 1057,
+        "len_restricted": 1057,
+        "gap": 0.01639389991760254,
+        "top2_gap": 0.01639389991760254
+       },
+       {
+        "id": "viewpoint/val/2",
+        "thinking": false,
+        "first_divergence": 777,
+        "len_generate_batch": 1057,
+        "len_restricted": 1057,
+        "gap": 0.04500293731689453,
+        "top2_gap": 0.04500293731689453
+       }
+      ],
+      "n_listed": 2
+     },
+     "teacher_forcing": {
+      "n_tokens": 42280,
+      "agreement": 0.9998817407757805,
+      "n_disagreements": 5,
+      "gap": {
+       "n": 5,
+       "median": 0.019702434539794922,
+       "max": 0.06310367584228516,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "top2_gap": {
+       "n": 5,
+       "median": 0.019702434539794922,
+       "max": 0.06310367584228516,
+       "frac_lt_threshold": 1.0,
+       "threshold": 2.0
+      },
+      "disagreements": [
+       {
+        "id": "occlusion/val/3",
+        "thinking": false,
+        "pos": 570,
+        "decoded": 248078,
+        "argmax": 248077,
+        "gap": 0.004621267318725586,
+        "top2_gap": 0.004621267318725586
+       },
+       {
+        "id": "occlusion/val/4",
+        "thinking": false,
+        "pos": 678,
+        "decoded": 248078,
+        "argmax": 248077,
+        "gap": 0.0016102790832519531,
+        "top2_gap": 0.0016102790832519531
+       },
+       {
+        "id": "rotation3d/val/4",
+        "thinking": false,
+        "pos": 546,
+        "decoded": 248077,
+        "argmax": 248118,
+        "gap": 0.019702434539794922,
+        "top2_gap": 0.019702434539794922
+       },
+       {
+        "id": "viewpoint/val/2",
+        "thinking": false,
+        "pos": 506,
+        "decoded": 248121,
+        "argmax": 248077,
+        "gap": 0.02041935920715332,
+        "top2_gap": 0.02041935920715332
+       },
+       {
+        "id": "viewpoint/val/2",
+        "thinking": false,
+        "pos": 652,
+        "decoded": 248077,
+        "argmax": 248110,
+        "gap": 0.06310367584228516,
+        "top2_gap": 0.06310367584228516
+       }
+      ],
+      "n_listed": 5
+     }
+    }
+   },
+   "across_merge": {
+    "compared": "同 merge 的两侧隐藏状态，只在允许集合上比较 logits",
+    "by_thinking": {
+     "thinking_off": {
+      "n_rows": 40,
+      "teacher_forcing": {
+       "n_tokens": 42280,
+       "argmax_agreement": 0.9998107852412488,
+       "n_disagreements": 8,
+       "gap": {
+        "n": 8,
+        "median": 0.029361486434936523,
+        "max": 0.10290718078613281,
+        "frac_lt_threshold": 1.0,
+        "threshold": 2.0
+       },
+       "top2_gap": {
+        "n": 8,
+        "median": 0.029361486434936523,
+        "max": 0.10290718078613281,
+        "frac_lt_threshold": 1.0,
+        "threshold": 2.0
+       },
+       "disagreements": [
+        {
+         "id": "occlusion/val/0",
+         "thinking": false,
+         "pos": 879,
+         "unmerged": 248078,
+         "merged": 248077,
+         "gap": 0.07066643238067627,
+         "top2_gap": 0.07066643238067627
+        },
+        {
+         "id": "occlusion/val/1",
+         "thinking": false,
+         "pos": 807,
+         "unmerged": 248078,
+         "merged": 248077,
+         "gap": 0.006560802459716797,
+         "top2_gap": 0.006560802459716797
+        },
+        {
+         "id": "occlusion/val/2",
+         "thinking": false,
+         "pos": 550,
+         "unmerged": 248078,
+         "merged": 248077,
+         "gap": 0.01349186897277832,
+         "top2_gap": 0.01349186897277832
+        },
+        {
+         "id": "occlusion/val/6",
+         "thinking": false,
+         "pos": 771,
+         "unmerged": 248078,
+         "merged": 248077,
+         "gap": 0.028478622436523438,
+         "top2_gap": 0.028478622436523438
+        },
+        {
+         "id": "physics/val/0",
+         "thinking": false,
+         "pos": 798,
+         "unmerged": 248078,
+         "merged": 248077,
+         "gap": 0.019337892532348633,
+         "top2_gap": 0.019337892532348633
+        },
+        {
+         "id": "rotation3d/val/3",
+         "thinking": false,
+         "pos": 517,
+         "unmerged": 248117,
+         "merged": 248116,
+         "gap": 0.10290718078613281,
+         "top2_gap": 0.10290718078613281
+        },
+        {
+         "id": "viewpoint/val/2",
+         "thinking": false,
+         "pos": 506,
+         "unmerged": 248121,
+         "merged": 248077,
+         "gap": 0.03285527229309082,
+         "top2_gap": 0.03285527229309082
+        },
+        {
+         "id": "viewpoint/val/2",
+         "thinking": false,
+         "pos": 515,
+         "unmerged": 248121,
+         "merged": 248077,
+         "gap": 0.03024435043334961,
+         "top2_gap": 0.03024435043334961
+        }
+       ],
+       "n_listed": 8,
+       "max_abs_logit": 0.5933394432067871,
+       "max_abs_hidden": 2.46875
+      }
+     }
+    }
+   },
+   "pass": true
+  }
+ },
+ "failures": {
+  "restricted": [],
+  "merge": [
+   "merge/thinking_off：教师强制的 argmax_agreement 0.96585 < 0.98"
+  ]
+ },
+ "pass": false,
+ "data": {
+  "subset": "dev",
+  "split": "val",
+  "n_per_task": 8,
+  "tasks": [
+   "rotation3d",
+   "viewpoint",
+   "occlusion",
+   "physics",
+   "imagery"
+  ],
+  "n": 40,
+  "sample_ids": [
+   "rotation3d/val/0",
+   "rotation3d/val/1",
+   "rotation3d/val/2",
+   "rotation3d/val/3",
+   "rotation3d/val/4",
+   "rotation3d/val/5",
+   "rotation3d/val/6",
+   "rotation3d/val/7",
+   "viewpoint/val/0",
+   "viewpoint/val/1",
+   "viewpoint/val/2",
+   "viewpoint/val/3",
+   "viewpoint/val/4",
+   "viewpoint/val/5",
+   "viewpoint/val/6",
+   "viewpoint/val/7",
+   "occlusion/val/0",
+   "occlusion/val/1",
+   "occlusion/val/2",
+   "occlusion/val/3",
+   "occlusion/val/4",
+   "occlusion/val/5",
+   "occlusion/val/6",
+   "occlusion/val/7",
+   "physics/val/0",
+   "physics/val/1",
+   "physics/val/2",
+   "physics/val/3",
+   "physics/val/4",
+   "physics/val/5",
+   "physics/val/6",
+   "physics/val/7",
+   "imagery/val/0",
+   "imagery/val/1",
+   "imagery/val/2",
+   "imagery/val/3",
+   "imagery/val/4",
+   "imagery/val/5",
+   "imagery/val/6",
+   "imagery/val/7"
+  ],
+  "n_runs": 2
+ },
+ "generation": {
+  "max_new_tokens": 1057,
+  "enable_thinking": false,
+  "batch_size": 64
+ },
+ "timing_s": {
+  "unmerged_s": 103.6257412172854,
+  "merged_s": 125.81755624338984,
+  "total_s": 229.44479606673121
+ },
+ "error": null,
+ "rule": "src/e5/trained_eval.py 的模块说明：起点 LoRA 合并之后，E5 LoRA 合并前（A）对合并后（B），原地合并；判据 v1（D50-3）= scripts/check_training_interfaces.py 的 judge",
+ "allowed": {
+  "scope": "task",
+  "stop": 248046,
+  "row": 248143,
+  "binary": {
+   "value_ids": [
+    248077,
+    248078
+   ],
+   "allowed": [
+    248046,
+    248077,
+    248078,
+    248143
+   ],
+   "values": "0 / 1 → E3b mask token 0 / 1"
+  },
+  "relief": {
+   "value_ids": [
+    248077,
+    248095,
+    248096,
+    248097,
+    248098,
+    248099,
+    248100,
+    248101,
+    248102,
+    248103,
+    248104,
+    248105,
+    248106,
+    248107,
+    248108,
+    248109,
+    248110,
+    248111,
+    248112,
+    248113,
+    248114,
+    248115,
+    248116,
+    248117,
+    248118,
+    248119,
+    248120,
+    248121,
+    248122,
+    248123,
+    248124,
+    248125,
+    248126
+   ],
+   "allowed": [
+    248046,
+    248077,
+    248095,
+    248096,
+    248097,
+    248098,
+    248099,
+    248100,
+    248101,
+    248102,
+    248103,
+    248104,
+    248105,
+    248106,
+    248107,
+    248108,
+    248109,
+    248110,
+    248111,
+    248112,
+    248113,
+    248114,
+    248115,
+    248116,
+    248117,
+    248118,
+    248119,
+    248120,
+    248121,
+    248122,
+    248123,
+    248124,
+    248125,
+    248126,
+    248143
+   ],
+   "depth_bins": [
+    16,
+    47
+   ],
+   "offset": 16,
+   "values": "起伏代码 0（背景）→ mask token 0；代码 k + 1（起伏档 k）→ depth token 第 offset + k 档"
+  }
+ }
+}
