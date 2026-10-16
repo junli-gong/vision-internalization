@@ -1421,3 +1421,4 @@
 - 10-16 19:45 UTC 心跳：两条 RUNNING；06 的 e3b_s0 进入第 7 段（15 分钟）；07 在 base_warmup_n4000_s2（55 分钟）；无新失败。同步 ok。
 - 10-16 20:15 UTC 心跳：两条 RUNNING；06 在 e3b_s0（第 7 段，45 分钟）；07 在 base_warmup_n4000_s2（85 分钟）；无新失败。同步 ok。
 - 10-16 20:45 UTC：07 的 base_warmup_n4000_s2 训完，接 eval_base_warmup_n4000_s2（5 分钟；之后只剩 e3b_n4000_s2，small_s2 组就齐了）。06 在 e3b_s0（第 7 段，75 分钟）。两条 RUNNING，无新失败，同步 ok。
+- 10-16 21:15 UTC：07 的 eval_base_warmup_n4000_s2 完成（e5-v2），接 small_s2 的最后一条 e3b_n4000_s2（5 分钟）。06 的 e3b_s0 进入第 8 段（最后一段，21:13）。两条 RUNNING，无新失败，同步 ok。
