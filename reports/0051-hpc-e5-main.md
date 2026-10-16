@@ -376,6 +376,28 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 | check | e3b_c3_n4000_s0 |
 | check | e3b_n4000_s0 |
 
+### 第一个补评（eval_e3b_c3_n1000_s0）
+
+- 04:02:36Z `eval_e3b_c3_n1000_s0 完成`（从 03:31:06Z 起 31.5 min）。核对文件 `trained/e3b_c3/qwen3.5-2b/n1000/seed0/merge_check.json` 写于 03:39:28Z；旧文件留作同目录的 `merge_check.v1.json`。
+- criteria_version `e5-v2`；pass true；failures `{"merge": [], "restricted": []}`。
+- v1_report_only.pass false，failures 同 v1 原判（restricted exact_rows 0.8250 < 0.95）。
+- 判定用到的读数（thinking_off）：restricted.across_merge 教师强制 argmax_agreement 0.99920；restricted 教师强制 agreement 0.99946。
+- 各比较的 gap（n / 中位 / 最大）：
+
+| 比较 | n | 中位 | 最大 |
+|---|---|---|---|
+| merge.generate | 21 | 0.2001 | 1.1876 |
+| merge.teacher_forcing | 222 | 0.1449 | 0.5740 |
+| restricted.decode_vs_generate_batch | 7 | 0.1230 | 0.2458 |
+| restricted.teacher_forcing | 23 | 0.0862 | 0.2956 |
+| restricted.across_merge.teacher_forcing | 34 | 0.1947 | 1.1876 |
+
+- metric_level（val 40 行，只报告）：status done，error null；A 侧 LoRA 审计 186 / 186 层被调用；A 104.5 s、B 58.3 s。
+  - 总体差（B − A）：all（n 40）iou_grid −0.00460，relief_error（16 行）+0.05956，相同 21 行，无效 0 / 0；headline（n 31）iou_grid −0.00692，relief_error（7 行）+0.13782。
+  - flags：iou false，relief **true**（规则：总体起伏误差平均差的绝对值 > 0.02）。只报告，不影响判定。
+- timing_s：unmerged 134.2 s，merged 125.0 s，total 422.0 s。
+- 已发管理员（只核对摘要，不含 test 分数）。
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
