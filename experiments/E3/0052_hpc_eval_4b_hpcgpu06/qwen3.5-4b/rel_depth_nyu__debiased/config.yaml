@@ -1,0 +1,103 @@
+experiment: E1
+framework: src/e1 事后读数（DEV-0033；E1 预注册 §10，D66）
+model:
+  key: qwen3.5-4b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-4B
+  revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+  adapter_model_key: qwen3.5-4b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+task: rel_depth_nyu
+subset: debiased
+generation:
+  enable_thinking: false
+  max_new_tokens: 1
+  decoding: option_logits：一次前向，取第一个生成位置的原始 logits（不采样；D37）
+  order: image_first
+  readout:
+    kind: letter_debiased
+    parse: letter_token
+    spellings:
+    - '{letter}'
+    - ' {letter}'
+    table:
+      letters:
+      - A
+      - B
+      entries:
+        A:
+        - spelling: A
+          token_id: 32
+          decoded: A
+        - spelling: ' A'
+          token_id: 357
+          decoded: ' A'
+        B:
+        - spelling: B
+          token_id: 33
+          decoded: B
+        - spelling: ' B'
+          token_id: 417
+          decoded: ' B'
+      skipped: []
+    orders: cyclic_shifts
+    method: option_logits
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+  entry:
+    template: 'Two points are circled on the image, labeled by A and B beside each
+      circle. Which point is closer to the camera?
+
+      Select from the following choices.
+
+      (A) A is closer
+
+      (B) B is closer'
+    native: false
+    provenance: unified_benchmark_wording
+    source_url: https://huggingface.co/datasets/BLINK-Benchmark/BLINK/tree/a3666eb249237ba3d5eca8db21176cc47967e040/Relative_Depth
+    parse: choice
+    max_new_tokens: 1024
+data:
+  n_samples: 3270
+  sample_ids_sha256: b71434caf4bc028a9c86a75d400957e5e14fbaf4eb79e45dbb63432bf27d493f
+  has_gt: true
+  selection_stats:
+    population:
+      n_total: 3270
+      n_kept: 3270
+      excluded_by_reason: {}
+    n: 3270
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: null
+map_ci_resamples: 0
+batch_size: 64
+batch_protocol:
+  protocol_version: 1
+  batch_size: 64
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: true
+  frozen_batch_size: 64
+posthoc:
+  kind: debiased_letter
+  config: configs/e1_posthoc.json
+  config_sha256: 9a5607826bae8b2387cd9b5bbd88cd71d5887ebf86237b786546ab13ac613ce1
+  base_subset: eval
+  note: 事后读数（D66；E1 预注册 §10，写于运行之前）：报告里注明"事后"
+  version: 1
+  layout: order_major
+  n_readings: 6540
+  split_how: rendered_template
+  line_format: ({letter}) {text}
