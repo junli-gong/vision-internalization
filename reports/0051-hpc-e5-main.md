@@ -343,7 +343,38 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
   - 任务书第 4 步的命令只设了 `PATH`，没有设 `HF_HOME`、`HF_HUB_CACHE`、`HF_HUB_OFFLINE`。
   - `$VI/hf/hub/models--OpenGVLab--InternVL3_5-2B-HF/snapshots/3f301ffcf3dcbb47893afae6650ea3e78d96fb6d/config.json` 存在。
   - 本集群上以前的测试与驱动脚本都 export 了 `HF_HOME=$VI/hf HF_HUB_CACHE=$VI/hf/hub HF_HUB_OFFLINE=1`（如 `driver_0044.sh` 第 22–24 行）；`reeval.sh` 第 37 行、`queue.sh` 第 40 行也自己 export 这三个。
-- 按任务书：测试不过就停，暂停文件留着，主驱动保持暂停。已把输出发给管理员（10-16 03:2xZ），等指示。没有重跑，也没有启动 `reeval.sh`。
+- 按任务书：测试不过就停，暂停文件留着，主驱动保持暂停。已把输出发给管理员（10-16 03:2xZ），等指示。
+
+### 测试重跑（管理员 03:2xZ 指示：加 HF 环境变量，其余同第 4 步）
+
+- 先查 `~/.cache/huggingface`（只看不删）：`find ~/.cache/huggingface -newermt '2026-10-16 03:05'`（节点本地时间 CST）与 `-newermt '2026-10-16 03:05 UTC'` 都没有输出；顶层最新的是 `hub/`，2026-08-08 16:44:30 +0800。
+- 命令：第 4 步的命令在 `env` 里加 `HF_HOME=$VI/hf HF_HUB_CACHE=$VI/hf/hub HF_HUB_OFFLINE=1 TMPDIR=$VI/tmp`，pytest 行不变。
+- 03:24:42Z – 03:30:30Z：`64 passed in 345.53s (0:05:45)`，`pytest_rc=0`。之后删了 `$VI/tmp/pt_0051a1`；wt0051 status 空；前后 squeue 两条 RUNNING。
+
+### 启动补评（第 5 步）
+
+- 03:31:05Z 按任务书命令启动 `reeval.sh`（`EXPECT_COMMIT=f703d7db…`，`QUEUE_CAP_H=14`），step 157297.87。启动前后 squeue 两条 RUNNING；主驱动的 step 157297.84 仍在，心跳 paused。
+- 驱动日志第一行：`2026-10-16T03:31:06Z 补评开始：hpcgpu07，commit f703d7dbb25817d097a574ebb0e61cd3cbc91f57；名单 …/reeval_e5v2/plan.tsv：补评 14 个、只核对 2 个`。
+- `plan.tsv`（kind、tag；checkpoint 都是 `$VI/ckpt/hpcgpu07/0051/train/<起点>/qwen3.5-2b/n<N>/seed<k>/ckpt/final`，model_dir 都是 `…/0051_e5_main_hpcgpu07/trained/<起点>/qwen3.5-2b/n<N>/seed<k>`）：
+
+| kind | tag |
+|---|---|
+| reeval | e3b_c3_n1000_s0 |
+| reeval | c3_warmup_n1000_s0 |
+| reeval | base_warmup_n1000_s0 |
+| reeval | e3b_n1000_s0 |
+| reeval | c3_warmup_n4000_s0 |
+| reeval | base_warmup_n4000_s0 |
+| reeval | e3b_c3_n1000_s1 |
+| reeval | c3_warmup_n1000_s1 |
+| reeval | base_warmup_n1000_s1 |
+| reeval | e3b_c3_n4000_s1 |
+| reeval | c3_warmup_n4000_s1 |
+| reeval | base_warmup_n4000_s1 |
+| reeval | e3b_c3_n1000_s2 |
+| reeval | c3_warmup_n1000_s2 |
+| check | e3b_c3_n4000_s0 |
+| check | e3b_n4000_s0 |
 
 ## 5. hpcgpu06
 
