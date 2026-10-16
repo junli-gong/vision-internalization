@@ -2335,3 +2335,23 @@
    - R_depth = P_depth ÷ E3b 的深度 AbsRel，即深度误差变大了几成。
    - 逐种子算、取种子平均，与 L、P 放在同一张表里。按 §13 同样的写法描述趋势，但不参与判定。
    - 理由（用户）：0.8B 的 E3b 网格能力本来就弱，像素干扰的绝对值受地板效应压制，直接和 2B、4B 比会误导。
+
+## D97 — DEV-0046 合入；D96-2 的执行细节；RUN-0051 补充 1（2026-10-16，管理员）
+
+1. **DEV-0046 合入**（commit 2db10553）：
+   - `src/e5/trained_eval.py`：判据 e5-v2（`judge_e5v2`，阈值只在 `E5V2_THRESHOLDS` 一处）；v1 照算、只报告（`v1_report_only`）；指标层面的合并前后比较（`metric_level`）。
+   - `scripts/eval_e5_trained.py`：加 `--check-only`。
+   - 回归：RUN-0051 的 15 份真实核对文件，v1 原样复现记录的判定（只有 e3b_c3 4K 种子 0、e3b 4K 种子 0 通过），e5-v2 全部通过，与 N34 的手算表一致。
+   - 测试：全量 2809 passed、18 skipped（开发 agent 跑的）；管理员复跑新增的测试与 test_constants，67 passed。
+2. **D96-2 的执行细节**（管理员定，负责人可改）：
+   - **IoU 的标记按全部 40 行的 `iou_grid` 算**：五类都输出 mask，这也是 E5 门槛先决条件的口径。只算二值格式 c、d、e 的读数另报一栏（`by_format.binary`）。D96-2 里"mask IoU（二值格式 c、d、e）"的括号按"另报一栏"理解。
+   - 起伏误差的噪声底照 D96-2 取 0.02。代码里写成 IoU 阈值的 2 倍，因为 `src/` 里不许出现约定外的字面量 0.02（test_constants）。数值由测试钉住。
+   - e5-v2 比 D96 原文略严三处：分歧数多于 gap 数判不过；缺节判不过；教师强制没有可比较的位置判不过。真实文件一处都没触发。gap 最大值的边界照 D96 原文用 ≤ 2.0（v1 的 restricted 是 < 2.0）。
+   - 指标层面的 A 侧加一项运行期审计：解码期间，被调用的 LoRA 层必须同样多次走 lora_B，至少一层被调用。用来排除"绕开 LoRA 或偷偷合并"。
+   - `configs/e5_train.json` 里 `merge_check_basis` 的说明文字已过时，仍写判据 v1。E5 进行中不改：改了会变 config 的 sha256，而它进核对的 key 与运行身份。E5 跑完后再改，门报告里注明。
+3. **RUN-0051 补充 1**（`prompts/server_hpc/0051-addendum-1.md`）：
+   - 在 hpcgpu07 上用暂停文件让主驱动停在两步之间，不杀进程。
+   - wt0051 切到新 commit。queue.sh 与 train_queue.sh 的字节不变，正在跑的 bash 不受影响，只有 python 代码换了。
+   - 先在 07 上跑新增的测试，再由 `reeval.sh` 补评被 v1 拒绝的检查点，v1 下已评过 test 的只做 `--check-only`。
+   - 跑完删掉暂停文件，主驱动用 e5-v2 接着跑。
+   - 补评都在 07 上做（D93-1）。约 9 小时，上限 14 小时。
