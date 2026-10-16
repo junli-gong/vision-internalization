@@ -156,3 +156,9 @@
   - `git worktree add --no-checkout` 之后只做 `sparse-checkout set`，索引是空的，工作树里一个文件都没有。还要补一步 `git read-tree -mu HEAD`，或者 `checkout`。管理员在开发机上验证时补了 checkout，写进任务书时漏了。
   - 排除目录前，先查代码在运行时会不会读那里的文件。本项目的训练去重读 `experiments/P0/` 下的一份清单，而且是"有就用、没有就跳过"，排除掉不会报错，只会悄悄改变训练数据。
   - 要在稀疏工作树里跑测试，稀疏规则还要留下测试会读的 experiments 子目录（RUN-0049 的 06 那一次：`test_v1_rejudges_run0021_all_pass` 读 `experiments/E3/0021_train_iface_check/`）。只跑训练、评测的工作树不受影响。
+
+### 任务书里在服务器上直接跑的命令，环境变量要和驱动脚本一样齐（RUN-0051 补充 1，2026-10-16）
+
+- 事故：补充任务书让服务器 CC 在节点上直接跑 pytest，命令只设了 PATH，没设 HF_HOME、HF_HUB_CACHE、HF_HUB_OFFLINE。用到真实模型配置的 5 条测试去连 huggingface.co，全部失败；主驱动因此多停了约半小时。
+- 驱动脚本自己 export 这些变量，所以彩排与正式运行都不暴露问题。只有任务书里手写的那条命令漏了。
+- 规则：任务书里手写的远程命令（测试、诊断、一次性脚本），环境变量照抄同一台机器上驱动脚本的 export 一节，至少包括缓存路径、离线开关、TMPDIR。能写成脚本的就写成脚本，在开发机上彩排一次。

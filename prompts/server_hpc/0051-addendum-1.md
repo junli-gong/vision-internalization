@@ -82,8 +82,11 @@
 
    ```bash
    ssh -n hpcgpu07 'srun --jobid=157297 --overlap -n1 env PATH=/home/mail/chenyuma/visint/env/bin:/usr/bin:/bin \
+     HF_HOME=/home/mail/chenyuma/visint/hf HF_HUB_CACHE=/home/mail/chenyuma/visint/hf/hub HF_HUB_OFFLINE=1 TMPDIR=/home/mail/chenyuma/visint/tmp \
      bash -c "cd /home/mail/chenyuma/visint/wt/wt0051 && CUDA_VISIBLE_DEVICES= python -m pytest tests/test_e5_merge_check_e5v2.py -q -p no:cacheprovider --basetemp=/home/mail/chenyuma/visint/tmp/pt_0051a1"' < /dev/null
    ```
+
+   - **更正（10-16 03:30 UTC）**：第一版的命令漏了 `HF_HOME`、`HF_HUB_CACHE`、`HF_HUB_OFFLINE`。测试去连 huggingface.co，5 条用到真实模型配置的测试失败（a100-69 03:22 报告）。上面已补上，与 reeval.sh、queue.sh 自己 export 的相同。
 
    全部通过才往下。不过就停下，把输出发给管理员，**暂停文件留着**，主驱动保持暂停。跑完删掉 `$VI/tmp/pt_0051a1`。
 5. **启动补评**（方案 B）：
