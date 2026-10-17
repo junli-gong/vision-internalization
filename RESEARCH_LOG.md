@@ -1481,3 +1481,4 @@
 - 10-17 17:10 UTC：发 RUN-0052 补充 1（prompts/server_hpc/0052-addendum-1.md）给 a100-69：等队列在 e3b_s2 前停下、run.sh 做完种子 0、1 的 eval b 之后，切 wt0052 到 b62986d5、节点上跑 DEV-0047 测试、用 run_s2.sh（QUEUE_CAP_H=52）训 e3b_s2 并只评种子 2。
 - 10-17 18:17 UTC：06 照 D98 预期：e3b_s1 训完后队列在 18:00:38 停下（blocked cap：已用 33.59 h + 13.6 h > 46 h，预期之内，不算异常），run.sh 接着做 eval b，在 grid_e3b_s0_refseg。07 在 c3_warmup_n16000_s1（第 2 段），e3b_c3_n16000_s1 已训完并评完。两条 RUNNING，同步 ok，无新失败。
 - 10-17 18:45 UTC 心跳：两条 RUNNING；06 在 grid_e3b_s0_refseg（45 分钟，日志 18:39 有更新）；07 在 c3_warmup_n16000_s1（第 2 段，30 分钟）；同步 ok；无新失败。
+- 10-17 19:28 UTC 心跳：两条 RUNNING；06 在 grid_e3b_s0_refseg（1.5 小时，日志 19:19 有更新）；07 在 c3_warmup_n16000_s1（第 2 段，75 分钟）；同步 ok；无新失败。
