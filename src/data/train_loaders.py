@@ -7,6 +7,7 @@
   （DEV-0024）；require_dedupe=False 只给开发机小样本与测试用。
 - 评测划分（ade20k/val、nyu_normals/test）不读剔除清单。
 - strict=True（默认）时图像或 GT 文件缺失直接报错；strict=False 时计入 stats["n_missing"] 并跳过（--limit 小样本用）。
+  文件在不在按父目录一次性列出来查（_DirListing，DEV-0047），结果与逐个 Path.exists() 相同。
 - 稠密 GT 不在加载时读进内存：gt 里放文件路径，用 read_depth_m / read_normals / read_ade_label 解码：
   深度 → 米（float32，0 = 无效）；法向 → 单位向量（float32 H×W×3）与有效掩码；ADE 标签 → uint8，0 到 src/constants.ADE_NUM_CLASSES（0 不参与评测）。
 - RefCOCO 的 gt 与 E1 相同：框是绝对像素 xyxy（浮点），mask 是 COCO 多边形或 RLE，附 height、width。
@@ -15,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -69,11 +71,48 @@ def _finish(samples: list[Sample], rel_of: Callable[[Sample], str], *, set_name:
     return LoadResult(sorted(kept, key=lambda s: s.id), stats)
 
 
-def _have(src: Path, rels: tuple[str, ...], files: dict[str, Any], strict: bool, what: str) -> bool:
-    if all(r in files and (src / r).exists() for r in rels):
+class _DirListing:
+    """一次加载器调用内的"磁盘上有没有"（DEV-0047）：每个父目录 os.scandir 一次，在内存里按名字查，代替逐个 Path.exists()
+    （共享盘的元数据慢时，逐个 stat 十几万次要几个小时；按目录列只要几百次）。结果与 Path.exists() 相同（Linux）：
+    - 名字按字节比较（scandir 与 exists 用同一套文件系统编码；不折叠大小写、不做 Unicode 规范化）；
+    - 列出来是符号链接的条目：这一条退回 Path.exists()（跟随链接，断链仍判不存在）；
+    - 父目录不存在或不是目录（FileNotFoundError、NotADirectoryError）：其下全都不存在（exists() 同样是 False）；
+      列不出来的其他原因（权限、链接环路、非法路径等）：这个目录退回逐个 Path.exists()，结果与异常都同旧做法；
+    - 名字是空、"."、".." 的路径（scandir 不列这些）：退回 Path.exists()。
+    缓存只活在一次加载器调用里（加载期间落地不变）。"""
+
+    def __init__(self) -> None:
+        self._dirs: dict[Path, dict[str, os.DirEntry[str]] | None] = {}
+
+    def _entries(self, d: Path) -> dict[str, os.DirEntry[str]] | None:
+        if d not in self._dirs:
+            try:
+                with os.scandir(d) as it:
+                    self._dirs[d] = {e.name: e for e in it}
+            except (FileNotFoundError, NotADirectoryError):
+                self._dirs[d] = {}
+            except (OSError, ValueError):
+                self._dirs[d] = None
+        return self._dirs[d]
+
+    def exists(self, path: Path) -> bool:
+        if path.name in ("", ".", ".."):
+            return path.exists()
+        entries = self._entries(path.parent)
+        if entries is None:
+            return path.exists()
+        e = entries.get(path.name)
+        if e is None:
+            return False
+        return path.exists() if e.is_symlink() else True
+
+
+def _have(src: Path, rels: tuple[str, ...], files: dict[str, Any], strict: bool, what: str, disk: _DirListing) -> bool:
+    """rels 都在清单 files 里、且磁盘上存在（disk：本次加载器调用的 _DirListing）。"""
+    if all(r in files and disk.exists(src / r) for r in rels):
         return True
     if strict:
-        raise FileNotFoundError(f"{what}：{[r for r in rels if not (src / r).exists()]} 不存在；落地不全（strict=False 可跳过并计数）")
+        raise FileNotFoundError(f"{what}：{[r for r in rels if not disk.exists(src / r)]} 不存在；落地不全（strict=False 可跳过并计数）")
     return False
 
 
@@ -92,7 +131,7 @@ def load_refcoco_train(root: str | Path, dataset: str, *, exclusions: str | Path
     files = read_manifest(src)["files"]
     excl, excl_path = _train_exclusions(root, f"{REFCOCO_TRAIN}/train", exclusions, require_dedupe)
     cats = doc["categories"]
-    out, n_missing = [], 0
+    out, n_missing, disk = [], 0, _DirListing()
     for r in doc["refs"]:
         ann = doc["anns"][str(r["ann_id"])]
         im = doc["images"][str(r["image_id"])]
@@ -100,7 +139,7 @@ def load_refcoco_train(root: str | Path, dataset: str, *, exclusions: str | Path
         seg = ann["segmentation"]
         mask = {"polygons": seg} if isinstance(seg, list) else {"rle": seg}
         mask.update(height=im["height"], width=im["width"])
-        if not _have(src, (rel,), files, strict, f"{dataset} ref {r['ref_id']}"):
+        if not _have(src, (rel,), files, strict, f"{dataset} ref {r['ref_id']}", disk):
             n_missing += len(r["sentences"])
             continue
         for s in r["sentences"]:
@@ -152,7 +191,7 @@ def load_nyu_depth_train(root: str | Path, *, exclusions: str | Path | None = "a
     excl, excl_path = _train_exclusions(root, f"{nyu_land.SOURCE}/train", exclusions, require_dedupe)
     H, W = nyu_land.SPEC["hw"]
     test_scenes = frozenset(nyu_land.TEST_SCENES)
-    out, n_missing = [], 0
+    out, n_missing, disk = [], 0, _DirListing()
     for line in (src / "pairs_train.jsonl").read_text().splitlines():
         p = json.loads(line)
         base = nyu_land.base_scene(p["scene"])
@@ -160,7 +199,7 @@ def load_nyu_depth_train(root: str | Path, *, exclusions: str | Path | None = "a
             raise ValueError(f"nyu pair {p['id']}：清单的 base_scene {p['base_scene']!r} 与按场景名算出的 {base!r} 不同")
         if base in test_scenes:
             raise ValueError(f"nyu pair {p['id']}：基础场景 {base!r} 属于官方 test 场景（D11-2），不能进训练集；落地的场景过滤没生效")
-        if not _have(src, (p["rgb"], p["depth"]), files, strict, f"nyu pair {p['id']}"):
+        if not _have(src, (p["rgb"], p["depth"]), files, strict, f"nyu pair {p['id']}", disk):
             n_missing += 1
             continue
         out.append(
@@ -206,11 +245,11 @@ def load_nyu_normals(root: str | Path, split: str, *, exclusions: str | Path | N
     set_name = f"{nn_land.SOURCE}/{split}"
     excl, excl_path = _train_exclusions(root, set_name, exclusions, require_dedupe) if nn_land.ROLE[split] == "train" else ({}, None)
     H, W = nn_land.SPEC["hw"]
-    out, n_missing = [], 0
+    out, n_missing, disk = [], 0, _DirListing()
     for r in json.loads((src / "index.json").read_text())["images"]:
         if r["split"] != split:
             continue
-        if not _have(src, (r["img"], r["norm"]), files, strict, f"nyu_normals {r['idx']}"):
+        if not _have(src, (r["img"], r["norm"]), files, strict, f"nyu_normals {r['idx']}", disk):
             n_missing += 1
             continue
         out.append(
@@ -253,10 +292,10 @@ def load_ade20k(root: str | Path, split: str, *, exclusions: str | Path | None =
     files = read_manifest(src)["files"]
     set_name = f"{ade_land.SOURCE}/{split}"
     excl, excl_path = _train_exclusions(root, set_name, exclusions, require_dedupe) if ade_land.ROLE[split] == "train" else ({}, None)
-    out, n_missing = [], 0
+    out, n_missing, disk = [], 0, _DirListing()
     for line in (src / f"{split}.jsonl").read_text().splitlines():
         r = json.loads(line)
-        if not _have(src, (r["image"], r["label"]), files, strict, f"ade20k {r['stem']}"):
+        if not _have(src, (r["image"], r["label"]), files, strict, f"ade20k {r['stem']}", disk):
             n_missing += 1
             continue
         out.append(
