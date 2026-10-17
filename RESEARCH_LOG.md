@@ -1483,3 +1483,4 @@
 - 10-17 18:45 UTC 心跳：两条 RUNNING；06 在 grid_e3b_s0_refseg（45 分钟，日志 18:39 有更新）；07 在 c3_warmup_n16000_s1（第 2 段，30 分钟）；同步 ok；无新失败。
 - 10-17 19:28 UTC 心跳：两条 RUNNING；06 在 grid_e3b_s0_refseg（1.5 小时，日志 19:19 有更新）；07 在 c3_warmup_n16000_s1（第 2 段，75 分钟）；同步 ok；无新失败。
 - 10-17 19:45 UTC 心跳（中转机第一次断，重试成功）：两条 RUNNING；06 在 grid_e3b_s0_refseg（1.7 小时，日志 19:39 有更新）；07 的 c3_warmup_n16000_s1 训完，在 eval_c3_warmup_n16000_s1（5 分钟）；同步 ok；无新失败。
+- 10-17 20:15 UTC：07 的 eval_c3_warmup_n16000_s1 完成（e5-v2），接 base_warmup_n16000_s1（mid_s1 的最后一条）。06 在 grid_e3b_s0_refseg（2.2 小时，日志 19:58 有更新）。两条 RUNNING，同步 ok，无新失败。
