@@ -480,6 +480,16 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
   - 03:01:20Z `eval_e3b_c3_n16000_s0 完成`。
 - 03:21:21Z 心跳：`running c3_warmup_n16000_s0`。`failed.txt` 仍是 14 行。
 
+- **c3_warmup_n16000_s0：** 训练 05:54:32Z 完成（131,087 KB）；n_runs 2，steps 2000，epochs 2，selected_step 2000，final_loss 0.03953，wall_s 10,230，step 中位 5.073 s，峰值 9.35 GB，n_skipped 0。核对 06:04:47Z：e5-v2 pass True，v1 True，metric done，flags iou False、relief None，iou_grid 差 −0.00401，相同 35 / 40；timing total 407.3 s。06:28:03Z 评测完成。
+- **base_warmup_n16000_s0：**
+  - 训练 10:10:20Z 完成；n_runs 2，steps 2000，epochs 2，selected_step 2000，final_loss 0.04041，wall_s 11,557，step 中位 5.074 s，峰值 9.35 GB，n_skipped 0。
+  - 驱动日志写的检查点大小是 **69,938 KB**（其余运行都是约 131,087 KB）。这个数是 `train_queue.sh` 第 178 行在复制后立即 `du -sk "$dst"` 得到的。
+  - 11:5xZ 复查：`du -sk` 131,780 KB（e3b_c3、c3_warmup n16000 都是 131,776 KB）；`train_summary.json` 的 final_checkpoint_bytes 134,908,499（另两个是 134,908,489、134,908,508）；`model/` 下 7 个文件逐个与 e3b_c3 n16000 的同名文件字节数相同（`lora/adapter_model.safetensors` 都是 134,609,728）。文件 mtime 10:04:20Z – 10:04:26Z（节点本地 18:04）。
+  - 核对 11:06:01Z：e5-v2 pass True，v1 True，metric done，flags iou False、relief None，iou_grid 差 +0.00377，相同 38 / 40；timing unmerged 236.1 s、merged 129.3 s、total 529.3 s（另两个 16K 的 unmerged 是 131.9、118.1 s）。
+  - 11:34:31Z 评测完成：从训练完成起 84 min（另两个 16K 是 35.5、33.5 min）。
+- **组 mid_s0 11:34:32Z 跑完**：从 10-16 23:30:33Z 认领起 43,439 s（12.07 h）。3 个训练运行（e3b_c3、c3_warmup、base_warmup × 16K；queue.sh 的 mid 组只用 STARTS，没有 e3b）全部完成、评测全部完成，没有被拒。
+- 驱动同一时刻认领组 `mid_s1`；11:54:40Z 心跳 `running e3b_c3_n16000_s1`。`failed.txt` 仍是 14 行。
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
