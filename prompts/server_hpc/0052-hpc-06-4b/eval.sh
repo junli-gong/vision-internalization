@@ -32,7 +32,7 @@ else
   export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16 PYTHONHASHSEED=0
   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
   export TRITON_CACHE_DIR=$VI/cache/$NODE/triton TORCHINDUCTOR_CACHE_DIR=$VI/cache/$NODE/inductor XDG_CACHE_HOME=$VI/cache/$NODE/xdg
-  T=(); D=(--data-root "$VI/b200/data"); SEEDS=(0 1 2)
+  T=(); D=(--data-root "$VI/b200/data"); SEEDS=(${EVAL_SEEDS:-0 1 2})  # EVAL_SEEDS：补充 1 只评种子 2（D98）
   # eval_lib 的 HPC 模式（D91）
   export EV_PAUSE=$LOGS/train.pause.$NODE EV_STATUS_GLOB="train_0052-$NODE.status" EV_NO_GIT=1
   # D95：HPC 的共享盘不设份额上限，不查份额；只在 Lustre 剩余空间低于 3 GB 时停
