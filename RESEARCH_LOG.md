@@ -1479,3 +1479,4 @@
 - 10-17 16:23 UTC：06 的 e3b_s1 第 8 段启动 8.4 分钟（第 7 段约 3 小时），从第 3500 步续跑，约 18:00 训完。之后：用量约 33.6 + EST 13.6 > 46，队列在 e3b_s2 前停下；run.sh 做种子 0、1 的 eval b（约 6.6 小时，到 10-18 00:40 前后）；然后另起一步，用含 DEV-0047 的新 commit 跑 e3b_s2 与它的 eval b（约 16 小时），4B 的三个种子的像素干扰约 10-18 17:00 UTC。
 - 10-17 17:00 UTC：DEV-0047 合入（706d3a0a，D98）；管理员复跑相关测试 62 passed、1 skipped（大小写那条，macOS 盘不区分大小写）。准备 RUN-0052 补充 1（e3b_s2 另起一步：run_s2.sh、eval.sh 加 EVAL_SEEDS）。等队列在 e3b_s2 前停下、run.sh 做完种子 0、1 的 eval b 再发。
 - 10-17 17:10 UTC：发 RUN-0052 补充 1（prompts/server_hpc/0052-addendum-1.md）给 a100-69：等队列在 e3b_s2 前停下、run.sh 做完种子 0、1 的 eval b 之后，切 wt0052 到 b62986d5、节点上跑 DEV-0047 测试、用 run_s2.sh（QUEUE_CAP_H=52）训 e3b_s2 并只评种子 2。
+- 10-17 18:17 UTC：06 照 D98 预期：e3b_s1 训完后队列在 18:00:38 停下（blocked cap：已用 33.59 h + 13.6 h > 46 h，预期之内，不算异常），run.sh 接着做 eval b，在 grid_e3b_s0_refseg。07 在 c3_warmup_n16000_s1（第 2 段），e3b_c3_n16000_s1 已训完并评完。两条 RUNNING，同步 ok，无新失败。
