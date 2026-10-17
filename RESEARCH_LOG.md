@@ -1478,3 +1478,4 @@
 - 10-17 16:16 UTC：06 第 8 段启动的 strace 样本（refcoco 阶段）：stat 中位 0.2 ms、均值 3.5 ms，每秒约 267 次（14:00 时 NYU 中位 111 ms、每秒 5.8 次）。照这个速度约 18 万次 stat 约 11 分钟，Lustre 已恢复。权重加载 26 s（第 7 段 70 s）。
 - 10-17 16:23 UTC：06 的 e3b_s1 第 8 段启动 8.4 分钟（第 7 段约 3 小时），从第 3500 步续跑，约 18:00 训完。之后：用量约 33.6 + EST 13.6 > 46，队列在 e3b_s2 前停下；run.sh 做种子 0、1 的 eval b（约 6.6 小时，到 10-18 00:40 前后）；然后另起一步，用含 DEV-0047 的新 commit 跑 e3b_s2 与它的 eval b（约 16 小时），4B 的三个种子的像素干扰约 10-18 17:00 UTC。
 - 10-17 17:00 UTC：DEV-0047 合入（706d3a0a，D98）；管理员复跑相关测试 62 passed、1 skipped（大小写那条，macOS 盘不区分大小写）。准备 RUN-0052 补充 1（e3b_s2 另起一步：run_s2.sh、eval.sh 加 EVAL_SEEDS）。等队列在 e3b_s2 前停下、run.sh 做完种子 0、1 的 eval b 再发。
+- 10-17 17:10 UTC：发 RUN-0052 补充 1（prompts/server_hpc/0052-addendum-1.md）给 a100-69：等队列在 e3b_s2 前停下、run.sh 做完种子 0、1 的 eval b 之后，切 wt0052 到 b62986d5、节点上跑 DEV-0047 测试、用 run_s2.sh（QUEUE_CAP_H=52）训 e3b_s2 并只评种子 2。
