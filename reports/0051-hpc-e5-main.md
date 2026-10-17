@@ -469,6 +469,17 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 - 驱动同一时刻认领组 `mid_s0`；23:35:33Z 心跳 `running e3b_c3_n16000_s0`。
 - `failed.txt` 仍是 14 行。
 
+### mid_s0
+
+- **e3b_c3_n16000_s0（第一个 16K 运行）：**
+  - 训练 10-17 02:25:50Z 完成（从 10-16 23:30:33Z 认领组起），检查点 131,087 KB。
+  - `accounting.json`：n_runs 2，n_steps_logged 2000，n_samples 32,000，wall_s 10,259，显存峰值 9.35 GB；各段 step_s 合起来中位 5.071 s。
+  - `train_summary.json`：complete True，steps 2000，epochs 2，min_steps None，selected_step 2000，selection None，final_loss 0.03805，n_skipped 0。
+  - 对照同起点 4K 种子 0：n_runs 1，steps 1000，epochs 2，min_steps 1000，n_samples 16,000，wall_s 6,473，step 中位 5.078 s，峰值 9.35 GB，selected_step 1000。
+  - 核对（e5-v2）写于 02:37:28Z：pass True，v1_report_only.pass True；metric_level done，flags iou False、relief None；iou_grid 差 +0.00374，起伏误差差 None，预测相同 35 / 40 行。
+  - 03:01:20Z `eval_e3b_c3_n16000_s0 完成`。
+- 03:21:21Z 心跳：`running c3_warmup_n16000_s0`。`failed.txt` 仍是 14 行。
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
