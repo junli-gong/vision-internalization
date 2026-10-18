@@ -1566,3 +1566,4 @@
 - 10-18 19:55 UTC：RUN-0054（0.8B r128）脚本 tiny 彩排通过（两臂 r = 128、运行身份记 r128 配置 sha256 与版本；评测 10 步 rc=0；interference.py 能读）；任务书 prompts/server_hpc/0054-hpc-07-r128.md 发给 a100-69，等 07 的 E5 队列跑完（约 10-19 下午）再开始。上限：训练 40、评测 24 小时。
 - 10-18 19:46 UTC：07 的 e3b_c3_n4000_s0_abcd 训完，在 eval_e3b_c3_n4000_s0_abcd（只评 e）。06 在 e3b_c3_n64000_s0（第 3 段，55 分钟）。两条 RUNNING，无新失败，同步 ok。
 - 10-18 20:17 UTC：07 的 eval_e3b_c3_n4000_s0_abcd 完成（e5-v2），在 c3_warmup_n4000_s0_abcd（20 分钟）。06 的 e3b_c3_n64000_s0 进入第 4 段。两条 RUNNING，无新失败，同步 ok。
+- 10-18 20:51 UTC 心跳：两条 RUNNING；06 在 e3b_c3_n64000_s0（第 4 段，35 分钟）；07 在 c3_warmup_n4000_s0_abcd（55 分钟）；无新失败；同步 ok。
