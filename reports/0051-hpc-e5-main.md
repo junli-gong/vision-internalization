@@ -541,6 +541,26 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 | rotation3d | pass | injected | 7 | 186 / 186 | 0 | 1057 / 1057 | None | 424.3 |
 | viewpoint | pass | injected | 13 | 186 / 186 | 0 | 1057 / 1057 | None | 809.2 |
 
+- **未合并补评跑完**：驱动日志末尾原文 `2026-10-18T16:02:15Z unmerged_c3_warmup_n4000_s2 完成`、`2026-10-18T16:02:16Z 删掉主驱动的暂停文件 /home/mail/chenyuma/visint/logs/train.pause.hpcgpu07：主驱动接着跑`、`2026-10-18T16:02:16Z 队列跑完：完成 12 条，失败 0 条`；心跳 `done 0051u-hpcgpu07`。墙钟 08:21:00Z – 16:02:16Z，27,676 s（7.69 h），上限 11 h。`unmerged_d99/driver/failed.txt` 不存在。
+- `unmerged_d99/summary.tsv` 原文：
+
+| tag | n_leaves_unmerged | audit_status |
+|---|---|---|
+| e3b_c3_n1000_s0 | 5 | pass |
+| c3_warmup_n1000_s0 | 5 | pass |
+| e3b_c3_n4000_s0 | 5 | pass |
+| c3_warmup_n4000_s0 | 5 | pass |
+| e3b_c3_n1000_s1 | 5 | pass |
+| c3_warmup_n1000_s1 | 5 | pass |
+| e3b_c3_n4000_s1 | 5 | pass |
+| c3_warmup_n4000_s1 | 5 | pass |
+| e3b_c3_n1000_s2 | 5 | pass |
+| c3_warmup_n1000_s2 | 5 | pass |
+| e3b_c3_n4000_s2 | 5 | pass |
+| c3_warmup_n4000_s2 | 5 | pass |
+
+- 主驱动恢复：暂停文件已不存在；16:03:03Z 心跳 `running base_warmup_n16000_s2 (chunk 2)`。恢复后第一条运行：base_warmup_n16000_s2（第 2 段起，在 d4c8f67a 上）。
+
 ### 第三部分：06 加入 E5，只跑 big_s0
 
 - 前提：`run_0052.log` 15:39:07Z `s2 done`；15:45Z hpcmgt 与 06 上没有 0052 的进程，06 GPU 空，没有 06 的暂停文件；wt0051 在 d4c8f67a（08:10Z 起）。
