@@ -531,6 +531,16 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 - 08:21:00Z 按任务书命令启动 `unmerged.sh`，step 157297.89；前后 squeue 两条 RUNNING；主驱动 step 157297.84 仍在、paused。
   - 驱动日志第一行：`未合并补评开始：hpcgpu07，commit d4c8f67a8c45e4f3ff7f77adf501a184c7c9d763，12 个运行：e3b_c3_n1000_s0 c3_warmup_n1000_s0 e3b_c3_n4000_s0 c3_warmup_n4000_s0 e3b_c3_n1000_s1 c3_warmup_n1000_s1 e3b_c3_n4000_s1 c3_warmup_n4000_s1 e3b_c3_n1000_s2 c3_warmup_n1000_s2 e3b_c3_n4000_s2 c3_warmup_n4000_s2`。
 
+- 第一个未合并补评：`2026-10-18T09:00:00Z unmerged_e3b_c3_n1000_s0 完成`（从 08:21:00Z 起 2,340 s）。输出 `trained/e3b_c3/qwen3.5-2b/n1000/seed0/<任务>__structured__unmerged/`。各任务 `logs/run_001.json` 的 `lora_audit`（不贴 metrics）：
+
+| 任务 | status | lora_state | n_batches | n_called / n_modules | n_not_called | min / max calls | error | run wall_s |
+|---|---|---|---|---|---|---|---|---|
+| imagery | pass | injected | 7 | 186 / 186 | 0 | 1057 / 1057 | None | 372.2 |
+| occlusion | pass | injected | 5 | 186 / 186 | 0 | 1057 / 1057 | None | 294.1 |
+| physics | pass | injected | 7 | 186 / 186 | 0 | 1057 / 1057 | None | 387.5 |
+| rotation3d | pass | injected | 7 | 186 / 186 | 0 | 1057 / 1057 | None | 424.3 |
+| viewpoint | pass | injected | 13 | 186 / 186 | 0 | 1057 / 1057 | None | 809.2 |
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
