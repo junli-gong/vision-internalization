@@ -32,6 +32,15 @@ v3 主比较的起点（D83-5）：base_warmup、e3b_c3、c3_warmup。e3b、e3a�
     # 加载 → 合并核对（e5-v2 + 指标层面）→ 写 <…>/seed<k>/merge_check.json → stdout 打一行摘要；不评任何任务、不建任何任务目录，已有的
     # 任务输出一字节都不动。--task、--subset、--limit、--resume、--decode 等评测参数不起作用。退出码：通过 0，不过 1（与 --task 无关），出错 2。
     # 用途：判据 v1 下已经评过 test 的运行补出 e5-v2 与指标层面的读数，不重评 test。
+不合并（DEV-0048；D99-2 的敏感性分析；--unmerged，只用于 --checkpoint，与 --start-only、--check-only 互斥；规则见 src/e5/trained_eval.py）：
+    python scripts/eval_e5_trained.py --unmerged --checkpoint <E5 训练叶目录>/ckpt/final --model qwen3.5-2b --out experiments/E5/<NNNN_slug> \\
+        [--task all] [--resume]
+    # 加载同上，但 load_trained(E5 检查点, merge=False) 之后不合并，E5 LoRA 保持 injected；不做评测前的合并核对（理由写进运行身份与运行
+    # 记录：评测的就是未合并的模型，合并核对见同一检查点的 merge_check.json，这个文件不改，只读出 sha256 与判定记进运行记录）。
+    # 评测与正式评测同一条路径（run_task + decode_grids(decode=structured)），只收结构强制（--decode restricted 是用法错误）；解码逐批过
+    # LoRA 审计（规则同 DEV-0046），不过就报错（退出码 2）、不写 metrics。结果写进同一模型目录下的 <任务>[__dev]__structured__unmerged/，
+    # 运行身份另记 lora_merge: unmerged（依据 D99-2），metrics.json 另记 "merge": "unmerged"；正式评测的叶目录与 merge_check.json 都不碰。
+    # --merge-check-n-per-task 不起作用，给了是用法错误。不加 --unmerged 时输出与改动前逐字节相同。
 小档（DEV-0038）：E5 检查点的 final/ 就是训练时 val 上选中的那一步；e5_stack.json 的 selection（规则、选中的步、分数）照记进
 config.yaml 的 checkpoint.selection。test 只在这个检查点上评一次。
 每档条数默认取配置的 eval.n_per_bin（test：每档 100 条，b 200 条，与零样本相同）；--n-per-bin 统一覆盖。批大小默认取配置的 eval.batch_size（64）；
@@ -118,6 +127,9 @@ def parse_args(argv=None):
     p.add_argument("--check-only", action="store_true",
                    help="只做评测前的合并核对（判据 e5-v2 与指标层面的比较，DEV-0046）：写 merge_check.json、打印摘要，不评任何任务、不建任务"
                         "目录；通过退出 0、不过退出 1（与 --task 无关）。只用于 --checkpoint")
+    p.add_argument("--unmerged", action="store_true",
+                   help="E5 LoRA 不合并，用正式评测的同一条路径（结构强制）再评一次（DEV-0048，D99-2 的敏感性分析）；不做合并核对，结果写进 "
+                        "<任务>[__dev]__structured__unmerged/。只用于 --checkpoint，与 --start-only、--check-only 互斥")
     p.add_argument("--tiny", action="store_true", help="小型随机模型 + CPU fp32（开发机彩排）")
     p.add_argument("--config", default=str(CONFIG_PATH), help="E5 训练配置（默认 configs/e5_train.json，读其中的 eval 节）")
     p.add_argument("--device", help="默认：真模型 cuda，--tiny 时 cpu")
@@ -138,6 +150,14 @@ def parse_args(argv=None):
     a.dtype = a.dtype or ("fp32" if a.tiny else "bf16")
     if a.start_only == (a.checkpoint is not None):
         p.error("--checkpoint（E5 检查点的评测）与 --start-only（只评起点，N = 0）二选一，必须且只能给一个")
+    if a.unmerged:  # DEV-0048
+        for flag, given in (("--start-only", a.start_only), ("--check-only", a.check_only)):
+            if given:
+                p.error(f"--unmerged 与 {flag} 互斥：--unmerged 只用于 --checkpoint（E5 LoRA 不合并的评测，D99-2）")
+        if a.decode is not None and a.decode != STRUCTURED:
+            p.error(f"--unmerged 只用结构强制解码（D99-2：其余同正式评测），收到 --decode {a.decode}")
+        if a.merge_check_n_per_task is not None:
+            p.error("--merge-check-n-per-task 不用于 --unmerged：不合并的评测不做合并核对（合并核对见同一检查点的 merge_check.json）")
     if a.start_only:  # DEV-0040
         if a.init is None:
             p.error(f"--start-only 要给 --init（{' / '.join(TE.START_ONLY_KINDS)}）")
@@ -217,6 +237,19 @@ def check_line(prefix: str, summ) -> str:
             f"previous={prev.get('renamed_to')} file={summ.get('file')}")
 
 
+def merge_check_ref(path: Path) -> dict:
+    """--unmerged（DEV-0048）的运行记录里记下同一检查点的 merge_check.json：路径、在不在、sha256、判据版本与判定。只读，不改。"""
+    ref = {"file": str(path), "exists": path.is_file()}
+    if ref["exists"]:
+        ref["sha256"] = sha256_file(path)
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            ref["criteria_version"], ref["pass"] = doc.get("criteria_version"), doc.get("pass")
+        except (OSError, ValueError, AttributeError) as e:
+            ref["read_error"] = repr(e)
+    return ref
+
+
 def cmd_run(a, argv) -> int:
     cfg = load_train_config(a.config)
     e, t, bs, subset, n_resamples = eval_settings(a, cfg)
@@ -254,21 +287,31 @@ def cmd_run(a, argv) -> int:
            "tasks": list(E5_TASKS), "tiny": a.tiny, "dtype": a.dtype, "batch_size": mc_bs, "config_sha256": cfg.sha256}
     exact = torch.device(a.device).type == "cpu" and DTYPES[a.dtype] == torch.float32
     prefix = f"trained {start_kind} {a.model} {tag} seed{seed}"
-    try:
-        mc = TE.stacked_merge_check(ad, e5tok, prompt, n=n, n_per_task=mc_n, tasks=E5_TASKS, batch_size=mc_bs, tiny=a.tiny,
-                                    exact=exact, key=key, out_json=mdir / TE.MERGE_CHECK)
-    except MergeCheckFailed as err:
-        print(TE.metric_level_line(err.summary.get("metric_level")), file=sys.stderr)
-        if a.check_only:  # DEV-0046：只做核对
-            print(check_line(prefix, err.summary))
-            print(f"合并核对没有通过（--check-only）：{err}", file=sys.stderr)
+    if a.unmerged:  # DEV-0048：不做评测前的合并核对，E5 LoRA 保持 injected（理由写进运行身份与运行记录）
+        if decode != STRUCTURED:
+            raise ValueError(f"--unmerged 只用结构强制解码（D99-2），配置给的是 {decode!r}")
+        if ad.lora_state != "injected":
+            raise RuntimeError(f"--unmerged：加载之后 LoRA 状态是 {ad.lora_state}，应为 injected（E5 LoRA 挂着、不合并）")
+        mc = None
+        mc_ref = merge_check_ref(mdir / TE.MERGE_CHECK)
+        print(f"[不合并] 跳过评测前的合并核对：{TE.UNMERGED_SKIPPED['e5_lora_merge']}（{mc_ref['file']}：exists={mc_ref['exists']} "
+              f"criteria={mc_ref.get('criteria_version')} pass={mc_ref.get('pass')}）", file=sys.stderr)
+    else:
+        try:
+            mc = TE.stacked_merge_check(ad, e5tok, prompt, n=n, n_per_task=mc_n, tasks=E5_TASKS, batch_size=mc_bs, tiny=a.tiny,
+                                        exact=exact, key=key, out_json=mdir / TE.MERGE_CHECK)
+        except MergeCheckFailed as err:
+            print(TE.metric_level_line(err.summary.get("metric_level")), file=sys.stderr)
+            if a.check_only:  # DEV-0046：只做核对
+                print(check_line(prefix, err.summary))
+                print(f"合并核对没有通过（--check-only）：{err}", file=sys.stderr)
+                return 1
+            print(f"拒绝评测：{err}", file=sys.stderr)
             return 1
-        print(f"拒绝评测：{err}", file=sys.stderr)
-        return 1
-    print(TE.metric_level_line(mc.get("metric_level")), file=sys.stderr)  # DEV-0046：指标层面的比较（只报告）
-    if a.check_only:  # DEV-0046：只做核对，不评任何任务、不建任务目录
-        print(check_line(prefix, mc))
-        return 0
+        print(TE.metric_level_line(mc.get("metric_level")), file=sys.stderr)  # DEV-0046：指标层面的比较（只报告）
+        if a.check_only:  # DEV-0046：只做核对，不评任何任务、不建任务目录
+            print(check_line(prefix, mc))
+            return 0
     checkpoint = {"manifest_sha256": e5_sha, "train_identity_sha256": stack["identity_sha256"],
                   "start": {"kind": start_kind, "manifest_sha256": stack["start"]["manifest_sha256"]},
                   "lora": man.get("lora"), "build_spec": man.get("build_spec"), "data": stack["data"], "seed": seed}
@@ -281,14 +324,17 @@ def cmd_run(a, argv) -> int:
     extra = {"checkpoint_dir": str(fd), "start_checkpoint": None if st.start_checkpoint is None else str(st.start_checkpoint),
              "merge_check": mc, "fingerprint": st.fingerprint,
              "gpu": torch.cuda.get_device_name(0) if a.device.startswith("cuda") and torch.cuda.is_available() else None}
+    if a.unmerged:  # DEV-0048：运行记录写明跳过的核对与理由，并记下同一检查点的 merge_check.json（只读，供溯源）
+        extra.update(mode="unmerged", lora_merge=TE.LORA_MERGE_UNMERGED, lora_merge_basis=TE.UNMERGED_BASIS,
+                     skipped_checks=dict(TE.UNMERGED_SKIPPED), merge_check_ref=mc_ref)
     for task in a.task:
         npb = int(a.n_per_bin or e["n_per_bin"][task])
         spec = TE.EvalSpec(start=start_kind, model_key=a.model, tag=tag, seed=seed, task=task, subset=subset, n_per_bin=npb,
                            n_resamples=n_resamples, batch_size=bs, tiny=a.tiny, dtype=a.dtype, limit=a.limit,
-                           data_seed=data_seed, decode=decode)
+                           data_seed=data_seed, decode=decode, unmerged=a.unmerged)
         m = TE.run_task(ad, e5tok, prompt, cfg, spec, a.out, checkpoint=checkpoint, n=n, resume=a.resume, argv=argv,
                         run_extra=extra)
-        report(decode_prefix(prefix, decode), task, subset, m)
+        report(decode_prefix(prefix, decode) + (f" merge={TE.LORA_MERGE_UNMERGED}" if a.unmerged else ""), task, subset, m)
     return 0
 
 

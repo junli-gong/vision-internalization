@@ -75,6 +75,21 @@ config.yaml（运行身份）、meta.json、README.md、logs/timing.jsonl、logs
 - 输出：<out>/trained/<起点>/<模型>/n0/seed<k>/<任务>[__dev]/（START_ONLY_TAG：数据量档的标记，与 n<数据量> 同一层），文件同上；运行身份另记
   start_only: true、n_train: 0，checkpoint 一节记起点（manifest 的 sha256 等）、权重指纹、配种子与核对（start_only_checkpoint）；
   metrics.json 另记 start_only、n_train。不用 --start-only 时输出与改动前逐字节相同（测试钉住）。
+
+**不合并的评测**（DEV-0048，D99-2 的敏感性分析；E5 预注册 §8c 补充；scripts/eval_e5_trained.py --unmerged，只用于 --checkpoint）：
+同一个 E5 检查点，E5 LoRA 挂着、不合并，在 test 上用正式评测的同一条路径再评一次。
+- 加载同上（base → 合并起点 LoRA → 核对起点 → load_trained(E5 检查点, merge=False)），之后**不合并**，E5 LoRA 保持 injected。
+- 评测前的合并核对跳过，理由（UNMERGED_SKIPPED）写进运行身份、README 与运行记录：评测的就是未合并的模型，合并核对见同一检查点的
+  merge_check.json（脚本不改这个文件，只读出它的 sha256、判据版本与判定记进运行记录，供溯源）。
+- 评测就是 run_task + decode_grids(decode=structured)，与正式评测一行不另写：样本、提示、批大小、解析、评分、汇总与门槛都不变。只收结构强制
+  （EvalSpec 校验；D99-2 写明结构强制解码）。run_task 的 LoRA 状态检查只在 spec.unmerged 时改为必须是 injected，其余照旧（merged / none）。
+- LoRA 审计（UnmergedAudit）：逐批用 LoraAudit 包住解码（规则同 DEV-0046：被调用的 LoRA 层与它的 lora_B 前向次数相等，至少一层被调用，
+  模型上找得到 LoRA 层），解码前后都核对 LoRA 状态是 injected。审计不过就报错：这一批的预测不写，metrics 不写；审计结果（含出错）写进
+  logs/run_<k>.json 的 lora_audit。
+- 输出：同一个模型目录下另起叶目录 <任务>[__dev]__structured__unmerged（UNMERGED_SUFFIX）；运行身份另记 lora_merge = unmerged、
+  lora_merge_basis（D99-2）、lora_merge_rule 与 skipped_checks；metrics.json 另记 merge = unmerged；README 写明。正式评测的叶目录与
+  merge_check.json 都不碰。续跑同正式评测（运行身份必须相同）。
+- 不用 --unmerged 时，predictions、metrics、config.yaml、README、merge_check.json 与打印行都与改动前（2db1055）逐字节相同（tests 钉住）。
 """
 
 from __future__ import annotations
@@ -166,6 +181,16 @@ METRIC_LEVEL_THRESHOLDS: Mapping[str, float] = MappingProxyType({
 METRIC_LEVEL_BASIS = ("D96-2：只报告、不判定；同一次加载、同一批 val 样本与成批方式，E5 LoRA 未合并（A）与合并后（B）各跑一次结构强制解码"
                       "（src/e5/token_grid.decode_grids，与正式评测同一个函数），E5 的正式解析与评分（record：E5Tokens.pred + scoring.score）；"
                       "起伏误差的噪声底取 IoU 阈值的 2 倍，同一尺度（mean_headline_v1 把 a 类的标题分记作 1 − 起伏误差/2）")
+# 不合并的评测（DEV-0048，D99-2；模块说明）
+UNMERGED_SUFFIX = "__unmerged"  # 叶目录后缀，接在 STRUCTURED_SUFFIX 之后
+LORA_MERGE_UNMERGED = "unmerged"  # 运行身份的 lora_merge 与 metrics.json 的 merge
+UNMERGED_BASIS = ("D99-2（负责人，2026-10-17；E5 预注册 §8c 补充，写于读到任何 E5 训练后 test 分数之前）：敏感性分析——H5 判定用到的 12 个"
+                  "运行（E3b+C3 与 C3+预热，1K、4K，各 3 个种子）用未合并的 E5 LoRA 在 test 上再评一次，结构强制解码，其余同正式评测；门报告"
+                  "同时报告合并与未合并两种口径下的 H5 结论")
+UNMERGED_RULE = ("DEV-0048：加载同正式评测（base → 合并起点 LoRA → 核对起点 → load_trained(E5 检查点, merge=False)），E5 LoRA 保持 injected、"
+                 "不合并；评测走 run_task 与 decode_grids(decode=structured)，与正式评测同一条路径（样本、提示、批大小、解析、评分、汇总、门槛"
+                 "都不变）；解码期间逐批做 LoRA 审计（LoraAudit，规则同 DEV-0046），审计不过就报错、这一批不写、不写 metrics")
+UNMERGED_SKIPPED = {"e5_lora_merge": "D99-2 敏感性分析：评测的就是未合并的模型；合并核对见同一检查点的 merge_check.json"}
 
 
 def model_dir(out: str | Path, start: str, model_key: str, tag: str, seed: int, data_seed: int | None = None) -> Path:
@@ -192,6 +217,7 @@ class EvalSpec:
     data_seed: int | None = None
     start_only: bool = False  # DEV-0040：只评起点（tag 必须是 START_ONLY_TAG）
     decode: str = RESTRICTED  # DEV-0043：解码方式（模块说明）
+    unmerged: bool = False  # DEV-0048：E5 LoRA 不合并（D99-2 的敏感性分析；只收 E5 检查点、结构强制）
 
     def __post_init__(self) -> None:
         check_decode(self.decode)
@@ -200,6 +226,9 @@ class EvalSpec:
                              f"{self.tag!r}、{self.start!r}、{self.data_seed!r}")
         if not self.start_only and self.tag == START_ONLY_TAG:
             raise ValueError(f"{START_ONLY_TAG} 是只评起点的标记，E5 检查点的评测不能用")
+        if self.unmerged and (self.start_only or self.decode != STRUCTURED):
+            raise ValueError(f"不合并的评测（DEV-0048，D99-2）只用于 E5 检查点、结构强制解码，收到 start_only={self.start_only}、"
+                             f"decode={self.decode!r}")
 
     def items(self) -> list[Any]:
         its = eval_items(self.task, self.subset, self.n_per_bin)
@@ -207,7 +236,7 @@ class EvalSpec:
 
     def leaf(self, out: str | Path) -> Path:
         name = canonical_task(self.task) + ("" if self.subset == "eval" else f"__{self.subset}") + \
-            (STRUCTURED_SUFFIX if self.decode == STRUCTURED else "")
+            (STRUCTURED_SUFFIX if self.decode == STRUCTURED else "") + (UNMERGED_SUFFIX if self.unmerged else "")
         return model_dir(out, self.start, self.model_key, self.tag, self.seed, self.data_seed) / name
 
 
@@ -376,13 +405,15 @@ class LoraAudit:
     """A 侧（E5 LoRA 未合并）结构强制解码期间的运行期审计：逐个 LoRA 层数它自己（peft 包上的 LoRA 线性层）与它的 lora_B 的前向次数。
     peft 的 LoRA 层在已合并或禁用 adapter 时只算 base_layer、不调 lora_B，所以"层被调用了、lora_B 没有同样多次" = 解码绕开了 LoRA（偷偷
     合并或禁用）；一个 LoRA 层都没被调用 = 解码没经过挂 LoRA 的模型；模型上找不到 LoRA 层 = 没挂着。三种都报错，并给出第一个模块名。
-    模型本来就不调用的层（例如共享 KV 的层的 k、v 投影）只报个数，不算违规。"""
+    模型本来就不调用的层（例如共享 KV 的层的 k、v 投影）只报个数，不算违规。label 是报错信息的前缀（默认指标层面的 A 侧；不合并的评测
+    UnmergedAudit 另给，DEV-0048）。"""
 
-    def __init__(self, ad: Any) -> None:
+    def __init__(self, ad: Any, label: str = "指标层面 A 侧") -> None:
         self._mods = [(name, m) for name, m in ad.model.named_modules() if hasattr(m, "lora_B") and "default" in m.lora_B]
         self.layer_calls = {name: 0 for name, _ in self._mods}
         self.lora_calls = {name: 0 for name, _ in self._mods}
         self._handles: list[Any] = []
+        self._label = label
 
     def __enter__(self) -> "LoraAudit":
         for name, m in self._mods:
@@ -405,14 +436,14 @@ class LoraAudit:
 
     def result(self) -> dict[str, Any]:
         if not self._mods:
-            raise RuntimeError("指标层面 A 侧：模型上找不到任何 LoRA 层（lora_B），E5 LoRA 没有挂着")
+            raise RuntimeError(f"{self._label}：模型上找不到任何 LoRA 层（lora_B），E5 LoRA 没有挂着")
         called = [n for n, c in self.layer_calls.items() if c > 0]
         if not called:
-            raise RuntimeError(f"指标层面 A 侧：结构强制解码期间 {len(self._mods)} 个 LoRA 层一个都没被调用，解码没经过挂 LoRA 的模型")
+            raise RuntimeError(f"{self._label}：结构强制解码期间 {len(self._mods)} 个 LoRA 层一个都没被调用，解码没经过挂 LoRA 的模型")
         bad = [n for n in called if self.lora_calls[n] != self.layer_calls[n]]
         if bad:
             n0 = bad[0]
-            raise RuntimeError(f"指标层面 A 侧：{len(bad)} 个 LoRA 层被调用时没走 LoRA 分支（第一个：{n0}，层 {self.layer_calls[n0]} 次、"
+            raise RuntimeError(f"{self._label}：{len(bad)} 个 LoRA 层被调用时没走 LoRA 分支（第一个：{n0}，层 {self.layer_calls[n0]} 次、"
                                f"lora_B {self.lora_calls[n0]} 次），解码绕开了 LoRA（已合并或禁用）")
         v = [self.layer_calls[n] for n in called]
         idle = [n for n, c in self.layer_calls.items() if c == 0]
@@ -785,6 +816,9 @@ def run_identity(spec: EvalSpec, items: Sequence[Any], e5tok: E5Tokens, prompt: 
     if spec.start_only:  # DEV-0040（模块说明）；不是只评起点时运行身份与改动前逐字节相同
         head.update(framework="src/e5（DEV-0040：只评起点，N = 0）", start_only=True, n_train=START_ONLY_N_TRAIN,
                     start_only_rule=START_ONLY_RULE)
+    if spec.unmerged:  # DEV-0048（模块说明）；不用 --unmerged 时运行身份与改动前逐字节相同
+        head.update(lora_merge=LORA_MERGE_UNMERGED, lora_merge_basis=UNMERGED_BASIS, lora_merge_rule=UNMERGED_RULE,
+                    skipped_checks=dict(UNMERGED_SKIPPED))
     return {
         **head,
         "task": t,
@@ -910,6 +944,16 @@ def readme_text(spec: EvalSpec, ident: Mapping[str, Any], m: Mapping[str, Any]) 
         title = f"# E5 · 训练后（{spec.start} → E5）"
         ck_lines = [f"- 检查点：E5 manifest {str(ck.get('manifest_sha256'))[:16]}…；起点 {ck.get('start', {}).get('kind')}（manifest "
                     f"{str(ck.get('start', {}).get('manifest_sha256'))[:16]}…）；训练运行身份 {str(ck.get('train_identity_sha256'))[:16]}…"]
+    if spec.unmerged:  # DEV-0048（模块说明）；不用 --unmerged 时 README 与改动前逐字节相同
+        title = f"# E5 · 训练后（{spec.start} → E5，E5 LoRA 不合并）"
+        merged_leaf = spec.leaf(".").name[: -len(UNMERGED_SUFFIX)]
+        ck_lines += [f"- E5 LoRA：**不合并**（lora_merge = {ident['lora_merge']}，LoRA 状态 injected）。D99-2 的敏感性分析：同一个检查点、同一条"
+                     f"评测路径（run_task + decode_grids(decode=structured)），样本、提示、批大小、解析、评分、汇总与门槛都与正式评测相同；"
+                     f"正式评测（合并后）的结果在同一模型目录的 {merged_leaf}/",
+                     "- 评测前的核对：起点 manifest 的 sha256 与权重指纹照常；跳过："
+                     + "；".join(f"{k}（{v}）" for k, v in ident["skipped_checks"].items()),
+                     "- LoRA 审计：解码期间逐批核对每个被调用的 LoRA 层都走了 lora_B（LoraAudit，规则同 DEV-0046），结果在 logs/run_<k>.json 的 "
+                     "lora_audit；审计不过就报错，不写 metrics"]
     lines = [f"{title}· {spec.model_key} · {spec.tag} · seed {spec.seed} · {m['task']}"
              f"（{TASK_LETTER[m['task']]}）· {spec.subset}", "",
              f"- 样本：{ident['data']['split']} 划分，每档 {spec.n_per_bin} 条，n = {m['n']}（id 指纹 "
@@ -956,6 +1000,8 @@ def finalize(leaf: Path, spec: EvalSpec, items: Sequence[Any], ident: Mapping[st
     dec = decode_record(spec.decode)
     if dec is not None:  # DEV-0043：只在结构强制时加（restricted 的 metrics.json 与改动前逐字节相同）
         head["decode"] = dec
+    if spec.unmerged:  # DEV-0048：只在不合并时加（正式评测的 metrics.json 与改动前逐字节相同）
+        head["merge"] = LORA_MERGE_UNMERGED
     metrics = {**head, "seed": spec.seed, "subset": spec.subset, **body}
     (leaf / METRICS).write_text(json.dumps(metrics, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     timing = {t["id"]: t for t in read_jsonl_tolerant(leaf / TIMING, repair=False)}
@@ -970,12 +1016,67 @@ def finalize(leaf: Path, spec: EvalSpec, items: Sequence[Any], ident: Mapping[st
     return metrics
 
 
+class UnmergedAudit:
+    """不合并的评测（DEV-0048）的 LoRA 审计：每批一个 LoraAudit 包住 decode_grids（规则同 DEV-0046：模型上找得到 LoRA 层；至少一层被调用；
+    被调用的层与它的 lora_B 前向次数相等），解码前后都核对 LoRA 状态是 injected。不过就抛 RuntimeError（调用方不写这一批、不写 metrics），
+    原因记在 error 里。summary() 进 logs/run_<k>.json 的 lora_audit：逐批读数汇总（层数、被调用过的层数、从没被调用的层、每批每层的最少
+    与最多调用次数）。"""
+
+    LABEL = "不合并的评测（--unmerged，D99-2）"
+    RULE = ("DEV-0048（D99-2）：每批一个 LoraAudit（规则同 DEV-0046：被调用的 LoRA 层与它的 lora_B 前向次数必须相等，至少一层被调用，模型上"
+            "找得到 LoRA 层），解码前后 LoRA 状态都必须是 injected；审计不过就报错，这一批的预测不写，不写 metrics")
+
+    def __init__(self) -> None:
+        self.n_batches = 0
+        self.n_modules: int | None = None
+        self.called: set[str] = set()
+        self.all_names: list[str] = []
+        self.min_calls: int | None = None
+        self.max_calls: int | None = None
+        self.error: str | None = None
+
+    def _fail(self, msg: str) -> None:
+        self.error = msg
+        raise RuntimeError(msg)
+
+    def decode(self, ad: Any, e5tok: E5Tokens, inputs: Sequence[Any], fmt: str, n: int, *, decode: str, where: str) -> list[Any]:
+        if ad.lora_state != "injected":
+            self._fail(f"{self.LABEL}{where}：解码之前 LoRA 状态是 {ad.lora_state}（应为 injected）")
+        au = LoraAudit(ad, label=f"{self.LABEL}{where}")
+        with au:
+            res = decode_grids(ad, e5tok, inputs, fmt, n, decode=decode, where=where)
+        if ad.lora_state != "injected":
+            self._fail(f"{self.LABEL}{where}：解码之后 LoRA 状态变成了 {ad.lora_state}（应为 injected）")
+        try:
+            r = au.result()
+        except RuntimeError as e:
+            self._fail(str(e))
+        self.n_batches += 1
+        self.n_modules = r["n_modules"]
+        self.all_names = list(au.layer_calls)
+        self.called |= {k for k, c in au.layer_calls.items() if c > 0}
+        self.min_calls = r["min_calls"] if self.min_calls is None else min(self.min_calls, r["min_calls"])
+        self.max_calls = r["max_calls"] if self.max_calls is None else max(self.max_calls, r["max_calls"])
+        return res
+
+    def summary(self) -> dict[str, Any]:
+        never = [k for k in self.all_names if k not in self.called]
+        status = "fail" if self.error else ("pass" if self.n_batches else "no_batches")
+        return {"status": status, "error": self.error, "lora_state": "injected", "n_batches": self.n_batches,
+                "n_modules": self.n_modules, "n_called": len(self.called), "n_not_called": len(never) if self.all_names else None,
+                "not_called": never[:20], "min_calls": self.min_calls, "max_calls": self.max_calls, "rule": self.RULE}
+
+
 def run_task(ad: Any, e5tok: E5Tokens, prompt: PromptFormat, cfg: E5TrainConfig, spec: EvalSpec, out: str | Path, *,
              checkpoint: Mapping[str, Any], n: int, resume: bool = False, argv: Sequence[str] = (),
              run_extra: Mapping[str, Any] | None = None, log: Callable[[str], None] | None = None) -> dict[str, Any]:
-    """一个任务的单轮评测（模块说明）。ad 必须是合并后的模型。"""
+    """一个任务的单轮评测（模块说明）。ad 必须是合并后的模型；只有 spec.unmerged（DEV-0048）时必须挂着未合并的 E5 LoRA（injected），
+    解码逐批过 LoRA 审计（UnmergedAudit），结果写进运行记录的 lora_audit。"""
     log = log or (lambda m: print(m, file=sys.stderr, flush=True))
-    if ad.lora_state not in ("merged", "none"):
+    if spec.unmerged:  # DEV-0048
+        if ad.lora_state != "injected":
+            raise RuntimeError(f"不合并的评测（D99-2）要挂着未合并的 E5 LoRA（当前 LoRA 状态 {ad.lora_state}）")
+    elif ad.lora_state not in ("merged", "none"):
         raise RuntimeError(f"评测要在合并之后（当前 LoRA 状态 {ad.lora_state}）")
     t = canonical_task(spec.task)
     check_platform(t, spec.tiny)
@@ -1002,13 +1103,22 @@ def run_task(ad: Any, e5tok: E5Tokens, prompt: PromptFormat, cfg: E5TrainConfig,
     t_all = time.perf_counter()
     fmt = task_format(t)
     n_batches = 0
+    audit = UnmergedAudit() if spec.unmerged else None  # DEV-0048
     for lo in range(keep, len(items), bs):
         batch = [make_sample(it) for it in items[lo: lo + bs]]
         t0 = time.perf_counter()
         texts = [prompt.render(s, n) for s in batch]
         inputs = [ad.build_inputs(sample_images(s), txt, prompt.order) for s, txt in zip(batch, texts)]
         prep = time.perf_counter() - t0
-        results = decode_grids(ad, e5tok, inputs, fmt, n, decode=spec.decode, where=f"[{t} 第 {lo // bs} 批]")
+        if audit is None:
+            results = decode_grids(ad, e5tok, inputs, fmt, n, decode=spec.decode, where=f"[{t} 第 {lo // bs} 批]")
+        else:  # DEV-0048：同一个 decode_grids，外面包 LoRA 审计；不过就报错，这一批不写（证据先写进运行记录）
+            try:
+                results = audit.decode(ad, e5tok, inputs, fmt, n, decode=spec.decode, where=f"[{t} 第 {lo // bs} 批]")
+            except Exception as e:
+                run_log.update(lora_audit=audit.summary(), error=repr(e), n_batches=n_batches)
+                run_path.write_text(json.dumps(run_log, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+                raise
         lines, tlines = [], []
         for s, txt, res in zip(batch, texts, results):
             rec = record(s, txt, res, e5tok, n)
@@ -1021,7 +1131,11 @@ def run_task(ad: Any, e5tok: E5Tokens, prompt: PromptFormat, cfg: E5TrainConfig,
         n_batches += 1
         hi = lo + len(batch)
         if n_batches == 1 or n_batches % 20 == 0 or hi == len(ids):
-            log(f"[E5 trained {spec.start} {spec.model_key} {spec.tag} seed{spec.seed} {t}/{spec.subset}] {hi}/{len(ids)}")
+            log(f"[E5 trained {spec.start} {spec.model_key} {spec.tag} seed{spec.seed} {t}/{spec.subset}"
+                f"{' unmerged' if spec.unmerged else ''}] {hi}/{len(ids)}")
+    if audit is not None:  # DEV-0048：审计结果先进运行记录，再算 metrics
+        run_log["lora_audit"] = audit.summary()
+        run_path.write_text(json.dumps(run_log, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     metrics = finalize(leaf, spec, items, ident)
     run_log.update(finished_utc=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                    wall_s=round(time.perf_counter() - t_all, 3), n_batches=n_batches)
@@ -1029,9 +1143,10 @@ def run_task(ad: Any, e5tok: E5Tokens, prompt: PromptFormat, cfg: E5TrainConfig,
     return metrics
 
 
-__all__ = ["CRITERIA_BASIS", "CRITERIA_VERSION", "E5V2_GAP_COMPARISONS", "E5V2_THRESHOLDS", "EVAL_SUB", "EvalSpec", "LoraAudit",
-           "MERGE_CHECK", "MERGE_CHECK_FORMAT", "METRIC_LEVEL_BASIS", "METRIC_LEVEL_THRESHOLDS", "START_ONLY_KINDS", "START_ONLY_N_TRAIN",
-           "START_ONLY_RULE", "START_ONLY_SKIPPED", "START_ONLY_TAG", "STRUCTURED_SUFFIX", "decode_line", "e5v2_criteria", "finalize",
+__all__ = ["CRITERIA_BASIS", "CRITERIA_VERSION", "E5V2_GAP_COMPARISONS", "E5V2_THRESHOLDS", "EVAL_SUB", "EvalSpec", "LORA_MERGE_UNMERGED",
+           "LoraAudit", "MERGE_CHECK", "MERGE_CHECK_FORMAT", "METRIC_LEVEL_BASIS", "METRIC_LEVEL_THRESHOLDS", "START_ONLY_KINDS",
+           "START_ONLY_N_TRAIN", "START_ONLY_RULE", "START_ONLY_SKIPPED", "START_ONLY_TAG", "STRUCTURED_SUFFIX", "UNMERGED_BASIS",
+           "UNMERGED_RULE", "UNMERGED_SKIPPED", "UNMERGED_SUFFIX", "UnmergedAudit", "decode_line", "e5v2_criteria", "finalize",
            "judge_document_e5v2", "judge_e5v2", "merge_check_items", "metric_level_block", "metric_level_brief", "metric_level_line",
            "metric_level_row", "metric_level_summary", "model_dir", "preserve_previous", "record", "run_task", "stacked_merge_check",
            "start_only_checkpoint", "v1_report"]
