@@ -541,6 +541,27 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 | rotation3d | pass | injected | 7 | 186 / 186 | 0 | 1057 / 1057 | None | 424.3 |
 | viewpoint | pass | injected | 13 | 186 / 186 | 0 | 1057 / 1057 | None | 809.2 |
 
+### 第三部分：06 加入 E5，只跑 big_s0
+
+- 前提：`run_0052.log` 15:39:07Z `s2 done`；15:45Z hpcmgt 与 06 上没有 0052 的进程，06 GPU 空，没有 06 的暂停文件；wt0051 在 d4c8f67a（08:10Z 起）。
+- `big_s0/node`：`hpcgpu06 2026-10-18T01:30:51Z pre-claimed by manager (D100, 0051-addendum-2)`；目录里只有 node，没有 done。
+- 15:46:11Z 在 06 上启动 queue.sh（`NODE=hpcgpu06 QUEUE_CAP_H=46`），step 157296.162；前后 squeue 两条 RUNNING。驱动日志原文：
+
+```
+2026-10-18T15:46:11Z 队列开始：hpcgpu06，commit d4c8f67a8c45e4f3ff7f77adf501a184c7c9d763，起点根 /home/mail/chenyuma/visint/b200/ckpt/0040、/home/mail/chenyuma/visint/b200/ckpt/0036，每段 1000 步，认领目录 /home/mail/chenyuma/visint/logs/e5_claims_0051
+2026-10-18T15:46:11Z 组 n0_all 已跑完（hpcgpu07 2026-10-14T15:05:34Z），跳过
+2026-10-18T15:46:11Z 组 small_s0 已跑完（hpcgpu07 2026-10-15T08:24:32Z），跳过
+2026-10-18T15:46:11Z 组 small_s1 已跑完（hpcgpu07 2026-10-15T20:57:35Z），跳过
+2026-10-18T15:46:11Z 组 small_s2 已跑完（hpcgpu07 2026-10-16T23:30:33Z），跳过
+2026-10-18T15:46:11Z 组 mid_s0 已跑完（hpcgpu07 2026-10-17T11:34:32Z），跳过
+2026-10-18T15:46:11Z 组 mid_s1 已跑完（hpcgpu07 2026-10-17T23:42:37Z），跳过
+2026-10-18T15:46:11Z 组 mid_s2 已被 hpcgpu07 认领，跳过
+2026-10-18T15:46:11Z 组 big_s0 是本节点认领过、没跑完的，接着跑
+```
+
+- 心跳 `train_0051-hpcgpu06.status`：`running e3b_c3_n64000_s0 (chunk 1)`。
+- 15:47:14Z 另起 v3 推送循环 0051h06（`experiments/E5/0051_e5_main_hpcgpu06`），实际 PID 1203347（`$VI/logs/sync_0051h06.pid`），日志 `$VI/logs/sync_0051h06.log`；sync_push.sh sha256 `21e5892e…`。原有的 0051（310182）、0052（3896115）循环没动。
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
