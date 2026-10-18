@@ -596,6 +596,11 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 - **组 mid_s2 17:58:36Z 跑完**：从 10-17 23:42:37Z 认领起 65,759 s（18.27 h），其中主驱动暂停 08:07:15Z – 16:02:16Z（28,501 s，7.92 h）。没有被拒，`failed.txt` 仍 14 行。
 - 驱动接着：`2026-10-18T17:58:36Z 组 big_s0 已被 hpcgpu06 认领，跳过`、`2026-10-18T17:58:36Z 认领组 ad_s0`（`ad_s0/node`：`hpcgpu07 2026-10-18T17:58:36Z`）。19:18:37Z 心跳 `running e3b_c3_n4000_s0_abcd`。
 
+### ad_s0（07）
+
+- **e3b_c3_n4000_s0_abcd：** 训练 19:43:44Z 完成（131,091 KB）；n_runs 1，steps 1000，epochs 2，n_samples 16,000，selected_step 1000，final_loss 0.02150，wall_s 6,270，step 中位 5.153 s，峰值 9.35 GB，n_skipped 0。核对 19:50:53Z：e5-v2 pass True，v1 False，metric_level done，flags iou False、relief False，iou_grid 差 −0.00061，起伏误差差 +0.00839，相同 28 / 40。19:54:44Z 评测完成；结果目录只有 `imagery__structured`（a–d 迁移的只评 e 类，同 queue.sh）。
+- 21:34:45Z 心跳 `running c3_warmup_n4000_s0_abcd`。`failed.txt` 仍 14 行。06：21:37:45Z `running e3b_c3_n64000_s0 (chunk 5)`。
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
