@@ -511,6 +511,26 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 - 之前 `$VI/logs/e5_claims_0051/`：n0_all、small_s0–2、mid_s0–2，node 都是 hpcgpu07；mid_s2 没有 done，其余都有；没有 big_s0。
 - `mkdir big_s0` 成功；`node` 内容：`hpcgpu06 2026-10-18T01:30:51Z pre-claimed by manager (D100, 0051-addendum-2)`。
 
+### 第二部分：12 个未合并补评（D99-2）
+
+- 06:45:24Z 写 `$VI/logs/train.pause.hpcgpu07`，内容 `RUN-0051 addendum-2: unmerged re-evals (D99-2, D100)`（之前没有任何 train.pause* 文件；07 心跳 06:40:44Z `running base_warmup_n16000_s2 (chunk 1)`）。
+- 主驱动 08:07:15Z `paused (pause file: …)`：在 base_warmup_n16000_s2 第 1 段之后（驱动每段前都查暂停文件，管理员 10-18 更正）。07 GPU 上没有计算进程；`failed.txt` 14 行，`done.txt` 71 行。
+  - mid_s2 中此前完成：e3b_c3_n16000_s2（02:35:57Z 训完，131,091 KB；03:08:57Z 评测完成），c3_warmup_n16000_s2（06:06:13Z 训完，131,091 KB；06:40:43Z 评测完成）。
+  - `e5_claims_0051/`：big_s0 node hpcgpu06（预认领）、没有 done；mid_s2 node hpcgpu07、没有 done；n0_all、small_s0–2、mid_s0–1 node hpcgpu07、有 done；还没有 ad_s0。
+- 切换 wt0051：切换前 HEAD `f703d7dbb25817d097a574ebb0e61cd3cbc91f57`，status 空；fetch、checkout rc=0；切换后 HEAD `d4c8f67a8c45e4f3ff7f77adf501a184c7c9d763`，status 空，`experiments/` 只有 P0。sha256，5 个都与任务书相同：
+
+| 文件 | sha256 | 切换前 |
+|---|---|---|
+| `prompts/server_hpc/0051-hpc-e5-main/unmerged.sh` | `5905d0310ae75019ca3661b33c559a016a07be9d33c8d1de3add8dbe9ba223ff` | 不存在 |
+| `prompts/server_hpc/0051-hpc-e5-main/queue.sh` | `8f33ad28c0f7b95757c0a2555b96f3c01f4c4d840824f0a2b45e39cb9a5ab769` | 相同 |
+| `scripts/server/train_queue.sh` | `fcb10f47c2fb6cf068b29f849230c82611bbcc018eb550116867b17337e0dbaa` | 相同 |
+| `src/e5/trained_eval.py` | `6695b08b98633b3f4eff76a8ddb3a17d05013ab4bf7e814d67347fde75366b05` | — |
+| `scripts/eval_e5_trained.py` | `3919249c7890c65888b44b52cda3ff4ce6d69401148cc670c500030b54f80061` | — |
+
+- 测试（07，srun，带 HF_HOME、HF_HUB_CACHE、HF_HUB_OFFLINE=1、TMPDIR）08:10:32Z – 08:19:53Z：`25 passed, 15 warnings in 551.65s (0:09:11)`，`pytest_rc=0`；删了 `$VI/tmp/pt_0051a2`；status 空；主驱动仍 paused。
+- 08:21:00Z 按任务书命令启动 `unmerged.sh`，step 157297.89；前后 squeue 两条 RUNNING；主驱动 step 157297.84 仍在、paused。
+  - 驱动日志第一行：`未合并补评开始：hpcgpu07，commit d4c8f67a8c45e4f3ff7f77adf501a184c7c9d763，12 个运行：e3b_c3_n1000_s0 c3_warmup_n1000_s0 e3b_c3_n4000_s0 c3_warmup_n4000_s0 e3b_c3_n1000_s1 c3_warmup_n1000_s1 e3b_c3_n4000_s1 c3_warmup_n4000_s1 e3b_c3_n1000_s2 c3_warmup_n1000_s2 e3b_c3_n4000_s2 c3_warmup_n4000_s2`。
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
