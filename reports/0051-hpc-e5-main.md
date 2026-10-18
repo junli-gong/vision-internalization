@@ -584,6 +584,18 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 
 - 06 第一个 64K 运行 e3b_c3_n64000_s0 第 1 段：驱动 `=== 2026-10-18T17:19:42Z chunk rc=0 wall_s=5611`；run_001 15:54:21Z（驱动开始后 8 min 10 s）– 17:19:13Z，wall_s 5,091.4，1000 步，每步中位 5.062 s，第一步 8.9 s，峰值 9.35 GB。
 
+### mid_s2（07）
+
+| 运行 | 训练完成 | 评测完成 | n_runs | steps | epochs | selected_step | final_loss | wall_s | step 中位 s | 峰值 GB | 核对写于 | e5-v2 pass | v1（只报告） | flag iou | flag relief | iou_grid 差 | 起伏误差差 | 相同行 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| e3b_c3 n16000 s2 | 02:35:57Z | 03:08:57Z | 2 | 2000 | 2 | 2000 | 0.03007 | 10,229 | 5.081 | 9.35 | 02:45:25Z | True | True | False | False | +0.00239 | 0.0 | 32 |
+| c3_warmup n16000 s2 | 06:06:13Z | 06:40:43Z | 2 | 2000 | 2 | 2000 | 0.03513 | 10,236 | 5.070 | 9.35 | 06:17:46Z | True | False | False | None | −0.00394 | None | 37 |
+| base_warmup n16000 s2 | 17:28:36Z | 17:58:36Z | 2 | 2000 | 2 | 2000 | 0.03625 | 10,199 | 5.075 | 9.35 | 17:35:28Z | True | False | False | None | −0.00072 | None | 38 |
+
+- base_warmup n16000 s2 第 1 段在 f703d7db 上、第 2 段在 d4c8f67a 上（中间是 addendum-2 的暂停）；n_skipped 0。
+- **组 mid_s2 17:58:36Z 跑完**：从 10-17 23:42:37Z 认领起 65,759 s（18.27 h），其中主驱动暂停 08:07:15Z – 16:02:16Z（28,501 s，7.92 h）。没有被拒，`failed.txt` 仍 14 行。
+- 驱动接着：`2026-10-18T17:58:36Z 组 big_s0 已被 hpcgpu06 认领，跳过`、`2026-10-18T17:58:36Z 认领组 ad_s0`（`ad_s0/node`：`hpcgpu07 2026-10-18T17:58:36Z`）。19:18:37Z 心跳 `running e3b_c3_n4000_s0_abcd`。
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
