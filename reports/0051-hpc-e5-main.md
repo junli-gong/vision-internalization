@@ -503,6 +503,14 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 - **组 mid_s1 23:42:37Z 跑完**：从 11:34:32Z 认领起 43,685 s（12.13 h）；3 个运行训练、评测全部完成，没有被拒。`failed.txt` 仍是 14 行。
 - 驱动同一时刻认领组 `mid_s2`，开始 `e3b_c3_n16000_s2`（chunk 1）。
 
+## addendum-2（D100；任务书 `prompts/server_hpc/0051-addendum-2.md`，59df4ebe）
+
+### 第一部分：big_s0 预认领给 hpcgpu06
+
+- 10-18 01:30:51Z（07 在跑 mid_s2 的 e3b_c3_n16000_s2）。前后 squeue 两条 RUNNING。
+- 之前 `$VI/logs/e5_claims_0051/`：n0_all、small_s0–2、mid_s0–2，node 都是 hpcgpu07；mid_s2 没有 done，其余都有；没有 big_s0。
+- `mkdir big_s0` 成功；`node` 内容：`hpcgpu06 2026-10-18T01:30:51Z pre-claimed by manager (D100, 0051-addendum-2)`。
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
