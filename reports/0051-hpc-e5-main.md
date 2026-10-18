@@ -582,6 +582,8 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 - 心跳 `train_0051-hpcgpu06.status`：`running e3b_c3_n64000_s0 (chunk 1)`。
 - 15:47:14Z 另起 v3 推送循环 0051h06（`experiments/E5/0051_e5_main_hpcgpu06`），实际 PID 1203347（`$VI/logs/sync_0051h06.pid`），日志 `$VI/logs/sync_0051h06.log`；sync_push.sh sha256 `21e5892e…`。原有的 0051（310182）、0052（3896115）循环没动。
 
+- 06 第一个 64K 运行 e3b_c3_n64000_s0 第 1 段：驱动 `=== 2026-10-18T17:19:42Z chunk rc=0 wall_s=5611`；run_001 15:54:21Z（驱动开始后 8 min 10 s）– 17:19:13Z，wall_s 5,091.4，1000 步，每步中位 5.062 s，第一步 8.9 s，峰值 9.35 GB。
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
