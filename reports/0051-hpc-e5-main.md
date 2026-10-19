@@ -618,7 +618,8 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 
 - **e3b_c3_n4000_s1_abcd：** 01:32:55Z 训练完成（131,091 KB）；steps 1000，final_loss 0.01786，wall_s 6,287，step 中位 5.156 s，n_skipped 0。核对 01:39:54Z：e5-v2 pass True，v1 False，flags iou False、relief False，相同 31 / 40。01:43:56Z 评测完成。
 - **c3_warmup_n4000_s1_abcd：** 03:29:07Z 训练完成（131,087 KB）；steps 1000，final_loss 0.02803，wall_s 6,253，step 中位 5.147 s，n_skipped 0。核对 03:35:56Z：e5-v2 pass True，v1 False，flags iou False、relief False，相同 35 / 40。03:40:07Z 评测完成。
-- 04:00:07Z 心跳 `running base_warmup_n4000_s1_abcd`。`failed.txt` 仍 14 行。
+- **base_warmup_n4000_s1_abcd：** 05:25:36Z 训练完成（131,091 KB）；steps 1000，final_loss 0.02855，wall_s 6,297，step 中位 5.157 s，n_skipped 0。核对 05:32:36Z：e5-v2 pass True，v1 False，flags iou False、relief False，相同 31 / 40。05:37:42Z 评测完成。
+- **组 ad_s1 05:37:42Z 跑完**：从 10-18 23:47:21Z 认领起 21,021 s（5.84 h）。3 个运行全部完成，没有被拒，`failed.txt` 仍 14 行。驱动同一时刻认领组 `ad_s2`；06:02:42Z 心跳 `running e3b_c3_n4000_s2_abcd`。
 
 ## 5. hpcgpu06
 
