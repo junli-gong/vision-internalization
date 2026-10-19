@@ -11,7 +11,10 @@
 算的东西（§8d，写于读到任何 E5 训练后 test 分数之前）：
 1. 显著：每类每档 src.stats.is_significant（D10(9) 三条规则），A = E3b+C3，B = C3+预热，输入 (样本, 种子)，统计量取均值；
    读数是标题指标（a：严格起伏误差，越低越好，只在目标起伏有定义的样本上；b–e：网格 mask IoU，越高越好），样本取标题口径。
-2. 先决条件与判定条件（按类；种子之间怎么合见 N39，三种口径都算）：
+2. 先决条件与判定条件（按类；N39 → D102，决定于揭盲之前）：
+   primary（主口径，D102）：seed_mean 通过，并且 3 个种子各自的点估计都在基线正确的一侧（标题口径网格 IoU 均值高于
+     seed_mean 选出的最强非真值基线；a、b 的严格起伏误差均值低于平面、真值仿射、凸起先验）。只看点估计。
+   敏感性分析（N39 的三个选项，门报告并列给出）：
    (a) seed_mean：每条样本对种子取平均，再用 src.e5.scoring.gate 与基线配对；
    (b) all_seeds：每个运行自己的 gate 都通过（metrics.json 的 gate.imagining 为 true）；
    (c) majority：至少 2 个种子通过。
@@ -46,7 +49,7 @@ if str(ROOT) not in sys.path:
 
 from src.constants import BOOTSTRAP_CI_LEVEL, BOOTSTRAP_N_RESAMPLES, BOOTSTRAP_SEED  # noqa: E402
 from src.e5.protocol import E5_TASKS, TASK_LETTER  # noqa: E402
-from src.e5.scoring import RELIEF_FAIL_VALUE, gate, relief_strict_value  # noqa: E402
+from src.e5.scoring import JUDGMENT_BASELINES, RELIEF_FAIL_VALUE, RELIEF_TASKS, gate, relief_strict_value  # noqa: E402
 from src.e5.val_select import HEADLINE_METRIC  # noqa: E402
 from src.stats import _percentile_ci, _resample_indices, is_significant, paired_bootstrap_ci  # noqa: E402
 
@@ -54,7 +57,7 @@ E, C, B, E3B = "e3b_c3", "c3_warmup", "base_warmup", "e3b"
 H5_TIERS = ("n1000", "n4000")
 SEEDS = (0, 1, 2)
 E3B_SEEDS = (0, 2)  # §8b：E3b 种子 1 在 A100 上没过起点的合并核对（RUN-0048）
-RULES = ("seed_mean", "all_seeds", "majority")
+RULES = ("primary", "seed_mean", "all_seeds", "majority")  # primary = D102 的主口径；其余是 N39 三个选项，作敏感性分析
 UNMERGED = "__unmerged"
 DATA_KEYS = ("sample_ids_sha256", "task_generator_version", "synth_generator_version")
 
@@ -269,13 +272,37 @@ class Analysis:
             avg.append({"id": i, "headline": True, "score": sc})
         g = gate(task, avg, {n: recs[n] for n in roles}, roles, n_resamples=self.n_resamples)
         pre, jud = g.get("prerequisite") or {}, g.get("judgment") or {}
-        return {"seed_mean": g["imagining"], "all_seeds": all(p is True for p in per_seed),
-                "majority": sum(p is True for p in per_seed) >= 2, "per_seed": per_seed,
+        direction = self.direction(task, lfs, recs, ids, pre.get("strongest"))
+        primary = bool(g["imagining"] is True and direction["ok"])
+        return {"primary": primary, "seed_mean": g["imagining"], "all_seeds": all(p is True for p in per_seed),
+                "majority": sum(p is True for p in per_seed) >= 2, "per_seed": per_seed, "direction": direction,
                 "seed_mean_detail": {"prerequisite_pass": pre.get("pass"), "prerequisite_diff": pre.get("diff"),
                                      "prerequisite_ci": _ci_pair(pre.get("diff_ci")), "strongest": pre.get("strongest"),
                                      "judgment_pass": jud.get("pass"),
                                      "judgment": {n: {"diff": b.get("diff"), "ci": _ci_pair(b.get("diff_ci")), "beats": b.get("beats")}
                                                   for n, b in (jud.get("baselines") or {}).items()}}}
+
+    @staticmethod
+    def direction(task: str, lfs: Sequence[Leaf], recs: Mapping[str, list[dict[str, Any]]], ids: Sequence[str],
+                  strongest: str | None) -> dict[str, Any]:
+        """D102 的方向一致条件：每个种子的点估计都在基线正确的一侧（只看点估计）。"""
+        out: dict[str, Any] = {"strongest": strongest, "ok": False}
+        if strongest is None:
+            return out
+        bm = {n: {r["id"]: r for r in rs} for n, rs in recs.items()}
+        b_iou = mean([float(bm[strongest][i]["score"]["iou_grid"]) for i in ids])
+        s_iou = [mean([float(lf.recs[i]["score"]["iou_grid"]) for i in ids]) for lf in lfs]
+        out.update(baseline_iou=b_iou, seed_iou=s_iou, iou_ok=all(v > b_iou for v in s_iou))
+        ok = out["iou_ok"]
+        if task in RELIEF_TASKS:
+            pop = [i for i in ids if not lfs[0].recs[i]["score"]["relief"]["target_flat"]]
+            b_rel = {n: mean([relief_strict_value(bm[n][i]) for i in pop]) for n in JUDGMENT_BASELINES}
+            s_rel = [mean([relief_strict_value(lf.recs[i]) for i in pop]) for lf in lfs]
+            rel_ok = all(v < b for v in s_rel for b in b_rel.values())
+            out.update(baseline_relief=b_rel, seed_relief=s_rel, relief_ok=rel_ok)
+            ok = ok and rel_ok
+        out["ok"] = bool(ok)
+        return out
 
     def slope(self, tag: str, task: str, merge: str = "") -> dict[str, Any] | None:
         """截距与斜率（§8d 第 4 项）。"""
@@ -410,19 +437,21 @@ def render(doc: Mapping[str, Any]) -> str:
         if not h:
             continue
         L += [f"## H5（{'合并' if h['merge'] == 'merged' else '未合并，D99-2'}）", "",
-              "结论（三种口径，N39）：" + "；".join(f"{r} = {h['verdict'][r] or '不完整'}" for r in RULES), ""]
+              f"结论（主口径 primary，D102）：{h['verdict']['primary'] or '不完整'}", "",
+              "敏感性分析（N39 的三个选项）：" + "；".join(f"{r} = {h['verdict'][r] or '不完整'}" for r in RULES[1:]), ""]
         for tag in H5_TIERS:
             t = h["tiers"][tag]
             L += [f"### {tag}（计入的类数：" + "，".join(f"{r} {t['n_classes'][r]}" for r in RULES) + "）", "",
-                  "| 类 | 指标 | n | E3b+C3 | C3+预热 | 差 | 95% CI | 显著更好 | 门槛 seed_mean / all_seeds / majority | 逐种子 gate |",
-                  "|---|---|---:|---:|---:|---:|---|---|---|---|"]
+                  "| 类 | 指标 | n | E3b+C3 | C3+预热 | 差 | 95% CI | 显著更好 | 门槛 primary | 方向一致 | 门槛 seed_mean / all_seeds / majority | 逐种子 gate |",
+                  "|---|---|---:|---:|---:|---:|---|---|---|---|---|---|"]
             for r in t["rows"]:
                 if r.get("missing"):
-                    L.append(f"| {r['letter']} | — | — | — | — | — | — | — | 缺运行 | — |")
+                    L.append(f"| {r['letter']} | — | — | — | — | — | — | — | 缺运行 | — | — | — |")
                     continue
                 g = r["gates"]
                 L.append(f"| {r['letter']} | {r['metric']} | {r['n']} | {r['mean_a']:.3f} | {r['mean_b']:.3f} | {fmt(r['diff'])} | {fci(r['ci'])} | "
-                         f"{fmt(r['better'])} | {fmt(g['seed_mean'])} / {fmt(g['all_seeds'])} / {fmt(g['majority'])} | "
+                         f"{fmt(r['better'])} | {fmt(g['primary'])} | {fmt(g['direction']['ok'])} | "
+                         f"{fmt(g['seed_mean'])} / {fmt(g['all_seeds'])} / {fmt(g['majority'])} | "
                          f"{' '.join(fmt(p) for p in g['per_seed'])} |")
             L += ["", "截距与斜率（D = 种子平均[(E − C)@N − (E − C)@0]，越大越好）：", "",
                   "| 类 | Δ_0 | Δ_N | D | 95% CI | 斜率的证据 |", "|---|---:|---:|---:|---|---|"]
