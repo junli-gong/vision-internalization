@@ -608,6 +608,10 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 - 训练 10-19 03:19:50Z 完成（131,091 KB）；从驱动开始（10-18 15:46:11Z）41,619 s（11.56 h）。各段驱动墙钟：5611、5221、5131、5131、5132、5130、5131、5131 s。
 - `accounting.json` / `train_summary.json`：n_runs 8，steps 8000，epochs 2，n_samples 128,000，selected_step 8000，final_loss 0.03906，wall_s 40,609，step 中位 5.048 s，峰值 9.35 GB，**n_skipped 2**（此前各运行都是 0）。
 - 核对 03:27:10Z：e5-v2 pass True，v1 False，flags iou False、relief True，iou_grid 差 +0.00677，起伏误差差 −0.02648，相同 29 / 40。03:50:20Z 评测完成。
+- n_skipped 2 的来源（`train_log.jsonl` 8000 行里 `n_skipped`/`skipped` 不为空的只有两行）：
+  - step 3176：`{"k": 50822, "id": "occlusion/train/6525", "reason": "occlusion/train/6525：生成器没有得到合格样本（occlusion train#6525 档 0：400 次尝试都不合格）"}`
+  - step 5226：`{"k": 83617, "id": "occlusion/train/6525", "reason": 同上}`
+  - 同一条，两个 epoch 各一次（k 50822 < 64,000 ≤ 83617）。各 `logs/run_00k.json` 里没有不为 0 的 skip 字段。
 - 04:00:20Z 心跳 `running c3_warmup_n64000_s0`。06 `failed.txt` 空。
 
 ### ad_s1（07）
