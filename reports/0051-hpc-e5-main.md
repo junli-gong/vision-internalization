@@ -621,6 +621,21 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 - **base_warmup_n4000_s1_abcd：** 05:25:36Z 训练完成（131,091 KB）；steps 1000，final_loss 0.02855，wall_s 6,297，step 中位 5.157 s，n_skipped 0。核对 05:32:36Z：e5-v2 pass True，v1 False，flags iou False、relief False，相同 31 / 40。05:37:42Z 评测完成。
 - **组 ad_s1 05:37:42Z 跑完**：从 10-18 23:47:21Z 认领起 21,021 s（5.84 h）。3 个运行全部完成，没有被拒，`failed.txt` 仍 14 行。驱动同一时刻认领组 `ad_s2`；06:02:42Z 心跳 `running e3b_c3_n4000_s2_abcd`。
 
+### big_s0（06）：c3_warmup_n64000_s0
+
+- 训练 10-19 15:30:29Z 完成（131,091 KB）。各段驱动墙钟：5563、5180、5160、5161、5161、5221、5370、5191 s。
+- n_runs 8，steps 8000，epochs 2，n_samples 128,000，selected_step 8000，final_loss 0.03975，wall_s 40,732，step 中位 5.052 s，peak_mem_bytes 各行最大 9,349,727,232，n_skipped 2。
+- **跳过核对**：`train_log.jsonl` 的 `skipped`，与 e3b_c3_n64000_s0 逐条比较：
+  - e3b_c3：(occlusion/train/6525, k 50822, step 3176)、(occlusion/train/6525, k 83617, step 5226)
+  - c3_warmup：(occlusion/train/6525, k 50822, step 3176)、(occlusion/train/6525, k 83617, step 5226)
+  - id、k、step 与 reason 原文都相同。
+- 核对 15:38:37Z：e5-v2 pass True，v1 False，flags iou False、relief False，iou_grid 差 −0.00532，起伏误差差 +0.00896，相同 33 / 40。16:02:00Z 评测完成。
+- 17:02:00Z 心跳 `running base_warmup_n64000_s0`。
+
+### 07 的 E5 队列跑完
+
+- `2026-10-19T11:30:25Z 组 ad_s2 跑完`；`2026-10-19T11:30:25Z 队列跑完：完成 91 条，失败 14 条`（14 条是 v1 时的记录）；心跳 `2026-10-19T11:30:25Z done 0051-hpcgpu07`。之后 07 交给 RUN-0054（见 `reports/0054-hpc-07-r128.md`）。
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
