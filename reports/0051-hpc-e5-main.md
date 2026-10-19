@@ -603,6 +603,19 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 - **base_warmup_n4000_s0_abcd：** 23:36:21Z 训练完成（131,091 KB）；steps 1000，final_loss 0.03538，wall_s 6,261，step 中位 5.149 s，峰值 9.35 GB，n_skipped 0。核对 23:43:14Z：e5-v2 pass True，v1 False，flags iou False、relief None，iou_grid 差 0.0，相同 36 / 40。23:47:21Z 评测完成。
 - **组 ad_s0 23:47:21Z 跑完**：从 17:58:36Z 认领起 20,925 s（5.81 h）。3 个运行全部完成，没有被拒，`failed.txt` 仍 14 行。驱动同一时刻认领组 `ad_s1`；10-19 00:27:21Z 心跳 `running e3b_c3_n4000_s1_abcd`。06：00:28:47Z `running e3b_c3_n64000_s0 (chunk 7)`。
 
+### big_s0（06）：e3b_c3_n64000_s0
+
+- 训练 10-19 03:19:50Z 完成（131,091 KB）；从驱动开始（10-18 15:46:11Z）41,619 s（11.56 h）。各段驱动墙钟：5611、5221、5131、5131、5132、5130、5131、5131 s。
+- `accounting.json` / `train_summary.json`：n_runs 8，steps 8000，epochs 2，n_samples 128,000，selected_step 8000，final_loss 0.03906，wall_s 40,609，step 中位 5.048 s，峰值 9.35 GB，**n_skipped 2**（此前各运行都是 0）。
+- 核对 03:27:10Z：e5-v2 pass True，v1 False，flags iou False、relief True，iou_grid 差 +0.00677，起伏误差差 −0.02648，相同 29 / 40。03:50:20Z 评测完成。
+- 04:00:20Z 心跳 `running c3_warmup_n64000_s0`。06 `failed.txt` 空。
+
+### ad_s1（07）
+
+- **e3b_c3_n4000_s1_abcd：** 01:32:55Z 训练完成（131,091 KB）；steps 1000，final_loss 0.01786，wall_s 6,287，step 中位 5.156 s，n_skipped 0。核对 01:39:54Z：e5-v2 pass True，v1 False，flags iou False、relief False，相同 31 / 40。01:43:56Z 评测完成。
+- **c3_warmup_n4000_s1_abcd：** 03:29:07Z 训练完成（131,087 KB）；steps 1000，final_loss 0.02803，wall_s 6,253，step 中位 5.147 s，n_skipped 0。核对 03:35:56Z：e5-v2 pass True，v1 False，flags iou False、relief False，相同 35 / 40。03:40:07Z 评测完成。
+- 04:00:07Z 心跳 `running base_warmup_n4000_s1_abcd`。`failed.txt` 仍 14 行。
+
 ## 5. hpcgpu06
 
 还没有加入，等管理员另行通知。
