@@ -1597,3 +1597,4 @@
 - 10-19 08:16 UTC 心跳（走备用线路）：两条 RUNNING；06 在 c3_warmup_n64000_s0（第 4 段开始）；07 在 c3_warmup_n4000_s2_abcd（40 分钟）；无新失败；同步 ok。
 - 10-19 08:45 UTC：**发 RUN-0055**（`prompts/server_hpc/0055-hpc-06-9b-measure.md`，脚本 e496ea0b）。按 N38 的默认动作，06 空出来后先实测 9B 在 A100-40GB 上的显存与每步耗时。HPC 上还没有 9B 权重，所以第一部分现在就经 hf-mirror 下载并逐文件核对（16 个文件，约 19.3 GB），与 big_s0 并行，只用 CPU 与网络。第二部分等 big_s0 跑完：三臂各 20 步，微批 4 显存不够时同一臂补测微批 2 × 累积 8（配置现生成，只改这两项与 version，非 tiny 下三臂都核对过）；网格评测 refseg 100、depth 50；T 文本基座 dev 20、free 10，检查点 dev 20。开发机 tiny 彩排两遍（正常一遍、强制走微批 2 一遍），各步 rc=0，检查点已删。
 - 10-19 08:41 UTC：RUN-0055 第一部分开始。wt0055 在 e496ea0b，7 个 sha256 都对，experiments 下只有 P0。fetch_9b.sh 08:40:34Z 在 06 上启动（步 157296.163，与 big_s0 的 157296.162 并行），squeue 前后两条都 RUNNING。开头一分钟两个 blob 已到 80 MB、160 MB，速度远高于 RUN-0044 的约 3.4 MB/s。
+- 10-19 08:46 UTC 心跳（走备用线路）：两条 RUNNING；06 在 c3_warmup_n64000_s0（第 4 段，30 分钟），9B 下载进行中（attempt 1）；07 在 c3_warmup_n4000_s2_abcd（70 分钟）；无新失败；同步 ok。值守 cron 换成 75f32ef9（加上 RUN-0054/0055、N38 与 64K 跳过核对）。
