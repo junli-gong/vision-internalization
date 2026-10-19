@@ -599,7 +599,9 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 ### ad_s0（07）
 
 - **e3b_c3_n4000_s0_abcd：** 训练 19:43:44Z 完成（131,091 KB）；n_runs 1，steps 1000，epochs 2，n_samples 16,000，selected_step 1000，final_loss 0.02150，wall_s 6,270，step 中位 5.153 s，峰值 9.35 GB，n_skipped 0。核对 19:50:53Z：e5-v2 pass True，v1 False，metric_level done，flags iou False、relief False，iou_grid 差 −0.00061，起伏误差差 +0.00839，相同 28 / 40。19:54:44Z 评测完成；结果目录只有 `imagery__structured`（a–d 迁移的只评 e 类，同 queue.sh）。
-- 21:34:45Z 心跳 `running c3_warmup_n4000_s0_abcd`。`failed.txt` 仍 14 行。06：21:37:45Z `running e3b_c3_n64000_s0 (chunk 5)`。
+- **c3_warmup_n4000_s0_abcd：** steps 1000，final_loss 0.03325，wall_s 6,279，step 中位 5.156 s，峰值 9.35 GB，n_skipped 0。核对 21:47:10Z：e5-v2 pass True，v1 False，flags iou False、relief True，iou_grid 差 +0.00762，起伏误差差 −0.02773，相同 29 / 40。21:51:18Z 评测完成。
+- **base_warmup_n4000_s0_abcd：** 23:36:21Z 训练完成（131,091 KB）；steps 1000，final_loss 0.03538，wall_s 6,261，step 中位 5.149 s，峰值 9.35 GB，n_skipped 0。核对 23:43:14Z：e5-v2 pass True，v1 False，flags iou False、relief None，iou_grid 差 0.0，相同 36 / 40。23:47:21Z 评测完成。
+- **组 ad_s0 23:47:21Z 跑完**：从 17:58:36Z 认领起 20,925 s（5.81 h）。3 个运行全部完成，没有被拒，`failed.txt` 仍 14 行。驱动同一时刻认领组 `ad_s1`；10-19 00:27:21Z 心跳 `running e3b_c3_n4000_s1_abcd`。06：00:28:47Z `running e3b_c3_n64000_s0 (chunk 7)`。
 
 ## 5. hpcgpu06
 
