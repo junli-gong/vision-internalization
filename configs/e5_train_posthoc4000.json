@@ -1,0 +1,175 @@
+{
+  "schema": 1,
+  "version": "e5-train-v3-posthoc4000",
+  "framework": "src/e5（DEV-0037：E5 主比较的训练与训练后评测；DEV-0038：小档的步数下限、val 选检查点、配种子；DEV-0043：v3 的起点 E3b+C3、C3+预热与结构强制解码）；规则见 src/e5/train_data.py、token_grid.py、stack.py、train.py、val_select.py、trained_eval.py 的模块说明",
+  "status": "草稿，未冻结。数据量档、epoch 数、学习率、批、提示与映射都是暂定值（各节 basis），由 E5 预注册冻结（简报 §8.8；E5 预注册草稿 §5、§7）",
+  "e3b_config": "configs/e3b_train.json",
+  "e3b_config_basis": "同一套 token、同一种格式（简报 §8.8：训练后的系统用像素 token 网格）：网格词表（67 个 token）、网格边长、受限 logits 的允许集合规则（allowed_scope）、思考开关、模型 dtype、梯度检查点、LoRA 的结构（r、alpha、dropout）与优化器的结构（AdamW、betas、eps、梯度裁剪、warmup + 余弦、token 行的 fp32 主副本）都取这份 E3b 配置（src/e3/config.resolve_run 的网格监督），E5 只改下面 training 一节列出的几项。E3b 配置的 sha256 进运行身份",
+  "starts": {
+    "base_warmup": {
+      "checkpoint": true,
+      "variant": "warmup",
+      "grid_tokens": "from_checkpoint",
+      "in_v3": true,
+      "role": "v3 参照：基座 + 网格格式预热（D36-5、N5 第 2 处；DEV-0035 的 scripts/train_e3b.py --supervision warmup）；E3b+C3 对它、C3+预热对它各报一行（E5 预注册 §8a 第 2 项）"
+    },
+    "e3b_c3": {
+      "checkpoint": true,
+      "variant": "e3b_c3",
+      "grid_tokens": "from_checkpoint",
+      "in_v3": true,
+      "role": "v3 主比较：E3b+C3，内化且保住了语言（D83-2、D85；scripts/train_e3b.py --supervision grid+text 的 ckpt/final/model：LoRA r 32 + 67 个网格 token 行）；H5 的主判据是它对 C3+预热（D83-5）"
+    },
+    "c3_warmup": {
+      "checkpoint": true,
+      "variant": "c3_warmup",
+      "grid_tokens": "from_checkpoint",
+      "in_v3": true,
+      "role": "v3 主比较的对照：C3+预热，文本曝光与 E3b+C3 相同、只差稠密监督（D83-5、D85；scripts/train_e3b.py --supervision warmup --start-checkpoint <C3> 的 ckpt/final/model：C3 与预热的 LoRA 按秩拼接成一个 r 64、alpha 128 的 LoRA（缩放 2，同 r 32 / alpha 64）+ 预热之后的 67 个网格 token 行）。合并起点 LoRA 走同一串调用（merge_start_lora），合并后的权重与 factory.load_trained(起点, merge=True) 逐位相同（开训前的第 2 项核对）；与'先合并 C3、再合并预热'只差末位舍入（D85-2；tests/test_e5_v3.py 钉住）"
+    },
+    "e3b": {
+      "checkpoint": true,
+      "variant": "e3b",
+      "grid_tokens": "from_checkpoint",
+      "in_v3": false,
+      "role": "E3b 模型（scripts/train_e3b.py --supervision grid）；v2 的主比较起点，不属于 v3 主比较（D83-5：只用稠密监督冲掉了语言，E3b 单独的臂作为消融往后排，D83-2）"
+    },
+    "e3a": {
+      "checkpoint": true,
+      "variant": "full",
+      "grid_tokens": "add",
+      "in_v3": false,
+      "role": "E3a 模型（scripts/train_e3a.py --variant full 的 ckpt/final/model；没有网格 token，先加上与 E3b 同一套 token 行、同一种初始化）；不属于 v3 主比较（D83-5：E3a 退出 E5 主比较）"
+    },
+    "base": {
+      "checkpoint": false,
+      "grid_tokens": "add",
+      "in_v3": false,
+      "role": "诊断：基座加网格 token 行，不预热；不属于 v3 主比较（D83-5：'基座、不预热'的诊断起点取消）"
+    },
+    "basis": "variant 是起点检查点所在训练叶目录 config.yaml 的 variant（找得到时核对，防止把预热与 E3b 检查点弄混；两者的检查点结构相同；e3b_c3 与 e3b、c3_warmup 与 warmup 也一样）。in_v3：是否属于 v3 主比较（D83-5；E5 预注册 §8a 第 1 项），e3b、e3a、base 保留在配置里，脚本照常能用，运行时提示不属于 v3 主比较。grid_tokens：from_checkpoint = 起点检查点必须带 E3b 词表的 67 个网格 token，行取检查点里训练过的值（restore_tokens）；add = 起点不能带网格 token，按 E3b 的规则新加（add_grid_tokens：基础词表行的均值，与 E3b 开训时的初始化逐位相同）"
+  },
+  "start_lora": {
+    "mode": "merge_then_new_lora",
+    "basis": "起点检查点的 LoRA 先在内存里合并进基座，当作新的起点权重，再注入一份新的 LoRA（r、alpha、dropout 同 E3b）在 E5 上训练。理由：预算对齐——每个起点在 E5 上训练的都是同样大小、同样初始化的一份新 LoRA（同一个种子下新 LoRA 的初始值在各起点之间逐位相同，样本日程也逐个相同），起点之间只差起点权重；继续训练原 LoRA 时，E3 起点的 LoRA 已有一段学习率日程与优化器历史，基座起点却从零开始，可训练参数的出发点不对等。不存合并后的整模型（D34）：E5 检查点 = LoRA + 网格 token 行 + 起点检查点的引用（ckpt/final/e5_stack.json 与 extra.safetensors 里起点 manifest 的 sha256），评测时按顺序合并（起点 LoRA → E5 LoRA）。开训前核对：起点检查点的合并核对（scripts/check_training_interfaces.py --checkpoint，判据 v1 = D50-3，检查项与它自己的评测相同：E3b / 预热 = grid_eval，E3a = t_text）不过就拒绝训练；合并后的权重指纹必须与 factory.load_trained(起点, merge=True) 的相同（src/e5/stack.py）"
+  },
+  "data": {
+    "tiers": [
+      1000,
+      4000,
+      16000,
+      64000
+    ],
+    "tiers_basis": "学习曲线的数据量档（E5 预注册草稿 §5，暂定）。数据量 = 五类合计的条数；每类 = 数据量 / 5（等量）。只训练部分任务（--tasks，例如 a–d，用于图像到文本的迁移，简报 §8.8 第 3 条）时每类条数不变、各类样本与五类全训的运行逐条相同，合计 = 每类 × 任务数",
+    "split": "train",
+    "seed_stride": 4294967296,
+    "index_basis": "样本由 (数据种子, 任务, j) 唯一决定、无状态：生成器的 train 划分序号 = 数据种子 × seed_stride + j，档 = j mod 档数（同 E5 评测集的轮转），即 src.synth.generate(任务, train, 序号, bin = 档)。j < 每类条数，所以小档是大档的前缀（同一个数据种子下嵌套，学习曲线上的点可以配对）。数据种子默认等于运行种子（--data-seed 可另给），不同数据种子的序号区间不相交（seed_stride = 2^32，数据种子 < 2^16）。train 划分的场景种子与物体身份与 val、test 不相交（D23-2；src/synth/seeding.py、shapes.py、solids.py）",
+    "tiny": {
+      "tiers": [
+        10,
+        20
+      ]
+    }
+  },
+  "format": {
+    "order": "instruction_first",
+    "order_basis": "指令在前，同 E3b 的网格输出（简报 §8.5、§12）。零样本用 E5 提示配置的 image_first（E1 的约定）；训练后的系统沿用 E3b 的格式，起点模型学过的就是这个顺序",
+    "template": "{instruction} {ending}",
+    "endings_from": {
+      "binary": "tasks.refseg.grid_template",
+      "relief": "tasks.depth.grid_instruction"
+    },
+    "template_basis": "提示 = 生成器的指令原文（sample.instruction：E5 提示配置里任务的原文，即零样本模板里的 {instruction}；它已经点名目标物体与变换）+ E3b 网格指令的结尾句（取 E3b 配置里 endings_from 所指模板的最后一句：二值网格 'Output the {n}x{n} mask grid.'，a、b 的起伏网格 'Output the {n}x{n} depth grid.'；只在 E3b 配置里写一处）。零样本模板里的输出格式说明（数字网格、33 个符号）不用：训练后的系统输出网格 token，那些说明与之矛盾。configs/e5_prompts.json 不改",
+    "relief_depth_bins": "centered",
+    "relief_basis": "a、b 的 33 档起伏网格（D28-13）映射到 E3b 的网格 token：背景 = 二值 token 0（mask 的第 0 个），起伏档 k（0 最近 … 31 最远，代码 k + 1）= 深度 token 第 (DEPTH_NUM_BINS − RELIEF_NUM_LEVELS) / 2 + k 档，即 64 档深度 token 正中间连续的 32 档（第 16–47 档，档几何中心约 1.1–4.6 m）。理由：(1) 保序且保邻接——起伏的一档对应深度 token 的一档，近 → 远同向，E3b 学到的相邻深度 token 的相似结构原样可用；(2) 取 64 档的中段：NYU 深度的主体落在这一段（E3b 训练最多的行），E5 场景的物理深度（a：相机距物体 1.8–2.8 m；b：4–5 m）也大致在这一段；(3) 起伏 0（物体平均深度）落在深度 token 的中点，对称。另一种取法（每隔一档取 32 档，铺满 0.5–10 m）会用到 NYU 里很少出现、训练得最少的两端；或新加 32 个 token（预算内，但起点模型完全没见过）。由 E5 预注册定",
+    "basis": "c、d、e 的二值网格用二值 token（0 / 1），与 E3b 的分割同一组。受限 logits 的允许集合 = 本任务的值 token + 行分隔 + 停止 token（E3b 配置的 allowed_scope = task；all 时是全部 67 个网格 token + 停止）。目标序列与 E3b 同一种格式（src/e3/targets.grid_to_ids：光栅顺序、每行之后一个行分隔、最后接本家族的回合结束 token，32 × 33 + 1 = 1057 个 token），全部格子都监督。评分时 token 映射回 E5 的格子表示（二值网格 / 33 档起伏代码），用 src/e5/scoring 的同一套评分（与零样本完全可比，tests 钉住同一个网格两条路径同分）"
+  },
+  "training": {
+    "epochs": 2,
+    "epochs_basis": "每个数据量档按固定的 epoch 数训练（不是固定步数）：步数 = ceil(epochs × 训练集条数 / 批大小)，1K 档 125 步、64K 档 8000 步（批 16）。理由：(1) 学习曲线的横轴是数据量，固定 epoch 让各档的'每条样本见几次'相同，档与档只差数据量（和随之成比例的算力）；固定步数会把数据量与重复次数绑在一起（同样 8000 步，1K 档每条见 128 次、64K 档见 2 次），小档读到的主要是记忆而不是学习效率。(2) 算力与数据量成正比，四档合计约是最大档的 1.33 倍；固定步数是 4 倍。(3) 2 而不是 1：1 个 epoch 时 1K 档只有 63 步，warmup + 余弦来不及；也不是 3：B200 的用时（见 DEV-0037 完成总结的推算）。由 E5 预注册冻结。D77-3 起小档另有步数下限（min_steps），16K、64K 仍按这里的 epoch 数",
+    "min_steps": {
+      "steps": 4000,
+      "tiers": [
+        1000,
+        4000
+      ],
+      "tiny": {
+        "steps": 6,
+        "tiers": [
+          10
+        ]
+      }
+    },
+    "min_steps_basis": "D77-3（负责人第六批答复）：固定 2 个 epoch 时 1K 档只有 125 步，小数据量上量到的混着'样本少'与'优化步数少'。修法：tiers 里的档（1K、4K，H5 的主信号所在）步数 = max(按 epoch 算出的步数, steps)，即 1K、4K 都是 1,000 步（4K 按 epoch 是 500 步）；16K（2,000 步）、64K（8,000 步）不受影响。下限生效时样本日程按步数排：总条数 = 步数 × 批大小（每步都满批；1K 档 16,000 条 = 16 个 epoch，4K 档 4 个 epoch），第 e 个 epoch 的置换与固定 epoch 时同一个（src/e5/train_data.Schedule），所以前 2 个 epoch 的样本顺序与不设下限时逐条相同；学习率的 warmup（3%）与余弦按实际步数排。只设下限、步数更多会过拟合，所以这些档另用 val 选检查点（selection 一节）。tiny 是开发机彩排的同构缩小（10 条的档 6 步，按 epoch 是 3 步）",
+    "micro_batch_size": 4,
+    "grad_accum_steps": 4,
+    "batch_basis": "每步 16 条（4 × 4），同 E3b 的暂定值",
+    "lr": {
+      "lora": 0.0002,
+      "token_rows": 0.0002
+    },
+    "lr_basis": "同 E3b（LLaVA-1.5 的 LoRA 微调脚本：2e-4，warmup 3%，余弦到 0）；没有在 E5 的任何数据上调过。只能在 val 上选（简报 §4 第 7 条），由 E5 预注册定",
+    "warmup_ratio": 0.03,
+    "ckpt_every": 500,
+    "data_workers": 4,
+    "data_workers_basis": "下一步的样本由线程池在本步的 GPU 计算期间生成（生成器单核一条几十毫秒以内，DEV-0037 开发机实测、不是约定；一步 16 条远小于一步的 GPU 时间）；每条样本由 (数据种子, 任务, j) 唯一决定，线程数不改变任何结果",
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "seeds_basis": "D72-4：E5 主比较 3 个种子；每个运行一个，命令行给出。种子决定新 LoRA 的初始化、dropout、样本顺序；数据种子默认同运行种子（训练集随种子换一份，学习曲线的种子间差异包含抽样的差异）。配种子（D77-3）：E5 的第 i 个种子用 E3 的第 i 个种子训练的起点检查点；起点的种子取它训练叶目录 config.yaml 的 seed（检查点 manifest 不记种子），不符或核对不了就拒绝训练，--allow-seed-mismatch 放开并记进运行身份（src/e5/stack.check_seed_pairing）",
+    "tiny": {
+      "epochs": 1,
+      "micro_batch_size": 2,
+      "grad_accum_steps": 2,
+      "ckpt_every": 2,
+      "warmup_steps": 1
+    }
+  },
+  "selection": {
+    "applies_to": "min_steps",
+    "split": "val",
+    "val_every": 200,
+    "n_per_task": 64,
+    "batch_size": 64,
+    "rule": "mean_headline_v1",
+    "tiny": {
+      "val_every": 2,
+      "n_per_task": 1,
+      "batch_size": 4
+    },
+    "basis": "val_every 由 DEV-0038 的 100 改为 200（D78：管理员定；1,000 步的档读 5 次加最后一步，val 评测的开销从约 10 小时降到约 5 小时）。D77-3：受步数下限影响的档（training.min_steps.tiers：1K、4K）用 val 选检查点，防止过拟合；16K、64K 不选，取最后一步。实现见 src/e5/val_select.py 的模块说明。(1) 划分：生成器的 val 划分（E5 评测的 dev 子集，与 test 不相交）；每条样本生成前断言划分是 val，训练进程里不生成任何 test 样本（tests 钉住）。(2) 样本：每类固定 n_per_task 条标题口径内的 val 样本（src/e5/protocol.in_headline，与 test 的标题口径同一个函数；a 另要求目标起伏不全平，起伏误差才有定义）：按 val 序号升序（档的轮转同评测集）取前 n_per_task 条落在口径里的，清单的 id 指纹进运行身份；口径外的样本不进分数，所以不解码。只用本次训练的任务（--tasks 子集时只用那几类）。(3) 解码与评分：每 val_every 步（以及最后一步）一次，与 test 评测同一条路径：单轮解码，方式取 decode 一节（v3 是结构强制，DEV-0043；src/e5/token_grid.decode_grids，允许集合、max_new_tokens = 1057、停止 token、关思考、贪心同 src/e5/trained_eval），按格式（二值 / 起伏）连续成批，批大小 batch_size（= eval.batch_size；64 条一类恰好一批），src/e5/trained_eval.record 与 src/e5/scoring.aggregate 的同一套评分。训练中的模型 LoRA 未合并（eval 模式、no_grad）；随机数状态在评测前后不变，有没有 val 评测，训练轨迹逐位相同。(4) 规则 mean_headline_v1：分数 = 训练任务各类标题指标的平均，越高越好。b、c、d、e 取标题口径的网格 mask IoU（严格读数，解析失败记 0；b 的标题指标就是环绕上的 mask IoU，E5 预注册 §2 的表）；a 取 1 − 起伏误差（严格读数，失败记 2.0）/ 2.0，把 a 的标题指标线性映到 [0, 1]（0 = 前后翻转或失败，约 0.5 = 平面，1 = 完全正确），与 IoU 同向、同尺度。选分数最高的一步，同分取较早的一步。理由：与 test 的标题口径、严格读数完全相同（格式崩坏照样扣分）；每类等权，H5 按类计数；线性映射保留起伏误差的大小与顺序。另一种做法是各类分别排名再求和，对各类的尺度不变，但丢掉了幅度，小样本下平局多，没有用。每类的 IoU、起伏误差、有效率、解析失败率都逐步记进 val_selection.jsonl，规则可以事后核对。(5) 选中那一步的检查点就是 final/（train_summary.json 与 e5_stack.json 记 selection：规则、选中的步、分数与全部 val 曲线）；test 只在它上面由 scripts/eval_e5_trained.py 评一次。(6) 用量（B200 推算）：一次 val 评测是 5 批 × 64 条的受限解码；按 DEV-0037 的评测推算，一批约 39 秒，一次约 3.3 分钟；1K、4K 档每次运行 10 次，约 33 分钟。tiny 是开发机彩排的同构缩小"
+  },
+  "decode": {
+    "mode": "structured",
+    "basis": "D83-3（负责人第八批答复；E5 预注册 §8a 第 5 项）：E5 的全部网格任务——二值的 c、d、e 与 33 个符号的起伏 a、b——在 N = 0（scripts/eval_e5_trained.py --start-only）、训练中的 val 选择（src/e5/val_select.py）与 test 评测（scripts/eval_e5_trained.py --checkpoint）里都以结构强制解码为正式口径：每个格子位置只允许本任务的值 token（二值 2 个，起伏 33 个：背景 + 32 档），行末只允许行分隔，最后只允许停止 token，长度恒为 n(n + 1) + 1 = 1057。理由：网格形状固定，强制结构不注入任务知识，属于协议本身；a、b 的值分布摊开，贪心受限解码会像 E3b 的深度那样提前停止，结果可能全部无效。实现：DEV-0041 的通用模块 src/grid/structured_decode.py（经 src/e5/token_grid.decode_grids 接入，不另写一套）。restricted（单轮受限解码 generate_restricted，v2 的口径）保留作诊断：命令行 --decode restricted，输出与改动前逐字节相同。运行身份记解码方式（评测的 decoding 一节、val 选择的 selection.decode）；eval_e5_trained 的结构强制结果写进 <任务>[__dev]__structured/（同 E3b 的叶目录约定，D84），restricted 照旧写进 <任务>[__dev]/；训练的叶目录不变，续跑时解码方式不同就拒绝混写"
+  },
+  "eval": {
+    "subset": "eval",
+    "n_per_bin": {
+      "rotation3d": 100,
+      "viewpoint": 200,
+      "occlusion": 100,
+      "physics": 100,
+      "imagery": 100
+    },
+    "n_per_bin_basis": "E5 预注册草稿 §2 的评测集：test 划分，每档 100 条，b 每档 200 条（标题只用环绕，约占一半）。样本清单与零样本完全相同（src/e5/protocol.eval_items）",
+    "headline_basis": "标题口径与判定的统计范围用 src/e5/protocol.in_headline（与零样本同一个函数，不在这里另写；D72-1 / D73：b 统计环绕的 [20,180] 三档）",
+    "batch_size": 64,
+    "batch_basis": "同 E1 / E5 冻结的批大小与 E3b 的评测（D43）；单轮解码（方式见 decode 一节）max_new_tokens = n(n + 1) + 1 = 1057（src/e3/targets.seq_len），关思考，贪心",
+    "merge_check": {
+      "n_per_task": 8,
+      "subset": "dev",
+      "batch_size": 64
+    },
+    "merge_check_basis": "评测前的合并核对（起点 LoRA 合并之后，E5 LoRA 合并前 vs 合并后；src/e5/trained_eval.py）：E5 val 划分每类 n_per_task 条（合计 40 条，二值 24 条、起伏 16 条，各一批），E5 训练后的提示与允许集合，每批 3 次整段生成（未合并的受限解码；合并后的受限解码与 generate_batch），判据 v1（D50-3；scripts/check_training_interfaces.py 的同一套判定函数，CPU fp32 时逐个相同）。不通过就拒绝评测。核对的是 E5 LoRA 合并前后，与评测用哪种解码无关（DEV-0043）：结构强制只是在合并后同一份 logits 上逐位置收窄允许集合，合并前后 logits 的一致由教师强制在全词表与允许集合上的比较把关，generate_batch 与 generate_restricted 两条路径的差异由 restricted.by_thinking 的 decode_vs_generate_batch 读出；所以不另加结构强制下的核对。8 条 × 5 类是暂定：B200 上约几分钟（D67 的 E3b restricted 核对是 200 条约 3–6 分钟）",
+    "tiny": {
+      "batch_size": 2,
+      "merge_check_n_per_task": 1,
+      "merge_check_batch_size": 4,
+      "n_resamples": 50
+    }
+  },
+  "version_note": "事后探索（D103 → N40 (a)；E5 预注册 §8e）：由 configs/e5_train.json（e5-train-v3）派生，只把 training.min_steps.steps 从 1000 改为 4000；其余逐字段相同。只用于 RUN-0057（4K 档，E3b+C3 与 C3+预热，种子 0–2），不改 H5 的结论。"
+}
