@@ -632,6 +632,12 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 - 核对 15:38:37Z：e5-v2 pass True，v1 False，flags iou False、relief False，iou_grid 差 −0.00532，起伏误差差 +0.00896，相同 33 / 40。16:02:00Z 评测完成。
 - 17:02:00Z 心跳 `running base_warmup_n64000_s0`。
 
+### big_s0（06）：base_warmup_n64000_s0
+
+- 训练 10-20 03:39:57Z 完成（131,091 KB）。各段驱动墙钟：5581、5161、5162、5221、5131、5161、5191、5268 s。
+- n_runs 8，steps 8000，epochs 2，n_samples 128,000，selected_step 8000，final_loss 0.04112，wall_s 40,752，step 中位 5.051 s，peak_mem_bytes 各行最大 9,349,727,232，n_skipped 2。
+- **跳过核对**：(occlusion/train/6525, k 50822, step 3176)、(occlusion/train/6525, k 83617, step 5226)；id、k、step 与 reason 原文与 e3b_c3、c3_warmup 两个 64K 起点都相同（3 / 3 一致）。
+
 ### 07 的 E5 队列跑完
 
 - `2026-10-19T11:30:25Z 组 ad_s2 跑完`；`2026-10-19T11:30:25Z 队列跑完：完成 91 条，失败 14 条`（14 条是 v1 时的记录）；心跳 `2026-10-19T11:30:25Z done 0051-hpcgpu07`。之后 07 交给 RUN-0054（见 `reports/0054-hpc-07-r128.md`）。
