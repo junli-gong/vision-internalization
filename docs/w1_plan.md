@@ -49,9 +49,17 @@ class ChatTurnResult:
     wall_time_s: float
 
 class ModelAdapter:            # base.py 新增方法；Qwen3.5 实现
-    def chat_turn(self, messages, *, tools: Sequence[ToolSpec] | None,
-                  thinking_budget: int, answer_budget: int) -> ChatTurnResult: ...
+    def chat_turn_batch(self, conversations: Sequence[Sequence[dict]], *, tools: Sequence[Sequence[ToolSpec] | None],
+                        thinking_budget: int, answer_budget: int) -> list[ChatTurnResult]: ...
+    def chat_turn(self, messages, *, tools, thinking_budget, answer_budget) -> ChatTurnResult:   # = 批大小 1
+        ...
 ```
+
+- **按轮批量**：
+  - 吞吐是关键。9B 单条解码约每秒几十个 token，一条样本最多 6 轮 × 2,048 个思考 token，逐条跑开发-检查集要几十小时。
+  - 所以回路按轮同步：每一轮，所有还没结束的样本拼成一批，左填充，一次生成。
+  - 与 `generate_batch_budgeted` 相同，批内每行各自强制收尾。
+  - 批内结果与逐条跑的结果逐 token 相同（贪心；同 E1 的批一致性规则，D36-7）。
 
 - 开思考；思考段到 `thinking_budget` 就强制收尾，与 `generate_batch_budgeted` 的规则相同（budget.py）。
 - 贪心解码，确定。
@@ -105,7 +113,8 @@ class Protocol:          # configs/w1.json；在开发-调参集上定，跑 tes
     answer_budget: int = 1024
     disabled_groups: frozenset[str] = frozenset()
 
-def run_episode(adapter, sample, task: str, protocol: Protocol, prompts) -> "EpisodeRecord": ...
+def run_episodes(adapter, samples, task: str, protocol: Protocol, prompts, *, batch_size: int) -> list["EpisodeRecord"]: ...
+# 按轮同步：每轮把还没结束的样本拼成一批调 adapter.chat_turn_batch，再逐条执行工具调用、追加 tool 消息；结束的样本退出批
 ```
 
 - **任务**：
