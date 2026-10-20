@@ -643,6 +643,7 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 - 推送循环 0051h06：最后一轮 origin `eaabc1d2 [results] 0051h06: sync 2026-10-20T04:34:43Z`（含 base_warmup 64K 的评测与 done.txt、driver.log 的结尾），`sync_0051h06.status` `2026-10-20T04:34:52Z ok`；04:35:52Z 在 sleep 时、`flock -n git.lock` 下按 PID 停掉（1203347 与 sleep 2957504）。
 
 ### 07 的 E5 队列跑完
+- 推送循环 0051（07 的路径）：07 路径最后一次 origin 提交 `b5e4238b [results] 0051: sync 2026-10-19T12:01:30Z`；之后几轮没有新东西。10-20 05:08:20Z 一轮 `ok` 之后，05:09:38Z 在 sleep 时、`flock -n git.lock` 下按 PID 停掉（310182 与 sleep 3144739）。0054（2836160）、0055（2911629）两个循环照常。
 
 - `2026-10-19T11:30:25Z 组 ad_s2 跑完`；`2026-10-19T11:30:25Z 队列跑完：完成 91 条，失败 14 条`（14 条是 v1 时的记录）；心跳 `2026-10-19T11:30:25Z done 0051-hpcgpu07`。之后 07 交给 RUN-0054（见 `reports/0054-hpc-07-r128.md`）。
 
