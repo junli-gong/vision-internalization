@@ -1,0 +1,215 @@
+experiment: E3b
+framework: src/e3（DEV-0025）
+model:
+  key: qwen3.5-0.8b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-0.8B
+  revision: 2fc06364715b967f1860aea9cf38778875588b17
+  adapter_model_key: qwen3.5-0.8b
+  tiny: false
+  dtype: bf16
+image_policy: pixel_budget:300
+supervision: text
+variant: c3
+seed: 2
+training:
+  supervision: text
+  variant: c3
+  steps: 4000
+  micro_batch_size: 4
+  grad_accum_steps: 4
+  ckpt_every: 500
+  lora:
+    r: 128
+    alpha: 256
+    dropout: 0.05
+  optim:
+    optimizer: adamw
+    betas:
+    - 0.9
+    - 0.999
+    eps: 1.0e-08
+    lora:
+      lr: 0.0002
+      weight_decay: 0.0
+    token_rows:
+      lr: 0.0002
+      weight_decay: 0.0
+      mode: fp32_master_rows
+    max_grad_norm: 1.0
+    schedule: warmup_cosine
+    warmup_ratio: 0.03
+    min_lr_ratio: 0.0
+  loss_reduction: token_mean
+  gradient_checkpointing: true
+  enable_thinking: false
+  allowed_scope: task
+  mix:
+    refseg: 1
+    depth: 1
+  correction_fraction: null
+  data_workers: 4
+  batch_size: 16
+  warmup_steps: 120
+grid_size: 32
+tokens: null
+stop_id: 248046
+instructions:
+  refseg:
+    order: instruction_first
+    grid_template: Segment {expression} in the image. Output the {n}x{n} mask grid.
+    correction_template: 'Segment {expression} in the image. The second image is a
+      candidate result: a mask overlaid on the first image. Output the corrected complete
+      {n}x{n} mask grid.'
+  depth:
+    order: instruction_first
+    grid_instruction: Estimate the depth of the image. Output the {n}x{n} depth grid.
+    correction_instruction: 'Estimate the depth of the image. The second image is
+      a candidate result: a depth map overlaid on the first image. Output the corrected
+      complete {n}x{n} depth grid.'
+c3:
+  seg_kinds:
+    box: 1
+    polygon: 1
+  box_template_from:
+    config: configs/e1_prompts.json
+    task: refexp_box
+  box_format: adapter.format_boxes（本家族原生格式，label = 指代句；DEV-0030 §3）
+  box_basis: 'DEV-0030 §3（D56-3、D60-4）：正式运行前 C3 的框改用各家族原生的框格式加 E1 的定位提示，否则对比偏向 E3b（统一格式对零样本的模型是陌生格式）。目标
+    = adapter.format_boxes([GT 框], width, height, labels=[指代句])：Qwen 是 ```json 代码块里的
+    {"bbox_2d": [x1, y1, x2, y2], "label": …}，Gemma 是 {"box_2d": [y1, x1, y2, x2],
+    "label": …}，InternVL 是 <ref>…</ref><box>[[x1, y1, x2, y2]]</box>，都是 0–1000 的整数；label
+    写指代句，与三家族零样本实测的原生输出一致（model_notes §5.5、§6.5、§7.5 都回写了被指代的物体）。提示 = configs/e1_prompts.json
+    的 tasks.refexp_box.families.<家族>.template 原文（要求 native = true），按 E1 的规则渲染（format(expression=…).strip()）。往返：本家族的
+    parse_boxes 解析回来与 GT 框每个坐标差 ≤ W/2000、H/2000（tests 钉住）。DEV-0025 暂行的统一格式提示与 "[x0,
+    y0, x1, y1]" 目标已删除'
+  polygon_template_from:
+    config: configs/e1_prompts.json
+    task: refexp_poly
+  polygon_max_points: 64
+  depth_template: 'Which point of each pair is closer to the camera? Coordinates are
+    relative to the image size and range from 0 to 1000, with x first.
+
+    {pairs}'
+  depth_pair_line: '{i}. A [{ax}, {ay}], B [{bx}, {by}]'
+  depth_answer_line: '{i}. {closer} is closer'
+  depth_pairs_per_image: 5
+  chunk_size: 1024
+  polygon_template: 'Outline {expression} in the image with a polygon. Report the
+    polygon vertices in JSON format as a list of [x, y] points: [[x1, y1], [x2, y2],
+    ...]. Coordinates are relative to the image size and range from 0 to 1000, with
+    x first. Output only one JSON block.'
+  polygon_template_source:
+    config: configs/e1_prompts.json
+    task: refexp_poly
+    sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+    provenance: unified
+  box_template: Locate {expression} in the image. Report bbox coordinates in JSON
+    format.
+  box_template_source:
+    config: configs/e1_prompts.json
+    task: refexp_box
+    sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+    provenance: predecessor_cookbook
+    native: true
+    source_url: https://github.com/QwenLM/Qwen3-VL/blob/0dcc180d854f4b132f8059b10bbf0b5fd5dae9ed/cookbooks/2d_grounding.ipynb
+noise: null
+config:
+  path: configs/e3b_train_r128.json
+  sha256: b57409372188d236f68e657ccf026ebf6316119fcf27cc361d98c647ae928f02
+  version: e3b-train-v3-r128-posthoc
+data:
+  refseg:
+    pool:
+      set: refcoco_train/train
+      datasets:
+        refcoco:
+          set: refcoco_train/train
+          n_total: 107859
+          n_missing: 0
+          n_dedupe_excluded: 27
+          n_kept: 107832
+          dataset: refcoco
+        refcoco+:
+          set: refcoco_train/train
+          n_total: 107376
+          n_missing: 0
+          n_dedupe_excluded: 27
+          n_kept: 107349
+          dataset: refcoco+
+        refcocog:
+          set: refcoco_train/train
+          n_total: 72369
+          n_missing: 0
+          n_dedupe_excluded: 32
+          n_kept: 72337
+          dataset: refcocog
+      n_kept: 287518
+      n_empty_expression: 0
+    n: 287518
+    ids_sha256: 835f4f7940948432226da31d61a1fbf20ef3d56daa4019ccef2da1230fed5185
+    dedupe:
+      file_sha256: 40f214fb14315c990de811ef9d23172d6c36ea661e40a241ad46fc667f3c1838
+      schema: 2
+      legacy: false
+      max_hamming: 8
+      eval_sets:
+      - ade20k/val
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - coco_val2017_full/val2017
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyu_normals/test
+      - nyuv2/dev_train
+      - nyuv2/test
+      - odinw13/eval
+      - probe/D20
+      - refcoco/eval
+      required_eval_sets:
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyuv2/test
+      - odinw13/eval
+      - refcoco/eval
+  depth:
+    pool:
+      set: nyu_depth_train/train
+      n_total: 22848
+      n_missing: 0
+      n_dedupe_excluded: 132
+      n_kept: 22716
+    n: 22716
+    ids_sha256: ade362c2b310428ee01d18f4234c46a61c0753ecceb0f777f3e11437985ec96e
+    dedupe:
+      file_sha256: 40f214fb14315c990de811ef9d23172d6c36ea661e40a241ad46fc667f3c1838
+      schema: 2
+      legacy: false
+      max_hamming: 8
+      eval_sets:
+      - ade20k/val
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - coco_val2017_full/val2017
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyu_normals/test
+      - nyuv2/dev_train
+      - nyuv2/test
+      - odinw13/eval
+      - probe/D20
+      - refcoco/eval
+      required_eval_sets:
+      - blink_reldepth/val
+      - coco_val2017/e1sub500
+      - countbench/eval
+      - cvbench/test
+      - embspatial/test
+      - nyuv2/test
+      - odinw13/eval
+      - refcoco/eval
