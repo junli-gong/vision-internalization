@@ -637,6 +637,10 @@ ERROR tests/test_e5_merge_check_e5v2.py::test_structured_eval_identical_to_4bd7f
 - 训练 10-20 03:39:57Z 完成（131,091 KB）。各段驱动墙钟：5581、5161、5162、5221、5131、5161、5191、5268 s。
 - n_runs 8，steps 8000，epochs 2，n_samples 128,000，selected_step 8000，final_loss 0.04112，wall_s 40,752，step 中位 5.051 s，peak_mem_bytes 各行最大 9,349,727,232，n_skipped 2。
 - **跳过核对**：(occlusion/train/6525, k 50822, step 3176)、(occlusion/train/6525, k 83617, step 5226)；id、k、step 与 reason 原文与 e3b_c3、c3_warmup 两个 64K 起点都相同（3 / 3 一致）。
+- 核对 03:50:30Z：e5-v2 pass True，v1 True，flags iou False、relief False，iou_grid 差 −0.00015，起伏误差差 +0.00827，相同 33 / 40。04:14:15Z 评测完成。
+- **组 big_s0 04:14:15Z 跑完**：从 06 驱动开始（10-18 15:46:11Z）131,284 s（36.47 h）。3 个 64K 运行全部完成，没有被拒，06 `failed.txt` 空。
+- 06 驱动随后：`组 ad_s0 / ad_s1 / ad_s2 已跑完（hpcgpu07 …），跳过`；`2026-10-20T04:14:16Z 队列跑完：完成 6 条，失败 0 条`；心跳 `done 0051-hpcgpu06`。之后 06 交给 RUN-0055 第二部分。
+- 推送循环 0051h06：最后一轮 origin `eaabc1d2 [results] 0051h06: sync 2026-10-20T04:34:43Z`（含 base_warmup 64K 的评测与 done.txt、driver.log 的结尾），`sync_0051h06.status` `2026-10-20T04:34:52Z ok`；04:35:52Z 在 sleep 时、`flock -n git.lock` 下按 PID 停掉（1203347 与 sleep 2957504）。
 
 ### 07 的 E5 队列跑完
 
