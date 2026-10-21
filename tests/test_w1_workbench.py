@@ -3,6 +3,9 @@
 钉住：框、多边形、样条的光栅化与 src/executors/raster.py 的规则一致；贴边工具在明确的合成情形下给出预期的 mask；
 zoom 的覆盖范围与坐标换算；check 的叠加图与原图同尺寸；specs() 的 JSON Schema 合法、关掉的组不出现且调用报错；
 出错不抛异常；日志字段；同样的调用序列结果逐位相同；docs/w1_tools.md 列出每个工具。
+
+DEV-0054（视图坐标，view_frames）：关时 specs() 的 tools_digest 与改动前相同、行为不变；开时视图编号递增、按视图给的坐标与
+直接给换算后的原图坐标逐位同结果、整图视图的换算是恒等、未知编号与超过 MAX_VIEWS 报错、结果确定。
 """
 
 import json
@@ -475,8 +478,9 @@ def _check_schema(s: dict, path: str) -> None:
         assert len(s["enum"]) == len(set(s["enum"])) and s["enum"]
 
 
-def test_specs_are_valid_json_schema(scene):
-    _, _, wb = scene
+@pytest.mark.parametrize("view_frames", [False, True])
+def test_specs_are_valid_json_schema(view_frames):
+    wb = Workbench(Image.fromarray(_scene()[0]), view_frames=view_frames)
     specs = wb.specs()
     names = [s.name for s in specs]
     assert len(names) == len(set(names))
@@ -496,8 +500,9 @@ def test_specs_are_valid_json_schema(scene):
                 wbm._parse_value(json.dumps(v["default"]) if v["type"] != "string" else v["default"], wb._tools[s.name].properties[k], k)
 
 
-def test_tool_texts_are_task_agnostic(scene):
-    _, _, wb = scene
+@pytest.mark.parametrize("view_frames", [False, True])
+def test_tool_texts_are_task_agnostic(view_frames):
+    wb = Workbench(Image.fromarray(_scene()[0]), view_frames=view_frames)
     blob = json.dumps([[s.name, s.description, s.parameters] for s in wb.specs()]).lower()
     for word in ("refer", "referring", "segment the", "count the", "object described", "expression", "refcoco", "countbench"):
         assert word not in blob, word
@@ -640,5 +645,389 @@ def test_docs_list_every_tool_and_group():
     for const in ("ZOOM_LONG_SIDE", "GRABCUT_ITERATIONS", "SLIC_N_SEGMENTS", "SLIC_COMPACTNESS", "CANNY_LOW", "CANNY_HIGH",
                   "MORPH_RADIUS_DEFAULT", "POINT_RADIUS_DEFAULT", "SPLINE_SAMPLES_PER_SEGMENT", "SPLINE_ALPHA",
                   "GRABCUT_RNG_SEED", "SLIC_SIGMA", "REFINE_THRESHOLD", "CANNY_BLUR_KSIZE", "CANNY_BLUR_SIGMA",
-                  "STDOUT_LIMIT_CHARS", "DEFAULT_TIMEOUT_S", "DEFAULT_MEMORY_BYTES", "MAX_MASKS", "COMPONENTS_LIST_MAX"):
+                  "STDOUT_LIMIT_CHARS", "DEFAULT_TIMEOUT_S", "DEFAULT_MEMORY_BYTES", "MAX_MASKS", "COMPONENTS_LIST_MAX", "MAX_VIEWS"):
         assert const in found, const
+    # view_frames 开时多出来的 view 参数也要写进文档
+    for s in Workbench(Image.fromarray(img), view_frames=True).specs():
+        for p in s.parameters["properties"]:
+            assert f"`{p}`" in text, (s.name, p)
+
+
+# ---------------------------------------------------------------------------
+# 视图坐标（view_frames；DEV-0054）
+# ---------------------------------------------------------------------------
+
+# specs() 的 tools_digest（src/w1/loop.tools_digest）。关：与 DEV-0054 之前逐字节相同（改动前在 c697ad4e 上算得）；
+# 开：带坐标的 10 个工具各多一个 view 参数，坐标参数的说明涵盖视图。改了工具说明就要改这里，并同步 docs/w1_tools.md。
+DIGEST_VIEW_FRAMES_OFF = "dcc91402712dd16de304c385f64197d73a6a119b1dcaeb252fa3368b041f8a11"
+DIGEST_VIEW_FRAMES_ON = "0bdcaf73354329f7dad411d774d4eec2c32295fd2db7a81968ab3a9ddcf6e038"
+# 开时坐标参数的说明（给模型的原文，docs/w1_tools.md 第 9 节逐字照录）
+_VIEW_COORD_DESCRIPTIONS = {
+    "Left edge, 0-1000 (full image, or the view given by 'view').",
+    "Top edge, 0-1000 (full image, or the view given by 'view').",
+    "Right edge, 0-1000 (full image, or the view given by 'view').",
+    "Bottom edge, 0-1000 (full image, or the view given by 'view').",
+    "Points [[x, y], ...] in 0-1000 coordinates of the full image or of the view given by 'view'.",
+    "Vertices [[x, y], ...] in 0-1000 coordinates of the full image or of the view given by 'view', at least 3.",
+    "Points on the curve [[x, y], ...] in order, 0-1000 coordinates of the full image or of the view given by 'view', at least 3.",
+    "Initial box [x1, y1, x2, y2] in 0-1000 coordinates of the full image or of the view given by 'view'.",
+    "Points [[x, y], ...] in 0-1000 coordinates of the full image or of the view given by 'view'; the superpixel containing each point "
+    "is selected.",
+    "Optional region [x1, y1, x2, y2] in 0-1000 coordinates of the full image or of the view given by 'view'.",
+}
+_VIEW_TOOLS = {"zoom", "read_pixels", "draw_box", "draw_points", "draw_polygon", "draw_spline", "grabcut", "select_superpixels",
+               "show", "submit_box"}
+_IN_VIEW_NOTE = "Coordinates given in view {k}, converted to full-image 0-1000 coordinates. "
+_VIEW_PREFIX = re.compile(r"^(This is view \d+\. )+")
+
+
+def _wb(img=None, **kw) -> Workbench:
+    return Workbench(Image.fromarray(_scene()[0] if img is None else img), **kw)
+
+
+def _strip_view_ids(text: str) -> str:
+    return _VIEW_PREFIX.sub("", text)
+
+
+def test_view_frames_off_keeps_specs_digest():
+    from src.w1.loop import tools_digest
+
+    img, _ = _scene()
+    assert tools_digest(Workbench(Image.fromarray(img)).specs()) == DIGEST_VIEW_FRAMES_OFF
+    assert tools_digest(Workbench(Image.fromarray(img), view_frames=False).specs()) == DIGEST_VIEW_FRAMES_OFF
+    on = Workbench(Image.fromarray(img), view_frames=True)
+    assert tools_digest(on.specs()) == DIGEST_VIEW_FRAMES_ON
+    # 开时与关时的差别只有两处：带坐标的工具在参数表最后多一个 view；这些工具的坐标参数的说明涵盖视图。其余逐字节相同。
+    off_specs = {s.name: s for s in Workbench(Image.fromarray(img)).specs()}
+    assert [s.name for s in on.specs()] == list(off_specs)
+    coord_descs = set()
+    for s in on.specs():
+        props = dict(s.parameters["properties"])
+        off_props = off_specs[s.name].parameters["properties"]
+        if s.name in _VIEW_TOOLS:
+            assert list(props)[-1] == "view", s.name
+            assert props.pop("view") == {"type": "integer", "minimum": 0, "maximum": wbm.MAX_VIEWS - 1, "default": 0,
+                                         "description": wbm.VIEW_PARAM_DESCRIPTION}
+            for p, _ in on._tools[s.name].coords:
+                d_on, d_off = props[p]["description"], off_props[p]["description"]
+                assert d_on != d_off and "view given by 'view'" in d_on and "full image" in d_on, (s.name, p)
+                assert "full-image" not in d_on and "(full image)" not in d_on, (s.name, p)
+                coord_descs.add(d_on)
+                props[p] = {**props[p], "description": d_off}
+        assert s.description == off_specs[s.name].description
+        assert props == off_props, s.name
+        assert s.parameters["required"] == off_specs[s.name].parameters["required"]
+    assert coord_descs == _VIEW_COORD_DESCRIPTIONS
+    assert {s.name for s in on.specs() if "view" in s.parameters["properties"]} == _VIEW_TOOLS
+    # 共享的 schema 字典没有被开时的改写改动：之后新建的关时工作台说明不变
+    assert tools_digest(Workbench(Image.fromarray(img)).specs()) == DIGEST_VIEW_FRAMES_OFF
+
+
+def test_view_relative_rewrite_refuses_silent_no_op():
+    """开时改写坐标参数的说明：说明里没有"原图坐标"的提法就报错（以后改了说明，不会静默漏改）。"""
+    props = {"x": {"type": "number", "minimum": 0, "maximum": 1000, "description": "Some coordinate."}}
+    with pytest.raises(AssertionError):
+        wbm._view_relative(props, (("x", "x"),))
+    shared = {"type": "number", "description": "Left edge, 0-1000 (full image)."}
+    out = wbm._view_relative({"x1": shared}, (("x1", "x"),))
+    assert out["x1"]["description"] == "Left edge, 0-1000 (full image, or the view given by 'view')."
+    assert shared["description"] == "Left edge, 0-1000 (full image)."  # 共享的 schema 字典不被改动
+
+
+def test_view_tools_are_exactly_the_tools_with_coordinates():
+    """每个取值为 0–1000 坐标的参数都声明在 coords 里（view_frames 开时随 view 换算），没有漏的；返回图的工具都标了 emits_image。"""
+    wb = _wb(view_frames=True)
+    for name, t in wb._tools.items():
+        declared = {p for p, _ in t.coords}
+        for p, schema in t.properties.items():
+            inner = schema
+            while inner["type"] == "array":
+                inner = inner["items"]
+            is_coord = inner["type"] == "number" and inner.get("minimum") == 0 and inner.get("maximum") == 1000
+            assert is_coord == (p in declared), (name, p)
+        assert bool(t.coords) == (name in _VIEW_TOOLS), name
+        assert t.emits_image == (name in _IMAGE_VIEW_TOOLS | _MASK_OVERLAY_TOOLS), name
+
+
+def test_view_frames_constructor():
+    img, _ = _scene()
+    wb = Workbench(Image.fromarray(img), disabled_groups=frozenset(), view_frames=True)  # DEV-0053 的透传方式
+    assert wb.view_frames is True and wb.views == (wbm.FULL_VIEW,)
+    assert Workbench(Image.fromarray(img)).view_frames is False
+    with pytest.raises(ValueError):
+        Workbench(Image.fromarray(img), view_frames="yes")
+    # 关时 view 是多余的参数，与改动前的报错相同
+    r = Workbench(Image.fromarray(img)).call("draw_box", {"name": "b", "x1": "0", "y1": "0", "x2": "5", "y2": "5", "view": "0"})
+    assert r.error and "unexpected parameter(s) ['view']" in r.error
+
+
+def _run_seq(seq, *, view_frames: bool, perturb_rng: bool = False, img=None):
+    wb = _wb(img, view_frames=view_frames)
+    outs = []
+    for name, args in seq:
+        if perturb_rng:
+            cv2.setRNGSeed(12345)
+            cv2.randu(np.zeros((10, 10), np.float32), 0, 1)
+        r = wb.call(name, args)
+        outs.append((r.text, r.error, [np.asarray(im).tobytes() for im in r.images]))
+    log = wb.log()
+    for e in log:
+        e.pop("wall_time_s")
+        if e["sandbox"]:
+            e["sandbox"].pop("wall_time_s")
+    s = wb.submission
+    sub = (s.kind, s.mask.tobytes() if s.mask is not None else None, s.box, s.count) if s else None
+    return wb, outs, {k: v.tobytes() for k, v in wb.masks.items()}, sub, log
+
+
+def test_view_frames_on_without_view_only_adds_view_ids():
+    """开着、但不用 view 参数：图、mask、提交与关时逐位相同；文字只在最前面多了 "This is view k."；日志只多 view / views 两个键。"""
+    _, a_out, a_masks, a_sub, a_log = _run_seq(_SEQUENCE, view_frames=False)
+    wb, b_out, b_masks, b_sub, b_log = _run_seq(_SEQUENCE, view_frames=True)
+    assert a_masks == b_masks and a_sub == b_sub
+    k = 0
+    for (name, _), (ta, ea, ia), (tb, eb, ib) in zip(_SEQUENCE, a_out, b_out):
+        assert ea is None and eb is None and ia == ib, name
+        assert not ta.startswith("This is view")
+        if ib:
+            k += 1
+            assert tb == f"This is view {k}. " + ta, name
+        else:
+            assert tb == ta, name
+    assert len(wb.views) == k + 1 and k == 6
+    for ea, eb in zip(a_log, b_log):
+        assert set(eb) - set(ea) == {"view", "views"} and eb["view"] is None
+        assert {x: y for x, y in eb.items() if x not in ("view", "views")} == ea
+
+
+def test_view_numbering_and_regions():
+    wb = _wb(view_frames=True)
+    r = _ok(wb.call("tile_view", {"rows": "2", "cols": "2"}))
+    assert r.text.startswith("This is view 1. The 128x96 image")
+    r = _ok(wb.call("zoom", {"x1": "250", "y1": "250", "x2": "750", "y2": "750"}))
+    assert r.text.startswith("This is view 2. Zoomed view") and "x = 250 + u*500" in r.text  # 原来的换算式保留
+    _ok(wb.call("draw_box", {"name": "m", "x1": "100", "y1": "100", "x2": "600", "y2": "600"}))  # 不返回图：不登记
+    assert len(wb.views) == 3
+    assert wb.call("zoom", {"x1": "600", "y1": "0", "x2": "500", "y2": "500"}).error  # 出错：不登记、不占编号
+    assert wb.call("show", {"name": "ghost"}).error
+    r = _ok(wb.call("edges", {}))
+    assert r.text.startswith("This is view 3. Canny")
+    r = _ok(wb.call("superpixels", {"n_segments": "20"}))
+    assert r.text.startswith("This is view 4. SLIC")
+    r = _ok(wb.call("show", {"name": "m"}))
+    assert r.text.startswith("This is view 5. Mask 'm' overlaid")
+    r = _ok(wb.call("show", {"name": "m", "region": "[251, 0, 500, 1000]"}))  # 向外取整：实际覆盖 x 250..500
+    assert r.text.startswith("This is view 6. Mask 'm' overlaid") and "x = 250..500, y = 0..1000" in r.text
+    full = wbm.FULL_VIEW
+    assert wb.views == (full, full, (250.0, 250.0, 750.0, 750.0), full, full, full, (250.0, 0.0, 500.0, 1000.0))
+    # 日志：每次调用登记的视图与用了哪个 view
+    log = wb.log()
+    assert [e["views"] for e in log] == [
+        [{"view": 1, "region": list(full)}], [{"view": 2, "region": [250.0, 250.0, 750.0, 750.0]}], [], [], [],
+        [{"view": 3, "region": list(full)}], [{"view": 4, "region": list(full)}], [{"view": 5, "region": list(full)}],
+        [{"view": 6, "region": [250.0, 0.0, 500.0, 1000.0]}]]
+    assert all(e["view"] is None for e in log)
+    # 视图上的嵌套 zoom：登记的是换回原图之后实际覆盖的区域
+    r = _ok(wb.call("zoom", {"x1": "0", "y1": "0", "x2": "500", "y2": "500", "view": "2"}))
+    assert r.text.startswith("This is view 7. " + _IN_VIEW_NOTE.format(k=2) + "Zoomed view")
+    assert "x = 250..500, y = 250..500" in r.text and wb.views[7] == (250.0, 250.0, 500.0, 500.0)
+    assert wb.log()[-1]["view"] == 2 and wb.log()[-1]["views"] == [{"view": 7, "region": [250.0, 250.0, 500.0, 500.0]}]
+
+
+# 每个带坐标的工具：按视图 1 给的参数，与换算成原图 0–1000 之后的同一组参数。视图 1 = zoom [250, 250, 750, 750]（128x96 上恰好覆盖
+# 列 32..95、行 24..71，区域无舍入），比例 0.5：x_full = 250 + x/2，换算没有浮点误差，两边的结果必须逐位相同。
+_VIEW_CALLS = {
+    "zoom": ({"x1": "200", "y1": "100", "x2": "600", "y2": "900"}, {"x1": "350", "y1": "300", "x2": "550", "y2": "700"}),
+    "read_pixels": ({"points": "[[100, 200], [900, 800], [437.5, 500]]", "radius": "1"},
+                    {"points": "[[300, 350], [700, 650], [468.75, 500]]", "radius": "1"}),
+    "draw_box": ({"name": "n", "x1": "123", "y1": "201", "x2": "655", "y2": "777"},
+                 {"name": "n", "x1": "311.5", "y1": "350.5", "x2": "577.5", "y2": "638.5"}),
+    "draw_points": ({"name": "n", "points": "[[100, 200], [900, 800], [440, 520]]", "labels": "[1, 1, 0]", "radius": "4"},
+                    {"name": "n", "points": "[[300, 350], [700, 650], [470, 510]]", "labels": "[1, 1, 0]", "radius": "4"}),
+    "draw_polygon": ({"name": "n", "points": "[[100, 100], [900, 200], [500, 900]]"},
+                     {"name": "n", "points": "[[300, 300], [700, 350], [500, 700]]"}),
+    "draw_spline": ({"name": "n", "points": "[[440, 40], [780, 500], [440, 960], [100, 500]]"},
+                    {"name": "n", "points": "[[470, 270], [640, 500], [470, 730], [300, 500]]"}),
+    "grabcut": ({"out": "g", "box": "[100, 100, 900, 900]"}, {"out": "g", "box": "[300, 300, 700, 700]"}),
+    "select_superpixels": ({"name": "s", "points": "[[100, 200], [437.5, 500]]"}, {"name": "s", "points": "[[300, 350], [468.75, 500]]"}),
+    "show": ({"name": "m", "region": "[0, 0, 1000, 1000]"}, {"name": "m", "region": "[250, 250, 750, 750]"}),
+    "submit_box": ({"x1": "200", "y1": "100", "x2": "600", "y2": "900"}, {"x1": "350", "y1": "300", "x2": "550", "y2": "700"}),
+}
+
+
+@pytest.mark.parametrize("tool", sorted(_VIEW_CALLS))
+def test_view_coordinates_match_full_image_coordinates(tool):
+    """zoom 一块区域，再用 view = 1 调用：与直接用换算后的原图坐标调用（开、关两种工作台）逐位同结果；文字只多一句说明。"""
+    assert set(_VIEW_CALLS) == _VIEW_TOOLS
+    img, disk = _scene()
+    in_view, in_full = _VIEW_CALLS[tool]
+
+    def run(view_frames, args):
+        wb = Workbench(Image.fromarray(img), view_frames=view_frames)
+        wb._set_mask("m", disk)
+        _ok(wb.call("zoom", {"x1": "250", "y1": "250", "x2": "750", "y2": "750"}))
+        if tool == "select_superpixels":
+            _ok(wb.call("superpixels", {"n_segments": "30"}))
+        r = _ok(wb.call(tool, args))
+        s = wb.submission
+        return (r, {k: v.tobytes() for k, v in wb.masks.items()}, [np.asarray(im).tobytes() for im in r.images],
+                (s.kind, s.box) if s else None, wb)
+
+    a, a_masks, a_imgs, a_sub, wb_a = run(True, {**in_view, "view": "1"})
+    b, b_masks, b_imgs, b_sub, wb_b = run(True, in_full)
+    c, c_masks, c_imgs, c_sub, _ = run(False, in_full)
+    assert wb_a.views[1] == (250.0, 250.0, 750.0, 750.0)
+    assert a_masks == b_masks == c_masks and a_imgs == b_imgs == c_imgs and a_sub == b_sub == c_sub
+    note = _IN_VIEW_NOTE.format(k=1)
+    assert note in a.text and a.text.replace(note, "", 1) == b.text  # 回显的坐标是原图 0–1000，与直接给原图坐标时相同
+    assert _strip_view_ids(b.text) == c.text
+    assert wb_a.log()[-1]["view"] == 1 and wb_b.log()[-1]["view"] is None
+    assert wb_a.views == wb_b.views
+    if tool == "read_pixels":
+        assert "RGB (220.0, 50.0, 40.0)" in a.text.splitlines()[-1]  # 视图 1 里的 (437.5, 500) 是红圆的圆心
+
+
+def test_view_frame_matches_what_the_zoomed_image_shows():
+    """语义核对（区域不是二进小数，换算有浮点舍入）：视图 [0, 0, 1000, 1000] 的框正好是这次 zoom 显示的那些原图像素；
+    按 view 给的比例位置 (u, v) 读到的原图像素，正是视图里同一比例位置所对应的那个原图像素。"""
+    img, _ = _scene()
+    wb = _wb(img, view_frames=True)
+    r = _ok(wb.call("zoom", {"x1": "100", "y1": "100", "x2": "333", "y2": "666"}))
+    assert "columns 12..42, rows 9..63" in r.text
+    _ok(wb.call("draw_box", {"name": "all", "x1": "0", "y1": "0", "x2": "1000", "y2": "1000", "view": "1"}))
+    exp = np.zeros((H, W), bool)
+    exp[9:64, 12:43] = True
+    assert np.array_equal(wb.masks["all"], exp)
+    for u, v in [(0.5, 0.5), (0.1, 0.9), (0.95, 0.05), (0.0, 0.0), (0.999, 0.999)]:
+        rp = _ok(wb.call("read_pixels", {"points": json.dumps([[u * 1000, v * 1000]]), "view": "1"}))
+        m = re.search(r"pixel \(col (\d+), row (\d+)\)", rp.text)
+        c, rr = int(m.group(1)), int(m.group(2))
+        # 视图覆盖 31 列 × 55 行：比例位置 u 落在窗口的第 floor(u·31) 列，行同理
+        assert c == 12 + int(u * 31) and rr == 9 + int(v * 55), (u, v, c, rr)
+
+
+def test_full_image_views_are_identity():
+    """覆盖整图的视图（原图 = 视图 0、tile_view、edges、superpixels、不带 region 的 show）：换算逐位是恒等。"""
+    rng = np.random.default_rng(7)
+    xs = np.concatenate([[0.0, 1000.0, 0.1, 999.9, 123.456789, 1 / 3, 2 / 3 * 1000], rng.uniform(0, 1000, 200)])
+    for x, y in zip(xs, xs[::-1]):
+        assert wbm.view_point_to_full(wbm.FULL_VIEW, x, y) == (float(x), float(y))
+    img, disk = _scene()
+    wb = _wb(img, view_frames=True)
+    wb._set_mask("m", disk)
+    for name, args in [("tile_view", {"rows": "2", "cols": "3"}), ("edges", {}), ("superpixels", {"n_segments": "20"}),
+                       ("show", {"name": "m"})]:
+        _ok(wb.call(name, args))
+    assert wb.views[1:] == (wbm.FULL_VIEW,) * 4
+    calls = [("draw_box", {"name": "b", "x1": "123.4", "y1": "201.7", "x2": "654.321", "y2": "777.7"}),
+             ("draw_points", {"name": "p", "points": "[[333.3, 666.7], [10.01, 990.99]]", "radius": "3.5"}),
+             ("draw_polygon", {"name": "q", "points": "[[100.1, 120.2], [800.8, 90.9], [650.65, 700.7], [300.3, 930.93]]"}),
+             ("read_pixels", {"points": "[[468.7, 499.9], [0, 0], [1000, 1000]]"}),
+             ("zoom", {"x1": "251.1", "y1": "3.3", "x2": "500.5", "y2": "999.9"})]
+    for k in range(5):
+        for name, args in calls:
+            if name.startswith("draw_"):
+                args = {**args, "name": f"{args['name']}{k}"}  # 每次都是新 mask（文字里是 "Created"）
+            ref = _wb(img, view_frames=True)
+            want = _ok(ref.call(name, args))
+            got = _ok(wb.call(name, {**args, "view": str(k)}))
+            assert [np.asarray(i).tobytes() for i in got.images] == [np.asarray(i).tobytes() for i in want.images], (k, name)
+            if name.startswith("draw_"):
+                assert np.array_equal(wb.masks[args["name"]], ref.masks[args["name"]]), (k, name)
+            note = _IN_VIEW_NOTE.format(k=k) if k else ""
+            assert _strip_view_ids(got.text) == note + _strip_view_ids(want.text), (k, name)
+
+
+def test_view_point_to_full_stays_inside_the_view():
+    rng = np.random.default_rng(11)
+    for _ in range(500):
+        a, b = np.sort(rng.uniform(0, 1000, 2))
+        c, d = np.sort(rng.uniform(0, 1000, 2))
+        region = (float(a), float(c), float(b), float(d))
+        for x, y in [(0.0, 0.0), (1000.0, 1000.0), tuple(rng.uniform(0, 1000, 2))]:
+            fx, fy = wbm.view_point_to_full(region, x, y)
+            assert a <= fx <= b and c <= fy <= d
+            assert abs(fx - (a + x / 1000 * (b - a))) < 1e-9 and abs(fy - (c + y / 1000 * (d - c))) < 1e-9  # 任务书的式子
+
+
+def test_unknown_view_is_an_error_not_an_exception():
+    wb = _wb(view_frames=True)
+    r = wb.call("draw_box", {"name": "b", "x1": "0", "y1": "0", "x2": "5", "y2": "5", "view": "1"})
+    assert r.error == "unknown view 1 (existing views: 0; 0 = the original image)" and r.text == "Error: " + r.error
+    assert "b" not in wb.masks
+    _ok(wb.call("zoom", {"x1": "0", "y1": "0", "x2": "500", "y2": "500"}))
+    for v, needle in [("2", "unknown view 2 (existing views: 0..1;"), (str(wbm.MAX_VIEWS), "out of range [0, 63]"),
+                      ("-1", "out of range"), ("1.5", "must be an integer"), ("one", "must be an integer")]:
+        r = wb.call("read_pixels", {"points": "[[1, 2]]", "view": v})
+        assert r.error is not None and needle in r.error, (v, r.error)
+        assert r.text.startswith("Error: ") and r.images == []
+        assert wb.log()[-1]["ok"] is False and wb.log()[-1]["views"] == []
+    # 视图坐标仍按 0–1000 校验（在视图坐标里校验）
+    r = wb.call("draw_box", {"name": "b", "x1": "0", "y1": "0", "x2": "1001", "y2": "5", "view": "1"})
+    assert r.error and "out of range" in r.error
+    # 换算之后的报错注明坐标已换算（报错里的坐标是原图 0–1000）
+    r = wb.call("draw_box", {"name": "b", "x1": "600", "y1": "0", "x2": "500", "y2": "5", "view": "1"})
+    assert r.error.startswith("box must satisfy x1 < x2 and y1 < y2; got (300, 0, 250, 2.5)"), r.error
+    assert r.error.endswith("(coordinates were converted from view 1 to full-image 0-1000 coordinates)")
+    assert len(wb.views) == 2
+
+
+def test_max_views():
+    img, disk = _scene()
+    wb = _wb(img, view_frames=True)
+    wb._set_mask("m", disk)
+    for k in range(1, wbm.MAX_VIEWS):
+        r = _ok(wb.call("tile_view", {"rows": "1", "cols": "1"}))
+        assert r.text.startswith(f"This is view {k}. ")
+    assert len(wb.views) == wbm.MAX_VIEWS
+    for name, args in [("zoom", {"x1": "0", "y1": "0", "x2": "500", "y2": "500"}), ("tile_view", {"rows": "1", "cols": "1"}),
+                       ("edges", {"out": "e"}), ("superpixels", {}), ("show", {"name": "m"})]:
+        r = wb.call(name, args)
+        assert r.error and r.error.startswith(f"too many views (limit {wbm.MAX_VIEWS}"), name
+    assert "e" not in wb.masks and wb._superpixels is None  # 在执行之前拦住：没有写了一半的状态
+    assert len(wb.views) == wbm.MAX_VIEWS
+    # 不返回图的工具照常可用，也能按最后一个视图给坐标
+    _ok(wb.call("draw_box", {"name": "b", "x1": "0", "y1": "0", "x2": "500", "y2": "500", "view": str(wbm.MAX_VIEWS - 1)}))
+
+
+_VIEW_SEQUENCE = [
+    ("zoom", {"x1": "200", "y1": "100", "x2": "800", "y2": "900"}),
+    ("zoom", {"x1": "300", "y1": "250", "x2": "700", "y2": "750", "view": "1"}),
+    ("read_pixels", {"points": "[[470, 500], [10, 10]]", "radius": "2", "view": "2"}),
+    ("draw_box", {"name": "box", "x1": "250", "y1": "200", "x2": "700", "y2": "800", "view": "1"}),
+    ("grabcut", {"out": "g", "box": "[100, 50, 900, 950]", "view": "2"}),
+    ("draw_points", {"name": "seed", "points": "[[500, 500]]", "radius": "2", "view": "2"}),
+    ("watershed", {"out": "w", "fg": "seed"}),
+    ("superpixels", {"n_segments": "30"}),
+    ("select_superpixels", {"name": "s", "points": "[[470, 500]]", "view": "3"}),
+    ("draw_polygon", {"name": "p", "points": "[[100, 100], [900, 150], [500, 950]]", "view": "2"}),
+    ("draw_spline", {"name": "sp", "points": "[[470, 270], [640, 500], [470, 730], [300, 500]]", "view": "1"}),
+    ("zoom", {"x1": "0", "y1": "0", "x2": "500", "y2": "500", "view": "9"}),
+    ("show", {"name": "g", "region": "[0, 0, 1000, 1000]", "view": "2"}),
+    ("submit_box", {"x1": "100", "y1": "50", "x2": "900", "y2": "950", "view": "2"}),
+    ("submit_mask", {"name": "g"}),
+]
+
+
+def test_view_frames_are_deterministic():
+    a = _run_seq(_VIEW_SEQUENCE, view_frames=True)
+    b = _run_seq(_VIEW_SEQUENCE, view_frames=True, perturb_rng=True)
+    assert a[0].views == b[0].views and len(a[0].views) == 5
+    assert a[1:] == b[1:]  # 文字、报错、图、mask、提交、日志逐位相同
+    errs = [o[1] for o in a[1]]
+    assert "unknown view 9" in errs[11] and all(e is None for i, e in enumerate(errs) if i != 11)
+    assert [e["view"] for e in a[4]] == [None, 1, 2, 1, 2, 2, None, None, 3, 2, 1, None, 2, 2, None]
+
+
+def test_docs_describe_view_frames():
+    text = DOCS.read_text(encoding="utf-8")
+    assert "视图坐标（`view_frames`，默认关" in text
+    assert "`MAX_VIEWS` = 64" in text  # 数值由 test_docs_list_every_tool_and_group 与代码核对
+    assert wbm.VIEW_PARAM_DESCRIPTION in text  # 给模型的原文逐字照录
+    for d in _VIEW_COORD_DESCRIPTIONS:
+        assert d in text, d
+    assert DIGEST_VIEW_FRAMES_OFF in text and DIGEST_VIEW_FRAMES_ON in text
+    assert "This is view k." in text and _IN_VIEW_NOTE.format(k="k").strip() in text
+    assert "(coordinates were converted from view k to full-image 0-1000 coordinates)" in text
+    for name in _VIEW_TOOLS:
+        assert f"`{name}`" in text

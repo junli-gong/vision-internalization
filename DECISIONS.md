@@ -2602,3 +2602,24 @@
 4. **测试**：
    - 开发 agent 跑全量：3211 passed、20 skipped，0 失败。
    - 管理员在主分支上复跑 W1 的回路、配置、开关、契约、命令行测试：108 passed、1 skipped。跳过的那项要等 DEV-0054 合入才生效。
+
+## D109（2026-10-21，管理员）：DEV-0054 合入，W1 工作台的视图坐标（`view_frames`，默认关）
+
+依据：RUN-0060 的诊断（W1 预注册 §10b 的 T4）；任务书 `prompts/dev/0054-w1-view-frames.md`。
+
+1. **合入**：`src/w1/workbench.py`、`docs/w1_tools.md` 第 9 节、`tests/test_w1_workbench.py`。
+   - 关时：specs、文字、图、mask、日志都与改动前逐位相同，`tools_digest` 仍是 `dcc91402…`。
+   - 开时：
+     - 每张返回的图登记为视图 k，文字以 "This is view k." 开头；
+     - 10 个带坐标的工具多一个可选参数 `view`；
+     - 坐标参数的说明改写成同时涵盖视图的说法（管理员审查时要求补的）；
+     - `tools_digest` 是 `0bdcaf73…`。
+2. **对任务书的偏离**，全部接受：
+   - `watershed` 不带 `view`，它的种子是 mask 名，没有坐标；
+   - 换算先算比例，所以整图视图逐位恒等，换算结果夹到视图区域内；
+   - `MAX_VIEWS = 64` 含视图 0；
+   - 假工作台不动。
+3. **系统提示里"每个工具都用原图坐标"一句与 `view` 参数矛盾**：T4 臂的配置把坐标段整段改写，见 `scripts/mgr/make_w1_tune_configs.py` 与 W1 预注册 §10b 的补记。
+4. **测试**：
+   - 开发 agent：全量 1 failed、3189 passed。唯一的失败是 D106 里待查的 `test_e3_c3_warmup`，单独重跑通过，与本改动无关。补改之后重跑 W1 测试，347 passed。
+   - 管理员在主分支上，两项都合入之后跑 W1 的全部测试与 `test_adapter_chat.py`：393 passed，0 skipped。DEV-0053 那项要等本项合入的测试已生效。

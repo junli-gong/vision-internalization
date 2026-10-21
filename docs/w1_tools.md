@@ -15,6 +15,7 @@
   - 所有坐标都是整张原图的 0–1000 相对坐标，x 在前，与 Qwen 的原生框格式一致。
   - 换算成绝对像素：x_abs = x / 1000 · W，y_abs = y / 1000 · H，一律走 `src/executors/geometry.norm1000_to_abs`。
   - 放大视图里看到的位置也要换回原图坐标，`zoom` 与 `show` 的文字给出换算式。
+  - 开了 `view_frames`（默认关）时，带坐标的工具还可以按某张返回的视图自己的 0–1000 给坐标，由工作台换回原图坐标，见第 9 节。
   - 长度（半径）以原图像素计。原图尺寸写在每条 mask 统计里（"of the W x H image"）。
 - **mask**：
   - 原图分辨率的二值数组，按名字存放。名字由字母、数字、`_`、`-` 组成，字母开头，至多 32 个字符；同时至多 `MAX_MASKS` = 32 个。
@@ -455,7 +456,97 @@
 
 - **返回**：文字。`Workbench.submission.count` = n。
 
-## 9. 没做的与已知的问题
+## 9. 视图坐标（`view_frames`，默认关；DEV-0054）
+
+- **用途**（RUN-0060 冒烟的诊断）：
+  - 模型先放大一块区域再给框时，常把放大窗口的边界或整百的数当成框，或者把放大图里看到的位置按换算式换回原图时算错。
+  - Qwen 的原生坐标是"所看那张图的 0–1000"。开了这个开关，模型可以直接按放大图自己的 0–1000 给坐标，由工作台换回原图。
+  - 这是工作台的通用功能，与任务无关：所有带坐标的工具都适用。
+- **开关**：`Workbench(image, *, disabled_groups=…, sandbox=…, view_frames=False)`。回路经 `configs/w1.json` 的 `workbench.view_frames` 透传（DEV-0053）。
+  - **关（默认）**：`specs()`、所有返回的文字、图、mask、日志都与没有这个开关时逐位相同；传 `view` 参数按"多余的参数"报错。
+    `specs()` 的 `tools_digest` = `dcc91402712dd16de304c385f64197d73a6a119b1dcaeb252fa3368b041f8a11`，与改动前相同（测试钉住）。
+  - **开**：`tools_digest` = `0bdcaf73354329f7dad411d774d4eec2c32295fd2db7a81968ab3a9ddcf6e038`（测试钉住）。与关时只有两处差别：
+    - 下面 10 个工具的参数表最后多一个 `view`；
+    - 这 10 个工具的坐标参数，说明里"原图坐标"的提法改成同时涵盖视图的说法（管理员审查 DEV-0054 时定），原文见本节末。
+      例如 "Left edge, 0-1000 (full image)." 改为 "Left edge, 0-1000 (full image, or the view given by 'view')."。
+    - 工具说明本身、其余参数的说明不变。
+- **视图编号**：
+  - 视图 0 是原图本身，即第一条 user 消息里的图。
+  - 每次成功的调用返回的每一张图都登记成一个新视图，编号从 1 起递增，不复用。登记的是这张图覆盖的原图区域，用原图 0–1000 的 `[x1, y1, x2, y2]` 表示：
+    - `zoom`、带 `region` 的 `show`：像素窗口向外取整之后实际覆盖的区域，即文字里 "The view covers ..." 的那个范围（存的是不舍入的浮点值）；
+    - `tile_view`、`edges`、`superpixels`、不带 `region` 的 `show`：与原图同尺寸，区域是 `[0, 0, 1000, 1000]`。
+  - 返回文字的**最前面**写 "This is view k."（工具消息里文字在图之前）。
+  - 出错的调用不返回图，也不登记视图、不占编号。
+  - 至多 `MAX_VIEWS` = 64 个视图，编号 0–63，含视图 0。
+    - 登记满之后，返回图的工具在执行之前就报错，不留下写了一半的状态（例如 `edges` 的 `out`）；其余工具照常可用。
+    - 回路里计数的工具调用至多 8 次，正常碰不到这个上限。
+- **`view` 参数**：
+  - 带坐标参数的 10 个工具多一个可选的整数参数 `view`（0–63，默认 0），放在参数表最后：
+
+    | 工具 | 随 `view` 换算的参数 |
+    |---|---|
+    | `zoom` | `x1`、`y1`、`x2`、`y2` |
+    | `read_pixels` | `points` |
+    | `draw_box` | `x1`、`y1`、`x2`、`y2` |
+    | `draw_points` | `points` |
+    | `draw_polygon` | `points` |
+    | `draw_spline` | `points` |
+    | `grabcut` | `box` |
+    | `select_superpixels` | `points` |
+    | `show` | `region` |
+    | `submit_box` | `x1`、`y1`、`x2`、`y2` |
+
+  - 其余工具没有坐标参数，也就没有 `view`。其中 `watershed` 的种子是 mask 名，不是点或框。
+    测试核对：参数表里每个取值为 0–1000 的数（或这种数的数组）都在上表里，没有漏的。
+  - **换算**：给了 `view` = k，这次调用里的所有坐标都按视图 k 自己的 0–1000 读（x 在前），先换成原图 0–1000，再照常走 `norm1000_to_abs` 与工具原来的算法：
+    - x_full = vx1 + x · ((vx2 − vx1) / 1000)，y_full = vy1 + y · ((vy2 − vy1) / 1000)。[vx1, vy1, vx2, vy2] 是视图 k 登记的区域。
+    - 这与 x_full = vx1 + x / 1000 · (vx2 − vx1) 是同一个式子，只是先算比例：覆盖整图的视图比例恰为 1.0，换算逐位是恒等（测试钉住）。
+    - 结果夹到 [vx1, vx2] 与 [vy1, vy2]，只去掉浮点误差。
+    - 函数是 `src.w1.workbench.view_point_to_full(region, x, y)`。工具本身的算法与固定参数一处不改。
+    - `zoom` 裁出整像素窗口后用 `cv2.resize` 缩放，resize 按像素边缘对齐整个窗口，所以视图里的比例位置正对应覆盖区域里的同一比例位置。
+  - **校验**：
+    - 坐标仍按 0–1000 校验，在视图坐标里校验；
+    - `view` 不是已有的编号时报错，返回错误文字，不抛异常。
+  - 长度类参数（`read_pixels` 与 `draw_points` 的 `radius`）不受影响，仍以原图像素计。
+- **返回文字**：
+  - 坐标一律是原图 0–1000，与关时相同。例如 `read_pixels` 回显的点、`grabcut` 与 `submit_box` 回显的框，都是换算之后的原图坐标。
+  - 给了非 0 的 `view` 时，文字前面加一句 "Coordinates given in view k, converted to full-image 0-1000 coordinates."；返回图的工具放在 "This is view m." 之后。
+  - 出错时报错末尾加 " (coordinates were converted from view k to full-image 0-1000 coordinates)"，因为报错里的坐标已经换算过。
+  - `zoom` 与 `show` 原来文字里的换算式保留。
+- **日志**（`Workbench.log()`，只在开时多两个键，关时与改动前相同）：
+  - `view`：这次调用的坐标按哪个视图读，没给 `view` 时为 null；
+  - `views`：这次调用登记的视图，`[{"view": k, "region": [x1, y1, x2, y2]}]`，出错时为空。
+  - `Workbench.views` 是到目前为止登记的全部区域。
+- **确定性**：同样的调用序列，文字、图、mask、日志逐位相同（测试钉住，中途打乱 OpenCV 的全局随机数也一样）。
+- **给模型的原文**（逐字照录）：
+  - `view` 参数：`{"type": "integer", "minimum": 0, "maximum": 63, "default": 0, "description": …}`，说明是：
+    Optional id of an earlier view (0 = the original image); if given, all coordinates in this call are 0-1000 relative to that view.
+  - 坐标参数的说明（只在开时；关时是第 3–8 节表里的原文）。改写规则只有两条，在 `src/w1/workbench.py` 的 `_VIEW_DESC_REWRITES`：
+    "0-1000 (full image)" → "0-1000 (full image, or the view given by 'view')"；
+    "0-1000 full-image coordinates" → "0-1000 coordinates of the full image or of the view given by 'view'"。
+    哪个坐标参数的说明里没有这两种提法，构造工作台时就报错，不会静默漏改。改写后的全部说明：
+
+    | 参数 | 所在工具 | 开时的说明 |
+    |---|---|---|
+    | `x1` | `zoom`、`draw_box`、`submit_box` | Left edge, 0-1000 (full image, or the view given by 'view'). |
+    | `y1` | 同上 | Top edge, 0-1000 (full image, or the view given by 'view'). |
+    | `x2` | 同上 | Right edge, 0-1000 (full image, or the view given by 'view'). |
+    | `y2` | 同上 | Bottom edge, 0-1000 (full image, or the view given by 'view'). |
+    | `points` | `read_pixels`、`draw_points` | Points [[x, y], ...] in 0-1000 coordinates of the full image or of the view given by 'view'. |
+    | `points` | `draw_polygon` | Vertices [[x, y], ...] in 0-1000 coordinates of the full image or of the view given by 'view', at least 3. |
+    | `points` | `draw_spline` | Points on the curve [[x, y], ...] in order, 0-1000 coordinates of the full image or of the view given by 'view', at least 3. |
+    | `box` | `grabcut` | Initial box [x1, y1, x2, y2] in 0-1000 coordinates of the full image or of the view given by 'view'. |
+    | `points` | `select_superpixels` | Points [[x, y], ...] in 0-1000 coordinates of the full image or of the view given by 'view'; the superpixel containing each point is selected. |
+    | `region` | `show` | Optional region [x1, y1, x2, y2] in 0-1000 coordinates of the full image or of the view given by 'view'. |
+
+  - 返回图的调用，文字最前面：This is view k.
+  - 给了非 0 的 `view`：Coordinates given in view k, converted to full-image 0-1000 coordinates.
+  - 报错：
+    - unknown view k (existing views: 0..n; 0 = the original image)（只有视图 0 时写 "existing views: 0"）
+    - too many views (limit 64, ids 0..63); this tool returns an image and no view id is left
+    - 换算之后的其他报错，末尾加：(coordinates were converted from view k to full-image 0-1000 coordinates)
+
+## 10. 没做的与已知的问题
 
 - **参数固定的 CRF：没做。** 任务书要求不装任何 CRF 库。
   - 负责人说的"参数固定的 CRF"通常指 DeepLab 式的全连接 CRF（Krähenbühl & Koltun 2011）。

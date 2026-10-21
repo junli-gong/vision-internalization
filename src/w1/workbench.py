@@ -17,6 +17,10 @@
 - 图像（管理员裁定，DEV-0050 审查）：把 mask 叠回原图属于"核对"，只有 check 组的 show 做。hand 组与 snap 组的
   其余工具只返回文字（mask 的面积、占比、0–1000 外接框）；返回图的只有 eye 组（原图的视图）与 snap 组里
   两个"看图本身"的视图：edges（边缘图）与 superpixels（带编号的分割图，选编号要用）。这样 A2（去掉 check）是干净的。
+- 视图坐标（view_frames，默认关；DEV-0054，RUN-0060 的诊断）：开了之后，每张返回的图登记为视图 k（原图 = 视图 0，
+  之后 1、2……），记下它覆盖的原图区域（0–1000），返回文字最前面写 "This is view k."；带坐标的工具多一个可选整数参数 view，
+  给了就把这次调用里的所有坐标按那张视图自己的 0–1000 读，换回原图 0–1000 再执行（view_point_to_full）。返回文字里的坐标
+  仍是原图 0–1000。关着时 specs()、文字、图、mask、日志都与改动前逐位相同（测试钉住 tools_digest）。
 
 禁止项（D103）：任何学习型视觉模型或预训练权重，OpenCV 的 DNN 模块。这里只用 numpy、scipy、OpenCV 与
 scikit-image 里不含学习的函数，且只用 OpenCV 4.10 与 5.x 都有的 API。
@@ -29,7 +33,7 @@ import json
 import math
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
 
@@ -94,6 +98,12 @@ COMPONENTS_LIST_MAX = 20
 COUNT_MAX = 10000
 LUMA_WEIGHTS = (0.299, 0.587, 0.114)  # 亮度系数：ITU-R 标清电视的 luma 定义，与 OpenCV 的 COLOR_RGB2GRAY 相同
 CODE_RESULT_DEFAULT = "code_result"
+# 视图坐标（view_frames 开时）：视图编号 0..MAX_VIEWS-1，0 是原图本身；登记满了之后再返回图的调用报错，不复用编号。
+MAX_VIEWS = 64
+FULL_VIEW = (0.0, 0.0, NORM1000_SCALE, NORM1000_SCALE)  # 覆盖整张原图的视图区域（原图 0–1000）：原图、tile_view、edges、superpixels、不带 region 的 show
+VIEW_PARAM_DESCRIPTION = (
+    "Optional id of an earlier view (0 = the original image); if given, all coordinates in this call are 0-1000 relative to that view."
+)
 # 绘制：网格线、编号、超像素边界的颜色（RGB）与 Hershey 字体（OpenCV 自带的矢量字体，不依赖 FreeType，跨机器一致）
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 _WHITE = (255, 255, 255)
@@ -261,6 +271,18 @@ def _fmt(v: float) -> str:
     return s[:-2] if s.endswith(".0") else s
 
 
+def view_point_to_full(region: Sequence[float], x: float, y: float) -> tuple[float, float]:
+    """视图坐标 → 原图坐标（都是 0–1000，x 在前）。region = 视图覆盖的原图区域 (vx1, vy1, vx2, vy2)。
+
+    x_full = vx1 + x · ((vx2 − vx1) / 1000)，y 同理；与 x_full = vx1 + x / 1000 · (vx2 − vx1) 是同一个式子，只是先算比例：
+    覆盖整图的视图比例恰为 1.0，换算逐位是恒等。结果夹到 [vx1, vx2]、[vy1, vy2]（只去掉浮点误差，视图坐标已按 0–1000 校验）。
+    """
+    vx1, vy1, vx2, vy2 = (float(v) for v in region)
+    fx = min(max(vx1 + float(x) * ((vx2 - vx1) / NORM1000_SCALE), vx1), vx2)
+    fy = min(max(vy1 + float(y) * ((vy2 - vy1) / NORM1000_SCALE), vy1), vy2)
+    return fx, fy
+
+
 def _jsonable(v):
     if isinstance(v, (str, int, float, bool)) or v is None:
         return v
@@ -317,6 +339,37 @@ _REGION = {
     "maxItems": 4,
     "description": "Optional region [x1, y1, x2, y2] in 0-1000 full-image coordinates.",
 }
+
+# 坐标参数（view_frames 开时按视图换算）：参数名 → 种类。x / y：单个坐标；points：[[x, y], ...]；box：[x1, y1, x2, y2]。
+_C_BOX = (("x1", "x"), ("y1", "y"), ("x2", "x"), ("y2", "y"))
+_C_POINTS = (("points", "points"),)
+COORD_KINDS = ("x", "y", "points", "box")
+
+
+def _p_view() -> dict:
+    return {"type": "integer", "minimum": 0, "maximum": MAX_VIEWS - 1, "default": 0, "description": VIEW_PARAM_DESCRIPTION}
+
+
+# view_frames 开时，坐标参数说明里"原图坐标"的提法改成同时涵盖视图的说法（管理员审查 DEV-0054 第 4 条）；关时说明一字不变。
+_VIEW_DESC_REWRITES = (
+    ("0-1000 (full image)", "0-1000 (full image, or the view given by 'view')"),
+    ("0-1000 full-image coordinates", "0-1000 coordinates of the full image or of the view given by 'view'"),
+)
+
+
+def _view_relative(properties: dict, coords: Sequence[tuple[str, str]]) -> dict:
+    """返回 properties 的副本：coords 里每个参数的说明按 _VIEW_DESC_REWRITES 改写（共享的 schema 字典不被改动）。
+    某个坐标参数的说明里没有可改写的提法就报错，免得以后改了说明、这里静默失效。"""
+    out = dict(properties)
+    for pname, _ in coords:
+        desc = properties[pname]["description"]
+        new = desc
+        for old, rep in _VIEW_DESC_REWRITES:
+            new = new.replace(old, rep)
+        if new == desc:
+            raise AssertionError(f"坐标参数 {pname!r} 的说明里没有可改写的原图坐标提法：{desc!r}")
+        out[pname] = {**properties[pname], "description": new}
+    return out
 
 
 def _parse_value(value: Any, schema: dict, pname: str, raw: bool = False) -> Any:
@@ -400,6 +453,8 @@ class _Tool:
     required: tuple[str, ...]
     handler: Callable[..., "ToolResult"]
     raw_params: frozenset[str] = frozenset()
+    coords: tuple[tuple[str, str], ...] = ()  # 坐标参数（参数名, 种类 ∈ COORD_KINDS）；非空的工具在 view_frames 开时多一个 view 参数
+    emits_image: bool = False  # 成功时返回一张图（view_frames 开时登记为新视图）
 
     def spec(self) -> ToolSpec:
         params = {"type": "object", "properties": self.properties, "required": list(self.required), "additionalProperties": False}
@@ -421,12 +476,21 @@ def _strip_internal(v):
 
 
 class Workbench:
-    """一条样本一个实例。image 是原图（PIL，任何模式都先转 RGB）。"""
+    """一条样本一个实例。image 是原图（PIL，任何模式都先转 RGB）。
 
-    def __init__(self, image: Image.Image, *, disabled_groups: frozenset[str] = frozenset(), sandbox: SandboxConfig | None = None):
+    view_frames（默认关）：开了之后每张返回的图登记为一个视图，带坐标的工具可以按某张视图自己的 0–1000 给坐标（见模块说明与
+    docs/w1_tools.md 的"视图坐标"一节）。关着时行为与没有这个参数时逐位相同。
+    """
+
+    def __init__(self, image: Image.Image, *, disabled_groups: frozenset[str] = frozenset(), sandbox: SandboxConfig | None = None,
+                 view_frames: bool = False):
         bad = set(disabled_groups) - set(GROUPS)
         if bad:
             raise ValueError(f"未知的工具组 {sorted(bad)}；可选 {GROUPS}")
+        if not isinstance(view_frames, bool):
+            raise ValueError(f"view_frames 必须是 bool，收到 {view_frames!r}")
+        self._view_frames = view_frames
+        self._views: list[tuple[float, float, float, float]] = [FULL_VIEW]  # 视图 k → 覆盖的原图区域（0–1000）；0 是原图
         rgb = np.array(image.convert("RGB"), dtype=np.uint8)
         rgb.setflags(write=False)
         self._rgb = rgb
@@ -467,9 +531,17 @@ class Workbench:
                 raise ToolError("arguments must be an object of named parameters")
             if tool.name == "run_python" and isinstance(arguments.get("code"), str):
                 self._cur["code"] = arguments["code"]
-            result = tool.handler(**self._parse_args(tool, arguments))
+            kwargs = self._parse_args(tool, arguments)
+            if self._view_frames:
+                kwargs = self._from_view(tool, kwargs)
+            result = tool.handler(**kwargs)
+            if self._view_frames:
+                result = self._commit_views(result)
         except ToolError as e:
-            result = ToolResult(text=f"Error: {e}", images=[], error=str(e))
+            msg = str(e)
+            if self._cur["view"]:  # 报错里的坐标已换成原图 0–1000
+                msg += f" (coordinates were converted from view {self._cur['view']} to full-image 0-1000 coordinates)"
+            result = ToolResult(text=f"Error: {msg}", images=[], error=msg)
         except Exception as e:  # noqa: BLE001 —— 工具内部的意外错误也不抛出，日志里标 internal_error
             internal = True
             msg = f"internal error in tool '{name}': {type(e).__name__}: {e}"
@@ -485,6 +557,11 @@ class Workbench:
             sandbox=self._cur["sandbox"],
             submission=self._submission_summary() if tool is not None and tool.group == "submit" and result.error is None else None,
         )
+        if self._view_frames:  # 只在开时加这两个键：关着时日志与改动前逐位相同
+            entry.update(
+                view=self._cur["view"],  # 这次调用的坐标按哪个视图读（没给 view 参数时为 None）
+                views=[{"view": k, "region": list(reg)} for k, reg in self._cur["views"]] if result.error is None else [],
+            )
         self._log.append(entry)
         return result
 
@@ -512,11 +589,62 @@ class Workbench:
         """原图 (W, H)。"""
         return self._w, self._h
 
+    @property
+    def view_frames(self) -> bool:
+        return self._view_frames
+
+    @property
+    def views(self) -> tuple[tuple[float, float, float, float], ...]:
+        """登记的视图：编号 k → 它覆盖的原图区域 (x1, y1, x2, y2)，原图 0–1000。0 是原图本身；view_frames 关时只有视图 0。"""
+        return tuple(self._views)
+
     # ---- 内部：参数、状态、显示 --------------------------------------------
 
     @staticmethod
     def _fresh_call_record() -> dict:
-        return {"masks_written": {}, "images": [], "code": None, "sandbox": None}
+        # view：这次调用的坐标按哪个视图读（给了 view 参数才有）；views：这次调用登记的新视图 [(编号, 区域)]，成功后才并入 self._views
+        return {"masks_written": {}, "images": [], "code": None, "sandbox": None, "view": None, "views": []}
+
+    def _from_view(self, tool: _Tool, kwargs: dict) -> dict:
+        """view_frames 开时：有 view 参数就把这次调用的所有坐标参数从那张视图的 0–1000 换成原图 0–1000（参数已按 0–1000 校验过）；
+        返回图的工具在视图登记满时报错（在执行之前，不留下写了一半的 mask）。"""
+        if "view" in kwargs:
+            v = kwargs.pop("view")
+            if not 0 <= v < len(self._views):
+                have = "0" if len(self._views) == 1 else f"0..{len(self._views) - 1}"
+                raise ToolError(f"unknown view {v} (existing views: {have}; 0 = the original image)")
+            region = self._views[v]
+            for pname, kind in tool.coords:
+                val = kwargs.get(pname)
+                if val is None:
+                    continue
+                if kind == "x":
+                    kwargs[pname] = view_point_to_full(region, val, 0.0)[0]
+                elif kind == "y":
+                    kwargs[pname] = view_point_to_full(region, 0.0, val)[1]
+                elif kind == "points":
+                    kwargs[pname] = [list(view_point_to_full(region, x, y)) for x, y in val]
+                elif kind == "box":
+                    kwargs[pname] = [*view_point_to_full(region, val[0], val[1]), *view_point_to_full(region, val[2], val[3])]
+                else:
+                    raise AssertionError(f"未知的坐标种类 {kind!r}")
+            self._cur["view"] = v
+        if tool.emits_image and len(self._views) >= MAX_VIEWS:
+            raise ToolError(f"too many views (limit {MAX_VIEWS}, ids 0..{MAX_VIEWS - 1}); this tool returns an image and no view id is left")
+        return kwargs
+
+    def _commit_views(self, result: ToolResult) -> ToolResult:
+        """成功的调用：把这次返回的图登记为视图，文字最前面写 "This is view k."；给了非 0 的 view 时再写一句坐标从哪个视图换算。"""
+        if result.error is not None:
+            return result
+        assert len(self._cur["views"]) == len(result.images), (self._cur["views"], len(result.images))
+        notes = [f"This is view {k}." for k, _ in self._cur["views"]]
+        if self._cur["view"]:
+            notes.append(f"Coordinates given in view {self._cur['view']}, converted to full-image 0-1000 coordinates.")
+        self._views.extend(reg for _, reg in self._cur["views"])
+        if not notes:
+            return result
+        return ToolResult(text=" ".join(notes) + " " + result.text, images=result.images, error=None)
 
     def _parse_args(self, tool: _Tool, arguments: Mapping[str, Any]) -> dict:
         unknown = sorted(set(arguments) - set(tool.properties))
@@ -561,7 +689,9 @@ class Workbench:
         self._masks[name] = a
         self._cur["masks_written"][name] = int(a.sum())
 
-    def _emit(self, arr: np.ndarray) -> Image.Image:
+    def _emit(self, arr: np.ndarray, region: Sequence[float] = FULL_VIEW) -> Image.Image:
+        """登记一张返回给模型的图。region：这张图覆盖的原图区域（0–1000）；与原图同尺寸的图是整图 FULL_VIEW。
+        view_frames 开时把 (视图编号, 区域) 记进这次调用，调用成功后由 _commit_views 登记。"""
         a = np.ascontiguousarray(arr, dtype=np.uint8)
         img = Image.fromarray(a)
         iid = f"view{len(self._images)}"
@@ -569,6 +699,11 @@ class Workbench:
         self._cur["images"].append(
             {"id": iid, "width": img.size[0], "height": img.size[1], "sha256": hashlib.sha256(a.tobytes()).hexdigest()}
         )
+        if self._view_frames:
+            k = len(self._views) + len(self._cur["views"])
+            if k >= MAX_VIEWS:  # _from_view 已在执行前拦住；这里是兜底
+                raise ToolError(f"too many views (limit {MAX_VIEWS}, ids 0..{MAX_VIEWS - 1})")
+            self._cur["views"].append((k, tuple(float(v) for v in region)))
         return img
 
     def _mask_stats(self, name: str) -> str:
@@ -602,8 +737,9 @@ class Workbench:
         self._set_mask(name, res)
         return f"{verb} mask '{name}'. " + self._mask_stats(name)
 
-    def _crop_view(self, arr: np.ndarray, region) -> tuple[np.ndarray, str]:
-        """按 0–1000 区域裁剪并缩放到 ZOOM_LONG_SIDE，返回 (视图, 覆盖范围说明)。"""
+    def _crop_view(self, arr: np.ndarray, region) -> tuple[np.ndarray, str, tuple[float, float, float, float]]:
+        """按 0–1000 区域裁剪并缩放到 ZOOM_LONG_SIDE，返回 (视图, 覆盖范围说明, 实际覆盖的原图区域 0–1000)。
+        视图的比例位置 (u, v) 正对应覆盖区域里的同一比例位置（cv2.resize 按像素边缘对齐整个裁剪窗口）。"""
         c0, r0, c1, r1 = self._region_px(*region)
         view = _resize_long_side(arr[r0:r1, c0:c1], ZOOM_LONG_SIDE)
         vx0, vy0 = self._px_to_norm(c0, r0)
@@ -615,7 +751,7 @@ class Workbench:
             f"shown at {vw}x{vh} px ({vw / (c1 - c0):.2f}x). A point at fraction (u, v) of the view (0-1 each, from the "
             f"top-left) is at x = {_fmt(vx0)} + u*{_fmt(vx1 - vx0)}, y = {_fmt(vy0)} + v*{_fmt(vy1 - vy0)} in full-image coordinates."
         )
-        return view, text
+        return view, text, (vx0, vy0, vx1, vy1)
 
     def _submission_summary(self) -> dict | None:
         s = self._submission
@@ -651,8 +787,8 @@ class Workbench:
     # ---- eye ----------------------------------------------------------------
 
     def _t_zoom(self, x1, y1, x2, y2) -> ToolResult:
-        view, cover = self._crop_view(self._rgb, (x1, y1, x2, y2))
-        return ToolResult(text="Zoomed view of the original image. " + cover, images=[self._emit(view)])
+        view, cover, covered = self._crop_view(self._rgb, (x1, y1, x2, y2))
+        return ToolResult(text="Zoomed view of the original image. " + cover, images=[self._emit(view, covered)])
 
     def _t_read_pixels(self, points, radius=0) -> ToolResult:
         pts = self._norm_to_abs(np.asarray(points, dtype=np.float64).reshape(-1, 2).ravel()).reshape(-1, 2)
@@ -933,10 +1069,11 @@ class Workbench:
         ov = render_overlay(np.asarray(self._rgb), [self._mask(name)])
         alpha = OVERLAY_ALPHA_NUM / OVERLAY_ALPHA_DEN
         text = f"Mask '{name}' overlaid on the original image (fill alpha {alpha:g}, outline {OVERLAY_CONTOUR_WIDTH} px). "
+        covered = FULL_VIEW
         if region is not None:
-            ov, cover = self._crop_view(ov, region)
+            ov, cover, covered = self._crop_view(ov, region)
             text += cover + " "
-        return ToolResult(text=text + self._mask_stats(name), images=[self._emit(ov)])
+        return ToolResult(text=text + self._mask_stats(name), images=[self._emit(ov, covered)])
 
     # ---- code ---------------------------------------------------------------
 
@@ -981,19 +1118,19 @@ class Workbench:
         tools = [
             # eye
             T("zoom", "eye", f"Return an enlarged view of a rectangular region of the original image (long side {ZOOM_LONG_SIDE} px); the text gives the exact region covered.",
-              dict(_BOX_PARAMS), ("x1", "y1", "x2", "y2"), self._t_zoom),
+              dict(_BOX_PARAMS), ("x1", "y1", "x2", "y2"), self._t_zoom, coords=_C_BOX, emits_image=True),
             T("read_pixels", "eye", "Read the RGB values and luminance of the original image at given points, optionally averaged over a square window.",
               {"points": _p_points("Points [[x, y], ...] in 0-1000 full-image coordinates."),
                "radius": {"type": "integer", "minimum": 0, "maximum": READ_PIXELS_MAX_RADIUS, "default": 0,
                           "description": "Half-size of the square window in pixels (0 = the single pixel)."}},
-              ("points",), self._t_read_pixels),
+              ("points",), self._t_read_pixels, coords=_C_POINTS),
             T("tile_view", "eye", "Return the original image divided into a grid of numbered cells; the text lists each cell's coordinate range.",
               {"rows": {"type": "integer", "minimum": 1, "maximum": TILE_MAX, "description": "Number of rows."},
                "cols": {"type": "integer", "minimum": 1, "maximum": TILE_MAX, "description": "Number of columns."}},
-              ("rows", "cols"), self._t_tile_view),
+              ("rows", "cols"), self._t_tile_view, emits_image=True),
             # hand
             T("draw_box", "hand", "Rasterize an axis-aligned box into a named mask.",
-              {"name": name_new, **_BOX_PARAMS, "mode": _p_mode()}, ("name", "x1", "y1", "x2", "y2"), self._t_draw_box),
+              {"name": name_new, **_BOX_PARAMS, "mode": _p_mode()}, ("name", "x1", "y1", "x2", "y2"), self._t_draw_box, coords=_C_BOX),
             T("draw_points", "hand", "Paint discs at points into a named mask: positive points (label 1) add discs, negative points (label 0) erase discs.",
               {"name": name_new, "points": _p_points("Points [[x, y], ...] in 0-1000 full-image coordinates."),
                "labels": {"type": "array", "items": {"type": "integer", "enum": [0, 1]}, "maxItems": MAX_POINTS,
@@ -1001,15 +1138,15 @@ class Workbench:
                "radius": {"type": "number", "minimum": 0, "maximum": POINT_RADIUS_MAX, "default": POINT_RADIUS_DEFAULT,
                           "description": "Disc radius in pixels of the original image."},
                "mode": _p_mode()},
-              ("name", "points"), self._t_draw_points),
+              ("name", "points"), self._t_draw_points, coords=_C_POINTS),
             T("draw_polygon", "hand", "Rasterize a polygon (vertices in order) into a named mask.",
               {"name": name_new, "points": _p_points("Vertices [[x, y], ...] in 0-1000 full-image coordinates, at least 3.", 3),
                "mode": _p_mode()},
-              ("name", "points"), self._t_draw_polygon),
+              ("name", "points"), self._t_draw_polygon, coords=_C_POINTS),
             T("draw_spline", "hand", "Rasterize a closed smooth curve through the given points (centripetal Catmull-Rom spline) into a named mask.",
               {"name": name_new, "points": _p_points("Points on the curve [[x, y], ...] in order, 0-1000 full-image coordinates, at least 3.", 3),
                "mode": _p_mode()},
-              ("name", "points"), self._t_draw_spline),
+              ("name", "points"), self._t_draw_spline, coords=_C_POINTS),
             T("combine_masks", "hand", "Combine mask 'other' into mask 'name' (new = copy, union, subtract or intersect).",
               {"name": name_new, "other": name_in, **{"mode": {**_p_mode(), "default": "union"}}},
               ("name", "other"), self._t_combine_masks),
@@ -1019,7 +1156,7 @@ class Workbench:
               {"low": {"type": "number", "minimum": 0, "maximum": CANNY_THRESHOLD_MAX, "default": CANNY_LOW, "description": "Lower hysteresis threshold."},
                "high": {"type": "number", "minimum": 0, "maximum": CANNY_THRESHOLD_MAX, "default": CANNY_HIGH, "description": "Upper hysteresis threshold."},
                "out": _p_name("Optional name of a mask to save the edge pixels to.")},
-              (), self._t_edges),
+              (), self._t_edges, emits_image=True),
             T("grabcut", "snap",
               "Segment with GrabCut (color models plus graph cuts), initialized from a box (outside = background) or from an existing mask "
               f"(inside = probable foreground; outside it but within its bounding box enlarged by {GRABCUT_MASK_MARGIN:.0%} per side = probable "
@@ -1032,7 +1169,7 @@ class Workbench:
                "bg": _p_name("Optional mask of pixels that must be background."),
                "iterations": {"type": "integer", "minimum": 1, "maximum": GRABCUT_MAX_ITERATIONS, "default": GRABCUT_ITERATIONS,
                               "description": "Number of iterations."}},
-              ("out",), self._t_grabcut),
+              ("out",), self._t_grabcut, coords=(("box", "box"),)),
             T("watershed", "snap", "Marker-based watershed on the color gradient of the original image: grows foreground seeds against background seeds and writes the foreground region.",
               {"out": _p_name("Name of the mask to write."),
                "fg": _p_name("Mask of foreground seed pixels."),
@@ -1043,13 +1180,13 @@ class Workbench:
                               "description": "Approximate number of superpixels."},
                "compactness": {"type": "number", "minimum": 0.01, "maximum": 100, "default": SLIC_COMPACTNESS,
                                "description": "Higher = more regular shapes, lower = follows color more closely."}},
-              (), self._t_superpixels),
+              (), self._t_superpixels, emits_image=True),
             T("select_superpixels", "snap", "Write the union of chosen superpixels (from the latest superpixels call) into a named mask, chosen by id and/or by points inside them.",
               {"name": name_new,
                "ids": {"type": "array", "items": {"type": "integer", "minimum": 1}, "maxItems": SLIC_MAX_SEGMENTS, "description": "Superpixel ids."},
                "points": _p_points("Points [[x, y], ...] in 0-1000 full-image coordinates; the superpixel containing each point is selected."),
                "mode": _p_mode()},
-              ("name",), self._t_select_superpixels),
+              ("name",), self._t_select_superpixels, coords=_C_POINTS),
             T("refine", "snap", "Snap a mask's boundary to image edges: guided filter of the mask with the original color image as guide, then threshold.",
               {"name": name_in, "out": out_opt,
                "radius": {"type": "integer", "minimum": 1, "maximum": REFINE_MAX_RADIUS, "default": REFINE_RADIUS, "description": "Filter radius in pixels."},
@@ -1070,7 +1207,7 @@ class Workbench:
               ("name",), self._t_components),
             # check
             T("show", "check", "Return the original image with a named mask overlaid (fill and outline), optionally zoomed to a region, with the mask's area, box and number of components.",
-              {"name": name_in, "region": dict(_REGION)}, ("name",), self._t_show),
+              {"name": name_in, "region": dict(_REGION)}, ("name",), self._t_show, coords=(("region", "box"),), emits_image=True),
             # code
             T("run_python", "code",
               "Run Python code in a sandbox with numpy, scipy, cv2, skimage, math, itertools, collections, functools, json, re and statistics "
@@ -1082,10 +1219,16 @@ class Workbench:
               ("code",), self._t_run_python, raw_params=frozenset({"code"})),
             # submit
             T("submit_mask", "submit", "Submit a named mask as the final answer.", {"name": name_in}, ("name",), self._t_submit_mask),
-            T("submit_box", "submit", "Submit a box as the final answer.", dict(_BOX_PARAMS), ("x1", "y1", "x2", "y2"), self._t_submit_box),
+            T("submit_box", "submit", "Submit a box as the final answer.", dict(_BOX_PARAMS), ("x1", "y1", "x2", "y2"), self._t_submit_box,
+              coords=_C_BOX),
             T("submit_count", "submit", "Submit a non-negative integer as the final answer.",
               {"n": {"type": "integer", "minimum": 0, "maximum": COUNT_MAX, "description": "The count."}}, ("n",), self._t_submit_count),
         ]
         order = {g: i for i, g in enumerate(GROUPS)}
         assert all(t.group in order for t in tools)
+        for t in tools:  # 坐标参数的声明与 schema 一致：都是已有参数、种类合法；view 只由下面加
+            assert "view" not in t.properties and all(p in t.properties and k in COORD_KINDS for p, k in t.coords), t.name
+        if self._view_frames:  # 带坐标的工具：坐标参数的说明涵盖视图，参数表最后多一个可选的 view；关着时 specs() 与改动前逐字节相同
+            tools = [replace(t, properties={**_view_relative(t.properties, t.coords), "view": _p_view()}) if t.coords else t
+                     for t in tools]
         return sorted(tools, key=lambda t: order[t.group])  # sorted 是稳定的：组内保持定义顺序
