@@ -168,3 +168,32 @@ FAILED tests/test_w1_sandbox.py::test_results_are_deterministic - AssertionEr...
 4 failed, 211 passed, 15 warnings in 241.96s (0:04:01)
 srun: error: hpcgpu06: task 0: Exited with exit code 1
 ```
+
+## rerun（管理员 10-21：同一任务书、同一命令，origin/main bdf0b3cd，含沙箱修复 eaa9cc5e）
+
+- 经 `$VI/tmp/run0059b.sh`，输出 `$VI/logs/run0059b.txt`、`$VI/logs/pytest0059b.txt`。08:57:58Z squeue 两条 RUNNING。
+- 临时工作树 wt0059：fetch、`worktree add --no-checkout --detach … origin/main`、`sparse-checkout set`、`read-tree -mu HEAD` 都 rc=0。
+- **commit：`bdf0b3cdaac3cbd9294fdad14f57913841d79d4f`**；status 空；包含 eaa9cc5e 与 bdf0b3cd：是。
+- pytest：08:58:07Z – 09:01:17Z，**pytest_rc=0**。
+- 之后删了 `$VI/tmp/pt_0059`；`git worktree remove` rc=0；09:01:19Z squeue 两条 RUNNING。
+- pytest 输出原文（共 16 行，全贴）：
+
+```
+........................................................................ [ 30%]
+........................................................................ [ 61%]
+........................................................................ [ 92%]
+..................                                                       [100%]
+=============================== warnings summary ===============================
+tests/test_adapter_chat.py::test_turn_fields[natural]
+  /home/mail/chenyuma/visint/env/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+    _cpu_device_warning()
+
+tests/test_adapter_chat.py: 14 warnings
+  /home/mail/chenyuma/visint/env/lib/python3.12/site-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+234 passed, 15 warnings in 187.07s (0:03:07)
+```
+
+- 测试数从首跑的 215（4 failed + 211 passed）变为 234，全部通过。
