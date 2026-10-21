@@ -40,6 +40,10 @@
 - DEV-0027：generate_batch_budgeted（预算强制收尾，公共实现在 src/adapters/budget.py；本家族的思考段开头 <think> 在助手头里，
   强制收尾补 `</think>` + THINK_SEPARATOR）；pre_projection_features（merger 之前的 patch 网格，重排成行主序）；format_boxes
   （parse_boxes 的逆）；end_of_turn_token_id / stop_token_ids。
+- DEV-0049（W1，docs/w1_plan.md §1）：多轮对话 chat_turn_batch / chat_turn（数据结构与解析在 src/adapters/chat.py）。整条对话用本家族的
+  对话模板渲染（原生的 tools 段、<tool_call>、role="tool" 的 <tool_response>，开思考、加生成提示），图像（含 tool 消息里的图）与
+  build_inputs 同一套处理（_prepare_images、_encode_images、_image_infos），占位符展开后整段分词（与官方处理器相同）；M-RoPE 位置
+  逐行与 get_rope_index 核对（没有填充也核对）；生成走 generate_batch_budgeted 的同一个循环（_budget_loop）与同一套记账（_budget_result）。
 
 处理器的用法：本适配器只用处理器的三个部件——tokenizer、image_processor、chat_template——自己完成图像占位符的
 展开与 mm_token_type_ids，做法与 `ProcessorMixin.__call__` 相同。原因：开发机没有 torchvision，
@@ -51,6 +55,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import json
 import math
 import types
 from typing import Any, Callable, Iterable, Iterator, Sequence
@@ -60,8 +65,9 @@ import torch
 from PIL import Image
 from transformers import LogitsProcessor
 
-from src.adapters import batching, registry
-from src.adapters.budget import BudgetSupport
+from src.adapters import batching, chat, registry
+from src.adapters.budget import BudgetSupport, check_budget, check_greedy_generation_config
+from src.adapters.chat import ChatInputs, ChatMessageError, ChatTurnResult, ToolSpec
 from src.adapters.image_policy import QWEN_PIXELS_PER_TOKEN, FixedSize, PixelBudget
 from src.adapters.checkpoint import CheckpointSupport, TokenRestoreError, base_fingerprint
 from src.adapters.training import TrainingSupport, cumsum_positions, scatter_rows
@@ -851,10 +857,7 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
         self._check_instruction(instruction)
         if isinstance(images, (Image.Image, np.ndarray)):
             raise TypeError("images 必须是图像的序列（单张图也要放进列表）")
-        if isinstance(self._policy, FixedSize):
-            pil = [self.resize_image(im) for im in images]
-        else:
-            pil = [self.to_rgb(im) for im in images]
+        pil = self._prepare_images(images)
         n_img = len(pil)
 
         # 1. 渲染：指令槽先放哨兵，确认模板对指令原样输出（Qwen 模板会 trim 整段内容）
@@ -871,26 +874,8 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
             raise RuntimeError(f"渲染没有以 {IM_END!r}+换行 结束")
 
         # 2. 图像：min_pixels = max_pixels 显式传入；逐张核对网格（固定尺寸：处理器不再缩放；像素预算：= smart_resize）
-        tensors: dict[str, torch.Tensor] = {}
-        n_tok_per_image: list[int] = []
-        llm_grids: list[tuple[int, int]] = []
-        n_pixels: list[int] = []
-        if n_img:
-            px = self.processor_pixels()
-            enc = self._ip(images=pil, min_pixels=px, max_pixels=px, return_tensors="pt")
-            grid = enc["image_grid_thw"]
-            p, merge = int(self._ip.patch_size), int(self._ip.merge_size)
-            want = torch.tensor([[1, *self.expected_grid((im.height, im.width))] for im in pil], dtype=grid.dtype)
-            if not torch.equal(grid, want):
-                raise RuntimeError(f"image_grid_thw={grid.tolist()}，期望 {want.tolist()}（{self._policy!r}）：处理器没有按给定的像素数缩放")
-            for _, gh_p, gw_p in grid.tolist():
-                if gh_p % merge or gw_p % merge:
-                    raise RuntimeError(f"patch 网格 {gh_p}×{gw_p} 不是 merge_size={merge} 的倍数")
-                llm_grids.append((gh_p // merge, gw_p // merge))
-                n_pixels.append(gh_p * p * gw_p * p)
-            n_tok_per_image = [gh * gw for gh, gw in llm_grids]
-            tensors["pixel_values"] = enc["pixel_values"].to(device=self._device, dtype=self._dtype)
-            tensors["image_grid_thw"] = grid.to(self._device)
+        tensors, llm_grids, n_pixels = self._encode_images(pil)
+        n_tok_per_image = [gh * gw for gh, gw in llm_grids]
 
         # 3. 展开图像占位符并分词；指令两侧分别分词，拼接必须与整段分词逐个相同。
         #    查询块（DEV-0020）：渲染时是哨兵 _QUERY_SLOT，在这里切开，拼进 [占位符 id] × n（与把占位符当作特殊 token 分词相同：
@@ -915,16 +900,7 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
         instruction_span = Span(len(ids_pre), len(ids_pre) + len(ids_ins))
 
         # 4. 图像区间：<|image_pad|> 的连续段，个数、长度、前后标记逐项核对
-        runs = _runs(ids, self._ids[IMAGE_PAD])
-        if [e - s for s, e in runs] != n_tok_per_image:
-            raise RuntimeError(f"图像 token 段 {runs} 与每张图的 token 数 {n_tok_per_image} 不一致")
-        infos = []
-        for (s, e), (gh, gw), npx in zip(runs, llm_grids, n_pixels):
-            if ids[s - 1] != self._ids[VISION_START] or ids[e] != self._ids[VISION_END]:
-                raise RuntimeError(f"图像段 [{s}, {e}) 前后不是 vision_start / vision_end")
-            if e - s != gh * gw:
-                raise RuntimeError(f"图像段长度 {e - s} 与网格 {gh}×{gw} 不一致")
-            infos.append(ImageTokenInfo(Span(s, e), (gh, gw), n_pixels=npx))
+        infos = self._image_infos(ids, llm_grids, n_pixels)
 
         # 5. 查询区间
         query_span = None
@@ -952,6 +928,51 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
             query_span=query_span,
             query_position_mode=self._query_mode if query_span is not None else None,
         )
+
+    def _prepare_images(self, images: Sequence[Any]) -> list[Image.Image]:
+        """送进图像处理器之前的一步（build_inputs 与 chat_inputs 共用）：固定尺寸先用 PIL 缩放到 (H, W)；像素预算只转 RGB。"""
+        if isinstance(self._policy, FixedSize):
+            return [self.resize_image(im) for im in images]
+        return [self.to_rgb(im) for im in images]
+
+    def _encode_images(self, pil: Sequence[Image.Image]) -> tuple[dict[str, torch.Tensor], list[tuple[int, int]], list[int]]:
+        """一条输入的全部图（build_inputs 与 chat_inputs 共用）→ (pixel_values / image_grid_thw，没有图时为空字典；每张图的 LLM
+        网格；每张图的像素数)。min_pixels = max_pixels 显式传入；逐张核对网格（固定尺寸：处理器不再缩放；像素预算：= smart_resize）。"""
+        tensors: dict[str, torch.Tensor] = {}
+        llm_grids: list[tuple[int, int]] = []
+        n_pixels: list[int] = []
+        if pil:
+            px = self.processor_pixels()
+            enc = self._ip(images=list(pil), min_pixels=px, max_pixels=px, return_tensors="pt")
+            grid = enc["image_grid_thw"]
+            p, merge = int(self._ip.patch_size), int(self._ip.merge_size)
+            want = torch.tensor([[1, *self.expected_grid((im.height, im.width))] for im in pil], dtype=grid.dtype)
+            if not torch.equal(grid, want):
+                raise RuntimeError(f"image_grid_thw={grid.tolist()}，期望 {want.tolist()}（{self._policy!r}）：处理器没有按给定的像素数缩放")
+            for _, gh_p, gw_p in grid.tolist():
+                if gh_p % merge or gw_p % merge:
+                    raise RuntimeError(f"patch 网格 {gh_p}×{gw_p} 不是 merge_size={merge} 的倍数")
+                llm_grids.append((gh_p // merge, gw_p // merge))
+                n_pixels.append(gh_p * p * gw_p * p)
+            tensors["pixel_values"] = enc["pixel_values"].to(device=self._device, dtype=self._dtype)
+            tensors["image_grid_thw"] = grid.to(self._device)
+        return tensors, llm_grids, n_pixels
+
+    def _image_infos(self, ids: Sequence[int], llm_grids: Sequence[tuple[int, int]],
+                     n_pixels: Sequence[int]) -> list[ImageTokenInfo]:
+        """图像区间（build_inputs 与 chat_inputs 共用）：ids 里 <|image_pad|> 的连续段，个数、长度、前后标记逐项核对。"""
+        n_tok_per_image = [gh * gw for gh, gw in llm_grids]
+        runs = _runs(ids, self._ids[IMAGE_PAD])
+        if [e - s for s, e in runs] != n_tok_per_image:
+            raise RuntimeError(f"图像 token 段 {runs} 与每张图的 token 数 {n_tok_per_image} 不一致")
+        infos = []
+        for (s, e), (gh, gw), npx in zip(runs, llm_grids, n_pixels):
+            if ids[s - 1] != self._ids[VISION_START] or ids[e] != self._ids[VISION_END]:
+                raise RuntimeError(f"图像段 [{s}, {e}) 前后不是 vision_start / vision_end")
+            if e - s != gh * gw:
+                raise RuntimeError(f"图像段长度 {e - s} 与网格 {gh}×{gw} 不一致")
+            infos.append(ImageTokenInfo(Span(s, e), (gh, gw), n_pixels=npx))
+        return infos
 
     # ------------------------------------------------------------------
     # 位置
@@ -1214,11 +1235,12 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
                                            stop_ids=[self._ids[s] for s in STOP_TOKENS], pad_id=self._ids[END_OF_TEXT],
                                            scope=self.gdn_scope())
 
-    def _check_batch_positions(self, kw: dict[str, Any], items: Sequence[ModelInputs]) -> None:
+    def _check_batch_positions(self, kw: dict[str, Any], items: Sequence[Any], *, without_padding: bool = False) -> None:
         """有填充的批：HF 的 get_rope_index（带 attention_mask，与 generate 内部同一种调用）在每行非填充位置上的 (T, H, W)
-        必须与本适配器按规则构造的位置（mrope_rows，图像段取各图自己的网格，assistant 头是文本）逐个相等。不一致就报错。"""
+        必须与本适配器按规则构造的位置（mrope_rows，图像段取各图自己的网格，assistant 头是文本）逐个相等。不一致就报错。
+        without_padding=True（多轮对话，DEV-0049）时没有填充也核对；items 只用到每项的 images（ModelInputs 或 ChatInputs）。"""
         pads = batching.n_padding(kw["attention_mask"])
-        if not any(pads):
+        if not any(pads) and not without_padding:
             return
         ref, _ = self._model.model.get_rope_index(
             kw["input_ids"], mm_token_type_ids=kw["mm_token_type_ids"], image_grid_thw=kw.get("image_grid_thw"),
@@ -1256,6 +1278,91 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
             ans = ans[:-1]
         text = self._tok.decode(ans, skip_special_tokens=False).strip("\n")
         return text, raw_text, False
+
+    # ------------------------------------------------------------------
+    # 多轮对话（DEV-0049，W1；接口约定 docs/w1_plan.md §1，数据结构与解析见 src/adapters/chat.py）
+    # ------------------------------------------------------------------
+
+    def chat_inputs(self, messages: Sequence[dict], *, tools: Sequence[ToolSpec] | None) -> ChatInputs:
+        """一条对话 → 送进模型的完整提示：全部历史 + 开思考的助手头（`<|im_start|>assistant\\n<think>\\n`）。
+
+        - 校验：chat.check_messages（每段文字用 _check_instruction 查结构性 token）与 chat.check_tools（工具说明的 JSON 也查）。
+        - 渲染：apply_chat_template(消息, tools=…, add_generation_prompt=True, enable_thinking=True)，模板自己处理 tools 段、
+          工具调用的历史、tool 消息（合进 user 轮的 <tool_response>）与最后一个真实 user 之前的思考段（去掉）。
+        - 图像：按模板里出现的顺序，与 build_inputs 同一套处理（图像口径、min_pixels = max_pixels、逐张核对网格）；占位符按每张图的
+          token 数展开后整段分词（与官方 Qwen3VLProcessor 相同，tests/test_adapter_chat.py 逐 token 核对）。
+        - 不追加查询 token（多轮对话只用于生成）。
+        """
+        self._require_loaded()
+        msgs = chat.check_messages(messages, check_text=self._check_instruction)
+        specs = chat.check_tools(tools)
+        for spec in specs:
+            try:
+                self._check_instruction(json.dumps(spec.as_template(), ensure_ascii=False))
+            except ValueError as e:
+                raise ChatMessageError(f"工具 {spec.name} 的说明：{e}") from None
+        tmpl, images = chat.template_messages(msgs)
+        try:
+            pil = self._prepare_images(images)
+        except (TypeError, ValueError) as e:
+            raise ChatMessageError(f"图像：{e}") from None
+        text = self._tok.apply_chat_template(tmpl, tools=[s.as_template() for s in specs] or None,
+                                             chat_template=self._template, tokenize=False, add_generation_prompt=True,
+                                             enable_thinking=True)
+        if text.count(IMAGE_PAD) != len(pil) or VIDEO_PAD in text:
+            raise RuntimeError(f"模板里的图像占位符有 {text.count(IMAGE_PAD)} 个，图有 {len(pil)} 张")
+        tensors, llm_grids, n_pixels = self._encode_images(pil)
+        ids = self._encode(self._expand(text, [gh * gw for gh, gw in llm_grids]))
+        header = list(self.assistant_header_ids(True))
+        if ids[-len(header):] != header:
+            raise RuntimeError("渲染结果不以开思考的助手头结尾")
+        infos = self._image_infos(ids, llm_grids, n_pixels)
+        input_ids = torch.tensor([ids], dtype=torch.long, device=self._device)
+        mm = (input_ids == self._ids[IMAGE_PAD]).to(torch.long)  # 与 ProcessorMixin.create_mm_token_type_ids 相同
+        tensors.update(input_ids=input_ids, attention_mask=torch.ones_like(input_ids), mm_token_type_ids=mm)
+        row = batching.PromptRow(ids=tuple(ids), n_visual_tokens=sum(len(i.span) for i in infos),
+                                 n_image_pixels=sum(int(i.n_pixels) for i in infos),
+                                 mm_token_type_ids=tuple(mm[0].tolist()))
+        return ChatInputs(tensors=tensors, images=tuple(infos), row=row, text=text)
+
+    def chat_turn_batch(self, conversations: Sequence[Sequence[dict]], *, tools: Sequence[Sequence[ToolSpec] | None],
+                        thinking_budget: int, answer_budget: int) -> list[ChatTurnResult]:
+        """多条对话各生成一轮（约定见 base.ModelAdapter.chat_turn_batch）。每条的提示由 chat_inputs 构造；拼批、预填位置、锁步的
+        greedy 循环与记账都与 generate_batch_budgeted 相同（batch_prompt 左填充、_budget_loop、_budget_result），只是每行的提示是
+        整条对话而不是 user 轮 + 助手头。M-RoPE 位置在没有填充时也逐行核对。批内每行只看自己的 logits，所以与逐条生成逐 token
+        相同（贪心）。入参不合规报 ChatMessageError（消息里写明第几条对话）或 BudgetError。"""
+        where = "chat_turn_batch"
+        self._require_loaded()
+        tb = check_budget("thinking_budget", thinking_budget)
+        ab = check_budget("answer_budget", answer_budget)
+        self._require_eval(where)
+        convs = chat.check_chat_batch(conversations, tools)
+        m_dev, m_dtype = self._check_model_entry(where)
+        items: list[ChatInputs] = []
+        for k, (msgs, tl) in enumerate(zip(convs, tools)):
+            try:
+                items.append(self.chat_inputs(msgs, tools=tl))
+            except ChatMessageError as e:
+                raise ChatMessageError(f"conversations[{k}]：{e}") from None
+        for it in items:
+            self._check_input_tensors(it.tensors, m_dev, m_dtype, where=where)
+        check_greedy_generation_config(getattr(self._model, "generation_config", None))
+        fmt = self.think_format()
+        stops = [int(s) for s in self._stop_ids()]
+        pad_id = int(self._pad_id())
+        rows = [it.row for it in items]
+        kw: dict[str, Any] = batching.batch_prompt(rows, pad_id=pad_id, device=self._device)
+        kw.update(self._image_kw(items))
+        self._check_batch_positions(kw, items, without_padding=True)
+        traces, wall = self._budget_loop(kw, fmt=fmt, stops=stops, pad_id=pad_id, thinking_budget=tb, answer_budget=ab,
+                                         allowed=None)
+        out = []
+        for it, tr in zip(items, traces):
+            gen = self._budget_result(it.row, tr, fmt, stops, wall=wall, n_rows=len(items))
+            think = chat.thinking_token_ids(gen, close_id=fmt.close_id, stop_ids=stops)
+            out.append(ChatTurnResult.from_generation(gen, thinking=self._tok.decode(think, skip_special_tokens=False),
+                                                      n_images=len(it.images)))
+        return out
 
     # ------------------------------------------------------------------
     # 查询 token 与新增 token
@@ -1557,8 +1664,8 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
         w = self._model.get_input_embeddings().weight
         return w.device, w.dtype
 
-    def _check_entry(self, inputs: ModelInputs, query_embeds: Any, *, where: str) -> None:
-        """入口断言：在任何模型算子之前比较 device / dtype，纯 Python，任何机器上都会触发。"""
+    def _check_model_entry(self, where: str) -> tuple[torch.device, torch.dtype]:
+        """入口断言的模型一侧：模型（嵌入层、lm_head、视觉塔）的 device / dtype 与构造、load 时给定的相同。返回 (device, dtype)。"""
         self._require_loaded()
         m_dev, m_dtype = self._model_device_dtype()
         if m_dev != self._device:
@@ -1569,15 +1676,25 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
                               ("visual.patch_embed", self._model.model.visual.patch_embed.proj)):
             if mod.weight.device != m_dev:
                 raise AdapterDeviceError(f"{where}：{mod_name} 在 {mod.weight.device}，嵌入层在 {m_dev}")
-        if not isinstance(inputs, ModelInputs):
-            raise TypeError(f"inputs 必须是 ModelInputs，收到 {type(inputs).__name__}")
-        for name, v in inputs.tensors.items():
+        return m_dev, m_dtype
+
+    @staticmethod
+    def _check_input_tensors(tensors: Any, m_dev: torch.device, m_dtype: torch.dtype, *, where: str) -> None:
+        """入口断言的输入一侧：每个输入张量与模型同 device，浮点张量与模型同 dtype。"""
+        for name, v in tensors.items():
             if not torch.is_tensor(v):
                 continue
             if v.device != m_dev:
                 raise AdapterDeviceError(f"{where}：输入 {name} 在 {v.device}，模型在 {m_dev}")
             if v.is_floating_point() and v.dtype != m_dtype:
                 raise AdapterDeviceError(f"{where}：输入 {name} 的 dtype 是 {v.dtype}，模型是 {m_dtype}")
+
+    def _check_entry(self, inputs: ModelInputs, query_embeds: Any, *, where: str) -> None:
+        """入口断言：在任何模型算子之前比较 device / dtype，纯 Python，任何机器上都会触发。"""
+        m_dev, m_dtype = self._check_model_entry(where)
+        if not isinstance(inputs, ModelInputs):
+            raise TypeError(f"inputs 必须是 ModelInputs，收到 {type(inputs).__name__}")
+        self._check_input_tensors(inputs.tensors, m_dev, m_dtype, where=where)
         if query_embeds is not None:
             if not torch.is_tensor(query_embeds):
                 raise TypeError(f"query_embeds 必须是张量，收到 {type(query_embeds).__name__}")

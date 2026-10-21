@@ -35,6 +35,9 @@
   助手头以空思考块结尾，所以在思考段之后）的末尾，作为输入的一部分，不计入生成；结果的 text、raw_text 按"预填的 token 是模型
   已经生成的前几个 token"来解码（split_answer 作用在 预填 + 生成 上），token_ids 只含生成的 token，GenerationResult.answer_prefix_ids
   记下预填的 token。公共部分在 src/adapters/batching.py（encode_answer_prefix、with_answer_prefix、make_results 的 prefix_ids）。
+- 多轮对话（DEV-0049，W1；接口约定 docs/w1_plan.md §1）：chat_turn_batch / chat_turn。消息、工具说明、结果的数据结构与工具调用的解析在
+  src/adapters/chat.py。不是抽象方法：基类报 NotImplementedError，目前只有 Qwen3.5 实现。tools、thinking_budget、answer_budget
+  是无默认值的关键字参数（同 D1 的规则，__init_subclass__ 核对）。
 """
 
 from __future__ import annotations
@@ -45,10 +48,13 @@ import math
 import time
 from dataclasses import dataclass
 from contextlib import contextmanager
-from typing import Any, Callable, Iterator, Literal, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal, Mapping, Sequence
 
 from src.constants import MAX_NEW_GRID_TOKENS
 from src.parsing import BoxParse, OneBoxParse, one_box
+
+if TYPE_CHECKING:  # chat.py 引用本模块的数据结构，运行时不反向 import
+    from src.adapters.chat import ChatTurnResult, ToolSpec
 
 Order = Literal["instruction_first", "image_first"]
 PositionMode = Literal["grid2d", "seq1d"]
@@ -501,6 +507,8 @@ _REQUIRED_KWONLY: dict[str, tuple[str, ...]] = {
     "option_logits": ("enable_thinking",),  # DEV-0016：思考开关每次显式给出（D1）
     "parse_boxes": ("width", "height"),  # 原图宽高必须由调用方显式给出（DEV-0006）
     "format_boxes": ("width", "height"),  # 同上（DEV-0027）
+    "chat_turn_batch": ("tools", "thinking_budget", "answer_budget"),  # DEV-0049：每次显式给出
+    "chat_turn": ("tools", "thinking_budget", "answer_budget"),
 }
 # 子类必须保持为"无默认值"的参数（层号只能由调用方给出）
 _REQUIRED_NO_DEFAULT: dict[str, tuple[str, ...]] = {
@@ -730,6 +738,31 @@ class ModelAdapter(abc.ABC):
         定位提示要求的输出格式相同。坐标按原图宽高换算到 0–1000 并取整（原生格式是整数），所以往返在本家族的坐标精度内
         （每个坐标差不超过半个单位，即 W/2000、H/2000 像素）。labels 可选，与 boxes 等长。不需要加载模型。"""
         raise NotImplementedError(f"{type(self).__name__} 没有实现 format_boxes")
+
+    # ------------------------------------------------------------------
+    # 多轮对话（DEV-0049，W1；docs/w1_plan.md §1；数据结构与解析见 src/adapters/chat.py）。不是抽象方法，目前只有 Qwen3.5 实现。
+    # ------------------------------------------------------------------
+
+    def chat_turn_batch(self, conversations: Sequence[Sequence[dict]], *,
+                        tools: Sequence[Sequence["ToolSpec"] | None], thinking_budget: int,
+                        answer_budget: int) -> list["ChatTurnResult"]:
+        """多条对话各生成一轮 assistant 回答（按轮批量），返回与 conversations 等长、同顺序的 ChatTurnResult。
+
+        约定：
+        - conversations[k] 是一条完整对话（消息格式与校验见 chat 模块说明），最后一条是 user 或 tool；tools[k] 是它自己的工具
+          （None = 没有工具），各条可以不同。
+        - 用本家族的对话模板渲染整条对话（tools、开思考、生成提示），每张图（包括 tool 消息里的图）都按适配器的图像口径处理。
+        - 生成：开思考、greedy，规则与 generate_batch_budgeted 完全相同（思考段写满 thinking_budget 强制收尾，作答段至多
+          answer_budget 个 token，到停止 token 结束）；多条对话左填充成一批锁步生成，每行各自收尾，结果与逐条生成逐 token 相同。
+        """
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 chat_turn_batch（DEV-0049 只实现 Qwen3.5）")
+
+    def chat_turn(self, messages: Sequence[dict], *, tools: Sequence["ToolSpec"] | None, thinking_budget: int,
+                  answer_budget: int) -> "ChatTurnResult":
+        """一条对话生成一轮：chat_turn_batch 的批大小 1。"""
+        (res,) = self.chat_turn_batch([messages], tools=[tools], thinking_budget=thinking_budget,
+                                      answer_budget=answer_budget)
+        return res
 
     def end_of_turn_token_id(self) -> int:
         """本家族的回合结束 token（Qwen、InternVL 是 <|im_end|>，Gemma 是 <turn|>）：E3b 目标序列的最后一个 token。"""

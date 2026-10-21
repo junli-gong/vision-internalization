@@ -281,6 +281,14 @@ class BudgetSupport:
         stops = [int(s) for s in self._stop_ids()]
         pad_id = int(self._pad_id())
         rows, kw = self._batch_kw(items, True)
+        traces, wall = self._budget_loop(kw, fmt=fmt, stops=stops, pad_id=pad_id, thinking_budget=tb, answer_budget=ab,
+                                         allowed=allowed)
+        return [self._budget_result(row, tr, fmt, stops, wall=wall, n_rows=len(rows)) for row, tr in zip(rows, traces)]
+
+    def _budget_loop(self, kw: dict[str, Any], *, fmt: ThinkFormat, stops: Sequence[int], pad_id: int,
+                     thinking_budget: int, answer_budget: int, allowed: torch.Tensor | None) -> tuple[list[RowTrace], float]:
+        """拼好的一批（kw：左填充的提示与图像张量）→ (每行的 RowTrace, 墙钟)。预填位置用 HF generate 的规则（_decode_positions）；
+        墙钟只含循环本身（CUDA 上前后各同步一次）。generate_batch_budgeted 与多轮对话的 chat_turn_batch（DEV-0049）共用。"""
         prefill = dict(kw)
         prefill["position_ids"] = self._decode_positions(kw)
         if self._device.type == "cuda":
@@ -288,12 +296,11 @@ class BudgetSupport:
         t0 = time.perf_counter()
         with self._forward_scope(), torch.no_grad():
             traces = budgeted_greedy_loop(forward=self._model, prefill_kw=prefill, step_extra=self._decode_step_extra,
-                                          fmt=fmt, stop_ids=stops, pad_id=pad_id, thinking_budget=tb, answer_budget=ab,
-                                          allowed=allowed)
+                                          fmt=fmt, stop_ids=stops, pad_id=pad_id, thinking_budget=thinking_budget,
+                                          answer_budget=answer_budget, allowed=allowed)
         if self._device.type == "cuda":
             torch.cuda.synchronize(self._device)
-        wall = time.perf_counter() - t0
-        return [self._budget_result(row, tr, fmt, stops, wall=wall, n_rows=len(rows)) for row, tr in zip(rows, traces)]
+        return traces, time.perf_counter() - t0
 
     def _budget_result(self, row: batching.PromptRow, tr: RowTrace, fmt: ThinkFormat, stops: Sequence[int], *, wall: float,
                        n_rows: int) -> GenerationResult:
