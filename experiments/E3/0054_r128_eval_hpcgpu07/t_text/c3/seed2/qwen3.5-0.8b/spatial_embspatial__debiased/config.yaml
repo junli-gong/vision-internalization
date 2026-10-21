@@ -1,0 +1,144 @@
+experiment: E1
+framework: src/e1 事后读数（DEV-0033；E1 预注册 §10，D66）
+model:
+  key: qwen3.5-0.8b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-0.8B
+  revision: 2fc06364715b967f1860aea9cf38778875588b17
+  adapter_model_key: qwen3.5-0.8b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+task: spatial_embspatial
+subset: debiased
+generation:
+  enable_thinking: false
+  max_new_tokens: 1
+  decoding: option_logits：一次前向，取第一个生成位置的原始 logits（不采样；D37）
+  order: image_first
+  readout:
+    kind: letter_debiased
+    parse: letter_token
+    spellings:
+    - '{letter}'
+    - ' {letter}'
+    table:
+      letters:
+      - A
+      - B
+      - C
+      - D
+      entries:
+        A:
+        - spelling: A
+          token_id: 32
+          decoded: A
+        - spelling: ' A'
+          token_id: 357
+          decoded: ' A'
+        B:
+        - spelling: B
+          token_id: 33
+          decoded: B
+        - spelling: ' B'
+          token_id: 417
+          decoded: ' B'
+        C:
+        - spelling: C
+          token_id: 34
+          decoded: C
+        - spelling: ' C'
+          token_id: 351
+          decoded: ' C'
+        D:
+        - spelling: D
+          token_id: 35
+          decoded: D
+        - spelling: ' D'
+          token_id: 414
+          decoded: ' D'
+      skipped: []
+    orders: cyclic_shifts
+    method: option_logits
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+  entry:
+    template: 'Question: {question}
+
+      Options:
+
+      {options}
+
+      Please select the correct answer from the options above.'
+    native: false
+    provenance: common_practice
+    source_url: https://github.com/open-compass/VLMEvalKit/blob/e9214c0816f67a2848296b82d5d615d709fb7325/vlmeval/dataset/image_mcq.py
+    parse: choice
+    max_new_tokens: 1024
+data:
+  n_samples: 3590
+  sample_ids_sha256: 66d68e5f859aa3a60da54c01d86d2caaf2c31b293eaa9fa6a4ce630a8743590f
+  has_gt: true
+  selection_stats:
+    population:
+      n_total: 3640
+      n_kept: 3590
+      excluded_by_reason:
+        开发子集: 50
+    n: 3590
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: null
+map_ci_resamples: 0
+batch_size: 64
+batch_protocol:
+  protocol_version: 1
+  batch_size: 64
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: true
+  frozen_batch_size: 64
+checkpoint:
+  manifest_sha256: 68ed834c673601415a8ec56a8c0c9de07af2b2e2b794f5a2116b86443b5e6981
+  label: t_text/c3/seed2
+  build_spec:
+    family_kw: {}
+    image_policy: pixel_budget:300
+    key: qwen3.5-0.8b
+    tiny: false
+  image_policy: pixel_budget:300
+  dtype: bfloat16
+  lora:
+    lora_alpha: 256.0
+    lora_dropout: 0.05
+    n_parameters: 86581248
+    n_targets: 186
+    n_tensors: 372
+    r: 128
+    targets_sha256: d993d0cbcc93630509dd4c28bee72f41f9cea5a455c5fae42b831780bf8c061c
+  trainable_token_rows: null
+  n_grid_tokens: 0
+  merge_check:
+    criteria_version: v1
+    n: 200
+    checks:
+    - merge
+posthoc:
+  kind: debiased_letter
+  config: configs/e1_posthoc.json
+  config_sha256: 9a5607826bae8b2387cd9b5bbd88cd71d5887ebf86237b786546ab13ac613ce1
+  base_subset: eval
+  note: 事后读数（D66；E1 预注册 §10，写于运行之前）：报告里注明"事后"
+  version: 1
+  layout: order_major
+  n_readings: 14360
+  split_how: option_format
+  line_format: ({letter}) {text}
