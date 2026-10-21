@@ -484,9 +484,12 @@ def batch_keys(readout: str, rendered: Sequence[Rendered]) -> list[Hashable]:
 
 def run_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: PromptConfig, paths: DataPaths, out_dir: str | Path,
              *, resume: bool = False, argv: Sequence[str] = (), log: Callable[[str], None] | None = None,
-             warmup: bool = True, run_extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
+             warmup: bool = True, run_extra: Mapping[str, Any] | None = None,
+             leaf: str | Path | None = None) -> dict[str, Any]:
     """跑一个任务，返回 metrics（规则见模块说明）。sel 的样本已按 limit 截好。run_extra 并进 logs/run_<k>.json（DEV-0030：
-    --checkpoint 时的合并核对摘要与检查点路径）。"""
+    --checkpoint 时的合并核对摘要与检查点路径）。
+    leaf（DEV-0051，W1 的 W1-0 基线）：给了就把输出写进这个目录，不按 leaf_dir 拼（W1 的布局 <out>/<模型>/<任务>/<设置>/<划分>）；
+    不给时与原来逐字节相同。"""
     grid_ids = grid_token_ids_of(adapter)
     log = log or (lambda m: print(m, file=sys.stderr, flush=True))
     if isinstance(spec.batch_size, bool) or not isinstance(spec.batch_size, int) or spec.batch_size < 1:
@@ -500,7 +503,7 @@ def run_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: PromptConfig,
     rendered_all = [prompts.render(spec.task, spec.family, s) for s in sel.samples]
     ro, table = readout_info(adapter, prompts, spec, rendered_all)
     plan = batch_plan(batch_keys(ro["kind"], rendered_all), spec.batch_size)
-    leaf = leaf_dir(out_dir, spec.model_key, spec.task, spec.subset, spec.policy_tag)
+    leaf = Path(leaf) if leaf is not None else leaf_dir(out_dir, spec.model_key, spec.task, spec.subset, spec.policy_tag)
     cfg = run_config(spec, sel, prompts, paths, readout=ro)
     pred_path = leaf / PREDICTIONS
     if leaf.exists() and any(leaf.iterdir()):

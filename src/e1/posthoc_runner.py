@@ -681,8 +681,13 @@ def letter_swap_readme(spec: RunSpec, cfg: Mapping[str, Any], metrics: Mapping[s
 def run_forced_poly_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: PromptConfig, posthoc: PosthocConfig,
                          paths: DataPaths, out_dir: str | Path, *, variant: str, resume: bool = False,
                          argv: Sequence[str] = (), log: Callable[[str], None] | None = None,
-                         warmup: bool = True) -> dict[str, Any]:
-    """结构强制的多边形的一个变体（规则见 src/e1/poly_forced.py 与 configs/e1_posthoc.json 的 format_forced_poly）。返回 metrics。"""
+                         warmup: bool = True, sample_subset: str | None = None,
+                         leaf: str | Path | None = None) -> dict[str, Any]:
+    """结构强制的多边形的一个变体（规则见 src/e1/poly_forced.py 与 configs/e1_posthoc.json 的 format_forced_poly）。返回 metrics。
+
+    DEV-0051（W1 的对照，D103 §三）：sample_subset 给了时，样本可以取自 E1 思考子集以外的清单（W1 的划分，sel.subset 必须等于它），
+    它代替 format_forced_poly.sample_subset 记进 config.yaml 的 posthoc.base_subset；leaf 给了就把输出写进这个目录（W1 的布局）。
+    两者都不给时只认思考子集，路径与输出与原来逐字节相同（tests/test_w1_baselines.py 的快照核对）。"""
     log = log or _log_default
     fp = posthoc.forced_poly
     if spec.subset != FORCED_POLY_SUBSET:
@@ -694,6 +699,10 @@ def run_forced_poly_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: P
     if spec.family not in fp["families"]:
         raise ValueError(f"结构强制的多边形只做 {fp['families']}（D72-3：Qwen 四个尺寸），{spec.model_key} 是 {spec.family}")
     base = posthoc.base_subset(spec.subset)
+    if sample_subset is not None:
+        if sample_subset == base or not str(sample_subset).strip():
+            raise ValueError(f"sample_subset 只用于 E1 思考子集以外的清单，收到 {sample_subset!r}")
+        base = sample_subset
     if sel.subset != base:
         raise ValueError(f"样本取自 {sel.subset!r}，结构强制的多边形应取 {base!r} 的 id")
     v = fp["variants"][variant]
@@ -718,7 +727,7 @@ def run_forced_poly_task(adapter: Any, spec: RunSpec, sel: Selection, prompts: P
                   "order": prompts.order, "readout": readout, "forced_poly": forced_info}
     info = _posthoc_record(posthoc, "format_forced_poly", base, version=fp["version"], variant=variant)
     cfg = _base_config(spec, sel, prompts, paths, readout=readout, generation=generation, posthoc_info=info)
-    leaf = leaf_dir(out_dir, spec.model_key, spec.task, variant, spec.policy_tag)
+    leaf = Path(leaf) if leaf is not None else leaf_dir(out_dir, spec.model_key, spec.task, variant, spec.policy_tag)
     _prepare_leaf(leaf, cfg, [prompts.path, posthoc.path, *paths.config_files()], resume=resume)
     what = f"{spec.model_key} {spec.task}/{variant}"
     ids = [s.id for s in sel.samples]
