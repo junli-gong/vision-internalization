@@ -1127,7 +1127,7 @@ L 的逐项（点，种子 0 / 1 / 2）：定位 6.0 / 5.0 / 6.5；多边形 5.6
 | T1 | 最后一轮只给提交工具。调用满 8 次之后也只给提交工具。最后一轮的提示改成："This is your last turn. Only the submit tools are available now: submit your answer." | DEV-0053：`final_round_tools`、`capped_tools` |
 | T2 | 每轮结束报剩余预算，追加在这一轮最后一条 tool 消息末尾："[Turn {round} of {max_rounds} done; tool calls used: {calls_used} of {max_tool_calls}; turns left: {rounds_left}.]" | DEV-0053：`messages.status` |
 | T3 | 系统提示加两句："You can make several tool calls in one turn; they run in order and all their results come back together in the next turn." 与 "Coordinates can take any value from 0 to 1000; give them as precisely as you can." | 只改配置 |
-| T4 | 视图坐标：每张返回的图有编号，带坐标的工具可以按某张视图自己的 0–1000 给坐标。系统提示加一句："Every image you are shown has a view number (the original image is view 0); tools that take coordinates accept an optional view number, and the coordinates are then 0 to 1000 relative to that view." | DEV-0054：`view_frames` |
+| T4 | 视图坐标：每张返回的图有编号，带坐标的工具可以按某张视图自己的 0–1000 给坐标。系统提示的坐标段整段改写，因为原文"每个工具都用原图坐标"与视图参数矛盾，改写后说明默认是原图坐标、给了视图编号就按那张视图读（2026-10-21 补记，仍在任何调参运行之前；原文见 `scripts/mgr/make_w1_tune_configs.py`）。 | DEV-0054：`view_frames` |
 
 - 各臂的配置放在 `configs/w1_tune/T1.json` … `T4.json`，与 `configs/w1.json` 只差上表的项。
 - 措辞在合入、写配置时可以有小的文字调整，以配置文件为准，但不加上表以外的内容。
