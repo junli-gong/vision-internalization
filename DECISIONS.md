@@ -2576,3 +2576,29 @@
    - 9B 的 W1-1 跑开发-检查集 500 句：约 7 GPU 小时，区间 4–10；
    - 各基线合计约 0.5 GPU 小时。
    - test 全量（5 × 1000）单是 9B 的 W1-1 就约 70 GPU 小时，加上消融与换模型会远超 80 GPU 小时的总预算。test 规模报负责人定（N42）。
+
+## D108（2026-10-21，管理员）：DEV-0053 合入，W1 回路的调参开关与冻结保护
+
+依据：RUN-0060 冒烟的诊断（W1 预注册 §10b）；任务书 `prompts/dev/0053-w1-loop-knobs.md`。
+
+1. **合入的内容**：
+   - 配置 `configs/w1.json`：
+     - `protocol.final_round_tools`、`protocol.capped_tools`，默认都是 `all`；
+     - `prompts.messages.status`，默认 null；
+     - `prompts.messages.final_round_refused`；
+     - 新增一节 `workbench`（`view_frames: false`）。
+   - 代码：`src/w1/{loop,config,runner}.py`、`scripts/run_w1.py`；测试 `tests/test_w1_knobs.py`；`tests/_w1_fakes.py` 只做增量。
+   - 默认配置下，tiny 彩排的 12 份 `predictions.jsonl` 与改动前逐字节相同（开发 agent 用新旧两份代码对比）。
+   - 配置的 sha256 从 `6a470459…` 变为 `5102fa22…`，因为加了键。
+2. **冻结保护**：
+   - 划分是 `devcheck` 或 `test*` 时，`--w1-config` 指的文件必须是 `frozen: true`，否则退出码 2，什么都不写。
+   - 对全部设置都适用；`--tiny` 不受此限。
+3. **对任务书的偏离**，全部接受：
+   - `final_round_refused` 给了默认文字。这条回复排在最后一轮之后，模型看不到，不影响结果。
+   - `placeholders.status` 沿用"模板里用了哪些占位符就如数声明"的约定。
+   - `capped_tools` 在每轮开始时按计数判定。
+   - 三条与回路无关的基线（`baseline_e1`、`baseline_ownbox`、`baseline_poly_structured`）不记 w1 配置。这样换调参的臂时，同一个框的运行可以复用，续跑也不冲突。
+   - README 多一行"协议开关"。
+4. **测试**：
+   - 开发 agent 跑全量：3211 passed、20 skipped，0 失败。
+   - 管理员在主分支上复跑 W1 的回路、配置、开关、契约、命令行测试：108 passed、1 skipped。跳过的那项要等 DEV-0054 合入才生效。

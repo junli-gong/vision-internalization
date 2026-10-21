@@ -15,6 +15,9 @@
 test_refcoco+_unc_testB、test_refcocog_umd_test（refseg、refexp_box）；devtune_countbench、test_countbench（count）。清单在
 configs/w1_splits.json（src/w1/data.py）。
 开发机彩排：加 --tiny（小型随机模型、CPU、tests/fixtures 的小数据，划分按 configs/w1.json 的 splits.tiny 现算，预算与批大小取 tiny 一节）。
+冻结保护（DEV-0053；D103 §二.4、§三）：划分是 devcheck 或以 test 开头时，--w1-config 指的文件（默认 configs/w1.json）必须
+"frozen": true，否则退出码 2；对全部设置都适用（基线也一样），--tiny 不受此限。--w1-config 可以指向调参的变体（configs/w1_tune/）；
+运行身份记这个文件的路径与 sha256。
 DEV-0049 / DEV-0050 合入之前，回路的彩排配假适配器与假工作台：--adapter-factory tests._w1_fakes:make_policy_adapter
 --workbench tests._w1_fakes:FakeWorkbench（这两个选项只配 --tiny）。
 退出码：0 = 跑完；2 = 出错（报错先写进 <out>/<模型>/errors/，argparse 用法错误也是 2）。
@@ -54,6 +57,11 @@ RUN_DIR_NAME = re.compile(r"[0-9]{4}_[A-Za-z0-9][A-Za-z0-9_.-]*")
 DEFAULT_WORKBENCH = "src.w1.workbench:Workbench"
 
 
+def needs_frozen(split: str) -> bool:
+    """devcheck 与 test_*（开发-检查集与 test）只能用冻结的协议跑（D103 §二.4、§三）；devtune 与 devtune_countbench 不要求。"""
+    return split == "devcheck" or split.startswith("test")
+
+
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", required=True, help="注册键（src/adapters/registry.py）")
@@ -89,6 +97,14 @@ def parse_args(argv=None):
         p.error("真模型运行要给 --data-root（或设 VISINT_DATA_ROOT）")
     if not a.tiny and not RUN_DIR_NAME.fullmatch(Path(a.out).name):
         p.error(f"--out 的目录名必须带运行编号，形如 0060_w1_devcheck，收到 {a.out!r}")
+    if not a.tiny and needs_frozen(a.split):  # 冻结保护：放在最后，其余用法错误先报
+        try:
+            frozen = load_w1_config(a.w1_config).data["frozen"]
+        except (OSError, ValueError) as e:  # W1ConfigError、JSON 写坏都是 ValueError
+            p.error(f"--w1-config {a.w1_config} 读不了：{e}")
+        if frozen is not True:
+            p.error(f"协议未冻结，不能碰开发-检查集与 test（D103 §二.4、§三）：--split {a.split} 要求 {a.w1_config} 的 "
+                    f"\"frozen\" 为 true（现在是 {frozen!r}）")
     a.device = a.device or ("cpu" if a.tiny else "cuda")
     a.dtype = a.dtype or ("fp32" if a.tiny else "bf16")
     return a

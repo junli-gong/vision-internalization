@@ -9,7 +9,11 @@ chat_turn_batch、DEV-0050 的 src/w1/workbench.py）合入之前，回路、基
   只回显代码长度）、overlay（check，mask 叠加回原图）、submit_mask / submit_box / submit_count（submit）。坐标都是原图的 0–1000，x 在前。
 - ScriptedChatAdapter(script)：每条样本按脚本逐轮返回 ChatTurnResult；样本由 user 消息里的任务文字认出（脚本的键是任务文字里的一段）。
 - PolicyChatAdapter()：命令行彩排用的确定性策略（按任务文字选工具，不同样本在不同轮结束）。
-两个适配器都记下每次 chat_turn_batch 的行数（batch_sizes），并核对约定里的入参。
+- OptionsWorkbench(image, *, disabled_groups=…, sandbox=None, **options)（DEV-0053）：接受任意工作台选项（configs/w1.json 的
+  workbench 透传）的假工作台；选项非空时写进 specs() 的说明（工具清单的 sha256 随之变）与每条 log()。
+- PersistentPolicyChatAdapter()（DEV-0053）：协议开关的彩排用，不主动收尾；只给了提交工具的那一轮先发一个非提交调用、再提交。
+各适配器都记下每次 chat_turn_batch 的行数（batch_sizes）与每行拿到的工具名（tools_seen；chat_inputs 的在 chat_inputs_tools），并核对
+约定里的入参。
 """
 
 from __future__ import annotations
@@ -218,6 +222,25 @@ class FakeWorkbench:
         raise AssertionError(name)
 
 
+class OptionsWorkbench(FakeWorkbench):
+    """工作台选项透传（DEV-0053）的测试用：接受任意关键字参数（真工作台的 view_frames 由 DEV-0054 加）。收到的选项非空时写进每个工具
+    说明的末尾（tools_digest 随之变，所以运行身份的探测与回路里的工作台必须拿到同样的选项）与每条 log()。"""
+
+    def __init__(self, image: Any, *, disabled_groups: frozenset = frozenset(), sandbox: Any = None, **options: Any) -> None:
+        super().__init__(image, disabled_groups=disabled_groups, sandbox=sandbox)
+        self.options = dict(options)
+
+    def specs(self) -> list[ToolSpec]:
+        base = super().specs()
+        if not self.options:
+            return base
+        tag = json.dumps(self.options, sort_keys=True)
+        return [ToolSpec(s.name, f"{s.description} [options {tag}]", s.parameters) for s in base]
+
+    def log(self) -> list[dict]:
+        return [{**e, "options": dict(self.options)} for e in super().log()]
+
+
 # ---------------------------------------------------------------------------
 # 假适配器
 # ---------------------------------------------------------------------------
@@ -257,6 +280,8 @@ class _BaseFake:
         self.conversations: list[list[list[dict]]] = []
         self.widths: list[list[int]] = []
         self.n_chat_inputs = 0
+        self.tools_seen: list[list[list[str]]] = []  # 每次 chat_turn_batch：每行拿到的工具名（按给的顺序）
+        self.chat_inputs_tools: list[list[str]] = []  # 每次 chat_inputs 拿到的工具名
 
     def warmup(self, images: Sequence[Any] = (), **kw: Any) -> float:
         return 0.0
@@ -290,6 +315,7 @@ class _BaseFake:
         """真适配器的预检（D104）：消息里有结构性 token 就报 ValueError（真的是 ChatMessageError，ValueError 的子类）；否则给出提示
         （只用 row.ids 的长度：拆子批用）。"""
         self.n_chat_inputs += 1
+        self.chat_inputs_tools.append([t.name for t in (tools or ())])
         bad = self._structural(messages)
         if bad:
             raise ValueError(f"消息里含有结构性 token：{bad}")
@@ -316,13 +342,18 @@ class _BaseFake:
         self.batch_sizes.append(len(conversations))
         self.budgets.append((thinking_budget, answer_budget))
         self.conversations.append([list(c) for c in conversations])
-        return [self._result(c, self.next_turn(c), len(conversations)) for c in conversations]
+        self.tools_seen.append([[t.name for t in tl] for tl in tools])
+        return [self._result(c, self.next_turn_for(c, tl), len(conversations)) for c, tl in zip(conversations, tools)]
 
     def chat_turn(self, messages, *, tools, thinking_budget, answer_budget):
         return self.chat_turn_batch([messages], tools=[tools], thinking_budget=thinking_budget, answer_budget=answer_budget)[0]
 
     def next_turn(self, conv) -> dict:
         raise NotImplementedError
+
+    def next_turn_for(self, conv, tools) -> dict:
+        """这一行的下一轮（tools 是这一行拿到的工具清单）；默认不看工具清单。"""
+        return self.next_turn(conv)
 
 
 class ScriptedChatAdapter(_BaseFake):
@@ -364,9 +395,40 @@ class PolicyChatAdapter(_BaseFake):
         return plan[min(r, len(plan) - 1)] if k else turn(text="3")
 
 
+SUBMIT_NAMES = frozenset({"submit_mask", "submit_box", "submit_count"})
+
+
+class PersistentPolicyChatAdapter(_BaseFake):
+    """协议开关（DEV-0053：final_round_tools、capped_tools、status）的彩排用：不主动收尾。每轮发 1 或 2 个非提交调用（按任务文字的
+    哈希；2 个的样本第 4 轮之后计满 8 次）；某一行拿到的工具全是提交工具（最后一轮或满额之后只给提交工具）时，先发一个非提交调用、
+    再提交（前者被拒，后者照常执行）。默认协议下样本到第 max_rounds 轮记 no_answer。"""
+
+    def next_turn_for(self, conv, tools) -> dict:
+        t = task_text(conv)
+        k = int(hashlib.sha256(t.encode("utf-8")).hexdigest(), 16) % 2
+        if t.startswith("Task: segment"):
+            work = [("draw_box", {"box": "[150, 150, 850, 850]", "out": "m"}), ("zoom", {"box": "[0, 0, 500, 500]"})]
+            submit = ("submit_mask", {"name": "m"})
+        elif t.startswith("Task: locate"):
+            work = [("zoom", {"box": "[0, 0, 500, 500]"}), ("zoom", {"box": "[500, 500, 1000, 1000]"})]
+            submit = ("submit_box", {"box": "[100, 120, 900, 880]"})
+        else:
+            work = [("run_python", {"code": "print(1)"}), ("zoom", {"box": "[0, 0, 1000, 1000]"})]
+            submit = ("submit_count", {"count": "2"})
+        names = {s.name for s in tools}
+        if names and names <= SUBMIT_NAMES:
+            return turn(text="Only submitting is left.", calls=[work[0], submit])
+        return turn(text="Keep working.", calls=work[: 1 + k])
+
+
 def make_policy_adapter(entry: Any = None) -> PolicyChatAdapter:
     """scripts/run_w1.py --adapter-factory 的入口（只配 --tiny）。"""
     return PolicyChatAdapter()
+
+
+def make_persistent_adapter(entry: Any = None) -> PersistentPolicyChatAdapter:
+    """scripts/run_w1.py --adapter-factory 的入口（只配 --tiny；协议开关的彩排，DEV-0053）。"""
+    return PersistentPolicyChatAdapter()
 
 
 __all__ = [
@@ -374,6 +436,8 @@ __all__ = [
     "FAKE_GRABCUT_ITERATIONS",
     "FakeWorkbench",
     "GROUPS",
+    "OptionsWorkbench",
+    "PersistentPolicyChatAdapter",
     "PolicyChatAdapter",
     "ScriptedChatAdapter",
     "Submission",
@@ -382,6 +446,7 @@ __all__ = [
     "ToolResult",
     "ToolSpec",
     "fake_grabcut_mask",
+    "make_persistent_adapter",
     "make_policy_adapter",
     "raw_call",
     "task_text",

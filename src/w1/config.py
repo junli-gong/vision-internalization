@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import string
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
-from src.w1.loop import TASKS, LoopPrompts, Protocol
+from src.w1.loop import STATUS_FIELDS, TASKS, TOOLS_OFFERED, TOOLS_SUBMIT_ONLY, LoopPrompts, Protocol, template_fields
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 W1_CONFIG_PATH = REPO_ROOT / "configs" / "w1.json"
@@ -24,7 +23,11 @@ SETTINGS: tuple[str, ...] = LOOP_SETTINGS + BASELINE_SETTINGS
 # 每种基线适用的 W1 任务（baseline_e1 三个任务都有；其余三种只对指代分割）
 BASELINE_TASKS: Mapping[str, tuple[str, ...]] = {"baseline_e1": TASKS, "baseline_ownbox": ("refseg",),
                                                  "baseline_poly_structured": ("refseg",), "w1f": ("refseg",)}
-PROMPT_KEYS: tuple[str, ...] = ("system",) + TASKS + ("tool_cap", "tool_call_error", "last_round")
+PROMPT_KEYS: tuple[str, ...] = ("system",) + TASKS + ("tool_cap", "tool_call_error", "last_round", "status", "final_round_refused")
+NULLABLE_PROMPTS: tuple[str, ...] = ("last_round", "status", "final_round_refused")  # 为 null（或不给）时不用
+# 工作台选项（configs/w1.json 的 workbench）→ 默认值；默认值与 src/w1/workbench.Workbench.__init__ 的关键字参数默认值相同
+# （view_frames 由 DEV-0054 加；tests/test_w1_knobs.py 在它存在时核对）。W1Config.workbench_options() 只给与这里不同的项。
+WORKBENCH_OPTIONS: Mapping[str, Any] = {"view_frames": False}
 
 
 class W1ConfigError(ValueError):
@@ -33,10 +36,6 @@ class W1ConfigError(ValueError):
 
 def _posint(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool) and v >= 1
-
-
-def _fields(template: str) -> set[str]:
-    return {name for _, name, _, _ in string.Formatter().parse(template) if name is not None}
 
 
 def validate(cfg: Mapping[str, Any]) -> None:
@@ -54,6 +53,9 @@ def validate(cfg: Mapping[str, Any]) -> None:
         bad.append("protocol.submit_tools 必须是不重复的 submit_* 工具名")
     if not isinstance(pr.get("submit_exempt_from_cap"), bool):
         bad.append("protocol.submit_exempt_from_cap 必须是 bool")
+    for k in ("final_round_tools", "capped_tools"):
+        if pr.get(k) not in TOOLS_OFFERED:
+            bad.append(f"protocol.{k} 必须是 {TOOLS_OFFERED} 之一")
     bt = cfg.get("batching", {})
     for k in ("batch_size", "chunk_size", "max_batch_tokens", "tool_workers"):
         if not _posint(bt.get(k)):
@@ -76,18 +78,24 @@ def validate(cfg: Mapping[str, Any]) -> None:
         bad.append(f"prompts.placeholders 必须恰好给出 {PROMPT_KEYS}")
     for k in PROMPT_KEYS:
         t = texts.get(k)
-        if k == "last_round" and t is None:
+        if k in NULLABLE_PROMPTS and t is None:
+            if k == "final_round_refused" and pr.get("final_round_tools") == TOOLS_SUBMIT_ONLY:
+                bad.append("protocol.final_round_tools = submit_only 时 prompts.messages.final_round_refused 必须有")
             continue
         if not isinstance(t, str) or not t.strip():
             bad.append(f"提示 {k} 必须是非空字符串")
             continue
         try:
-            used = _fields(t)
+            used = template_fields(t)
         except ValueError as e:
             bad.append(f"提示 {k} 的占位符写法不对：{e}")
             continue
         if used != set(ph.get(k, [])):
             bad.append(f"提示 {k} 用的占位符 {sorted(used)} 与 placeholders 声明的 {ph.get(k)} 不同")
+        if k == "status" and used - set(STATUS_FIELDS):
+            bad.append(f"提示 status 的占位符只能是 {STATUS_FIELDS}，收到 {sorted(used - set(STATUS_FIELDS))}")
+        if k == "final_round_refused" and used:
+            bad.append(f"提示 final_round_refused 不能有占位符，收到 {sorted(used)}")
     sp = cfg.get("splits", {})
     for k in ("salt", "purpose", "population", "count_devtune", "count_test"):
         if not isinstance(sp.get(k), str) or not sp.get(k):
@@ -108,6 +116,11 @@ def validate(cfg: Mapping[str, Any]) -> None:
                    "src.w1.workbench.GRABCUT_ITERATIONS；D103：W1-F 用工作台的同一个函数）")
     if not str(w1f.get("rule", "")).strip():
         bad.append("baselines.w1f.rule 不能为空")
+    wb = cfg.get("workbench")
+    if not isinstance(wb, Mapping) or set(wb) != set(WORKBENCH_OPTIONS):
+        bad.append(f"workbench 必须恰好给出 {sorted(WORKBENCH_OPTIONS)}")
+    elif any(not isinstance(wb[k], bool) for k in wb):
+        bad.append("workbench.view_frames 必须是 bool")
     tiny = cfg.get("tiny", {})
     if not _posint(tiny.get("batch_size")) or not _posint(tiny.get("chunk_size")):
         bad.append("tiny.batch_size、tiny.chunk_size 必须是正整数")
@@ -131,7 +144,8 @@ class W1Config:
         p = Protocol(max_rounds=int(pr["max_rounds"]), max_tool_calls=int(pr["max_tool_calls"]),
                      thinking_budget=int(pr["thinking_budget"]), answer_budget=int(pr["answer_budget"]),
                      disabled_groups=frozenset(self.data["settings"][setting]), submit_tools=frozenset(pr["submit_tools"]),
-                     submit_exempt_from_cap=bool(pr["submit_exempt_from_cap"]))
+                     submit_exempt_from_cap=bool(pr["submit_exempt_from_cap"]), final_round_tools=pr["final_round_tools"],
+                     capped_tools=pr["capped_tools"])
         if tiny:
             p = replace(p, **{k: int(v) for k, v in self.data["tiny"]["protocol"].items()})
         return p
@@ -142,7 +156,14 @@ class W1Config:
         msgs = p["messages"]
         return LoopPrompts(system=p["system"].format(**caps), tasks=dict(p["tasks"]),
                            tool_cap=msgs["tool_cap"].format(max_tool_calls=protocol.max_tool_calls),
-                           tool_call_error=msgs["tool_call_error"], last_round=msgs.get("last_round"))
+                           tool_call_error=msgs["tool_call_error"], last_round=msgs.get("last_round"), status=msgs.get("status"),
+                           final_round_refused=msgs.get("final_round_refused"))
+
+    def workbench_options(self) -> dict[str, Any]:
+        """configs/w1.json 的 workbench 里与默认值（WORKBENCH_OPTIONS）不同的项，作为关键字参数传给工作台；默认时是空字典（什么都不传，
+        工作台的构造与改动前相同）。"""
+        wb = self.data["workbench"]
+        return {k: wb[k] for k in WORKBENCH_OPTIONS if wb[k] != WORKBENCH_OPTIONS[k]}
 
     def batching(self, *, tiny: bool = False) -> dict[str, int]:
         b = self.data["batching"]
@@ -179,11 +200,13 @@ __all__ = [
     "BASELINE_SETTINGS",
     "BASELINE_TASKS",
     "LOOP_SETTINGS",
+    "NULLABLE_PROMPTS",
     "PROMPT_KEYS",
     "SETTINGS",
     "W1Config",
     "W1ConfigError",
     "W1_CONFIG_PATH",
+    "WORKBENCH_OPTIONS",
     "file_sha256",
     "load_w1_config",
     "validate",

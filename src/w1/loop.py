@@ -18,6 +18,18 @@
   - 解析失败的调用（ChatTurnResult.tool_call_errors）不执行、不计数，各返回一条 prompts.tool_call_error；这一轮不算给出最终答案。
   - 第 max_rounds 轮之后还没有答案：failure = no_answer（ended_by = round_cap）。进入第 max_rounds 轮之前，prompts.last_round（不为 None
     时）追加在上一轮最后一条 tool 消息的末尾。
+- 协议开关（DEV-0053；与任务无关，默认值 = 上面的行为，默认时记录逐字节不变）：
+  - protocol.final_round_tools = submit_only（且 max_rounds > 1）：第 max_rounds 轮交给 chat_inputs 与 chat_turn_batch 的工具清单只含
+    specs() 里属于 submit_tools 的那几个（顺序照 specs()）；这一轮里调用非提交工具：不执行、不计数，refused = final_round，返回一条
+    prompts.final_round_refused；同一段里排在后面的提交照常执行；文字形式的最终答案照旧有效。
+  - protocol.capped_tools = submit_only：某一轮开始时计数的调用已满 max_tool_calls，这一轮的工具清单只给提交工具；被拒的调用照旧记
+    tool_cap。
+  - 被拒的先后：after_submission → final_round → tool_cap。
+  - 给的不是全部工具时，轮记录里加 "tools_offered": "submit_only"。
+  - prompts.status（不为 None 时）：每一轮执行完、样本还没结束时，按 STATUS_FIELDS 填好，作为一个文字项追加在这一轮最后一条 tool 消息
+    的末尾，轮记录里加 "status_notice": true；与 last_round 都有时 status 在前（status 在本轮末尾追加，last_round 在进入最后一轮时追加）。
+- 工作台选项（configs/w1.json 的 workbench，W1Config.workbench_options() 只给与默认值不同的项）：run_episodes 原样作为关键字参数传给
+  workbench_factory；默认时什么都不传。
 - 最终答案：refseg = 提交的 mask（原图分辨率 bool）；refexp_box = submit_box 的框，或最终答案文字里本家族的原生框（adapter.parse_one_box，
   E1 的解析器）；count = submit_count 的数，或最终答案文字里的单个整数（E1 的 parse_count）。最终答案文字先按 E1 的
   parse_generation 判思考段未闭合、截断、空回答。refseg 给了文字却没有提交 mask：failure = not_submitted；提交了别的种类（例如
@@ -35,6 +47,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import string
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -58,13 +71,20 @@ FAILURE_NOT_SUBMITTED = "not_submitted"  # refseg 给了最终答案文字，没
 FAILURE_WRONG_SUBMISSION = "wrong_submission"  # 提交了别的种类（例如 refseg 交了框）
 REFUSED_TOOL_CAP = "tool_cap"
 REFUSED_AFTER_SUBMISSION = "after_submission"
+REFUSED_FINAL_ROUND = "final_round"  # final_round_tools = submit_only 时最后一轮里的非提交调用（DEV-0053）
 THINKING_UNCLOSED = "unclosed"  # ChatTurnResult.thinking_end 的取值（同 GenerationResult，src/adapters/base.THINKING_ENDS）
+TOOLS_ALL = "all"
+TOOLS_SUBMIT_ONLY = "submit_only"
+TOOLS_OFFERED: tuple[str, ...] = (TOOLS_ALL, TOOLS_SUBMIT_ONLY)  # protocol.final_round_tools / capped_tools 的取值（DEV-0053）
+# prompts.status 能用的占位符（DEV-0053）：刚结束的轮、上限、剩余轮数、计数的调用、调用上限、剩余调用（不小于 0）
+STATUS_FIELDS: tuple[str, ...] = ("round", "max_rounds", "rounds_left", "calls_used", "max_tool_calls", "calls_left")
 
 
 @dataclass(frozen=True)
 class Protocol:
     """回路协议（configs/w1.json 的 protocol；docs/w1_plan.md §3）。在开发-调参集上定，跑 test 之前冻结（D103 §二.4）。
-    submit_tools、submit_exempt_from_cap 是 DEV-0051 加的两项（见模块说明的"上限"）。"""
+    submit_tools、submit_exempt_from_cap 是 DEV-0051 加的两项（见模块说明的"上限"）；final_round_tools、capped_tools 是 DEV-0053 加的
+    两个开关（见模块说明的"协议开关"），默认 all = 原来的行为。"""
 
     max_rounds: int = 6
     max_tool_calls: int = 8
@@ -73,6 +93,8 @@ class Protocol:
     disabled_groups: frozenset[str] = frozenset()
     submit_tools: frozenset[str] = frozenset({"submit_mask", "submit_box", "submit_count"})
     submit_exempt_from_cap: bool = True
+    final_round_tools: str = TOOLS_ALL
+    capped_tools: str = TOOLS_ALL
 
     def __post_init__(self) -> None:
         for name in ("max_rounds", "max_tool_calls", "thinking_budget", "answer_budget"):
@@ -83,25 +105,56 @@ class Protocol:
         object.__setattr__(self, "submit_tools", frozenset(self.submit_tools))
         if "submit" in self.disabled_groups:
             raise ValueError("submit 组不能关（关了就交不了答案）")
+        for name in ("final_round_tools", "capped_tools"):
+            if getattr(self, name) not in TOOLS_OFFERED:
+                raise ValueError(f"Protocol.{name} 只能是 {TOOLS_OFFERED}，收到 {getattr(self, name)!r}")
+
+    def final_round_submit_only(self, r: int) -> bool:
+        """第 r 轮是否只给提交工具（final_round_tools = submit_only 时的最后一轮；max_rounds = 1 时不生效）。"""
+        return self.final_round_tools == TOOLS_SUBMIT_ONLY and self.max_rounds > 1 and r == self.max_rounds
 
     def as_dict(self) -> dict[str, Any]:
         """config.yaml 的 protocol 一节（集合排序，便于逐字节比较）。"""
         return {"max_rounds": self.max_rounds, "max_tool_calls": self.max_tool_calls,
                 "thinking_budget": self.thinking_budget, "answer_budget": self.answer_budget,
                 "disabled_groups": sorted(self.disabled_groups), "submit_tools": sorted(self.submit_tools),
-                "submit_exempt_from_cap": self.submit_exempt_from_cap}
+                "submit_exempt_from_cap": self.submit_exempt_from_cap, "final_round_tools": self.final_round_tools,
+                "capped_tools": self.capped_tools}
+
+
+def template_fields(template: str) -> set[str]:
+    """str.format 模板里用到的占位符名（写法不对时抛 ValueError）。"""
+    return {name for _, name, _, _ in string.Formatter().parse(template) if name is not None}
 
 
 @dataclass(frozen=True)
 class LoopPrompts:
     """回路用的提示（src/w1/config.W1Config.loop_prompts 由 configs/w1.json 渲染）：system 与 tool_cap 已按协议填好上限；
-    tasks 是按任务的模板；tool_call_error 含 {error}；last_round 为 None 时不追加。"""
+    tasks 是按任务的模板；tool_call_error 含 {error}；last_round 为 None 时不追加。DEV-0053：status 是每轮的状态提示模板
+    （占位符只能是 STATUS_FIELDS，None 时不追加）；final_round_refused 是最后一轮里非提交调用的回复（final_round_tools = submit_only
+    时必须有，没有占位符）。"""
 
     system: str
     tasks: Mapping[str, str]
     tool_cap: str
     tool_call_error: str
     last_round: str | None
+    status: str | None = None
+    final_round_refused: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status is not None:
+            bad = template_fields(self.status) - set(STATUS_FIELDS)
+            if bad:
+                raise ValueError(f"status 的占位符只能是 {STATUS_FIELDS}，收到 {sorted(bad)}")
+
+    def status_text(self, r: int, protocol: Protocol, calls_used: int) -> str:
+        """刚结束第 r 轮、计数的调用已有 calls_used 次时的状态提示（status 为 None 时不该调用）。"""
+        if self.status is None:
+            raise RuntimeError("prompts.status 为 None")
+        return self.status.format(round=r, max_rounds=protocol.max_rounds, rounds_left=protocol.max_rounds - r,
+                                  calls_used=calls_used, max_tool_calls=protocol.max_tool_calls,
+                                  calls_left=max(0, protocol.max_tool_calls - calls_used))
 
     def task_text(self, task: str, sample: Sample) -> str:
         from src.e1.prompts import COUNTBENCHQA_FIELD
@@ -250,6 +303,7 @@ class _Episode:
         self.rec = EpisodeRecord(id=sample.id, task=task, instruction=instr, image_size=tuple(image.size), tools_sha256=tools_sha)
         self.calls: list[Compute] = []
         self.done = False
+        self.offered = TOOLS_ALL  # 这一轮给的工具（tool_specs 定，step 记进轮记录）
 
     # -- 结束 ---------------------------------------------------------------
 
@@ -316,8 +370,17 @@ class _Episode:
 
     # -- 一轮 ---------------------------------------------------------------
 
-    def tool_specs(self) -> list[Any]:
-        return list(self.wb.specs())
+    def tool_specs(self, r: int) -> list[Any]:
+        """第 r 轮交给 chat_inputs 与 chat_turn_batch 的工具清单：默认 specs() 全部；final_round_tools = submit_only 的最后一轮、或
+        capped_tools = submit_only 且计数的调用已满时，只给 specs() 里属于 submit_tools 的（顺序照 specs()）。"""
+        specs = list(self.wb.specs())
+        p = self.protocol
+        capped = p.capped_tools == TOOLS_SUBMIT_ONLY and self.rec.n_tool_calls >= p.max_tool_calls
+        if p.final_round_submit_only(r) or capped:
+            self.offered = TOOLS_SUBMIT_ONLY
+            return [s for s in specs if s.name in p.submit_tools]
+        self.offered = TOOLS_ALL
+        return specs
 
     def add_round(self, r: int, res: Any, batch_rows: int) -> None:
         pixels = getattr(res, "n_image_pixels", None)
@@ -342,6 +405,8 @@ class _Episode:
     def step(self, r: int, res: Any, batch_rows: int, adapter: Any) -> None:
         """处理这一轮的结果：记录、回填历史、执行工具调用、判结束。"""
         self.add_round(r, res, batch_rows)
+        if self.offered != TOOLS_ALL:  # 只在非默认时加字段（默认配置下记录逐字节不变）
+            self.rec.rounds[-1]["tools_offered"] = self.offered
         calls, errors = list(res.tool_calls), list(res.tool_call_errors)
         # 回填（D104）：作答原文（含模型自己写的 <tool_call> 块）+ 思考段，不给 tool_calls，最贴近模型的原样输出
         msg = _text_msg("assistant", res.text)
@@ -352,6 +417,7 @@ class _Episode:
             return
         rnd = self.rec.rounds[-1]
         p = self.protocol
+        final_only = p.final_round_submit_only(r)
         submitted_by: str | None = None
         for c in calls:
             entry: dict[str, Any] = {"name": c.name, "arguments": dict(c.arguments), "raw": c.raw, "counted": False,
@@ -360,6 +426,11 @@ class _Episode:
             if submitted_by is not None:
                 entry["refused"] = REFUSED_AFTER_SUBMISSION
                 self.rec.n_refused += 1
+                continue
+            if final_only and c.name not in p.submit_tools:  # 最后一轮只给了提交工具（DEV-0053）
+                entry["refused"] = REFUSED_FINAL_ROUND
+                self.rec.n_refused += 1
+                self.messages.append(_tool_msg(self.prompts.final_round_refused))
                 continue
             counts = not (p.submit_exempt_from_cap and c.name in p.submit_tools)
             if counts and self.rec.n_tool_calls >= p.max_tool_calls:
@@ -386,6 +457,9 @@ class _Episode:
             self.messages.append(_tool_msg(self.prompts.tool_call_error.format(error=e)))
         if r >= p.max_rounds:
             self._finish("round_cap", FAILURE_NO_ANSWER)
+            return
+        if self.prompts.status is not None:
+            self.add_status_notice(r)
 
     def reject_input(self, r: int, err: Exception) -> None:
         """拼批前的预检拒收这条对话（D104）：不进这一轮的批，记 failure = input_rejected 与原因。"""
@@ -398,6 +472,14 @@ class _Episode:
             raise RuntimeError(f"{self.sample.id}：进入最后一轮之前，最后一条消息应是 tool 消息，收到 {last['role']}")
         last["content"].append({"type": "text", "text": text})
         self.rec.rounds[-1]["last_round_notice"] = True
+
+    def add_status_notice(self, r: int) -> None:
+        """第 r 轮执行完、样本还没结束：prompts.status 填好后追加在这一轮最后一条 tool 消息的末尾（DEV-0053）。"""
+        last = self.messages[-1]
+        if last["role"] != "tool":
+            raise RuntimeError(f"{self.sample.id} 第 {r} 轮：追加状态提示时，最后一条消息应是 tool 消息，收到 {last['role']}")
+        last["content"].append({"type": "text", "text": self.prompts.status_text(r, self.protocol, self.rec.n_tool_calls)})
+        self.rec.rounds[-1]["status_notice"] = True
 
 
 def _text_is_not_an_answer(text: str) -> ParseResult:
@@ -420,17 +502,22 @@ def default_workbench_factory() -> Callable[..., Any]:
 
 def run_episodes(adapter: Any, samples: Sequence[Sample], task: str, protocol: Protocol, prompts: LoopPrompts, *,
                  batch_size: int, max_batch_tokens: int | None = None, workbench_factory: Callable[..., Any] | None = None,
-                 tool_workers: int = 1, expected_tools_sha256: str | None = None, images: Sequence[Any] | None = None,
+                 workbench_options: Mapping[str, Any] | None = None, tool_workers: int = 1,
+                 expected_tools_sha256: str | None = None, images: Sequence[Any] | None = None,
                  log: Callable[[str], None] | None = None) -> list[EpisodeRecord]:
     """samples 一起按轮同步地跑完（规则见模块说明），返回与 samples 同序的 EpisodeRecord。
 
     每一轮：还没结束的样本按原顺序逐条预检（adapter.chat_inputs；拒收的记 input_rejected，不进批，D104），再按 plan_sub_batches
     拆子批（行数 ≤ batch_size，且 行数 × 子批里最长的提示 ≤ max_batch_tokens），逐个子批调 chat_turn_batch、执行工具调用。
-    workbench_factory(image, disabled_groups=…) 构造每条样本自己的工作台（默认 DEV-0050 的 Workbench；工作台拿原图的副本）。
+    workbench_factory(image, disabled_groups=…, **workbench_options) 构造每条样本自己的工作台（默认 DEV-0050 的 Workbench；工作台拿
+    原图的副本）；workbench_options 是 W1Config.workbench_options()（只含与默认值不同的项，默认时为空，什么都不传）。
     expected_tools_sha256 给了时，每条样本的工具清单（tools_digest(specs())）必须等于它（运行身份里记的那一份）。
     images 给了时按它取原图（与 samples 同序、每条一张 PIL 图），否则用 E1 的 load_images。"""
     if task not in TASKS:
         raise ValueError(f"未知任务 {task!r}；可用 {TASKS}")
+    if protocol.final_round_tools == TOOLS_SUBMIT_ONLY and protocol.max_rounds > 1 and not prompts.final_round_refused:
+        raise ValueError("final_round_tools = submit_only 时 prompts.final_round_refused 必须有")
+    options = dict(workbench_options or {})
     if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
         raise ValueError(f"batch_size 必须是正整数，收到 {batch_size!r}")
     if max_batch_tokens is not None and (isinstance(max_batch_tokens, bool) or not isinstance(max_batch_tokens, int)
@@ -453,7 +540,7 @@ def run_episodes(adapter: Any, samples: Sequence[Sample], task: str, protocol: P
         raise ValueError("images 与 samples 条数不同")
     eps: list[_Episode] = []
     for s, im in zip(samples, images):
-        wb = factory(im.copy(), disabled_groups=protocol.disabled_groups)
+        wb = factory(im.copy(), disabled_groups=protocol.disabled_groups, **options)
         sha = tools_digest(wb.specs())
         if expected_tools_sha256 is not None and sha != expected_tools_sha256:
             raise RuntimeError(f"{s.id}：工具清单的 sha256 {sha[:12]}… 与运行身份里的 {expected_tools_sha256[:12]}… 不同")
@@ -469,7 +556,7 @@ def run_episodes(adapter: Any, samples: Sequence[Sample], task: str, protocol: P
                     e.add_last_round_notice(prompts.last_round)
             ready, widths, specs = [], [], []
             for e in active:  # 预检（D104）：有结构性 token 等，chat_turn_batch 会让整批报错；这一条单独记失败
-                sp = e.tool_specs()
+                sp = e.tool_specs(r)
                 try:
                     ci = adapter.chat_inputs(e.messages, tools=sp)
                 except ValueError as err:  # ChatMessageError 是 ValueError 的子类
@@ -515,12 +602,18 @@ __all__ = [
     "LoopPrompts",
     "Protocol",
     "REFUSED_AFTER_SUBMISSION",
+    "REFUSED_FINAL_ROUND",
     "REFUSED_TOOL_CAP",
+    "STATUS_FIELDS",
     "SUBMISSION_FIELDS",
     "TASKS",
+    "TOOLS_ALL",
+    "TOOLS_OFFERED",
+    "TOOLS_SUBMIT_ONLY",
     "default_workbench_factory",
     "plan_sub_batches",
     "image_digest",
     "run_episodes",
+    "template_fields",
     "tools_digest",
 ]

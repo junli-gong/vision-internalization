@@ -11,7 +11,9 @@
   "answer_budget": 1024,
   "submit_tools": ["submit_mask", "submit_box", "submit_count"],
   "submit_exempt_from_cap": true,
-  "rule": "按轮同步（src/w1/loop.run_episodes）：第 1 轮 = system + user（原图在前，任务提示在后）。之后每轮把还没结束的样本按原顺序拼成至多 batch_size 行的批，调 adapter.chat_turn_batch（开思考、贪心；思考写满 thinking_budget 由适配器强制收尾，作答至多 answer_budget）；再逐条按出现顺序执行作答段里的工具调用（Workbench.call），每次调用的结果作为一条 tool 消息（文字 + 图）追加。结束：(1) 某次调用之后 Workbench.submission 不为空（提交了答案），这一段里其后的调用不再执行；(2) 作答段里既没有解析出的工具调用、也没有解析失败的工具调用，即给出了最终答案。上限：执行过的工具调用计数，submit_tools 不计入（submit_exempt_from_cap，否则用完 8 次之后指代分割再也交不了答案）；计数满 max_tool_calls 之后的调用不执行，返回 messages.tool_cap。第 max_rounds 轮结束仍没有答案记 failure = no_answer。解析失败的工具调用（ChatTurnResult.tool_call_errors）不执行、不计数，返回 messages.tool_call_error，这一轮不算给出最终答案。回路不做任何与任务相关的修补。"
+  "final_round_tools": "all",
+  "capped_tools": "all",
+  "rule": "按轮同步（src/w1/loop.run_episodes）：第 1 轮 = system + user（原图在前，任务提示在后）。之后每轮把还没结束的样本按原顺序拼成至多 batch_size 行的批，调 adapter.chat_turn_batch（开思考、贪心；思考写满 thinking_budget 由适配器强制收尾，作答至多 answer_budget）；再逐条按出现顺序执行作答段里的工具调用（Workbench.call），每次调用的结果作为一条 tool 消息（文字 + 图）追加。结束：(1) 某次调用之后 Workbench.submission 不为空（提交了答案），这一段里其后的调用不再执行；(2) 作答段里既没有解析出的工具调用、也没有解析失败的工具调用，即给出了最终答案。上限：执行过的工具调用计数，submit_tools 不计入（submit_exempt_from_cap，否则用完 8 次之后指代分割再也交不了答案）；计数满 max_tool_calls 之后的调用不执行，返回 messages.tool_cap。第 max_rounds 轮结束仍没有答案记 failure = no_answer。解析失败的工具调用（ChatTurnResult.tool_call_errors）不执行、不计数，返回 messages.tool_call_error，这一轮不算给出最终答案。回路不做任何与任务相关的修补。协议开关（DEV-0053，与任务无关；默认 all = 上面的行为）：final_round_tools = submit_only 时（max_rounds > 1），第 max_rounds 轮交给模型的工具清单只含 specs() 里属于 submit_tools 的（顺序照 specs()），这一轮里调用非提交工具不执行、不计数，记 refused = final_round，返回 messages.final_round_refused，同一段里排在后面的提交照常执行，文字形式的最终答案照旧有效；capped_tools = submit_only 时，某一轮开始时计数的调用已满 max_tool_calls，这一轮的工具清单只给提交工具，被拒的调用照旧记 tool_cap；被拒的先后：after_submission → final_round → tool_cap。给的不是全部工具时轮记录加 tools_offered = submit_only。"
  },
  "batching": {
   "batch_size": 16,
@@ -28,6 +30,7 @@
   "no_snap": ["snap", "code"],
   "rule": "设置 → 关掉的工具组（docs/w1_plan.md §2 的 GROUPS）：W1-1 = full；A1 = no_eye；A2 = no_check；A3 = no_snap（去掉 snap 与 code）。submit 组永远不关。"
  },
+ "workbench": {"view_frames": false},
  "prompts": {
   "status": "初稿，开发-调参集上待定（D103 §二.4）。系统提示对所有任务逐字相同，只说明工作台的用法、坐标约定与上限；按任务的提示只说明任务是什么、输出成什么格式，不写解题方法（docs/w1_plan.md §0）。工具说明由 Workbench.specs() 经对话模板的 tools 参数渲染，不写进提示。",
   "system": "You are working on one image with a workbench of tools. The tools do not know what is in the image; you decide what to look at and what to build, and the tools measure, draw and fit for you.\n\nCoordinates: every tool uses coordinates relative to the full original image, from 0 to 1000, with x first (x = 0 is the left edge and x = 1000 the right edge; y = 0 is the top and y = 1000 the bottom). Zoomed views use the same original-image coordinates, and the tool reports which region a view covers.\n\nHow to work: call tools when they help; their results (text and images) come back in the next turn. You have at most {max_rounds} turns and at most {max_tool_calls} tool calls in total; submitting the final answer does not count as a tool call. When you are done, give the final answer in the format the task asks for. If a result looks wrong, go back to the original image and start that part again instead of patching the wrong result.",
@@ -39,7 +42,9 @@
   "messages": {
    "tool_cap": "Tool call limit reached ({max_tool_calls} calls): this call was not executed. Give the final answer now.",
    "tool_call_error": "This tool call could not be parsed and was not executed: {error}",
-   "last_round": "This is the last turn: give the final answer now."
+   "last_round": "This is the last turn: give the final answer now.",
+   "status": null,
+   "final_round_refused": "This is the last turn and only the submit tools are available: this call was not executed."
   },
   "placeholders": {
    "system": ["max_rounds", "max_tool_calls"],
@@ -48,9 +53,11 @@
    "count": ["question"],
    "tool_cap": ["max_tool_calls"],
    "tool_call_error": ["error"],
-   "last_round": []
+   "last_round": [],
+   "status": [],
+   "final_round_refused": []
   },
-  "rule": "refseg、refexp_box 的 {expression} 取 Sample.fields.expression（与 E1 相同）；count 的 {question} 取 E1 的人工问句（src/e1/prompts.COUNTBENCHQA_FIELD，D36-2，与 E1 默认相同）。messages.last_round 在进入第 max_rounds 轮之前追加在上一轮最后一条 tool 消息的末尾；为 null 时不追加。"
+  "rule": "refseg、refexp_box 的 {expression} 取 Sample.fields.expression（与 E1 相同）；count 的 {question} 取 E1 的人工问句（src/e1/prompts.COUNTBENCHQA_FIELD，D36-2，与 E1 默认相同）。messages.last_round 在进入第 max_rounds 轮之前追加在上一轮最后一条 tool 消息的末尾；为 null 时不追加。messages.status（DEV-0053）为 null 时不追加；是字符串时，每一轮执行完、样本还没结束，填好占位符后追加在这一轮最后一条 tool 消息的末尾（与 last_round 都有时 status 在前），轮记录加 status_notice = true；占位符只能是 {round}（刚结束的轮）、{max_rounds}、{rounds_left}、{calls_used}（计数的调用）、{max_tool_calls}、{calls_left}（不小于 0），用了哪些要在 placeholders.status 里声明。messages.final_round_refused（DEV-0053）是 final_round_tools = submit_only 时最后一轮里非提交调用的回复（这时必须有，没有占位符）；它排在最后一轮之后，模型看不到，只为历史里每个调用都有回复。"
  },
  "splits": {
   "salt": "w1_dev_v1",

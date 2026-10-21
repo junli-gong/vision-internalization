@@ -4,8 +4,9 @@
 - predictions.jsonl：每条样本一行（回路的设置：EpisodeRecord.to_json() + score；基线：见 src/w1/baselines.py）。不含墙钟，逐字节可复现。
 - metrics.json：只由 predictions.jsonl 算出（src/w1/scoring.aggregate_w1；E1 的基线用 E1 的 aggregate），含 bootstrap 95% CI。
 - compute.json：src/accounting.py（每轮记一次调用；墙钟取 logs/timing.jsonl，同一 id 取最后一条）。
-- config.yaml：运行身份（模型与 revision、协议、configs/w1.json 的 sha256、划分清单与这个划分的 sha256、样本 id 指纹、工作台工具清单的
-  sha256、批大小与组大小；不含时间戳与机器相关的路径）；meta.json（src/runlog.write_run_metadata）；README.md。
+- config.yaml：运行身份（模型与 revision、协议（含 DEV-0053 的开关）、W1 配置文件（--w1-config）的路径与 sha256、划分清单与这个划分的
+  sha256、样本 id 指纹、工作台选项与工具清单的 sha256、批大小与组大小；不含时间戳与机器相关的路径）；meta.json
+  （src/runlog.write_run_metadata）；README.md。
 - logs/：timing.jsonl（每条样本每轮的生成墙钟与工具墙钟）、workbench.jsonl（Workbench.log()：每次调用的耗时、沙箱代码原文……）、
   run_<k>.json。
 
@@ -88,9 +89,11 @@ def w1_record(spec: W1RunSpec, splits_doc: Mapping[str, Any], samples: Sequence[
             "n_samples": len(samples), "limit": spec.limit, "sample_ids_sha256": ids_digest([s.id for s in samples])}
 
 
-def probe_tools(factory: Callable[..., Any], sample: Sample, protocol: Protocol) -> dict[str, Any]:
-    """工作台工具清单（运行身份用）：在第一条样本的原图上构造一个工作台，取 specs() 的名字与 sha256（tools_digest）。"""
-    wb = factory(load_images(sample)[0].copy(), disabled_groups=protocol.disabled_groups)
+def probe_tools(factory: Callable[..., Any], sample: Sample, protocol: Protocol,
+                options: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """工作台工具清单（运行身份用）：在第一条样本的原图上构造一个工作台（与回路相同的关键字参数：disabled_groups 与
+    W1Config.workbench_options()），取 specs() 的名字与 sha256（tools_digest）。"""
+    wb = factory(load_images(sample)[0].copy(), disabled_groups=protocol.disabled_groups, **dict(options or {}))
     specs = list(wb.specs())
     return {"tools_sha256": tools_digest(specs), "tools": [s.name for s in specs]}
 
@@ -110,8 +113,9 @@ def loop_identity(spec: W1RunSpec, cfg: W1Config, protocol: Protocol, splits_doc
         "protocol": protocol.as_dict(),
         "prompts": {"config": _rel(cfg.path), "config_sha256": cfg.sha256, "frozen": bool(cfg.data["frozen"]),
                     "system_sha256": hashlib.sha256(prompts.system.encode("utf-8")).hexdigest(),
-                    "task_template": prompts.tasks[spec.task], "last_round": prompts.last_round},
-        "workbench": {"factory": workbench_name, **dict(tools)},
+                    "task_template": prompts.tasks[spec.task], "last_round": prompts.last_round, "status": prompts.status,
+                    "final_round_refused": prompts.final_round_refused},
+        "workbench": {"factory": workbench_name, "options": dict(cfg.data["workbench"]), **dict(tools)},
         "batching": {"batch_size": batch_size, "chunk_size": chunk_size, "max_batch_tokens": max_batch_tokens,
                      "config_default": cfg.batching(tiny=spec.tiny)["batch_size"] == batch_size},
         "data": {"config_sha256": {Path(p).name: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in paths.config_files()}},
@@ -152,7 +156,9 @@ def loop_readme(spec: W1RunSpec, cfg: Mapping[str, Any], m: Mapping[str, Any]) -
              f"- 模型：{spec.repo}@{spec.revision}（适配器 {spec.adapter_model_key}）",
              f"- 协议：至多 {pr['max_rounds']} 轮、{pr['max_tool_calls']} 次计数的工具调用（提交不计数：{pr['submit_exempt_from_cap']}），"
              f"每轮思考 {pr['thinking_budget']}、作答 {pr['answer_budget']} token；关掉的工具组 {pr['disabled_groups'] or '无'}",
-             f"- 提示：configs/w1.json sha256 {cfg['prompts']['config_sha256'][:16]}…（frozen = {cfg['prompts']['frozen']}）；"
+             f"- 协议开关：最后一轮的工具 {pr['final_round_tools']}；满额之后的工具 {pr['capped_tools']}；每轮状态提示 "
+             f"{'有' if cfg['prompts']['status'] is not None else '无'}；工作台选项 {cfg['workbench']['options']}",
+             f"- 提示：{cfg['prompts']['config']} sha256 {cfg['prompts']['config_sha256'][:16]}…（frozen = {cfg['prompts']['frozen']}）；"
              f"工具清单 sha256 {cfg['workbench']['tools_sha256'][:16]}…（{len(cfg['workbench']['tools'])} 个工具）",
              f"- 划分 {w['split']}：n = {m['n']}（划分清单 {w['split_n']} 条，指纹 {w['split_sha256'][:16]}…）；批 {cfg['batching']['batch_size']}"
              f"（行数 × 提示宽度 ≤ {cfg['batching']['max_batch_tokens']}），组 {cfg['batching']['chunk_size']}；"
@@ -195,7 +201,8 @@ def run_loop(adapter: Any, spec: W1RunSpec, cfg: W1Config, protocol: Protocol, s
     if not samples:
         raise ValueError("没有样本")
     leaf = w1_leaf(out, spec.model_key, spec.task, spec.setting, spec.split)
-    tools = probe_tools(workbench_factory, samples[0], protocol)
+    wb_options = cfg.workbench_options()
+    tools = probe_tools(workbench_factory, samples[0], protocol, wb_options)
     cfg_doc = loop_identity(spec, cfg, protocol, splits_doc, samples, tools, workbench_name, batch_size, chunk_size, paths,
                             max_batch_tokens=max_batch_tokens)
     files = [cfg.path, *([] if splits_doc.get("tiny") else [W1_SPLITS_PATH]), *paths.config_files()]
@@ -215,7 +222,7 @@ def run_loop(adapter: Any, spec: W1RunSpec, cfg: W1Config, protocol: Protocol, s
     for a, b in todo:
         chunk = list(samples[a:b])
         recs = run_episodes(adapter, chunk, spec.task, protocol, prompts, batch_size=batch_size, max_batch_tokens=max_batch_tokens,
-                            workbench_factory=workbench_factory, tool_workers=tool_workers,
+                            workbench_factory=workbench_factory, workbench_options=wb_options, tool_workers=tool_workers,
                             expected_tools_sha256=tools["tools_sha256"], log=log)
         lines, tlines, wlines = [], [], []
         for s, rec in zip(chunk, recs):
