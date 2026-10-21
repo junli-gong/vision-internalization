@@ -25,6 +25,7 @@ OUT_DIR = ROOT / "configs" / "w1_tune"
 LAST_ROUND = "This is your last turn. Only the submit tools are available now: submit your answer."
 FINAL_ROUND_REFUSED = "Only the submit tools can be used in the last turn; this call was not executed."
 STATUS = "[Turn {round} of {max_rounds} done; tool calls used: {calls_used} of {max_tool_calls}; turns left: {rounds_left}.]"
+STATUS_FIELDS_USED = ["round", "max_rounds", "calls_used", "max_tool_calls", "rounds_left"]
 ANCHOR_TURN = "their results (text and images) come back in the next turn."
 ADD_MULTI = " You can make several tool calls in one turn; they run in order and all their results come back together in the next turn."
 ANCHOR_COORD = "and the tool reports which region a view covers."
@@ -53,6 +54,7 @@ def arms(base: dict) -> dict[str, dict]:
     c["prompts"]["messages"]["final_round_refused"] = FINAL_ROUND_REFUSED
     out["T1"] = copy.deepcopy(c)
     c["prompts"]["messages"]["status"] = STATUS
+    c["prompts"]["placeholders"]["status"] = STATUS_FIELDS_USED  # DEV-0053：模板用了哪些占位符就如数声明（D108-3）
     out["T2"] = copy.deepcopy(c)
     s = _insert_after(c["prompts"]["system"], ANCHOR_TURN, ADD_MULTI)
     c["prompts"]["system"] = _insert_after(s, ANCHOR_COORD, ADD_PRECISE)

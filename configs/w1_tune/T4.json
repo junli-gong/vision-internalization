@@ -1,0 +1,148 @@
+{
+ "schema_version": 1,
+ "name": "W1 调参臂 T4（PREREGISTRATION.md W1 §10b；由 scripts/mgr/make_w1_tune_configs.py 从 configs/w1.json 生成）",
+ "status": "调参用，只能跑开发-调参集。生成自 configs/w1.json（sha256 5102fa228367d48dfdea8e29b58933536ef8c99ebefbc4983bcd64213503006f）。",
+ "frozen": false,
+ "basis": "D103（负责人 2026-10-20 指令第二节第 4 条）：每条样本最多 6 轮、8 次工具调用；每轮思考最多 2,048 个 token，到上限强制收尾（与 E5 同一口径）；最终答案与 E1 的 T 通道一致：框用原生格式、mask 由工具光栅化后提交、计数直接给数字；出错时回到原图重画；每条样本记 token 数、工具调用次数、轮数与墙钟（简报硬约束第 11 条）。",
+ "protocol": {
+  "max_rounds": 6,
+  "max_tool_calls": 8,
+  "thinking_budget": 2048,
+  "answer_budget": 1024,
+  "submit_tools": [
+   "submit_mask",
+   "submit_box",
+   "submit_count"
+  ],
+  "submit_exempt_from_cap": true,
+  "final_round_tools": "submit_only",
+  "capped_tools": "submit_only",
+  "rule": "按轮同步（src/w1/loop.run_episodes）：第 1 轮 = system + user（原图在前，任务提示在后）。之后每轮把还没结束的样本按原顺序拼成至多 batch_size 行的批，调 adapter.chat_turn_batch（开思考、贪心；思考写满 thinking_budget 由适配器强制收尾，作答至多 answer_budget）；再逐条按出现顺序执行作答段里的工具调用（Workbench.call），每次调用的结果作为一条 tool 消息（文字 + 图）追加。结束：(1) 某次调用之后 Workbench.submission 不为空（提交了答案），这一段里其后的调用不再执行；(2) 作答段里既没有解析出的工具调用、也没有解析失败的工具调用，即给出了最终答案。上限：执行过的工具调用计数，submit_tools 不计入（submit_exempt_from_cap，否则用完 8 次之后指代分割再也交不了答案）；计数满 max_tool_calls 之后的调用不执行，返回 messages.tool_cap。第 max_rounds 轮结束仍没有答案记 failure = no_answer。解析失败的工具调用（ChatTurnResult.tool_call_errors）不执行、不计数，返回 messages.tool_call_error，这一轮不算给出最终答案。回路不做任何与任务相关的修补。协议开关（DEV-0053，与任务无关；默认 all = 上面的行为）：final_round_tools = submit_only 时（max_rounds > 1），第 max_rounds 轮交给模型的工具清单只含 specs() 里属于 submit_tools 的（顺序照 specs()），这一轮里调用非提交工具不执行、不计数，记 refused = final_round，返回 messages.final_round_refused，同一段里排在后面的提交照常执行，文字形式的最终答案照旧有效；capped_tools = submit_only 时，某一轮开始时计数的调用已满 max_tool_calls，这一轮的工具清单只给提交工具，被拒的调用照旧记 tool_cap；被拒的先后：after_submission → final_round → tool_cap。给的不是全部工具时轮记录加 tools_offered = submit_only。"
+ },
+ "batching": {
+  "batch_size": 16,
+  "chunk_size": 64,
+  "max_batch_tokens": 48000,
+  "tool_workers": 1,
+  "rule": "样本按划分的固定顺序每 chunk_size 条成一组（续跑的粒度：没写完的那一组整组重跑）；组内按轮同步。每一轮还没结束的样本按顺序先用 adapter.chat_inputs 逐条预检（拒收的记 input_rejected，不进批，D104），再按顺序贪心拆子批（src/w1/loop.plan_sub_batches）：行数 ≤ batch_size，且 行数 × 子批里最长的提示（左填充后的宽度，token）≤ max_batch_tokens；一条本身就超过上限时单独成批（D104：预填不分块）。批的组成只取决于顺序与提示长度，是确定的。batch_size、chunk_size、max_batch_tokens 进运行身份（config.yaml）。tool_workers 是组内跨样本并行执行工具调用的线程数（同一条样本的调用总是按顺序），只影响墙钟、不进运行身份。",
+  "status": "待定：batch_size 16 是按 A100-40GB 上 9B（权重约 19 GB）与每行最长约 1.5 万 token 的上下文估的保守值；max_batch_tokens 48000 是 D104 的初值，两者在服务器上实测显存后与回路协议一起冻结（D104）；tool_workers 等 DEV-0050 确认 Workbench 实例之间没有共享状态后可调到 4–8。"
+ },
+ "settings": {
+  "full": [],
+  "no_eye": [
+   "eye"
+  ],
+  "no_check": [
+   "check"
+  ],
+  "no_snap": [
+   "snap",
+   "code"
+  ],
+  "rule": "设置 → 关掉的工具组（docs/w1_plan.md §2 的 GROUPS）：W1-1 = full；A1 = no_eye；A2 = no_check；A3 = no_snap（去掉 snap 与 code）。submit 组永远不关。"
+ },
+ "workbench": {
+  "view_frames": true
+ },
+ "prompts": {
+  "status": "初稿，开发-调参集上待定（D103 §二.4）。系统提示对所有任务逐字相同，只说明工作台的用法、坐标约定与上限；按任务的提示只说明任务是什么、输出成什么格式，不写解题方法（docs/w1_plan.md §0）。工具说明由 Workbench.specs() 经对话模板的 tools 参数渲染，不写进提示。",
+  "system": "You are working on one image with a workbench of tools. The tools do not know what is in the image; you decide what to look at and what to build, and the tools measure, draw and fit for you.\n\nCoordinates: tools use coordinates from 0 to 1000, with x first (x = 0 is the left edge and x = 1000 the right edge; y = 0 is the top and y = 1000 the bottom), relative to the full original image unless you give a view number. Every image you are shown has a view number (the original image is view 0); tools that take coordinates accept an optional view number, and the coordinates are then 0 to 1000 relative to that view. Coordinates can take any value from 0 to 1000; give them as precisely as you can.\n\nHow to work: call tools when they help; their results (text and images) come back in the next turn. You can make several tool calls in one turn; they run in order and all their results come back together in the next turn. You have at most {max_rounds} turns and at most {max_tool_calls} tool calls in total; submitting the final answer does not count as a tool call. When you are done, give the final answer in the format the task asks for. If a result looks wrong, go back to the original image and start that part again instead of patching the wrong result.",
+  "tasks": {
+   "refseg": "Task: segment {expression} in the image.\nOutput: a mask of exactly that object, built with the tools and submitted with submit_mask. The submitted mask is the final answer.",
+   "refexp_box": "Task: locate {expression} in the image.\nOutput: its bounding box, either submitted with submit_box or reported as bbox coordinates in JSON format as the final answer.",
+   "count": "Task: {question}\nOutput: a single number, either submitted with submit_count or given as the final answer."
+  },
+  "messages": {
+   "tool_cap": "Tool call limit reached ({max_tool_calls} calls): this call was not executed. Give the final answer now.",
+   "tool_call_error": "This tool call could not be parsed and was not executed: {error}",
+   "last_round": "This is your last turn. Only the submit tools are available now: submit your answer.",
+   "status": "[Turn {round} of {max_rounds} done; tool calls used: {calls_used} of {max_tool_calls}; turns left: {rounds_left}.]",
+   "final_round_refused": "Only the submit tools can be used in the last turn; this call was not executed."
+  },
+  "placeholders": {
+   "system": [
+    "max_rounds",
+    "max_tool_calls"
+   ],
+   "refseg": [
+    "expression"
+   ],
+   "refexp_box": [
+    "expression"
+   ],
+   "count": [
+    "question"
+   ],
+   "tool_cap": [
+    "max_tool_calls"
+   ],
+   "tool_call_error": [
+    "error"
+   ],
+   "last_round": [],
+   "status": [
+    "round",
+    "max_rounds",
+    "calls_used",
+    "max_tool_calls",
+    "rounds_left"
+   ],
+   "final_round_refused": []
+  },
+  "rule": "refseg、refexp_box 的 {expression} 取 Sample.fields.expression（与 E1 相同）；count 的 {question} 取 E1 的人工问句（src/e1/prompts.COUNTBENCHQA_FIELD，D36-2，与 E1 默认相同）。messages.last_round 在进入第 max_rounds 轮之前追加在上一轮最后一条 tool 消息的末尾；为 null 时不追加。messages.status（DEV-0053）为 null 时不追加；是字符串时，每一轮执行完、样本还没结束，填好占位符后追加在这一轮最后一条 tool 消息的末尾（与 last_round 都有时 status 在前），轮记录加 status_notice = true；占位符只能是 {round}（刚结束的轮）、{max_rounds}、{rounds_left}、{calls_used}（计数的调用）、{max_tool_calls}、{calls_left}（不小于 0），用了哪些要在 placeholders.status 里声明。messages.final_round_refused（DEV-0053）是 final_round_tools = submit_only 时最后一轮里非提交调用的回复（这时必须有，没有占位符）；它排在最后一轮之后，模型看不到，只为历史里每个调用都有回复。"
+ },
+ "splits": {
+  "salt": "w1_dev_v1",
+  "purpose": "w1_dev",
+  "population": "poly:refcoco_unc_val",
+  "devtune_n": 300,
+  "devcheck_n": 500,
+  "test": [
+   "refcoco_unc_testA",
+   "refcoco_unc_testB",
+   "refcoco+_unc_testA",
+   "refcoco+_unc_testB",
+   "refcocog_umd_test"
+  ],
+  "count_devtune": "e1_dev:countbench",
+  "count_test": "e1_eval:countbench",
+  "rule": "devtune 与 devcheck：E1 的 poly:refcoco_unc_val（configs/e1_eval_subsets.json，1,000 句）按 sha256(salt|purpose|sent_id) 升序（src/data/subsets.hash_rank）排成一列，前 devtune_n 句是开发-调参集，第 devtune_n+1 到 devtune_n+devcheck_n 句是开发-检查集，两者不重叠；各自按 id 自然顺序列出。test_<数据集_划分方式_划分>：E1 的 poly:<同名> 子集原样（每个 1,000 句）。计数：test_countbench = E1 的 CountBench 评测条目（load_countbench(subset='eval')，442 条）；devtune = E1 的 CountBench 开发子集（configs/e1_dev_subsets.json 的 countbench，49 条；提议，待裁）。去重照 E1（加载器 subset='eval' 已剔除开发子集与 D20 探针图）。id 清单与 sha256 在 configs/w1_splits.json（src/w1/data.py 生成与核对）。",
+  "tiny": {
+   "devtune_n": 2,
+   "devcheck_n": 3
+  }
+ },
+ "baselines": {
+  "e1_task": {
+   "refseg": "refexp_poly",
+   "refexp_box": "refexp_box",
+   "count": "count"
+  },
+  "ownbox": {
+   "task": "refseg",
+   "box_task": "refexp_box",
+   "box_setting": "baseline_e1",
+   "rule": "\"自己的框\"：同一个模型在同一批句子上的 W1-0 refexp_box 预测（<out>/<模型>/refexp_box/baseline_e1/<划分>，没跑完就先按 E1 的协议跑完），按 configs/e1_posthoc.json 的 own_box.raster_rule 光栅化（四个角当多边形，scripts/summarize_e1_posthoc.own_box_record 的多边形对照），与 GT mask 算 inter / union；解析失败的框是空 mask。"
+  },
+  "poly_structured": {
+   "task": "refseg",
+   "variant": "poly_structured",
+   "rule": "E1 结构强制的多边形（configs/e1_posthoc.json 的 format_forced_poly，变体 poly_structured：至少 3 个点）在 W1 的划分上跑：src/e1/posthoc_runner.run_forced_poly_task(sample_subset=\"w1:<划分>\", leaf=…)，关思考、贪心、E1 冻结的批大小。"
+  },
+  "w1f": {
+   "task": "refseg",
+   "function": "src.w1.workbench.grabcut_mask",
+   "iterations": "src.w1.workbench.GRABCUT_ITERATIONS",
+   "rule": "W1-F（固定流程，没有 LLM 的点、修正与核对）：\"自己的框\"（同 ownbox 的框：W1-0 refexp_box 解析出的原图绝对像素 xyxy）直接交给工作台的同一个 GrabCut 函数 src.w1.workbench.grabcut_mask（box_abs 初始化：框内可能前景、框外确定背景；迭代次数取工作台的 GRABCUT_ITERATIONS，随机数种子取 GRABCUT_RNG_SEED，D106），返回的 mask 就是答案。框解析失败记那个失败原因、GrabCut 报错（框里或框外没有像素等）记 tool_error，都按空 mask 计分。函数与迭代次数只在 src/w1/workbench.py 定义一处，这里只写名字。"
+  }
+ },
+ "tiny": {
+  "protocol": {
+   "thinking_budget": 8,
+   "answer_budget": 32
+  },
+  "batch_size": 2,
+  "chunk_size": 4,
+  "rule": "--tiny（开发机彩排：小型随机模型、CPU、tests/fixtures 的小数据）：回路上限不变（6 轮、8 次调用），思考与作答预算缩小；批大小与组大小缩小，使彩排里也有多个批、多个组与续跑。"
+ }
+}
