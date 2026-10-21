@@ -2481,3 +2481,24 @@
    - 已批准计划内的运行，前一个结束就接下一个；
    - 需要裁定的事项附截止时间；
    - 10-26 前出论文用图：E1 差距图、E2 逐层曲线、E3 对照表、干扰随尺寸的曲线。
+
+## D104 — DEV-0049 合入（W1 的多轮对话接口；2026-10-21，管理员）
+
+1. **合入**：`src/adapters/chat.py`（新）、`base.py`、`budget.py`、`qwen35.py`、`tests/test_adapter_chat.py`（54 个测试）。
+   - `chat_turn_batch` / `chat_turn`：按轮批量，用 Qwen3.5 模板原生的 tools / `<tool_call>` / `role: "tool"`，后续轮次可以加图。
+   - 思考预算与强制收尾走 `generate_batch_budgeted` 的同一个循环（`_budget_loop`）与同一套记账。
+   - 批内结果与逐条结果逐 token 相同，在 CPU fp32 上有测试证明。
+   - `qwen35.py` 的 `build_inputs` 与 `budget.py` 的重构只是原样抽出函数，旧 API 的行为不变。
+   - 管理员复跑适配器测试：775/776 通过。唯一的失败 `test_adapter_trainable_rows[internvl-untied]` 单独重跑 4/4 通过，判为开发机满载下的偶发失败（当时 26 个 pytest 进程）。开发 agent 的全量结果是 2885 passed、19 skipped、1 failed（`test_synth_occlusion` 的 CPU 测速用例，与本改动无关，空机时再跑）。
+2. **对 `docs/w1_plan.md` §1 的偏离**：
+   - 接受：
+     - `ChatTurnResult` 多 5 个有默认值的字段（`token_ids`、`n_thinking_tokens`、`n_image_pixels`、`batch_size`、`batch_wall_time_s`）；
+     - assistant 消息可带 `reasoning_content`；
+     - `text` 去掉首尾换行，与 `answer_text` 一致；
+     - 公开 `chat_inputs` 与 `ChatInputs`；
+     - `tools=None` 与 `[]` 等价。
+   - **回填规则**（DEV-0051 照此）：assistant 消息写 `content=[作答原文]`、`reasoning_content=思考段`、不给 `tool_calls`，这样最贴近模型原样输出。
+   - **特殊 token**：工具输出与模型文字里出现 7 个结构性 token 中的任何一个，整批报错。工作台的输出要避开它们；回路拼批前用 `chat_inputs` 逐条预检，有问题的那条单独记失败。
+   - **显存**：预填不分块。回路按"行数 × 填充后的提示宽度 ≤ 约 4.8 万 token"拆子批，具体上限在服务器上实测后与回路协议一起冻结。
+   - **作答预算**：先保留 `answer_budget = 1024`，因为作答段里可能有较长的沙箱代码；开发-调参集上实测后定。
+   - **bf16 批一致性**：按轮批量时批的组成会变，样本做完就退出，按显存拆子批也会改变组成。组成是确定的。回路协议冻结时一并冻结拆批规则；不同批组成之间要做 ±δ 核对（D36-1）。
