@@ -2543,3 +2543,36 @@
      - `GRABCUT_MASK_MARGIN = 0.2`（暂定，随回路协议冻结）；
      - 屏蔽比任务书宽，整个 cv2.ml、HOGDescriptor 与视频跟踪器都屏蔽；k-means、HOG、LBP 照常允许，它们不带预训练权重。
 3. **HPC 上验证**（RUN-0059）：在 RUN-0058 的环境（cv2 4.10、skimage 0.24、Linux 的 RLIMIT_AS）里跑 W1 的测试。开发机的 cv2 是 5.0，跨版本的结果不保证逐位相同；同一环境内确定。
+
+## D107 — DEV-0051 合入（W1 的回路、划分、评分、基线与去留脚本；2026-10-21，管理员）
+
+1. **合入**（1ea8343b）：
+   - 配置：`configs/w1.json`（协议初稿，`frozen: false`）、`configs/w1_splits.json`（划分清单与 sha256）；
+   - 代码：`src/w1/{config,data,loop,scoring,runner,baselines}.py`；
+   - 脚本：`scripts/run_w1.py`、`scripts/w1_gate.py`；
+   - 测试：W1 的 9 个测试文件与假实现，E1 两个运行器的留档快照；
+   - E1 改动：`src/e1/runner.py` 与 `src/e1/posthoc_runner.py` 只加可选参数，默认路径逐字节不变，有快照测试证明。
+2. **划分**：
+   - devtune 300：`21e50b3b…`；
+   - devcheck 500：`e947f25f…`；
+   - 两者都从 `poly:refcoco_unc_val` 按 salt `w1_dev_v1` 排序取，不重叠；
+   - test：E1 的 poly 子集，5 × 1000；
+   - CountBench：调参用 E1 的开发子集 49 条，test 用 E1 的评测条目 442 条。
+3. **对 `docs/w1_plan.md` §3 的偏离**，全部接受：
+   - 提交答案不计入 8 次工具调用；
+   - 解析失败的调用不执行、不计数、返回报错，并在最后一轮前提示；
+   - 输出目录末尾加一层划分；
+   - CountBench 的调参集如上；
+   - 新增失败码 `no_answer`、`not_submitted`、`wrong_submission`、`input_rejected`、`tool_error`；
+   - `--tiny` 的两个钩子；
+   - 假实现放在 `tests/_w1_fakes.py`；
+   - 预检的 CPU 开销。
+   - 批参数是初值，在服务器上实测后与协议一起冻结：`batch_size 16`、`max_batch_tokens 48000`、`chunk_size 64`、`tool_workers 1`。
+4. **测试**：
+   - 开发 agent：D104 版完整跑过一次，2916 passed、25 skipped；最终版分三段补跑，共 2942 项，0 失败。中间一次全量卡在 `test_e2_probes` 的 HF Hub 读取上，与本改动无关。之后跑全量要加 `HF_HUB_OFFLINE=1`。
+   - 真的小模型、真的 `chat_turn_batch` 加真工作台的 `--tiny` 端到端跑通。
+   - 管理员在主分支上复跑 W1 与 E1 运行器的测试，结果另记。
+5. **用量**（开发 agent 的估计，假设见其总结）：
+   - 9B 的 W1-1 跑开发-检查集 500 句：约 7 GPU 小时，区间 4–10；
+   - 各基线合计约 0.5 GPU 小时。
+   - test 全量（5 × 1000）单是 9B 的 W1-1 就约 70 GPU 小时，加上消融与换模型会远超 80 GPU 小时的总预算。test 规模报负责人定（N42）。
