@@ -1106,6 +1106,46 @@ L 的逐项（点，种子 0 / 1 / 2）：定位 6.0 / 5.0 / 6.5；多边形 5.6
 - 划分：`configs/w1_splits.json`，devtune `21e50b3b…`，devcheck `e947f25f…`。
 - 去留判定：`scripts/w1_gate.py`。
 
+### 10b. 开发-调参：冒烟的诊断、调参的臂与选法（2026-10-21；**写于任何调参运行之前**，只看过 RUN-0060 的开发-调参集 32 句）
+
+**RUN-0060 的诊断**（9B，开发-调参集前 32 句，协议初稿）：
+- 指代分割 30/32 句到第 6 轮还没提交（`no_answer`），cIoU 0.159。同样的句子上："自己的框" 0.487，结构强制多边形 0.403，W1-F 0.518。
+- 模型每轮只发 1 个工具调用（192 轮里没有一轮发两个）。第 6 轮 30 句里有 11 句还在调 `show`。只有 3/32 的思考提到"最后一轮"的提示。
+- 提交了的 2 句，IoU 0.856、0.870。
+- 模型写进 `grabcut`、`draw_box` 的框，与它自己的原生框相比，IoU 中位数只有 0.68。27 个框里有 24 个是在放大之后给的。
+- 定位（16 条）：12 条提交，Acc@0.5 0.375（E1 原生 0.906）。提交的框常常就是放大窗口的边界。
+- 计数（16 条）：14/16 对。
+
+**调参的臂**：
+- 设计：
+  - 逐级累加，所有改动与任务无关；
+  - 按任务的提示不改；上限不改（6 轮、8 次调用、思考 2,048）。
+- 每个臂都跑 9B、指代分割、开发-调参集的前 96 句。
+
+| 臂 | 相对上一级加什么 | 实现 |
+|---|---|---|
+| T1 | 最后一轮只给提交工具。调用满 8 次之后也只给提交工具。最后一轮的提示改成："This is your last turn. Only the submit tools are available now: submit your answer." | DEV-0053：`final_round_tools`、`capped_tools` |
+| T2 | 每轮结束报剩余预算，追加在这一轮最后一条 tool 消息末尾："[Turn {round} of {max_rounds} done; tool calls used: {calls_used} of {max_tool_calls}; turns left: {rounds_left}.]" | DEV-0053：`messages.status` |
+| T3 | 系统提示加两句："You can make several tool calls in one turn; they run in order and all their results come back together in the next turn." 与 "Coordinates can take any value from 0 to 1000; give them as precisely as you can." | 只改配置 |
+| T4 | 视图坐标：每张返回的图有编号，带坐标的工具可以按某张视图自己的 0–1000 给坐标。系统提示加一句："Every image you are shown has a view number (the original image is view 0); tools that take coordinates accept an optional view number, and the coordinates are then 0 to 1000 relative to that view." | DEV-0054：`view_frames` |
+
+- 各臂的配置放在 `configs/w1_tune/T1.json` … `T4.json`，与 `configs/w1.json` 只差上表的项。
+- 措辞在合入、写配置时可以有小的文字调整，以配置文件为准，但不加上表以外的内容。
+
+**选法**（事先定死）：
+1. 每个臂在前 96 句上的指代分割 cIoU 与提交率。
+2. 只考虑提交率 ≥ 90% 的臂。在其中取 cIoU 最高的。
+3. 如果有更简单的臂（编号更小）与最高者相差不到 0.02，取最简单的那个。
+4. 没有一个臂的提交率 ≥ 90%：先在本节追加一轮新臂与理由，再跑，不在已有的臂上事后挑。
+5. 选中的臂再跑定位（开发-调参集 64 条）与计数（49 条），只报告，不再据此调参。
+
+**冻结**：
+- 选定之后，把选中的值写进 `configs/w1.json`，置 `frozen: true`，记一个 D 编号。sha256 写进 RESEARCH_LOG。
+- 然后才跑开发-检查集。
+- `scripts/run_w1.py` 在配置未冻结时拒绝开发-检查集与 test（DEV-0053）。
+
+**用量**：每个臂约 0.7 GPU 小时，总共约 4 GPU 小时。在 07 上 RUN-0057 的两段之间让路来跑，算进 W1 的 80 小时。
+
 ### 11. 待定（冻结前定）
 
 - test 的规模：N42，原计划超预算。
