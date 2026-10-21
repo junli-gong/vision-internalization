@@ -1,0 +1,166 @@
+experiment: E1
+framework: src/e1 事后读数（DEV-0033；E1 预注册 §10，D66）
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  adapter_model_key: qwen3.5-9b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+task: refexp_poly
+subset: forced_poly
+generation:
+  enable_thinking: false
+  max_new_tokens: 1024
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  readout:
+    kind: poly_structured
+    parse: polygon
+  forced_poly:
+    variant: poly_structured
+    grammar:
+      min_points: 3
+      max_points: 64
+      coord_max: 1000
+      stop_ids:
+      - 248046
+      - 248044
+      max_tokens: 769
+    format_ids:
+      digit_ids:
+      - 15
+      - 16
+      - 17
+      - 18
+      - 19
+      - 20
+      - 21
+      - 22
+      - 23
+      - 24
+      digit_tokens:
+      - '0'
+      - '1'
+      - '2'
+      - '3'
+      - '4'
+      - '5'
+      - '6'
+      - '7'
+      - '8'
+      - '9'
+      pieces:
+        open:
+          text: '[['
+          ids:
+          - 15050
+          tokens:
+          - '[['
+        xy_sep:
+          text: ', '
+          ids:
+          - 11
+          - 220
+          tokens:
+          - ','
+          - Ġ
+        point_sep:
+          text: '], ['
+          ids:
+          - 1089
+          - 498
+          tokens:
+          - '],'
+          - Ġ[
+        close:
+          text: ']]'
+          ids:
+          - 4891
+          tokens:
+          - ']]'
+      probes:
+      - text: '[[0, 0], [1000, 999], [12, 3]]'
+        n_tokens: 24
+      - text: '[[7, 100], [45, 1000], [999, 10], [5, 60]]'
+        n_tokens: 34
+      - text: '[[1000, 1000], [0, 1], [10, 0], [100, 101], [9, 99], [250, 750], [31,
+          4], [600, 8]]'
+        n_tokens: 67
+      rule: 数字逐位（每个十进制数字一个单 token）；四段结构各取单独编码的 token 序列；探针多边形的整段编码 = 各段编码与逐位数字的拼接、解码回来逐字相同（configs/e1_posthoc.json
+        的 format_forced_poly.tokenization）
+    rule: 至少 3 个点（E1 解析的下限 MIN_POLYGON_POINTS）：第 3 个点写完之前不允许 close。
+    grammar_rule: 生成必须恰好是 open 点 (point_sep 点)… close，再接一个停止 token；点 = 整数 xy_sep 整数。逐位置的
+      logits 处理器（src/e1/poly_forced.PolyStructureProcessor，经 generate_batch 的 logits_processor
+      传入，不改模型）从已生成的 token 推出每一行的状态，只留合乎语法的下一个 token，其余 logit 置 −inf：开头只留 open；写数字时只留合乎
+      integer_rule 的数字，已写了至少一位时另留下一段的第一个 token（x 之后是 xy_sep；y 之后是 point_sep（已写完的点数
+      + 1 < max_points 时）与 close（已写完的点数 + 1 ≥ min_points 时））；一段写到一半时只留这一段的下一个 token；close
+      之后只留本家族的停止 token（adapter.stop_token_ids）。点数由模型决定。
+    near_rectangle:
+      n_points: 4
+      min_area_ratio: 0.95
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+  entry:
+    template: 'Outline {expression} in the image with a polygon. Report the polygon
+      vertices in JSON format as a list of [x, y] points: [[x1, y1], [x2, y2], ...].
+      Coordinates are relative to the image size and range from 0 to 1000, with x
+      first. Output only one JSON block.'
+    native: false
+    provenance: unified
+    source_url: prompts/dev/0014-e1-harness.md
+    parse: polygon
+    max_new_tokens: 1024
+data:
+  n_samples: 32
+  sample_ids_sha256: 2ebdfae52f54db14a3d826d094a9fe3f3074135ee9c9bf81a9c69678936ecc38
+  has_gt: true
+  selection_stats:
+    w1:
+      task: refseg
+      split: devtune
+      setting: baseline_poly_structured
+      splits_config: configs/w1_splits.json
+      splits_sha256: a1371851555e854fac6f9d0e267f19a23602ee9cf31d5c303ef08432d1f7f0f7
+      split_sha256: 21e50b3bb13e25be281d268543d8df5801226f828640e44f99e2aa502bb6635c
+      split_n: 300
+      n_samples: 32
+      limit: 32
+      sample_ids_sha256: 2ebdfae52f54db14a3d826d094a9fe3f3074135ee9c9bf81a9c69678936ecc38
+    n: 32
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: 32
+map_ci_resamples: 0
+batch_size: 64
+batch_protocol:
+  protocol_version: 1
+  batch_size: 64
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: true
+  frozen_batch_size: 64
+posthoc:
+  kind: format_forced_poly
+  config: configs/e1_posthoc.json
+  config_sha256: 9a5607826bae8b2387cd9b5bbd88cd71d5887ebf86237b786546ab13ac613ce1
+  base_subset: w1:devtune
+  note: 事后读数（D66；E1 预注册 §10，写于运行之前）：报告里注明"事后"
+  version: 1
+  variant: poly_structured
