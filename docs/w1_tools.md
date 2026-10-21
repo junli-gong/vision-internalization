@@ -411,8 +411,10 @@
   - **四层拦截**：
     1. 启动前的 AST 检查。禁用名字：open、exec、eval、compile、`__import__`、getattr、setattr、globals、vars 等，以及一切双下划线名字。
        禁用属性：以下划线开头的属性、标准库模块名（如 `cv2.os`）、帧对象属性、明确的学习型与文件读写 API 名。
-    2. 受限的内建函数，加上带白名单的 `__import__`。
+    2. 受限的内建函数，加上带白名单的 `__import__`。白名单只管用户代码里的 import 语句。
+       用户代码调用的 C 函数在内部发起的导入属于库内部，私有子模块照常导入；例如 `image.max()` 第一次调用时 numpy 会导入 `numpy._core._methods`（RUN-0059）。
     3. `sys.meta_path` 拦截器：学习型框架与下载器（torch、transformers、sklearn、onnxruntime、pooch 等）谁都不能加载。
+       库代码可选地导入它们时只得到 ModuleNotFoundError，回退照常工作，记进 `blocked_imports`，不算违规；用户代码导入它们才算违规。
     4. 属性下毒：被屏蔽的属性换成一调用、一取属性就报违规的占位对象，别名也一并换掉。
   - **违规处理**：任何一次违规都判这次运行为 violation，返回的 mask 作废。`except` 接不住，光秃的 `except:` 接住了也照样记下。
   - **不算学习、照常允许的算法**：k-means（`cv2.kmeans`、`scipy.cluster`）、HOG 特征（`skimage.feature.hog`）、局部二值模式等。

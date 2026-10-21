@@ -24,8 +24,10 @@
 1. 启动前的 AST 检查（父进程）：import 白名单；禁用名字（open、exec、eval、compile、__import__、getattr 等，
    以及一切双下划线名字）；禁用属性（以下划线开头的属性、标准库模块名、帧对象属性、明确的学习型 / 文件读写 API 名）。
 2. 受限的内建（子进程）：用户代码的 `__builtins__` 只含白名单里的内建；`import` 语句走带白名单的 `__import__`
-   （名字以双下划线开头，第 1 层不让用户代码直接引用它）。
-3. `sys.meta_path` 拦截器（子进程，对所有导入者生效，包括白名单库的内部）：学习型模型框架与下载器一律不能加载；
+   （名字以双下划线开头，第 1 层不让用户代码直接引用它）。白名单只管用户代码里的 import 语句；用户代码调用的
+   C 函数在内部发起的导入（如 `image.max()` 第一次导入 numpy._core._methods）属于库内部，私有子模块照常导入。
+3. `sys.meta_path` 拦截器（子进程，对所有导入者生效，包括白名单库的内部）：学习型模型框架与下载器一律不能加载，
+   导入它们只得到 ModuleNotFoundError（库的可选依赖回退照常工作），记进 blocked_imports，不算违规；
    白名单包（numpy、scipy、cv2、skimage）的每个模块加载完，都重新执行第 4 层。
 4. 属性下毒（子进程）：白名单包里被屏蔽的属性（`cv2.dnn`、`cv2.CascadeClassifier`、`skimage.data`、`np.load` 等）
    换成一调用、一取属性就报违规的占位对象；公开子模块里对同一对象的别名也一并换掉。
@@ -276,6 +278,11 @@ class SandboxConfig:
     memory_bytes: int = DEFAULT_MEMORY_BYTES
     stdout_chars: int = STDOUT_LIMIT_CHARS
     python: str | None = None
+    # 仅供回归测试（RUN-0059）：在开发机上不装任何东西，复现"库内部导入可选依赖、私有子模块"的情形。工作台从不设置。
+    # test_sys_path：追加到子进程 sys.path 末尾的目录（放假的 pooch、torch 与模拟库代码的模块）；
+    # test_preload：沙箱在用户代码之前导入的模块名（按库代码导入，不过白名单），以同名变量交给用户代码。
+    test_sys_path: tuple[str, ...] = ()
+    test_preload: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not (isinstance(self.timeout_s, (int, float)) and self.timeout_s > 0):
@@ -376,7 +383,11 @@ def run_code(code: str, *, image, masks: Mapping[str, Any] | None = None, config
 
     with tempfile.TemporaryDirectory(prefix="w1sbx_") as tmp:
         with open(os.path.join(tmp, _CONFIG_FILE), "w", encoding="utf-8") as f:
-            json.dump({"memory_bytes": cfg.memory_bytes, "stdout_chars": cfg.stdout_chars}, f)
+            json.dump(
+                {"memory_bytes": cfg.memory_bytes, "stdout_chars": cfg.stdout_chars,
+                 "test_sys_path": list(cfg.test_sys_path), "test_preload": list(cfg.test_preload)},
+                f,
+            )
         with open(os.path.join(tmp, _CODE_FILE), "w", encoding="utf-8") as f:
             f.write(code)
         np.savez(os.path.join(tmp, _INPUT_FILE), image=img, **{MASK_KEY_PREFIX + k: v for k, v in ms.items()})
@@ -599,15 +610,47 @@ class _Finder:
         return None
 
 
+_IMPORT_NAME_OPCODE = None  # dis.opmap["IMPORT_NAME"]，子进程里第一次用到时取
+
+
+def _import_from_user_statement(depth: int = 2) -> bool:
+    """这次 `__import__` 是不是用户代码里的 import 语句发起的。
+
+    用户代码的 `__builtins__` 是受限字典，所以凡是"当前帧是用户代码"时发生的导入都会经过 _guarded_import，包括两种：
+    - 用户写的 import 语句：调用者帧是用户代码，且正在执行 IMPORT_NAME 指令；
+    - 用户代码调用的 C 函数在内部导入（PyImport_Import 取当前帧的 builtins）：例如 `image.max()` 第一次调用时
+      numpy 的 C 代码导入 numpy._core._methods。此时调用者帧也是用户代码，但当前指令是 CALL，不是 IMPORT_NAME。
+      这属于库内部的导入（RUN-0059 在 HPC 上发现的误判），不按用户代码的规则判。
+    帧 0 是这里，1 是 _guarded_import，2 是发起导入的帧。
+    """
+    global _IMPORT_NAME_OPCODE
+    if _IMPORT_NAME_OPCODE is None:
+        import dis
+
+        _IMPORT_NAME_OPCODE = dis.opmap["IMPORT_NAME"]
+    f = sys._getframe(depth)
+    if f.f_code.co_filename != CODE_FILENAME:
+        return False
+    code, i = f.f_code.co_code, f.f_lasti
+    return 0 <= i < len(code) and code[i] == _IMPORT_NAME_OPCODE
+
+
 def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
-    """用户代码的 `__import__`（第 2 层）：与 AST 检查同一套白名单，运行期再判一次，导入后重新下毒。"""
-    if level:
-        _violation("relative import")
-    if not module_allowed(name):
-        _violation(f"import {name}")
-    for item in fromlist or ():
-        if not from_import_allowed(name, item):
-            _violation(f"from {name} import {item}")
+    """用户代码的 `__import__`（第 2 层），导入之后重新下毒。
+
+    - 用户代码里的 import 语句：与 AST 检查同一套白名单，运行期再判一次，不合规就是违规。
+    - 库内部的导入（用户代码调用的 C 函数里发起的）：不套用户规则，私有子模块（numpy._core.* 等）照常导入。
+      第 3 层照样生效：学习型框架与下载器（torch、pooch 等）谁导入都只得到 ModuleNotFoundError，
+      记进 blocked_imports，不算违规，库的"可选依赖"回退照常工作；这些模块永远不会被加载。
+    """
+    if _import_from_user_statement():
+        if level:
+            _violation("relative import")
+        if not module_allowed(name):
+            _violation(f"import {name}")
+        for item in fromlist or ():
+            if not from_import_allowed(name, item):
+                _violation(f"from {name} import {item}")
     mod = __import__(name, globals, locals, fromlist, level)
     _poison_now()
     return mod
@@ -736,10 +779,16 @@ def _child_main(workdir: str) -> None:
         with open(os.path.join(workdir, _CODE_FILE), encoding="utf-8") as f:
             code = f.read()
         h, w = int(image.shape[0]), int(image.shape[1])
+        sys.path.extend(cfg.get("test_sys_path", []))
         sys.meta_path.insert(0, _Finder())
         _poison_now()
         warnings.simplefilter("ignore")
         g = {"__builtins__": _safe_builtins(), "__name__": "__w1_sandbox__", "image": image, "masks": masks, "H": h, "W": w}
+        for modname in cfg.get("test_preload", []):  # 仅测试：按库代码导入（经第 3 层，但不经用户白名单）
+            import importlib
+
+            g[modname.split(".")[-1]] = importlib.import_module(modname)
+            _poison_now()
         out = _CappedWriter(int(cfg["stdout_chars"]))
         status, error = "ok", None
         try:

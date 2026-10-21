@@ -192,6 +192,112 @@ def test_library_internals_keep_their_own_file_reads(image, masks):
     assert r.stdout.strip() == "29"
 
 
+# ---------------------------------------------------------------------------
+# RUN-0059 回归：库内部的导入（私有子模块、可选依赖）不算违规；用户代码的导入照旧按白名单判
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("code", ["y = masks['a'].mean()", "s = image.std()", "mx = image.max()", "v = image.var()"])
+def test_c_level_lazy_import_of_private_numpy_submodule_is_allowed(image, masks, code):
+    """这些 ndarray 方法第一次调用时，numpy 的 C 代码经 PyImport_Import 导入 numpy._core._methods；当前帧是用户代码，
+    所以导入经过受限的 __import__。修复前这里判成 "violation: 'import numpy._core._methods'"（HPC 与开发机都能复现）。"""
+    r = run_code(code + "\nresult_mask = masks['a']", image=image, masks=masks)
+    assert r.status == "ok", r.error
+    assert r.violations == () and r.result_mask is not None
+
+
+def _fake_library_dir(root):
+    """假的 pooch、torch（被执行就留下标记文件并抛 RuntimeError）与一个模拟库代码的模块 w1test_lib。"""
+    lib = root / "lib"
+    lib.mkdir()
+    marks = root / "marks"
+    marks.mkdir()
+    for name in ("pooch", "torch"):
+        (lib / f"{name}.py").write_text(
+            f"open({str(marks / (name + '.loaded'))!r}, 'w').close()\nraise RuntimeError('fake {name} was executed')\n"
+        )
+    (lib / "w1test_lib.py").write_text(
+        f"open({str(marks / 'w1test_lib.loaded')!r}, 'w').close()\n"
+        "import importlib\n"
+        "\n"
+        "def optional():\n"
+        "    out = {}\n"
+        "    for name in ('pooch', 'torch'):\n"
+        "        try:\n"
+        "            importlib.import_module(name)\n"
+        "            out[name] = 'loaded'\n"
+        "        except ImportError as e:\n"
+        "            out[name] = type(e).__name__\n"
+        "    try:\n"
+        "        import torch  # 语句形式的可选导入\n"
+        "        out['torch_stmt'] = 'loaded'\n"
+        "    except ImportError as e:\n"
+        "        out['torch_stmt'] = type(e).__name__\n"
+        "    return out\n"
+        "\n"
+        "def private_numpy():\n"
+        "    m = importlib.import_module('numpy._core._methods')\n"
+        "    import numpy._core._internal as internal\n"
+        "    return m.__name__, internal.__name__\n"
+    )
+    return lib, marks
+
+
+def test_library_optional_imports_of_blocked_modules_behave_as_missing(image, masks, tmp_path):
+    """假的 pooch、torch 就在子进程的 sys.path 上；库代码（非用户代码）可选地导入它们：得到 ModuleNotFoundError，
+    运行仍是 ok、没有违规，它们的模块代码从未执行。库代码导入 numpy 的私有子模块也照常可用。"""
+    lib, marks = _fake_library_dir(tmp_path)
+    cfg = SandboxConfig(test_sys_path=(str(lib),), test_preload=("w1test_lib",))
+    code = "print(w1test_lib.optional())\nprint(w1test_lib.private_numpy())\nresult_mask = masks['a']"
+    r = run_code(code, image=image, masks=masks, config=cfg)
+    assert r.status == "ok", r.error
+    assert r.violations == () and np.array_equal(r.result_mask, masks["a"])
+    out = r.stdout.splitlines()
+    assert eval(out[0]) == {"pooch": "ModuleNotFoundError", "torch": "ModuleNotFoundError", "torch_stmt": "ModuleNotFoundError"}
+    assert eval(out[1]) == ("numpy._core._methods", "numpy._core._internal")
+    assert {"pooch", "torch"} <= set(r.blocked_imports)
+    assert (marks / "w1test_lib.loaded").exists()  # 标记机制本身有效
+    assert not (marks / "pooch.loaded").exists() and not (marks / "torch.loaded").exists()  # 被挡的模块从未加载
+
+
+def test_real_library_with_fake_pooch_installed(image, masks, tmp_path):
+    """HPC 上装了 pooch：skimage 导入时会可选地 import pooch。在开发机上用假的 pooch 复现：slic 照常跑完，不算违规。"""
+    lib, marks = _fake_library_dir(tmp_path)
+    code = "from skimage.segmentation import slic\nlab = slic(image, n_segments=6, start_label=1)\nresult_mask = lab == lab[10, 16]"
+    r = run_code(code, image=image, masks=masks, config=SandboxConfig(test_sys_path=(str(lib),)))
+    assert r.status == "ok", r.error
+    assert r.violations == () and "pooch" in r.blocked_imports
+    assert not (marks / "pooch.loaded").exists()
+
+
+@pytest.mark.parametrize("code", ["import numpy._core", "import pooch", "import torch", "from numpy._core import _methods"])
+def test_user_imports_of_private_or_blocked_modules_are_still_refused(image, masks, tmp_path, code):
+    lib, marks = _fake_library_dir(tmp_path)
+    r = run_code(code, image=image, masks=masks, config=SandboxConfig(test_sys_path=(str(lib),)))
+    assert r.status == "rejected" and r.violations, (r.status, r.error)
+    assert not (marks / "pooch.loaded").exists() and not (marks / "torch.loaded").exists()
+
+
+@pytest.mark.parametrize("code,ok", [
+    ("import numpy", True), ("from numpy import linalg", True), ("import math", True),
+    ("import numpy._core", False), ("import pooch", False), ("import torch", False), ("import os", False),
+    ("from numpy import load", False), ("from numpy._core import _methods", False),
+])
+def test_guarded_import_alone_polices_user_import_statements(monkeypatch, code, ok):
+    """第 2 层单独（不经 AST 检查）也能拦下用户代码里的 import 语句。在本进程里直接执行，下毒换成空操作，免得改动测试进程的 numpy。"""
+    monkeypatch.setattr(sandbox, "_poison_now", lambda: None)
+    monkeypatch.setattr(sandbox, "_VIOLATIONS", [])
+    g = {"__builtins__": {"__import__": sandbox._guarded_import}, "__name__": "__w1_sandbox__"}
+    compiled = compile(code, sandbox.CODE_FILENAME, "exec", dont_inherit=True)
+    if ok:
+        exec(compiled, g)
+        assert sandbox._VIOLATIONS == []
+    else:
+        with pytest.raises(sandbox.SandboxViolation):
+            exec(compiled, g)
+        assert sandbox._VIOLATIONS
+
+
 def test_user_exception_and_syntax_error(image, masks):
     r = run_code("x = 1\ny = x / 0", image=image, masks=masks)
     assert r.status == "error" and "ZeroDivisionError" in r.error and "line 2" in r.error
