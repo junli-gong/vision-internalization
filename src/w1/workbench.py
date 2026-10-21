@@ -48,19 +48,7 @@ from src.executors.raster import box_to_mask, polygons_to_mask
 from src.executors.upsample import guide_to_unit, guided_filter
 from src.w1.sandbox import STDOUT_LIMIT_CHARS, SandboxConfig, run_code
 
-try:  # DEV-0049 的定义（docs/w1_plan.md §1）；合并后以它为准，下面的同字段占位届时删除
-    from src.adapters.chat import ToolSpec
-except ModuleNotFoundError as _e:  # pragma: no cover —— 只在 DEV-0049 合入之前生效
-    if _e.name != "src.adapters.chat":
-        raise
-
-    @dataclass(frozen=True)
-    class ToolSpec:  # type: ignore[no-redef]
-        """一个工具的说明，按 Qwen3.5 对话模板的 tools 参数渲染（字段同 docs/w1_plan.md §1）。"""
-
-        name: str
-        description: str
-        parameters: dict
+from src.adapters.chat import ToolSpec  # DEV-0049 的定义（docs/w1_plan.md §1；占位已在合入时删除，D106）
 
 
 # ---------------------------------------------------------------------------

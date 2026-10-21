@@ -2524,3 +2524,22 @@
    - C3 相对基座在计数与检测上掉得很多：0.8B 计数 30.4 ± 20.4 对 74.9，检测 8.0 对 24.6；2B 检测 9.8 对 41.7；4B 计数 56.5 对 87.3。
    - E3b+C3 在 0.8B 与 2B 上的检测 F1 三个种子全是 0。
    - 这与"C3 保住了语言"的说法有出入。论文里 L 的读法（C3 − E3b+C3）不受影响，但"语言保住"要按任务照实写。
+
+## D106 — DEV-0050 合入（W1 的工作台与沙箱；2026-10-21，管理员）
+
+1. **合入**：`src/w1/workbench.py`、`src/w1/sandbox.py`、`src/w1/__init__.py`、`docs/w1_tools.md`、两个测试文件，`requirements.txt` 加 opencv-python-headless 4.10.0.84 与 scikit-image 0.24.0。
+   - 22 个不含学习的工具，分 6 组：eye、hand、snap、check、code、submit。
+   - 坐标一律是原图的 0–1000。出错只返回、不抛异常。完全确定。
+   - 沙箱：`python -I` 子进程、空环境变量、限时 20 s、限内存 4 GB；四层拦截：AST、受限内建函数、meta_path、属性下毒；npz 进出。
+   - 合入时管理员删了 `ToolSpec` 的占位，改为直接 import DEV-0049 的定义。主分支上 W1、对话接口与常量的测试共 215 项通过。
+   - 开发 agent 的全量测试：2988 passed、19 skipped、2 failed。两项都与本改动无关，单独重跑都通过：
+     - `test_synth_occlusion` 的测速用例；
+     - `test_e3_c3_warmup` 的续跑一致性（两份 `adapter_config.json` 字节不同，疑似 peft 写 target_modules 的顺序不稳定，**另记待查**）。
+2. **裁定**：
+   - **核对只经 `show`**：把 mask 叠回原图只有 check 组的 `show` 做；hand 组的 `render` 删掉。hand 与 snap 组的结果只返回文字（面积、占比、0–1000 外接框、连通块数）。只有 `zoom`、`tile_view`、`edges`、`superpixels` 返回图，四张都与 mask 无关。这样 A2（去掉核对）是干净的消融，有测试钉住。
+   - **CRF 不做**：标准的全连接 CRF 只有第三方库实现（pydensecrf 等），任务书不让装；网格 CRF 的能量就是 GrabCut 最小化的。这是对负责人工具清单（D103 §二.2"参数固定的 CRF"）的一处偏离，写进 W1 预注册并报负责人。
+   - **其余接受**：
+     - 签名差异，新增 `select_superpixels`、`combine_masks`、`delete_mask`；
+     - `GRABCUT_MASK_MARGIN = 0.2`（暂定，随回路协议冻结）；
+     - 屏蔽比任务书宽，整个 cv2.ml、HOGDescriptor 与视频跟踪器都屏蔽；k-means、HOG、LBP 照常允许，它们不带预训练权重。
+3. **HPC 上验证**（RUN-0059）：在 RUN-0058 的环境（cv2 4.10、skimage 0.24、Linux 的 RLIMIT_AS）里跑 W1 的测试。开发机的 cv2 是 5.0，跨版本的结果不保证逐位相同；同一环境内确定。
