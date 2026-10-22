@@ -244,6 +244,50 @@ def color_gradient(image_rgb: np.ndarray) -> np.ndarray:
     return np.sqrt(sum(sobel(img[..., c]) ** 2 for c in range(3)))
 
 
+def point_disks(shape: tuple[int, int], pts_abs: np.ndarray, radius: float) -> np.ndarray:
+    """以各点为圆心、半径 radius（px）的圆盘之并：像素中心到圆心的距离 ≤ radius，外加点所在的那个像素（夹到图内）。
+    shape = (H, W)；pts_abs：(n, 2) 绝对像素 (x, y)，点应在 [0, W] × [0, H] 内。返回 (H, W) bool。
+    （DEV-0058 从 Workbench._disks 提出，供 src/w2/candidates.py 复用；工作台的 draw_points 行为逐位不变。）"""
+    h, w = int(shape[0]), int(shape[1])
+    out = np.zeros((h, w), bool)
+    r = float(radius)
+    for x, y in pts_abs:
+        c, rr = min(int(math.floor(x)), w - 1), min(int(math.floor(y)), h - 1)
+        out[rr, c] = True
+        c0, c1 = max(int(math.floor(x - r)) - 1, 0), min(int(math.ceil(x + r)) + 1, w)
+        r0, r1 = max(int(math.floor(y - r)) - 1, 0), min(int(math.ceil(y + r)) + 1, h)
+        cy = np.arange(r0, r1)[:, None] + 0.5
+        cx = np.arange(c0, c1)[None, :] + 0.5
+        out[r0:r1, c0:c1] |= (cx - x) ** 2 + (cy - y) ** 2 <= r * r
+    return out
+
+
+def morph_mask(src: np.ndarray, op: str, radius: int = MORPH_RADIUS_DEFAULT) -> np.ndarray:
+    """二值形态学（op ∈ MORPH_OPS）：fill_holes 用 scipy.ndimage.binary_fill_holes（不看 radius）；dilate / erode / open / close
+    用半径 radius 的圆盘结构元（disk_footprint）与 OpenCV 的 dilate / erode / morphologyEx。返回 (H, W) bool。
+    （DEV-0058 从 Workbench._t_morph 提出；工作台的 morph 工具行为逐位不变。）"""
+    if op == "fill_holes":
+        return ndimage.binary_fill_holes(src)
+    k = disk_footprint(radius)
+    m8 = np.asarray(src).astype(np.uint8)
+    fn = {
+        "dilate": lambda: cv2.dilate(m8, k),
+        "erode": lambda: cv2.erode(m8, k),
+        "open": lambda: cv2.morphologyEx(m8, cv2.MORPH_OPEN, k),
+        "close": lambda: cv2.morphologyEx(m8, cv2.MORPH_CLOSE, k),
+    }[op]
+    return fn() > 0
+
+
+def components_by_area(mask: np.ndarray) -> tuple[np.ndarray, int, list[int]]:
+    """8 连通域（scipy.ndimage.label，行优先扫描）。返回 (标号图, 个数 n, 按面积从大到小排好的标号；同面积按扫描顺序)。
+    （DEV-0058 从 Workbench._t_components 提出；工作台的 components 工具行为逐位不变。）"""
+    lab, n = ndimage.label(mask, structure=np.ones((3, 3), bool))
+    area = np.bincount(lab.ravel(), minlength=n + 1)
+    order = sorted(range(1, n + 1), key=lambda i: (-int(area[i]), i))
+    return lab, int(n), order
+
+
 def _check_mask(m, shape, name) -> np.ndarray:
     a = np.asarray(m)
     if a.dtype != bool or a.shape != tuple(shape):
@@ -771,18 +815,8 @@ class Workbench:
         return self._gradient
 
     def _disks(self, pts_abs: np.ndarray, radius: float) -> np.ndarray:
-        """以各点为圆心、半径 radius（px）的圆盘之并：像素中心到圆心的距离 ≤ radius，外加点所在的那个像素。"""
-        out = np.zeros((self._h, self._w), bool)
-        r = float(radius)
-        for x, y in pts_abs:
-            c, rr = min(int(math.floor(x)), self._w - 1), min(int(math.floor(y)), self._h - 1)
-            out[rr, c] = True
-            c0, c1 = max(int(math.floor(x - r)) - 1, 0), min(int(math.ceil(x + r)) + 1, self._w)
-            r0, r1 = max(int(math.floor(y - r)) - 1, 0), min(int(math.ceil(y + r)) + 1, self._h)
-            cy = np.arange(r0, r1)[:, None] + 0.5
-            cx = np.arange(c0, c1)[None, :] + 0.5
-            out[r0:r1, c0:c1] |= (cx - x) ** 2 + (cy - y) ** 2 <= r * r
-        return out
+        """以各点为圆心、半径 radius（px）的圆盘之并：像素中心到圆心的距离 ≤ radius，外加点所在的那个像素（point_disks）。"""
+        return point_disks((self._h, self._w), pts_abs, radius)
 
     # ---- eye ----------------------------------------------------------------
 
@@ -1015,33 +1049,20 @@ class Workbench:
 
     def _t_morph(self, name, op, radius=MORPH_RADIUS_DEFAULT, out=None) -> ToolResult:
         src = self._mask(name)
-        if op == "fill_holes":
-            res = ndimage.binary_fill_holes(src)
-            how = "fill_holes"
-        else:
-            k = disk_footprint(radius)
-            m8 = src.astype(np.uint8)
-            fn = {
-                "dilate": lambda: cv2.dilate(m8, k),
-                "erode": lambda: cv2.erode(m8, k),
-                "open": lambda: cv2.morphologyEx(m8, cv2.MORPH_OPEN, k),
-                "close": lambda: cv2.morphologyEx(m8, cv2.MORPH_CLOSE, k),
-            }[op]
-            res = fn() > 0
-            how = f"{op} with a disc of radius {radius} px"
+        res = morph_mask(src, op, radius)
+        how = "fill_holes" if op == "fill_holes" else f"{op} with a disc of radius {radius} px"
         dst = out or name
         self._set_mask(dst, res)
         return ToolResult(text=f"Applied {how} to mask '{name}'. " + self._mask_stats(dst))
 
     def _t_components(self, name, keep=None, out=None) -> ToolResult:
         src = self._mask(name)
-        lab, n = ndimage.label(src, structure=np.ones((3, 3), bool))
+        lab, n, order = components_by_area(src)  # order：面积从大到小，同面积按扫描顺序
         if n == 0:
             if keep:
                 raise ToolError(f"mask '{name}' is empty; nothing to keep")
             return ToolResult(text=f"Mask '{name}' is empty: 0 components.")
         area = np.bincount(lab.ravel(), minlength=n + 1)
-        order = sorted(range(1, n + 1), key=lambda i: (-int(area[i]), i))  # 面积从大到小，同面积按扫描顺序
         objs = ndimage.find_objects(lab)
         lines = [f"Mask '{name}' has {n} 8-connected component{'s' if n != 1 else ''} (largest first):"]
         for rank, i in enumerate(order[:COMPONENTS_LIST_MAX], start=1):

@@ -2744,3 +2744,23 @@
    - 同样的代码在 Mac 上能运行。
    - 这不改变判定。
 4. **测试**：管理员在主分支上跑 `tests/test_w1_replay.py`，25 passed；开发 agent 跑 W1 的全部测试，396 passed。
+
+## D115（2026-10-22，管理员）：DEV-0058 合入，W2 的候选生成器与挑选图渲染
+
+1. **合入**：
+   - 新建 `src/w2/{__init__,candidates,render}.py`、`docs/w2_tools.md`、`tests/test_w2_{candidates,render}.py`；
+   - `src/w1/workbench.py` 只把三处私有实现提成公共函数（`point_disks`、`morph_mask`、`components_by_area`）。W1 的工具清单 digest 仍是 `dcc91402…`，W1 的测试照常通过。
+2. **生成器**：
+   - 类型：`grabcut_default`（逐位等于 W1-F）、`grabcut`（迭代次数、框外扩或内缩、软初始化）、`grabcut_points`、`slic`、`watershed`、`box`；任何生成器都可以带通用的后处理 `post`。
+   - `DEFAULT_SPEC` 的 8 项：`gc_default`、`gc_box_plus10`、`gc_soft_box_minus10`、`gc_default+lcc+fill`、`slic_s30_t50`、`slic_s100_t50`、`ws_pts`、`box`。
+   - 耗时：8 个候选每句中位约 3.4 s（开发机 M4 单核），其中九成花在 3 次 GrabCut 上。
+3. **对 `docs/w2_plan.md` 的偏离**，全部接受：
+   - 空 mask 不算失败；
+   - SLIC 在框周围的裁剪区域上跑；
+   - 候选名用 `ws_pts`、`ws_center`；
+   - 后处理做成通用键；
+   - 点用绝对像素；
+   - 拼图 638×482。
+4. **1 号候选失败时**：由 W2 回路统一当作空 mask，与 W1-F 一致，在 DEV-0059 的补改里实现。实测 W1-F 在 596 句上 GrabCut 0 次报错。
+5. **布局**：在 Qwen3.5 的 PixelBudget(300) 下，任何一张图都被缩到约 300 个视觉 token，所以 grid 布局每个候选只有约 33 个 token；separate 每句约 2,700 个。两者都留给 W2 预注册 §5 调参第 1 步去比，不改预注册。
+6. **测试**：管理员在主分支上跑 W2 的候选、渲染测试与 W1 的工作台、重放、基线、回路、契约测试：204 passed。
