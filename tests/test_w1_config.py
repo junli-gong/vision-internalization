@@ -21,7 +21,7 @@ def test_protocol_numbers_pinned_to_d103():
     assert p.disabled_groups == frozenset() and p.submit_tools == {"submit_mask", "submit_box", "submit_count"}
     assert p.submit_exempt_from_cap is True
     assert "6 轮" in CFG.data["basis"] and "8 次" in CFG.data["basis"] and "2,048" in CFG.data["basis"]
-    assert CFG.data["frozen"] is False  # 开发-调参集上定稿之前
+    assert CFG.data["frozen"] is True  # D111：开发-调参集上选定 U2 后冻结（冻结前是 False）
 
 
 def test_settings_map_to_ablation_groups():
