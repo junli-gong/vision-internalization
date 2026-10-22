@@ -4,9 +4,9 @@
 - predictions.jsonl：每条样本一行（回路的设置：EpisodeRecord.to_json() + score；基线：见 src/w1/baselines.py）。不含墙钟，逐字节可复现。
 - metrics.json：只由 predictions.jsonl 算出（src/w1/scoring.aggregate_w1；E1 的基线用 E1 的 aggregate），含 bootstrap 95% CI。
 - compute.json：src/accounting.py（每轮记一次调用；墙钟取 logs/timing.jsonl，同一 id 取最后一条）。
-- config.yaml：运行身份（模型与 revision、协议（含 DEV-0053 的开关）、W1 配置文件（--w1-config）的路径与 sha256、划分清单与这个划分的
-  sha256、样本 id 指纹、工作台选项与工具清单的 sha256、批大小与组大小；不含时间戳与机器相关的路径）；meta.json
-  （src/runlog.write_run_metadata）；README.md。
+- config.yaml：运行身份（模型与 revision、协议（含 DEV-0053 的开关）、提示走哪种消息（DEV-0055 的 status_role、last_round_role）、
+  W1 配置文件（--w1-config）的路径与 sha256、划分清单与这个划分的 sha256、样本 id 指纹、工作台选项与工具清单的 sha256、批大小与
+  组大小；不含时间戳与机器相关的路径）；meta.json（src/runlog.write_run_metadata）；README.md。
 - logs/：timing.jsonl（每条样本每轮的生成墙钟与工具墙钟）、workbench.jsonl（Workbench.log()：每次调用的耗时、沙箱代码原文……）、
   run_<k>.json。
 
@@ -114,7 +114,8 @@ def loop_identity(spec: W1RunSpec, cfg: W1Config, protocol: Protocol, splits_doc
         "prompts": {"config": _rel(cfg.path), "config_sha256": cfg.sha256, "frozen": bool(cfg.data["frozen"]),
                     "system_sha256": hashlib.sha256(prompts.system.encode("utf-8")).hexdigest(),
                     "task_template": prompts.tasks[spec.task], "last_round": prompts.last_round, "status": prompts.status,
-                    "final_round_refused": prompts.final_round_refused},
+                    "final_round_refused": prompts.final_round_refused, "status_role": prompts.status_role,
+                    "last_round_role": prompts.last_round_role},
         "workbench": {"factory": workbench_name, "options": dict(cfg.data["workbench"]), **dict(tools)},
         "batching": {"batch_size": batch_size, "chunk_size": chunk_size, "max_batch_tokens": max_batch_tokens,
                      "config_default": cfg.batching(tiny=spec.tiny)["batch_size"] == batch_size},
@@ -157,7 +158,8 @@ def loop_readme(spec: W1RunSpec, cfg: Mapping[str, Any], m: Mapping[str, Any]) -
              f"- 协议：至多 {pr['max_rounds']} 轮、{pr['max_tool_calls']} 次计数的工具调用（提交不计数：{pr['submit_exempt_from_cap']}），"
              f"每轮思考 {pr['thinking_budget']}、作答 {pr['answer_budget']} token；关掉的工具组 {pr['disabled_groups'] or '无'}",
              f"- 协议开关：最后一轮的工具 {pr['final_round_tools']}；满额之后的工具 {pr['capped_tools']}；每轮状态提示 "
-             f"{'有' if cfg['prompts']['status'] is not None else '无'}；工作台选项 {cfg['workbench']['options']}",
+             f"{'有' if cfg['prompts']['status'] is not None else '无'}；提示走的消息 status → {cfg['prompts'].get('status_role', 'tool')}、"
+             f"last_round → {cfg['prompts'].get('last_round_role', 'tool')}；工作台选项 {cfg['workbench']['options']}",
              f"- 提示：{cfg['prompts']['config']} sha256 {cfg['prompts']['config_sha256'][:16]}…（frozen = {cfg['prompts']['frozen']}）；"
              f"工具清单 sha256 {cfg['workbench']['tools_sha256'][:16]}…（{len(cfg['workbench']['tools'])} 个工具）",
              f"- 划分 {w['split']}：n = {m['n']}（划分清单 {w['split_n']} 条，指纹 {w['split_sha256'][:16]}…）；批 {cfg['batching']['batch_size']}"

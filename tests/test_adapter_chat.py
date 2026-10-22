@@ -466,6 +466,87 @@ def test_two_round_rehearsal_round_synchronous(ad, convs, imgs):
 
 
 # ---------------------------------------------------------------------------
+# DEV-0055：W1 的提示作为单独的 user 消息（tool → user → 生成）
+# ---------------------------------------------------------------------------
+
+NOTICE = "[Turn 2 of 6 done; tool calls used: 2 of 8; turns left: 4.]"
+THINK1, THINK2 = "First I should zoom in on the square.", "The zoomed view shows the square; look again."
+VIEW = "View of [100, 200, 300, 400]:"
+PAD = "<|vision_start|><|image_pad|><|vision_end|>"
+
+
+def _w1_two_rounds(imgs):
+    """W1 回路回填的两轮历史（D104 的写法：content = 作答原文（含 <tool_call> 块），reasoning_content = 思考段，不给 tool_calls），
+    每轮一个调用、结果是文字加图。"""
+    return [{"role": "system", "content": [_t(SYSTEM)]},
+            {"role": "user", "content": [_i(imgs["land"]), _t("Segment the green square.")]},
+            {"role": "assistant", "content": [_t(CALL_TEXT)], "reasoning_content": THINK1},
+            {"role": "tool", "content": [_t(VIEW), _i(imgs["square"])]},
+            {"role": "assistant", "content": [_t(CALL_TEXT)], "reasoning_content": THINK2},
+            {"role": "tool", "content": [_t(VIEW), _i(imgs["wide"])]}]
+
+
+def _notice_variants(imgs):
+    """同一段历史，提示的两种走法：tool（现状：作为一个文字项追加在最后一条 tool 消息末尾）与 user（单独一条 user 消息）。"""
+    hist = _w1_two_rounds(imgs)
+    as_tool = hist[:-1] + [{"role": "tool", "content": list(hist[-1]["content"]) + [_t(NOTICE)]}]
+    as_user = hist + [{"role": "user", "content": [_t(NOTICE)]}]
+    return as_tool, as_user
+
+
+def test_notice_as_user_message_renders_after_tool_results(ad, ref, imgs):
+    """check_messages / chat_inputs 接受 assistant → tool → user → 生成；渲染与官方处理器逐 token 相同；user 消息渲染为
+    </tool_response> 之后单独的 user 轮、生成提示之前。Qwen3.5 的模板只保留最后一条真实 user 之后的思考段：走 tool 时两轮的思考段
+    都在，走 user 时两轮都被去掉（assistant 只剩作答原文）。提示的 token 数随之变化（视觉 token 不变）。"""
+    as_tool, as_user = _notice_variants(imgs)
+    px = ad.processor_pixels()
+    inp = {}
+    for name, conv in (("tool", as_tool), ("user", as_user)):
+        i = ad.chat_inputs(conv, tools=[ZOOM])
+        text = ref.apply_chat_template(template_messages(conv)[0], tools=[ZOOM.as_template()], tokenize=False,
+                                       add_generation_prompt=True, enable_thinking=True)
+        enc = ref(text=[text], images=[imgs["land"], imgs["square"], imgs["wide"]], min_pixels=px, max_pixels=px,
+                  return_tensors="pt")
+        assert i.text == text and list(i.row.ids) == enc["input_ids"][0].tolist(), name
+        assert torch.equal(enc["pixel_values"], i.tensors["pixel_values"])
+        inp[name] = i
+    t, u = inp["tool"].text, inp["user"].text
+    gen = "<|im_start|>assistant\n<think>\n"
+    # tool：提示在 <tool_response> 里，与工具输出之间没有分隔
+    assert t.endswith(f"<tool_response>\n{VIEW}{PAD}{NOTICE}\n</tool_response><|im_end|>\n{gen}")
+    # user：</tool_response> 之后单独一条 user 轮，紧接着是生成提示
+    assert u.endswith(f"<tool_response>\n{VIEW}{PAD}\n</tool_response><|im_end|>\n<|im_start|>user\n{NOTICE}<|im_end|>\n{gen}")
+    assert t.count("<|im_start|>user") == 3 and u.count("<|im_start|>user") == 4
+    # 思考段：tool 时两轮都在（在最后一条真实 user 之后）；user 时都被模板去掉
+    for th in (THINK1, THINK2):
+        assert f"<|im_start|>assistant\n<think>\n{th}\n</think>\n\n{CALL_TEXT}<|im_end|>" in t
+        assert th not in u
+    assert u.count(f"<|im_start|>assistant\n{CALL_TEXT}<|im_end|>") == 2 and "</think>" not in u
+    # token 数：视觉 token 相同；user 时去掉的两段思考比多出的 user 轮长，提示变短
+    assert inp["tool"].row.n_visual_tokens == inp["user"].row.n_visual_tokens > 0
+    dropped = sum(len(ad._encode(f"<think>\n{th}\n</think>\n\n")) for th in (THINK1, THINK2))
+    added = len(ad._encode(f"<|im_start|>user\n{NOTICE}<|im_end|>\n")) - len(ad._encode(NOTICE))
+    assert len(inp["user"].row.ids) - len(inp["tool"].row.ids) == added - dropped < 0
+
+
+def test_notice_as_user_message_generates_like_any_turn(ad, imgs):
+    """chat_turn_batch 接受以 user 提示结尾的对话（与以 tool 结尾的同批）：字段照常，批内与逐条逐 token 相同。"""
+    as_tool, as_user = _notice_variants(imgs)
+    kinds = _kinds(ad)
+    lt, lu = _plen(ad, as_tool, [ZOOM]), _plen(ad, as_user, [ZOOM])
+    assert lt != lu
+    plan = {lt: kinds["tool_call"], lu: kinds["natural"]}
+    with scripted(ad, plan):
+        batch = ad.chat_turn_batch([as_tool, as_user], tools=[[ZOOM], [ZOOM]], thinking_budget=TB, answer_budget=AB)
+        single = [ad.chat_turn(c, tools=[ZOOM], thinking_budget=TB, answer_budget=AB) for c in (as_tool, as_user)]
+    for bt, s in zip(batch, single):
+        assert {f: getattr(bt, f) for f in _FIELDS} == {f: getattr(s, f) for f in _FIELDS}
+    _check_result(ad, batch[0], "tool_call", kinds["tool_call"], as_tool, [ZOOM])
+    _check_result(ad, batch[1], "natural", kinds["natural"], as_user, [ZOOM])
+    assert batch[1].n_prompt_tokens == lu and batch[1].n_images == 3
+
+
+# ---------------------------------------------------------------------------
 # parse_tool_calls
 # ---------------------------------------------------------------------------
 

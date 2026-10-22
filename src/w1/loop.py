@@ -28,6 +28,15 @@
   - 给的不是全部工具时，轮记录里加 "tools_offered": "submit_only"。
   - prompts.status（不为 None 时）：每一轮执行完、样本还没结束时，按 STATUS_FIELDS 填好，作为一个文字项追加在这一轮最后一条 tool 消息
     的末尾，轮记录里加 "status_notice": true；与 last_round 都有时 status 在前（status 在本轮末尾追加，last_round 在进入最后一轮时追加）。
+- 提示走哪种消息（DEV-0055；configs/w1.json 的 prompts.status_role、prompts.last_round_role，取 NOTICE_ROLES；默认 tool = 上面的行为，
+  记录逐字节不变）：
+  - tool：追加在这一轮最后一条 tool 消息的末尾（一个文字项，与工具输出之间不加分隔，现状）。
+  - user：这一轮的工具结果全部追加之后，再追加一条只有文字的 user 消息（对话模板把它渲染成 </tool_response> 之后单独的 user 轮）。
+    同一轮至多一条：status 与 last_round 都走 user 时拼进同一条，status 在前、last_round 在后，中间空一行。
+  - 一个走 tool、一个走 user 时各走各的：走 tool 的那条照旧追加在这一轮最后一条 tool 消息上（即使它后面已经有了这一轮的 user 提示）。
+  - 有 user 提示的那一轮，轮记录里再加 "notice_message": "user"（status_notice、last_round_notice 照旧）。
+  - 注意（Qwen3.5 的对话模板）：模板只保留"最后一条真实 user 消息"之后的 assistant 思考段（reasoning_content），插入 user 提示之后，
+    它之前各轮的思考段都不再渲染（见 DEV-0055 的完成总结与 tests/test_adapter_chat.py）。
 - 工作台选项（configs/w1.json 的 workbench，W1Config.workbench_options() 只给与默认值不同的项）：run_episodes 原样作为关键字参数传给
   workbench_factory；默认时什么都不传。
 - 最终答案：refseg = 提交的 mask（原图分辨率 bool）；refexp_box = submit_box 的框，或最终答案文字里本家族的原生框（adapter.parse_one_box，
@@ -78,6 +87,12 @@ TOOLS_SUBMIT_ONLY = "submit_only"
 TOOLS_OFFERED: tuple[str, ...] = (TOOLS_ALL, TOOLS_SUBMIT_ONLY)  # protocol.final_round_tools / capped_tools 的取值（DEV-0053）
 # prompts.status 能用的占位符（DEV-0053）：刚结束的轮、上限、剩余轮数、计数的调用、调用上限、剩余调用（不小于 0）
 STATUS_FIELDS: tuple[str, ...] = ("round", "max_rounds", "rounds_left", "calls_used", "max_tool_calls", "calls_left")
+# prompts.status_role / last_round_role 的取值（DEV-0055）：tool = 追加在这一轮最后一条 tool 消息的末尾（默认，现状）；user = 这一轮的
+# 工具结果之后单独一条 user 消息
+NOTICE_TOOL = "tool"
+NOTICE_USER = "user"
+NOTICE_ROLES: tuple[str, ...] = (NOTICE_TOOL, NOTICE_USER)
+NOTICE_SEPARATOR = "\n\n"  # 同一轮的 status 与 last_round 都走 user 时，拼进同一条 user 消息的分隔（空一行）
 
 
 @dataclass(frozen=True)
@@ -132,7 +147,8 @@ class LoopPrompts:
     """回路用的提示（src/w1/config.W1Config.loop_prompts 由 configs/w1.json 渲染）：system 与 tool_cap 已按协议填好上限；
     tasks 是按任务的模板；tool_call_error 含 {error}；last_round 为 None 时不追加。DEV-0053：status 是每轮的状态提示模板
     （占位符只能是 STATUS_FIELDS，None 时不追加）；final_round_refused 是最后一轮里非提交调用的回复（final_round_tools = submit_only
-    时必须有，没有占位符）。"""
+    时必须有，没有占位符）。DEV-0055：status_role、last_round_role 是这两种提示走哪种消息（NOTICE_ROLES；默认 tool = 追加在这一轮最后
+    一条 tool 消息的末尾；user = 单独一条 user 消息，见模块说明）。"""
 
     system: str
     tasks: Mapping[str, str]
@@ -141,12 +157,17 @@ class LoopPrompts:
     last_round: str | None
     status: str | None = None
     final_round_refused: str | None = None
+    status_role: str = NOTICE_TOOL
+    last_round_role: str = NOTICE_TOOL
 
     def __post_init__(self) -> None:
         if self.status is not None:
             bad = template_fields(self.status) - set(STATUS_FIELDS)
             if bad:
                 raise ValueError(f"status 的占位符只能是 {STATUS_FIELDS}，收到 {sorted(bad)}")
+        for name in ("status_role", "last_round_role"):
+            if getattr(self, name) not in NOTICE_ROLES:
+                raise ValueError(f"LoopPrompts.{name} 只能是 {NOTICE_ROLES}，收到 {getattr(self, name)!r}")
 
     def status_text(self, r: int, protocol: Protocol, calls_used: int) -> str:
         """刚结束第 r 轮、计数的调用已有 calls_used 次时的状态提示（status 为 None 时不该调用）。"""
@@ -304,6 +325,7 @@ class _Episode:
         self.calls: list[Compute] = []
         self.done = False
         self.offered = TOOLS_ALL  # 这一轮给的工具（tool_specs 定，step 记进轮记录）
+        self.user_notice: dict[str, Any] | None = None  # 最近一条作为 user 消息追加的提示（DEV-0055；同一轮至多一条）
 
     # -- 结束 ---------------------------------------------------------------
 
@@ -466,19 +488,39 @@ class _Episode:
         self.rec.input_error = {"round": r, "error": f"{type(err).__name__}: {err}"}
         self._finish("input_rejected", FAILURE_INPUT_REJECTED)
 
+    def _round_tool_message(self, where: str) -> dict[str, Any]:
+        """这一轮最后一条 tool 消息：通常是最后一条消息；这一轮已经追加了 user 提示（DEV-0055）时是它前面那条。"""
+        k = -2 if self.user_notice is not None and self.messages[-1] is self.user_notice else -1
+        msg = self.messages[k]
+        if msg["role"] != "tool":
+            raise RuntimeError(f"{self.sample.id}：{where}，这一轮最后一条消息应是 tool 消息，收到 {msg['role']}")
+        return msg
+
+    def _add_notice(self, role: str, text: str, where: str) -> None:
+        """追加一条提示（DEV-0055）：tool = 作为一个文字项追加在这一轮最后一条 tool 消息的末尾（现状）；user = 这一轮的工具结果之后
+        单独一条只有文字的 user 消息，同一轮已经有了就拼进去（中间空一行），轮记录加 notice_message = user。"""
+        if role == NOTICE_TOOL:
+            self._round_tool_message(where)["content"].append({"type": "text", "text": text})
+            return
+        if self.user_notice is not None and self.messages[-1] is self.user_notice:
+            item = self.user_notice["content"][0]
+            self.user_notice["content"][0] = {"type": "text", "text": item["text"] + NOTICE_SEPARATOR + text}
+        else:
+            self._round_tool_message(where)  # user 提示只跟在这一轮的工具结果之后（tool → user）
+            self.user_notice = _text_msg("user", text)
+            self.messages.append(self.user_notice)
+        self.rec.rounds[-1]["notice_message"] = NOTICE_USER
+
     def add_last_round_notice(self, text: str) -> None:
-        last = self.messages[-1]
-        if last["role"] != "tool":
-            raise RuntimeError(f"{self.sample.id}：进入最后一轮之前，最后一条消息应是 tool 消息，收到 {last['role']}")
-        last["content"].append({"type": "text", "text": text})
+        """进入最后一轮之前：prompts.last_round 按 last_round_role 追加（默认 tool：上一轮最后一条 tool 消息的末尾）。"""
+        self._add_notice(self.prompts.last_round_role, text, "进入最后一轮之前")
         self.rec.rounds[-1]["last_round_notice"] = True
 
     def add_status_notice(self, r: int) -> None:
-        """第 r 轮执行完、样本还没结束：prompts.status 填好后追加在这一轮最后一条 tool 消息的末尾（DEV-0053）。"""
-        last = self.messages[-1]
-        if last["role"] != "tool":
-            raise RuntimeError(f"{self.sample.id} 第 {r} 轮：追加状态提示时，最后一条消息应是 tool 消息，收到 {last['role']}")
-        last["content"].append({"type": "text", "text": self.prompts.status_text(r, self.protocol, self.rec.n_tool_calls)})
+        """第 r 轮执行完、样本还没结束：prompts.status 填好后按 status_role 追加（DEV-0053；默认 tool：这一轮最后一条 tool 消息的
+        末尾；DEV-0055）。"""
+        self._add_notice(self.prompts.status_role, self.prompts.status_text(r, self.protocol, self.rec.n_tool_calls),
+                         f"第 {r} 轮追加状态提示时")
         self.rec.rounds[-1]["status_notice"] = True
 
 
@@ -600,6 +642,10 @@ __all__ = [
     "FAILURE_NO_ANSWER",
     "FAILURE_WRONG_SUBMISSION",
     "LoopPrompts",
+    "NOTICE_ROLES",
+    "NOTICE_SEPARATOR",
+    "NOTICE_TOOL",
+    "NOTICE_USER",
     "Protocol",
     "REFUSED_AFTER_SUBMISSION",
     "REFUSED_FINAL_ROUND",

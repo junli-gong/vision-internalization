@@ -57,7 +57,9 @@
    "status": [],
    "final_round_refused": []
   },
-  "rule": "refseg、refexp_box 的 {expression} 取 Sample.fields.expression（与 E1 相同）；count 的 {question} 取 E1 的人工问句（src/e1/prompts.COUNTBENCHQA_FIELD，D36-2，与 E1 默认相同）。messages.last_round 在进入第 max_rounds 轮之前追加在上一轮最后一条 tool 消息的末尾；为 null 时不追加。messages.status（DEV-0053）为 null 时不追加；是字符串时，每一轮执行完、样本还没结束，填好占位符后追加在这一轮最后一条 tool 消息的末尾（与 last_round 都有时 status 在前），轮记录加 status_notice = true；占位符只能是 {round}（刚结束的轮）、{max_rounds}、{rounds_left}、{calls_used}（计数的调用）、{max_tool_calls}、{calls_left}（不小于 0），用了哪些要在 placeholders.status 里声明。messages.final_round_refused（DEV-0053）是 final_round_tools = submit_only 时最后一轮里非提交调用的回复（这时必须有，没有占位符）；它排在最后一轮之后，模型看不到，只为历史里每个调用都有回复。"
+  "status_role": "tool",
+  "last_round_role": "tool",
+  "rule": "refseg、refexp_box 的 {expression} 取 Sample.fields.expression（与 E1 相同）；count 的 {question} 取 E1 的人工问句（src/e1/prompts.COUNTBENCHQA_FIELD，D36-2，与 E1 默认相同）。messages.last_round 在进入第 max_rounds 轮之前追加在上一轮最后一条 tool 消息的末尾；为 null 时不追加。messages.status（DEV-0053）为 null 时不追加；是字符串时，每一轮执行完、样本还没结束，填好占位符后追加在这一轮最后一条 tool 消息的末尾（与 last_round 都有时 status 在前），轮记录加 status_notice = true；占位符只能是 {round}（刚结束的轮）、{max_rounds}、{rounds_left}、{calls_used}（计数的调用）、{max_tool_calls}、{calls_left}（不小于 0），用了哪些要在 placeholders.status 里声明。messages.final_round_refused（DEV-0053）是 final_round_tools = submit_only 时最后一轮里非提交调用的回复（这时必须有，没有占位符）；它排在最后一轮之后，模型看不到，只为历史里每个调用都有回复。status_role、last_round_role（DEV-0055）是 messages.status 与 messages.last_round 走哪种消息：tool（默认，上面说的追加在这一轮最后一条 tool 消息的末尾）或 user（这一轮的工具结果全部追加之后，再追加一条只有文字的 user 消息；同一轮只追加一条，两种提示都走 user 时 status 在前、last_round 在后，中间空一行；一个走 tool、一个走 user 时各走各的）；有 user 提示的那一轮，轮记录加 notice_message = user。不给时取 tool。注意 Qwen3.5 的对话模板只保留最后一条真实 user 消息之后的思考段：走 user 之后，它之前各轮的思考段不再渲染。"
  },
  "splits": {
   "salt": "w1_dev_v1",

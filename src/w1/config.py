@@ -12,7 +12,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
-from src.w1.loop import STATUS_FIELDS, TASKS, TOOLS_OFFERED, TOOLS_SUBMIT_ONLY, LoopPrompts, Protocol, template_fields
+from src.w1.loop import (NOTICE_ROLES, NOTICE_TOOL, STATUS_FIELDS, TASKS, TOOLS_OFFERED, TOOLS_SUBMIT_ONLY, LoopPrompts, Protocol,
+                         template_fields)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 W1_CONFIG_PATH = REPO_ROOT / "configs" / "w1.json"
@@ -25,6 +26,9 @@ BASELINE_TASKS: Mapping[str, tuple[str, ...]] = {"baseline_e1": TASKS, "baseline
                                                  "baseline_poly_structured": ("refseg",), "w1f": ("refseg",)}
 PROMPT_KEYS: tuple[str, ...] = ("system",) + TASKS + ("tool_cap", "tool_call_error", "last_round", "status", "final_round_refused")
 NULLABLE_PROMPTS: tuple[str, ...] = ("last_round", "status", "final_round_refused")  # 为 null（或不给）时不用
+# 提示走哪种消息（DEV-0055）：prompts 下的键 → 默认值。取 NOTICE_ROLES 之一；不给时取默认（tool，现状），所以 DEV-0055 之前生成的
+# 配置（例如 configs/w1_tune/T1–T4）照旧可读、行为不变。
+NOTICE_ROLE_KEYS: Mapping[str, str] = {"status_role": NOTICE_TOOL, "last_round_role": NOTICE_TOOL}
 # 工作台选项（configs/w1.json 的 workbench）→ 默认值；默认值与 src/w1/workbench.Workbench.__init__ 的关键字参数默认值相同
 # （view_frames 由 DEV-0054 加；tests/test_w1_knobs.py 在它存在时核对）。W1Config.workbench_options() 只给与这里不同的项。
 WORKBENCH_OPTIONS: Mapping[str, Any] = {"view_frames": False}
@@ -72,6 +76,9 @@ def validate(cfg: Mapping[str, Any]) -> None:
     p = cfg.get("prompts", {})
     ph = p.get("placeholders", {})
     texts = {"system": p.get("system"), **(p.get("tasks") or {}), **(p.get("messages") or {})}
+    for k in NOTICE_ROLE_KEYS:
+        if p.get(k, NOTICE_ROLE_KEYS[k]) not in NOTICE_ROLES:
+            bad.append(f"prompts.{k} 必须是 {NOTICE_ROLES} 之一（不给时取 {NOTICE_ROLE_KEYS[k]!r}）")
     if set(p.get("tasks") or {}) != set(TASKS):
         bad.append(f"prompts.tasks 必须恰好是 {TASKS}")
     if set(ph) != set(PROMPT_KEYS):
@@ -157,7 +164,12 @@ class W1Config:
         return LoopPrompts(system=p["system"].format(**caps), tasks=dict(p["tasks"]),
                            tool_cap=msgs["tool_cap"].format(max_tool_calls=protocol.max_tool_calls),
                            tool_call_error=msgs["tool_call_error"], last_round=msgs.get("last_round"), status=msgs.get("status"),
-                           final_round_refused=msgs.get("final_round_refused"))
+                           final_round_refused=msgs.get("final_round_refused"), **self.notice_roles())
+
+    def notice_roles(self) -> dict[str, str]:
+        """prompts.status_role、prompts.last_round_role（DEV-0055；不给时取默认 tool）。"""
+        p = self.data["prompts"]
+        return {k: p.get(k, v) for k, v in NOTICE_ROLE_KEYS.items()}
 
     def workbench_options(self) -> dict[str, Any]:
         """configs/w1.json 的 workbench 里与默认值（WORKBENCH_OPTIONS）不同的项，作为关键字参数传给工作台；默认时是空字典（什么都不传，
@@ -200,6 +212,7 @@ __all__ = [
     "BASELINE_SETTINGS",
     "BASELINE_TASKS",
     "LOOP_SETTINGS",
+    "NOTICE_ROLE_KEYS",
     "NULLABLE_PROMPTS",
     "PROMPT_KEYS",
     "SETTINGS",

@@ -2623,3 +2623,26 @@
 4. **测试**：
    - 开发 agent：全量 1 failed、3189 passed。唯一的失败是 D106 里待查的 `test_e3_c3_warmup`，单独重跑通过，与本改动无关。补改之后重跑 W1 测试，347 passed。
    - 管理员在主分支上，两项都合入之后跑 W1 的全部测试与 `test_adapter_chat.py`：393 passed，0 skipped。DEV-0053 那项要等本项合入的测试已生效。
+
+## D110（2026-10-22，管理员）：DEV-0055 合入，状态提示与"最后一轮"提示可以作为单独的 user 消息发出
+
+依据：RUN-0061 臂 T1 的诊断（W1 预注册 §10b）；任务书 `prompts/dev/0055-w1-notice-role.md`。
+
+1. **合入**：
+   - `configs/w1.json` 加 `prompts.status_role`、`prompts.last_round_role`，都默认 `tool`；
+   - `src/w1/{loop,config,runner}.py`；
+   - 测试 `tests/test_w1_notice_role.py`，`tests/test_adapter_chat.py` 加 2 项。
+   - 默认配置下，tiny 彩排 18 份 `predictions.jsonl` 与改动前逐字节相同。
+   - `configs/w1.json` 的 sha256 变为 `1cd4524f…`。
+2. **开发 agent 的两个实测，调参时要分开看**：
+   - **思考段**：Qwen3.5 的对话模板只保留"最后一条真实 user 消息"之后的思考段。提示走 user 时，它之前各轮的思考段都不再渲染。
+     - 只让 last_round 走 user：只有第 6 轮丢掉前 5 轮的思考，第 6 轮提示中位短约 10%。
+     - status 也走 user：从第 2 轮起每轮都看不到之前的思考。
+   - **分隔**：走 tool 时，提示与工具输出之间、status 与 last_round 之间都没有任何分隔，原文是 "…<|vision_end|>[Turn 5 of 6 done; …]This is your last turn. …"。这可能也是 T1 里模型无视提示的原因之一。
+3. **对任务书的偏离**，全部接受：
+   - 两个键缺省时取 `tool`，所以 RUN-0061 用过的 T1–T4 照旧能读；
+   - 两个开关总是写进运行身份。
+4. **生成脚本**：`scripts/mgr/make_w1_tune_configs.py --check` 现在报 T1–T4 "不同"，因为基线配置加了键、sha 变了。
+   - T1–T4 保留 RUN-0061 用过的原文件，作为记录，不再重新生成。
+   - 下一轮的臂由生成脚本按新的 `configs/w1.json` 另行生成。
+5. **测试**：管理员在主分支上跑 W1 的全部测试与 `test_adapter_chat.py`：423 passed。
