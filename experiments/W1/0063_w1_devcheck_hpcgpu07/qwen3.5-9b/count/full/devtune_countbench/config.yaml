@@ -1,0 +1,93 @@
+experiment: W1
+framework: src/w1（DEV-0051；docs/w1_plan.md）
+w1:
+  task: count
+  split: devtune_countbench
+  setting: full
+  splits_config: configs/w1_splits.json
+  splits_sha256: a1371851555e854fac6f9d0e267f19a23602ee9cf31d5c303ef08432d1f7f0f7
+  split_sha256: 3559c5aec49d23d3729f578c4ee0f39cacfe0e3e6fcd1f9a743708a03c509cd5
+  split_n: 49
+  n_samples: 49
+  limit: 49
+  sample_ids_sha256: 9cc83f756324ac38e5628eaf3a7955dfdb46aa2cdecaffde09b278b866631763
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  adapter_model_key: qwen3.5-9b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+protocol:
+  max_rounds: 6
+  max_tool_calls: 8
+  thinking_budget: 2048
+  answer_budget: 1024
+  disabled_groups: []
+  submit_tools:
+  - submit_box
+  - submit_count
+  - submit_mask
+  submit_exempt_from_cap: true
+  final_round_tools: submit_only
+  capped_tools: submit_only
+prompts:
+  config: configs/w1.json
+  config_sha256: e4cc841907284009b0d5ea51c075b3d52699eacb3c624207b084bc9e4952f928
+  frozen: true
+  system_sha256: 3f07645fb98974016ab3192e98157ef091695fdc98bf1472411ed2ff52e539e0
+  task_template: 'Task: {question}
+
+    Output: a single number, either submitted with submit_count or given as the final
+    answer.'
+  last_round: 'This is your last turn. Only the submit tools are available now: submit
+    your answer.'
+  status: null
+  final_round_refused: Only the submit tools can be used in the last turn; this call
+    was not executed.
+  status_role: tool
+  last_round_role: user
+workbench:
+  factory: src.w1.workbench:Workbench
+  options:
+    view_frames: false
+  tools_sha256: dcc91402712dd16de304c385f64197d73a6a119b1dcaeb252fa3368b041f8a11
+  tools:
+  - zoom
+  - read_pixels
+  - tile_view
+  - draw_box
+  - draw_points
+  - draw_polygon
+  - draw_spline
+  - combine_masks
+  - delete_mask
+  - edges
+  - grabcut
+  - watershed
+  - superpixels
+  - select_superpixels
+  - refine
+  - morph
+  - components
+  - show
+  - run_python
+  - submit_mask
+  - submit_box
+  - submit_count
+batching:
+  batch_size: 16
+  chunk_size: 64
+  max_batch_tokens: 48000
+  config_default: true
+data:
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
