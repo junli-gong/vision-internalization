@@ -75,6 +75,7 @@ from src.adapters.base import (
     ORDERS,
     POSITION_MODES,
     PRE_NORM_LAST,
+    BoxPointsParse,
     GenerationResult,
     HiddenStates,
     ImageTokenInfo,
@@ -93,7 +94,7 @@ from src.adapters.base import (
     resolve_layer_keys,
 )
 from src.executors.geometry import norm1000_to_abs
-from src.parsing import BoxParse, OneBoxParse, one_box, parse_json_boxes
+from src.parsing import BoxParse, OneBoxParse, ParseFailure, extract_json, one_box, parse_json_boxes
 
 # ---------------------------------------------------------------------------
 # Qwen3.5 家族事实（字符串来自 docs/model_notes.md §5.1–5.2；id 一律在 attach 时从 tokenizer 查）
@@ -1449,6 +1450,10 @@ class Qwen35Adapter(ReservedRowTokens, CheckpointSupport, TrainingSupport, Budge
         """parse_boxes 的逆（DEV-0027），格式见模块级的 format_boxes。不需要加载模型。"""
         return format_boxes(boxes, width=width, height=height, labels=labels)
 
+    def parse_box_points(self, text: str, *, width: float, height: float, max_points: int) -> BoxPointsParse:
+        """一个框加前景点、背景点（DEV-0059，W2 的 box_points 提出），规则见模块级的 parse_box_points。不需要加载模型。"""
+        return parse_box_points(text, width=width, height=height, max_points=max_points)
+
     # ------------------------------------------------------------------
     # 停止 token（DEV-0027：公开接口，替代私有的 _stop_ids()）
     # ------------------------------------------------------------------
@@ -1821,6 +1826,57 @@ def parse_one_box(text: str, *, width: float, height: float) -> OneBoxParse:
     return one_box(parse_boxes(text, width=width, height=height))
 
 
+POINT_KEY = "point_2d"  # Qwen 的原生点（与 bbox_2d 同一套 0–1000、x 在前的约定）
+BACKGROUND_LABEL = "background"
+
+
+def _native_point(v: Any) -> tuple[float, float] | None:
+    """原生点 [x, y]：两个有限的 JSON 数（不是 bool），都在 [0, 1000] 内；否则 None。"""
+    if not isinstance(v, list) or len(v) != 2 or any(isinstance(x, bool) or not isinstance(x, (int, float)) for x in v):
+        return None
+    if not all(math.isfinite(float(x)) and 0 <= float(x) <= 1000 for x in v):
+        return None
+    return float(v[0]), float(v[1])
+
+
+def parse_box_points(text: str, *, width: float, height: float, max_points: int) -> BoxPointsParse:
+    """一个框加前景点、背景点（DEV-0059，W2 的 box_points 提出）→ 原图绝对像素。原生格式：JSON（代码块或裸 JSON，规则同
+    extract_json），单个对象或对象的列表：
+    - 框：带 bbox_2d 的对象（只把这些对象重新写成 JSON）交给 parse_one_box：没有 → no_box，多个 → multiple_boxes，其余失败原样给出；
+    - 点：带 point_2d、不带 bbox_2d 的对象，值必须是两个 [0, 1000] 内的数（x 在前，按原图宽高换算，同 bbox_2d），不合格的丢掉并计数；
+      label 为 background（不分大小写、去掉首尾空白）的是背景点，其余（含没有 label）是前景点；各取前 max_points 个，多出的也计入
+      丢掉的点数；
+    - 没有 JSON → no_box；JSON 不是对象或对象的列表 → malformed；空串 → no_box（parse_generation 的要求）。"""
+    fail = BoxPointsParse(None, None, None, None, ParseFailure.NO_BOX)
+    got = extract_json(text)
+    if got.failure is not None:
+        return fail if got.failure == ParseFailure.NO_JSON else fail._replace(failure=got.failure)
+    objs = got.value if isinstance(got.value, list) else [got.value]
+    if not objs or any(not isinstance(o, dict) for o in objs):
+        return fail._replace(failure=ParseFailure.MALFORMED if objs else ParseFailure.NO_BOX)
+    b = parse_one_box(json.dumps([o for o in objs if BOX_KEY in o], ensure_ascii=False), width=width, height=height)
+    if b.failure is not None:
+        return fail._replace(failure=b.failure)
+    fg: list[tuple[float, float]] = []
+    bg: list[tuple[float, float]] = []
+    dropped = 0
+    for o in objs:
+        if BOX_KEY in o or POINT_KEY not in o:
+            continue
+        p = _native_point(o[POINT_KEY])
+        if p is None:
+            dropped += 1
+            continue
+        label = o.get("label")
+        dst = bg if isinstance(label, str) and label.strip().lower() == BACKGROUND_LABEL else fg
+        if len(dst) >= max_points:
+            dropped += 1
+            continue
+        x, y = (float(v) for v in norm1000_to_abs(np.asarray(p, dtype=np.float64), width=width, height=height))
+        dst.append((x, y))
+    return BoxPointsParse(tuple(float(v) for v in b.box), tuple(fg), tuple(bg), dropped, None)
+
+
 # 原生框的文本格式（format_boxes；DEV-0027）：Qwen3-VL cookbook 的写法，也是 RUN-0005 关思考时的实测输出，如
 # '```json\n[\n\t{"bbox_2d": [14, 114, 492, 983], "label": "cat on the left"}\n]\n```'（tab 缩进，一行一个对象）。
 JSON_FENCE_OPEN = "```json\n"
@@ -2004,6 +2060,7 @@ __all__ = [
     "make_tiny_adapter",
     "mrope_rows",
     "native_box_to_xyxy",
+    "parse_box_points",
     "parse_boxes",
     "parse_one_box",
     "reference_processor",

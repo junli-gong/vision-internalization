@@ -2764,3 +2764,26 @@
 4. **1 号候选失败时**：由 W2 回路统一当作空 mask，与 W1-F 一致，在 DEV-0059 的补改里实现。实测 W1-F 在 596 句上 GrabCut 0 次报错。
 5. **布局**：在 Qwen3.5 的 PixelBudget(300) 下，任何一张图都被缩到约 300 个视觉 token，所以 grid 布局每个候选只有约 33 个 token；separate 每句约 2,700 个。两者都留给 W2 预注册 §5 调参第 1 步去比，不改预注册。
 6. **测试**：管理员在主分支上跑 W2 的候选、渲染测试与 W1 的工作台、重放、基线、回路、契约测试：204 passed。
+
+## D116（2026-10-22，管理员）：DEV-0059 合入，W2 的回路、划分骨架、对照与判定脚本
+
+1. **合入**：
+   - 配置：`configs/w2.json`（`frozen: false`）、`configs/w2_splits.json`（骨架，devcheck2 是 `pending`，由服务器生成）；
+   - 代码：`src/w2/{config,data,loop,runner}.py`、`scripts/run_w2.py`、`scripts/w2_gate.py`；
+   - 适配器：`src/adapters/base.py` 加 `parse_box_points`，非抽象，默认 NotImplementedError；`src/adapters/qwen35.py` 实现它。旧行为不变。
+   - 测试：`tests/test_w2_{config,data,loop,gate,cli,contract}.py`、`tests/test_adapter_box_points.py`、`tests/_w2_fakes.py`、`tests/fixtures/w2/`。
+2. **管理员合入时改的**：`configs/w2.json` 的 `candidates.generators` 换成 DEV-0058 的 `DEFAULT_SPEC`（8 个），`render.style` 换成 `DEFAULT_STYLE`。`layout` 仍是 `grid`：W2 预注册 §5 第 1 步比较 grid 与 separate。
+3. **审查时的裁定**（开发 agent 已补改）：
+   - (A) 1 号候选 `ok = False` 时，回路一律当作空 mask：w1f 交空；w2a、random、oracle 选中或回退到 1 号也交空；渲染画空叠加。与 W1-F 完全一致。
+   - (B) 点的解析与 0–1000 换算挪进适配器，遵守 CLAUDE.md "模型相关逻辑放在 `src/adapters/`"。
+   - (C) 候选生成可以多进程并行：`--candidate-workers`，不进运行身份，与单进程的 `content_sha256` 相同。
+4. **对 `docs/w2_plan.md` 的其余偏离**，全部接受：
+   - 关思考的挑选走 E1 单轮路径；
+   - w1f 总是用 box 模式的候选；
+   - gate 多两项核对：同一份冻结的配置；W2-c 必须带检查点；
+   - w2a 在定位、计数上原样复用 baseline_e1；
+   - 候选缓存的 info 带耗时，下游设置的身份用 `content_sha256`；
+   - tiny 下跳过"总体等于 E1 清单"的核对；
+   - `generate_candidates` 抛出的异常不捕获。
+   - E1 开发子集所在的图不从 devcheck2 中按图排除：E1 的规则是按句剔除，维持。
+5. **测试**：管理员在主分支上跑 W1、W2 的全部测试与 `test_adapter_chat.py`、`test_adapter_box_points.py`，598 passed、0 skipped，契约测试已生效。开发 agent 跑了适配器全套，788 passed。

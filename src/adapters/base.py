@@ -48,7 +48,7 @@ import math
 import time
 from dataclasses import dataclass
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal, Mapping, NamedTuple, Sequence
 
 from src.constants import MAX_NEW_GRID_TOKENS
 from src.parsing import BoxParse, OneBoxParse, one_box
@@ -272,6 +272,17 @@ class GenerationResult:
                 raise ValueError("batch_wall_time_s 不能为负")
             if not math.isclose(self.wall_time_s, self.batch_wall_time_s / self.batch_size, rel_tol=1e-9, abs_tol=1e-12):
                 raise ValueError(f"wall_time_s={self.wall_time_s} 不是整批墙钟 {self.batch_wall_time_s} 的 1/{self.batch_size}")
+
+
+class BoxPointsParse(NamedTuple):
+    """一个框加若干前景点、背景点的解析结果（DEV-0059，W2 的 box_points 提出；适配器的 parse_box_points）。box 是内部格式
+    （绝对像素、浮点、xyxy），点是绝对像素 (x, y)；n_points_dropped 是丢掉的点数（不合格或超过上限）。失败时前四项都是 None。"""
+
+    box: tuple[float, float, float, float] | None
+    fg_points: tuple[tuple[float, float], ...] | None
+    bg_points: tuple[tuple[float, float], ...] | None
+    n_points_dropped: int | None
+    failure: Any
 
 
 # 受限选项读数（DEV-0016，D36-4）：一个选项的候选写法，"{}" 换成选项本身。至少包括不带空格与带一个前导空格两种
@@ -712,6 +723,12 @@ class ModelAdapter(abc.ABC):
         """只要一个框（如 RefCOCO 的 REC），建在 parse_boxes 之上（规则见 src.parsing.one_box）：
         parse_boxes 失败 → 原样给出失败原因（没有框就是 no_box）；成功但零个框 → no_box；多于一个框 → multiple_boxes。"""
         return one_box(self.parse_boxes(text, width=width, height=height))
+
+    def parse_box_points(self, text: str, *, width: float, height: float, max_points: int) -> BoxPointsParse:
+        """一个框加至多 max_points 个前景点与 max_points 个背景点（DEV-0059，W2 的 box_points 提出），换算成原图绝对像素。
+        本家族的原生格式与规则写在实现里（目前只有 Qwen3.5）；对空串必须返回失败（src.parsing.parse_generation 要求）。
+        不需要加载模型。不是抽象方法：其余家族没有实现。"""
+        raise NotImplementedError(f"{type(self).__name__} 没有实现 parse_box_points（DEV-0059 只实现 Qwen3.5）")
 
     # ------------------------------------------------------------------
     # DEV-0027 的接口：预算强制收尾、投影前的视觉特征、原生框的格式化、公开的停止 token。不是抽象方法（只做推理的替身与旧的
