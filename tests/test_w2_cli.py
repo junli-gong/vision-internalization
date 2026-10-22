@@ -164,7 +164,8 @@ def test_w2a_with_the_real_chat_turn_batch(runs):
     assert cfg["w2_config"]["frozen"] is False and len(cfg["w2_config"]["config_sha256"]) == 64
     for r in recs[1:]:
         s = r["select"]
-        assert s["method"] == "chat_turn_batch" and s["images"][0]["size"] == [48 * 4, 36] and s["n_visual_tokens"] > 0
+        n_cells = len(GENS) + (1 if json.loads(runs["cfg"].read_text())["render"]["style"].get("reference") else 0)  # 参照格随配置的 style（D117）
+        assert s["method"] == "chat_turn_batch" and s["images"][0]["size"] == [48 * n_cells, 36] and s["n_visual_tokens"] > 0
         assert r["fallback"] in (None, "none", "parse_failure") and r["final_index"] == (r["pick"] or 1)
         assert r["n_model_calls"] == 2 and r["n_tool_calls"] == 1 and all("wall" not in k for k in r)
     m = json.loads((lx / "metrics.json").read_text())

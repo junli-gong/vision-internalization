@@ -2787,3 +2787,22 @@
    - `generate_candidates` 抛出的异常不捕获。
    - E1 开发子集所在的图不从 devcheck2 中按图排除：E1 的规则是按句剔除，维持。
 5. **测试**：管理员在主分支上跑 W1、W2 的全部测试与 `test_adapter_chat.py`、`test_adapter_box_points.py`，598 passed、0 skipped，契约测试已生效。开发 agent 跑了适配器全套，788 passed。
+
+## D117（2026-10-22，管理员）：devcheck2 的清单装入；更正 D116 第 2 条
+
+1. **devcheck2**：RUN-0065 在 HPC 上生成，build 与 check 都 rc=0。
+   - 总体：`refcoco_unc_val` 的 10,634 句，与 E1 的清单一致；
+   - 按图像排除：devtune800 所在的 636 张图，去掉 5,024 句，剩 5,610 句；
+   - 取前 500 句，sha256 `e0c090322dc324a27283aa78d3a5ce6ee5f910822646369cd6b2cac36307c546`。
+   - 整份文件原样装入 `configs/w2_splits.json`（sha256 `9dd22dff…`）。开发机上 `python -m src.w2.data --check` 核对一致：与 devtune800 按句、按图都不重叠。
+   - 判定之前，不看任何系统在 devcheck2 上的结果。
+2. **更正 D116 第 2 条**：
+   - D116 记"`configs/w2.json` 的候选与样式已换成 DEV-0058 的默认值"，实际没有生效。管理员当时用 `conda run … python - <<EOF` 喂脚本，而 `conda run` 不转发标准输入，脚本没有执行。
+   - 提交上去的是占位的 2 个生成器，样式是空的，渲染时补默认值。
+   - 现已用脚本文件正确换上：`DEFAULT_SPEC` 的 8 个生成器、`DEFAULT_STYLE` 的 18 项。
+   - 没有任何运行用过那份占位的配置。
+   - `tests/test_w2_cli.py` 的一处断言原先默认样式里没有参照格；改为按配置的 `style.reference` 算格数，属管理员的常量级修改。W2 的测试 136 passed。
+   - 教训：给 `conda run` 的 python 一律写成脚本文件或用 `-c`，不用标准输入。
+3. **服务器上候选生成的耗时**：RUN-0065，Xeon Gold 6342，40 张 COCO 640×480 图 × 3 个框。`DEFAULT_SPEC` 每次中位 4.55 s，均值 6.09 s，最大 39 s；当时 OpenCV 用 8 个线程。
+   - devtune800 用 8 个进程约 8–10 分钟。
+   - W2-c 若取 RefCOCO train 的 2 万句，约 25 CPU 小时，8 个进程约 3 小时。
