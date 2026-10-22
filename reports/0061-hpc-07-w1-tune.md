@@ -260,3 +260,7 @@ run_w1.py: error: --out 的目录名必须带运行编号，形如 0060_w1_devch
 
 **结论：彩排，不作数（规则给出：放弃）**
 
+
+## 推送循环 0061
+
+- 最后一轮 origin `8d28033a [results] 0061: sync 2026-10-22T09:07:47Z`（含 `gate_tune_T4.md` 与 `steps.log` 的 `done; failed steps: 0`），`sync_0061.status` `2026-10-22T09:07:56Z ok`。09:08:43Z 在 sleep 时、`flock -n git.lock` 下按 PID 停掉（1294229 与 sleep 4013698）。
