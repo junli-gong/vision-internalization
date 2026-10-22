@@ -1,0 +1,61 @@
+{
+ "experiment": "W1",
+ "w1": {
+  "task": "refseg",
+  "split": "devtune",
+  "setting": "w1f",
+  "splits_config": "configs/w1_splits.json",
+  "splits_sha256": "a1371851555e854fac6f9d0e267f19a23602ee9cf31d5c303ef08432d1f7f0f7",
+  "split_sha256": "21e50b3bb13e25be281d268543d8df5801226f828640e44f99e2aa502bb6635c",
+  "split_n": 300,
+  "n_samples": 96,
+  "limit": 96,
+  "sample_ids_sha256": "b54c531e67174095de48a72f42b3036516135fb34cd84c64b080ea9b3ddd7ba0"
+ },
+ "model": "qwen3.5-9b",
+ "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+ "n": 96,
+ "headline": [
+  {
+   "name": "cIoU",
+   "scope": "all",
+   "value": 0.5221867970234653,
+   "ci": {
+    "low": 0.45716520305026215,
+    "high": 0.5947503587415197,
+    "level": 0.95,
+    "n_resamples": 1000
+   },
+   "n": 96
+  },
+  {
+   "name": "gIoU",
+   "scope": "all",
+   "value": 0.53039571595248,
+   "ci": {
+    "low": 0.472946546478551,
+    "high": 0.5894990724047439,
+    "level": 0.95,
+    "n_resamples": 1000
+   },
+   "n": 96
+  }
+ ],
+ "failures": {
+  "multiple_boxes": 3,
+  "ok": 92,
+  "truncated": 1
+ },
+ "box_run": {
+  "leaf": "<out>/qwen3.5-9b/refexp_box/baseline_e1/devtune",
+  "predictions_sha256": "4db33b66396d31d12f3d6cdf9f3634cec3db38271e3ae2cc232c5b0dbb0d9c93",
+  "config_sha256": "453bb1aaf8ca0a56b22a37831ab5dc484cb02ce9e5c0fd920b53c126c33d9824"
+ },
+ "w1f": {
+  "function": "src.w1.workbench.grabcut_mask",
+  "iterations": 5,
+  "rule": "W1-F（固定流程，没有 LLM 的点、修正与核对）：\"自己的框\"（同 ownbox 的框：W1-0 refexp_box 解析出的原图绝对像素 xyxy）直接交给工作台的同一个 GrabCut 函数 src.w1.workbench.grabcut_mask（box_abs 初始化：框内可能前景、框外确定背景；迭代次数取工作台的 GRABCUT_ITERATIONS，随机数种子取 GRABCUT_RNG_SEED，D106），返回的 mask 就是答案。框解析失败记那个失败原因、GrabCut 报错（框里或框外没有像素等）记 tool_error，都按空 mask 计分。函数与迭代次数只在 src/w1/workbench.py 定义一处，这里只写名字。"
+ },
+ "complete": true,
+ "n_expected": 96
+}
