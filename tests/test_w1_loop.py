@@ -7,11 +7,15 @@
 - 解析失败的调用：不执行、不计数、返回报错说明，这一轮不算最终答案。
 - 历史：assistant 的 content 去掉了调用原文、带 tool_calls 与 reasoning_content；tool 消息带图；最后一轮之前追加提示。
 - compute 字段齐全且与每轮的 token 数一致；to_json 不含墙钟；tool_workers 不改变输出；入口断言（没有像素、工具清单不符）。
+- 冻结前的草稿配置（DEV-0056，D111）：configs/w1.json 冻结为 U2 之后，把它当"默认、未冻结"用的测试改读夹具
+  tests/fixtures/w1/w1_draft_unfrozen.json（commit 4c9d92bb 的 configs/w1.json 原样，sha256 钉在 DRAFT_SHA256）。DRAFT 只在这里
+  定义，test_w1_knobs、test_w1_notice_role 从这里 import。
 """
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -36,6 +40,11 @@ from src.w1.loop import (
 from tests._w1_fakes import ChatTurnResult, FakeWorkbench, ScriptedChatAdapter, raw_call, turn
 
 CFG = load_w1_config()
+# 冻结前的草稿（DEV-0055 合入之后、D111 冻结之前的 configs/w1.json，commit 4c9d92bb）：frozen = false，两个开关 all，status 为 null，
+# 两种提示走 tool。测"默认、未冻结"行为的测试读它，不读冻结后的仓库配置。
+DRAFT_PATH = Path(__file__).resolve().parent / "fixtures" / "w1" / "w1_draft_unfrozen.json"
+DRAFT_SHA256 = "1cd4524f89a44c4446923745ad91763ef701d32a3451414bb29f26b7770fb681"
+DRAFT = load_w1_config(DRAFT_PATH)
 W, H = 40, 30
 
 
@@ -58,16 +67,16 @@ def protocol(**kw) -> Protocol:
     return Protocol(**{"max_rounds": 6, "max_tool_calls": 8, "thinking_budget": 2048, "answer_budget": 1024, **kw})
 
 
-def prompts(p: Protocol) -> LoopPrompts:
-    return CFG.loop_prompts(p)
+def prompts(p: Protocol, cfg=CFG) -> LoopPrompts:
+    return cfg.loop_prompts(p)
 
 
-def run(script, task="refseg", p=None, batch_size=8, **kw):
+def run(script, task="refseg", p=None, batch_size=8, *, cfg=CFG, **kw):
     p = p or protocol()
     keys = list(script)
     ad = ScriptedChatAdapter({f"the thing {k}" if task != "count" else f"things {k} " : v for k, v in script.items()})
     ss = [sample(k, task) for k in keys]
-    recs = run_episodes(ad, ss, task, p, prompts(p), batch_size=batch_size, workbench_factory=FakeWorkbench,
+    recs = run_episodes(ad, ss, task, p, prompts(p, cfg), batch_size=batch_size, workbench_factory=FakeWorkbench,
                         images=[image(i) for i in range(len(ss))], **kw)
     return ad, {k: r for k, r in zip(keys, recs)}
 
@@ -243,10 +252,11 @@ def test_disabled_group_tools_are_absent_and_calls_error():
 
 
 def test_history_format_and_last_round_notice():
+    """默认走法（未冻结的草稿）：last_round 走 tool，追加在上一轮最后一条 tool 消息的末尾。"""
     z = turn(text="Zooming.", thinking="where is it", calls=[ZOOM])
-    ad, r = run({"a": [z, z, z, z, z, turn(calls=[DRAW, SUBMIT_M])]})
+    ad, r = run({"a": [z, z, z, z, z, turn(calls=[DRAW, SUBMIT_M])]}, cfg=DRAFT)
     last = ad.conversations[-1][0]
-    p = prompts(protocol())
+    p = prompts(protocol(), DRAFT)
     assert last[0] == {"role": "system", "content": [{"type": "text", "text": p.system}]}
     assert last[1]["content"][1]["text"] == p.task_text("refseg", sample("a"))
     a1 = last[2]
@@ -262,6 +272,15 @@ def test_history_format_and_last_round_notice():
     assert r["a"].rounds[4].get("last_round_notice") is True and r["a"].failure is None
     img = r["a"].rounds[0]["tool_calls"][0]["result"]["images"][0]
     assert set(img) == {"size", "mode", "sha256"} and len(img["sha256"]) == 64
+
+
+def test_draft_fixture_is_the_pre_freeze_config():
+    """夹具是冻结前的草稿原样（sha256 钉住）：未冻结、两个开关 all、没有 status、两种提示走 tool。"""
+    assert DRAFT.sha256 == DRAFT_SHA256
+    d = DRAFT.data
+    assert d["frozen"] is False and (d["protocol"]["final_round_tools"], d["protocol"]["capped_tools"]) == ("all", "all")
+    assert d["prompts"]["messages"]["status"] is None
+    assert DRAFT.notice_roles() == {"status_role": "tool", "last_round_role": "tool"}
 
 
 def test_system_prompt_identical_across_tasks_and_counts_question():

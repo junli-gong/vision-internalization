@@ -2679,3 +2679,13 @@
 5. **测试**：
    - `tests/test_w1_config.py` 里钉 `frozen` 的断言由 False 改为 True（管理员按本条做的常量级修改）。
    - 另有 17 项测试把仓库里的 `configs/w1.json` 当作"默认、未冻结"的配置用，冻结之后失败。派 DEV-0056：给这些测试一份冻结前的草稿配置（sha256 `1cd4524f…`）作夹具，不改被测代码。这 17 项不影响运行。
+
+## D112（2026-10-22，管理员）：DEV-0056 合入，W1 测试在冻结后改用冻结前的草稿作夹具
+
+1. **合入**：只改了 `tests/`：
+   - `tests/fixtures/w1/w1_draft_unfrozen.json`，即 4c9d92bb 版的 `configs/w1.json` 原样，sha256 `1cd4524f…`，测试里钉住；
+   - `tests/test_w1_{loop,knobs,notice_role}.py`。
+   - 17 项把仓库配置当"默认、未冻结"用的测试改读草稿；`test_devtune_runs_unfrozen` 也改读草稿，接受。
+   - 新增 3 项钉住冻结后的仓库配置：`frozen` 为 true；与 U2 除 name、status、frozen 外完全相同；能过冻结保护。
+2. **偏离**：参数化实例实际是 9 个，任务书误写成 10 个，接受。
+3. **测试**：管理员在主分支上跑 W1 的全部测试与 `test_adapter_chat.py`：427 passed。

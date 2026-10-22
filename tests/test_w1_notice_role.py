@@ -8,6 +8,8 @@
 - 配置：默认两个键都是 tool；不给时取 tool（DEV-0055 之前生成的配置照旧可读）；取值校验；进运行身份。
 - 命令行彩排：全部开关打开（两个都走 user）的临时配置，假适配器（开关都被走到）与真的小模型各跑一遍，rc = 0。
 （真的 Qwen3.5 对话模板怎样渲染 tool → user、前几轮的思考段是否保留：tests/test_adapter_chat.py 的 DEV-0055 一节。）
+- DEV-0056（D111）：configs/w1.json 冻结后 last_round 走 user；测默认（两种都走 tool）的测试读冻结前的草稿夹具
+  （tests.test_w1_loop.DRAFT）。
 """
 
 from __future__ import annotations
@@ -19,22 +21,23 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.w1.config import NOTICE_ROLE_KEYS, W1_CONFIG_PATH, W1ConfigError, load_w1_config, validate
+from src.w1.config import NOTICE_ROLE_KEYS, W1ConfigError, load_w1_config, validate
 from src.w1.loop import NOTICE_ROLES, NOTICE_SEPARATOR, STATUS_FIELDS, LoopPrompts, Protocol, _Episode, run_episodes
 from tests._w1_fakes import FakeWorkbench, ScriptedChatAdapter, turn
-from tests.test_w1_knobs import REFUSAL, STATUS, SUBMIT_ORDER, _args, _cfg, _cli, _jsonl, expected_status, texts
-from tests.test_w1_loop import DRAW, SUBMIT_M, ZOOM, image, protocol, sample
+from tests.test_w1_knobs import REFUSAL, STATUS, SUBMIT_ORDER, UNFROZEN, _args, _cfg, _cli, _jsonl, expected_status, texts
+from tests.test_w1_loop import DRAFT, DRAFT_PATH, DRAFT_SHA256, DRAW, SUBMIT_M, ZOOM, image, protocol, sample
 
 REPO = Path(__file__).resolve().parents[1]
 CFG = load_w1_config()
-LAST = CFG.loop_prompts(protocol()).last_round  # configs/w1.json 的默认文字
+LAST = CFG.loop_prompts(protocol()).last_round  # configs/w1.json 的 last_round 文字
 COMBOS = [(s, lr) for s in NOTICE_ROLES for lr in NOTICE_ROLES]
 _KEEP = object()
 
 
-def lp(p: Protocol, *, status=STATUS, status_role="tool", last_round_role="tool", last_round=_KEEP, refusal=REFUSAL) -> LoopPrompts:
+def lp(p: Protocol, *, status=STATUS, status_role="tool", last_round_role="tool", last_round=_KEEP, refusal=REFUSAL,
+       cfg=CFG) -> LoopPrompts:
     kw = {} if last_round is _KEEP else {"last_round": last_round}
-    return dataclasses.replace(CFG.loop_prompts(p), status=status, final_round_refused=refusal, status_role=status_role,
+    return dataclasses.replace(cfg.loop_prompts(p), status=status, final_round_refused=refusal, status_role=status_role,
                                last_round_role=last_round_role, **kw)
 
 
@@ -120,12 +123,13 @@ def test_each_combination_places_notices(status_role, last_round_role):
 
 
 def test_default_roles_are_tool_and_records_unchanged():
-    """不给 status_role / last_round_role 与显式给 tool 完全相同；默认时不加 notice_message，对话里没有提示用的 user 消息。"""
+    """不给 status_role / last_round_role 与显式给 tool 完全相同；默认时不加 notice_message，对话里没有提示用的 user 消息。
+    默认取冻结前的草稿（冻结后的仓库配置 last_round 走 user）。"""
     p = protocol()
-    base = dataclasses.replace(CFG.loop_prompts(p), status=STATUS)
+    base = dataclasses.replace(DRAFT.loop_prompts(p), status=STATUS)
     assert (base.status_role, base.last_round_role) == ("tool", "tool")
     ad0, r0 = go({"a": SCRIPT, "b": [turn(calls=[ZOOM])] * 6}, p, base)
-    ad1, r1 = go({"a": SCRIPT, "b": [turn(calls=[ZOOM])] * 6}, p, lp(p))
+    ad1, r1 = go({"a": SCRIPT, "b": [turn(calls=[ZOOM])] * 6}, p, lp(p, cfg=DRAFT))
     assert [json.dumps(r.to_json()) for r in r0.values()] == [json.dumps(r.to_json()) for r in r1.values()]
     assert all("notice_message" not in rd for r in r0.values() for rd in r.rounds)
     assert all(sum(m["role"] == "user" for m in conv) == 1 for batch in ad0.conversations for conv in batch)
@@ -211,11 +215,11 @@ def test_with_final_round_and_capped_switches(status_role, last_round_role):
 
 
 def test_config_defaults_and_roles():
-    pr = CFG.data["prompts"]
-    assert (pr["status_role"], pr["last_round_role"]) == ("tool", "tool")  # 写在 configs/w1.json 里
+    pr = DRAFT.data["prompts"]
+    assert (pr["status_role"], pr["last_round_role"]) == ("tool", "tool")  # 写在冻结前的 configs/w1.json（草稿夹具）里
     assert dict(NOTICE_ROLE_KEYS) == {"status_role": "tool", "last_round_role": "tool"} and NOTICE_ROLES == ("tool", "user")
-    assert CFG.notice_roles() == {"status_role": "tool", "last_round_role": "tool"}
-    lpr = CFG.loop_prompts(CFG.protocol("full"))
+    assert DRAFT.notice_roles() == {"status_role": "tool", "last_round_role": "tool"}
+    lpr = DRAFT.loop_prompts(DRAFT.protocol("full"))
     assert (lpr.status_role, lpr.last_round_role) == ("tool", "tool")
     for name in ("status_role", "last_round_role"):
         with pytest.raises(ValueError, match=name):
@@ -309,9 +313,10 @@ def test_tiny_rehearsal_all_switches_real_tiny_model(tmp_path):
 
 
 def test_default_identity_records_tool_roles(tmp_path):
+    """冻结前的草稿（两种提示都走 tool）：运行身份记 tool、tool，记录里没有 notice_message。"""
     out = tmp_path / "out"
     fakes = ["--adapter-factory", "tests._w1_fakes:make_persistent_adapter", "--workbench", "tests._w1_fakes:FakeWorkbench"]
-    p = _cli(_args("refseg", "devtune", "full", *fakes, tiny=True, out=str(out)), tmp_path)
+    p = _cli(_args("refseg", "devtune", "full", *UNFROZEN, *fakes, tiny=True, out=str(out)), tmp_path)
     assert p.returncode == 0, p.stderr[-3000:]
     leaf = out / "qwen3.5-0.8b" / "refseg" / "full" / "devtune"
     cfg = yaml.safe_load((leaf / "config.yaml").read_text())
@@ -319,4 +324,5 @@ def test_default_identity_records_tool_roles(tmp_path):
     recs = _jsonl(leaf / "predictions.jsonl")
     assert any(rd.get("last_round_notice") for r in recs for rd in r["rounds"])  # 默认的 last_round 照旧走 tool
     assert all("notice_message" not in rd for r in recs for rd in r["rounds"])
-    assert W1_CONFIG_PATH.name == Path(cfg["prompts"]["config"]).name
+    assert REPO / cfg["prompts"]["config"] == DRAFT_PATH  # 仓库内的路径记成相对仓库根
+    assert (cfg["prompts"]["config_sha256"], cfg["prompts"]["frozen"]) == (DRAFT_SHA256, False)

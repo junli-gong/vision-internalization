@@ -9,6 +9,8 @@
 - 工作台选项：默认不传；非默认时传给回路里的每个工作台与运行身份的探测（命令行彩排里核对）。
 - 冻结保护：未冻结时 devcheck、test_* 退出码 2（全部设置）；devtune 照常；--tiny 照常；--w1-config 的路径与 sha256 进运行身份。
 - 全部开关打开的临时配置跑一遍 tiny 彩排（假适配器不主动收尾，开关都被走到），rc = 0。
+- DEV-0056（D111）：configs/w1.json 已冻结为调参臂 U2。测"默认、未冻结"行为与冻结保护拒跑的测试读冻结前的草稿夹具
+  （tests.test_w1_loop.DRAFT）；另有三项钉住冻结后的仓库配置：frozen 为 true、与 U2 除 name/status/frozen 外相同、冻结保护放行。
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.w1.config import W1_CONFIG_PATH, WORKBENCH_OPTIONS, W1ConfigError, load_w1_config, validate
+from src.w1.config import W1_CONFIG_PATH, WORKBENCH_OPTIONS, W1ConfigError, file_sha256, load_w1_config, validate
 from src.w1.loop import (
     REFUSED_AFTER_SUBMISSION,
     REFUSED_FINAL_ROUND,
@@ -39,34 +41,34 @@ from src.w1.loop import (
     run_episodes,
 )
 from tests._w1_fakes import TOOLS, FakeWorkbench, OptionsWorkbench, ScriptedChatAdapter, turn
-from tests.test_w1_loop import DRAW, SUBMIT_M, ZOOM, image, protocol, sample
+from tests.test_w1_loop import DRAFT, DRAFT_PATH, DRAW, SUBMIT_M, ZOOM, image, protocol, sample
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "run_w1.py"
-CFG = load_w1_config()
+CFG = load_w1_config()  # 仓库配置（D111 起已冻结）；测默认、未冻结行为的读 DRAFT
 ALL_TOOLS = list(TOOLS)  # FakeWorkbench.specs() 的顺序
 SUBMIT_ORDER = [n for n in ALL_TOOLS if n.startswith("submit_")]  # specs() 里的提交工具，顺序照 specs()
 REFUSAL = "REFUSED-FINAL-ROUND"
 STATUS = "S r={round}/{max_rounds} left={rounds_left} used={calls_used}/{max_tool_calls} calls_left={calls_left}"
 
 
-def prompts(p: Protocol, **kw) -> LoopPrompts:
-    return dataclasses.replace(CFG.loop_prompts(p), **kw)
+def prompts(p: Protocol, *, cfg=CFG, **kw) -> LoopPrompts:
+    return dataclasses.replace(cfg.loop_prompts(p), **kw)
 
 
-def run(script, p, *, task="refseg", status=None, refusal=REFUSAL, batch_size=8, **kw):
+def run(script, p, *, task="refseg", status=None, refusal=REFUSAL, batch_size=8, cfg=CFG, **kw):
     keys = list(script)
     ad = ScriptedChatAdapter({f"the thing {k}" if task != "count" else f"things {k} ": v for k, v in script.items()})
     ss = [sample(k, task) for k in keys]
-    recs = run_episodes(ad, ss, task, p, prompts(p, status=status, final_round_refused=refusal), batch_size=batch_size,
+    recs = run_episodes(ad, ss, task, p, prompts(p, cfg=cfg, status=status, final_round_refused=refusal), batch_size=batch_size,
                         workbench_factory=FakeWorkbench, images=[image(i) for i in range(len(ss))], **kw)
     return ad, {k: r for k, r in zip(keys, recs)}
 
 
-def episode_messages(script_turns, p, *, status=None, refusal=REFUSAL):
+def episode_messages(script_turns, p, *, status=None, refusal=REFUSAL, cfg=CFG):
     """一条样本照 run_episodes 的步骤逐轮走，返回 (_Episode, adapter)；最后一轮之后的历史（模型看不到）也能查。"""
     ad = ScriptedChatAdapter({"the thing a": script_turns})
-    pr = prompts(p, status=status, final_round_refused=refusal)
+    pr = prompts(p, cfg=cfg, status=status, final_round_refused=refusal)
     im = image()
     e = _Episode(sample("a"), im, FakeWorkbench(im.copy()), "refseg", p, pr, "sha")
     for r in range(1, p.max_rounds + 1):
@@ -199,10 +201,10 @@ def expected_status(rnd: int, used: int, max_rounds: int = 6, max_calls: int = 8
 def test_status_notice_values_and_position():
     three = turn(calls=[ZOOM, ZOOM, ZOOM])
     script = {"a": [turn(calls=[DRAW, ZOOM, ZOOM]), three, turn(errors=["bad xml"]), three, turn(calls=[ZOOM]), turn(calls=[SUBMIT_M])]}
-    ad, r = run(script, protocol(), status=STATUS)
+    ad, r = run(script, protocol(), status=STATUS, cfg=DRAFT)  # 默认走法：两种提示都走 tool
     a = r["a"]
     used = [3, 6, 6, 8, 8]  # 第 1–5 轮结束时计数的调用
-    last_round = CFG.loop_prompts(protocol()).last_round
+    last_round = DRAFT.loop_prompts(protocol()).last_round
     for k in range(1, 6):  # 第 k+1 轮的对话：最后一条是 tool 消息，末尾是第 k 轮的状态
         conv = ad.conversations[k][0]
         assert conv[-1]["role"] == "tool"
@@ -229,9 +231,9 @@ def test_status_not_added_after_the_episode_ends():
 def test_status_with_partial_placeholders_and_with_final_round_switch():
     p = protocol(final_round_tools="submit_only", max_rounds=3)
     e, ad = episode_messages([turn(calls=[DRAW]), turn(calls=[ZOOM]), turn(calls=[ZOOM, SUBMIT_M])], p,
-                             status="{rounds_left} turns and {calls_left} calls left.")
+                             status="{rounds_left} turns and {calls_left} calls left.", cfg=DRAFT)
     assert texts(ad.conversations[1][0][-1])[-1] == "2 turns and 7 calls left."
-    assert texts(ad.conversations[2][0][-1])[-2:] == ["1 turns and 6 calls left.", CFG.loop_prompts(p).last_round]
+    assert texts(ad.conversations[2][0][-1])[-2:] == ["1 turns and 6 calls left.", DRAFT.loop_prompts(p).last_round]
     assert ad.tools_seen[-1] == [SUBMIT_ORDER] and e.rec.failure is None
 
 
@@ -266,19 +268,20 @@ def test_protocol_switches_validated_and_in_identity():
 
 
 def test_default_config_keeps_previous_behaviour():
-    pr = CFG.data["protocol"]
+    """未冻结的草稿（DEV-0053 之后的默认）：两个开关 all，没有 status，工作台什么都不传。"""
+    pr = DRAFT.data["protocol"]
     assert (pr["final_round_tools"], pr["capped_tools"]) == ("all", "all")
-    p = CFG.protocol("full")
+    p = DRAFT.protocol("full")
     assert (p.final_round_tools, p.capped_tools) == ("all", "all") and not p.final_round_submit_only(6)
-    lp = CFG.loop_prompts(p)
-    assert lp.status is None and CFG.data["prompts"]["messages"]["status"] is None
+    lp = DRAFT.loop_prompts(p)
+    assert lp.status is None and DRAFT.data["prompts"]["messages"]["status"] is None
     assert lp.final_round_refused and "{" not in lp.final_round_refused
-    assert CFG.data["workbench"] == {"view_frames": False} and CFG.workbench_options() == {}
+    assert DRAFT.data["workbench"] == {"view_frames": False} and DRAFT.workbench_options() == {}
     assert dict(WORKBENCH_OPTIONS) == {"view_frames": False}
 
 
-def _cfg() -> dict:
-    return copy.deepcopy(json.loads(W1_CONFIG_PATH.read_text(encoding="utf-8")))
+def _cfg(path: Path = W1_CONFIG_PATH) -> dict:
+    return copy.deepcopy(json.loads(path.read_text(encoding="utf-8")))
 
 
 def _set_status(d: dict, text: str | None, declared: list[str]) -> None:
@@ -392,15 +395,9 @@ def _args(task, split, setting, *extra, tiny=False, out="/nonexistent/0999_w1_kn
         "--model", "qwen3.5-0.8b", "--task", task, "--split", split, "--setting", setting, "--out", out, *extra]
 
 
-def _frozen_copy(tmp_path: Path) -> Path:
-    d = _cfg()
-    d["frozen"] = True
-    p = tmp_path / "w1_frozen.json"
-    p.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
-    return p
-
-
-@pytest.mark.parametrize("task, split, setting", [
+UNFROZEN = ("--w1-config", str(DRAFT_PATH))  # 冻结前的草稿（frozen = false）
+# 冻结保护管的 (task, split, setting)：devcheck 与 test_*，回路设置与各种基线
+GUARDED = [
     ("refseg", "devcheck", "full"),
     ("refseg", "devcheck", "baseline_ownbox"),
     ("refseg", "devcheck", "w1f"),
@@ -410,20 +407,32 @@ def _frozen_copy(tmp_path: Path) -> Path:
     ("refexp_box", "test_refcocog_umd_test", "full"),
     ("count", "test_countbench", "baseline_e1"),
     ("count", "test_countbench", "no_eye"),
-])
+]
+
+
+def _frozen_copy(tmp_path: Path) -> Path:
+    """草稿只把 frozen 改成 true（与 UNFROZEN 只差这一处）。"""
+    d = _cfg(DRAFT_PATH)
+    d["frozen"] = True
+    p = tmp_path / "w1_frozen.json"
+    p.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+    return p
+
+
+@pytest.mark.parametrize("task, split, setting", GUARDED)
 def test_unfrozen_config_refuses_devcheck_and_test(task, split, setting, capsys, tmp_path):
     with pytest.raises(SystemExit) as ex:
-        RUN_W1.parse_args(_args(task, split, setting))
+        RUN_W1.parse_args(_args(task, split, setting, *UNFROZEN))
     assert ex.value.code == 2 and FROZEN_MSG in capsys.readouterr().err
     a = RUN_W1.parse_args(_args(task, split, setting, "--w1-config", str(_frozen_copy(tmp_path))))  # 冻结的配置照常
     assert a.split == split
-    assert RUN_W1.parse_args(_args(task, split, setting, tiny=True)).tiny  # --tiny 不受此限
+    assert RUN_W1.parse_args(_args(task, split, setting, *UNFROZEN, tiny=True)).tiny  # --tiny 不受此限
 
 
 @pytest.mark.parametrize("task, split, setting", [
     ("refseg", "devtune", "full"), ("refseg", "devtune", "baseline_ownbox"), ("count", "devtune_countbench", "full")])
 def test_devtune_runs_unfrozen(task, split, setting):
-    assert RUN_W1.parse_args(_args(task, split, setting)).split == split
+    assert RUN_W1.parse_args(_args(task, split, setting, *UNFROZEN)).split == split
 
 
 def test_unreadable_config_is_a_usage_error(tmp_path, capsys):
@@ -441,8 +450,38 @@ def _cli(args, tmp: Path) -> subprocess.CompletedProcess:
 
 def test_frozen_guard_exit_code_from_the_command_line(tmp_path):
     out = tmp_path / "0999_w1_knobs"
-    p = _cli(_args("refseg", "devcheck", "full", out=str(out)), tmp_path)
+    p = _cli(_args("refseg", "devcheck", "full", *UNFROZEN, out=str(out)), tmp_path)
     assert p.returncode == 2 and FROZEN_MSG in p.stderr and not out.exists()  # 用法错误：什么都不写
+
+
+# ---------------------------------------------------------------------------
+# 冻结后的仓库配置（D111：configs/w1.json = 调参臂 U2）
+# ---------------------------------------------------------------------------
+
+U2_PATH = REPO / "configs" / "w1_tune" / "U2.json"
+ARM_ONLY_KEYS = ("name", "status", "frozen")  # 冻结时只改这三项
+
+
+def test_repo_config_is_frozen():
+    assert Path(CFG.path) == W1_CONFIG_PATH and CFG.data["frozen"] is True
+
+
+def test_repo_config_is_tuning_arm_u2():
+    """除 name、status、frozen 外与 U2 完全相同（含键的顺序）；status 里写的 U2 的 sha256 就是这份文件的。"""
+    frozen, u2 = (json.loads(p.read_text(encoding="utf-8")) for p in (W1_CONFIG_PATH, U2_PATH))
+    rest = [{k: v for k, v in d.items() if k not in ARM_ONLY_KEYS} for d in (frozen, u2)]
+    assert list(frozen) == list(u2) and rest[0] == rest[1]
+    assert json.dumps(rest[0], ensure_ascii=False) == json.dumps(rest[1], ensure_ascii=False)
+    assert (frozen["frozen"], u2["frozen"]) == (True, False) and frozen["name"] != u2["name"]
+    assert file_sha256(U2_PATH) in frozen["status"]
+
+
+def test_repo_config_passes_the_frozen_guard():
+    """默认 --w1-config（冻结后的仓库配置）：devcheck 与 test_* 不再被冻结保护拒绝（只到参数检查这一步）。"""
+    for task, split, setting in GUARDED:
+        assert RUN_W1.needs_frozen(split)
+        a = RUN_W1.parse_args(_args(task, split, setting))
+        assert (a.split, a.w1_config, a.tiny) == (split, str(W1_CONFIG_PATH), False)
 
 
 # ---------------------------------------------------------------------------
