@@ -7,6 +7,9 @@
   T3：T2 + 系统提示加两句（一轮可以发几个调用；坐标尽量精确）。
   T4：T3 + 视图坐标（workbench.view_frames）+ 系统提示的坐标段改写成带视图编号的说法。
 用法：python scripts/mgr/make_w1_tune_configs.py [--check]   （--check：只核对现有文件与生成结果逐字节相同）
+      python scripts/mgr/make_w1_tune_configs.py --freeze T<k> --decision D<nnn>
+        冻结：按 §10b 选中的臂，从 configs/w1_tune/T<k>.json（先核对它与由当前 configs/w1.json 生成的结果逐字节相同）写出新的
+        configs/w1.json：内容与该臂相同，只改 name、status 与 frozen = true。之后再生成臂会报错（基于冻结后的文件已无意义）。
 """
 
 from __future__ import annotations
@@ -78,8 +81,28 @@ def arms(base: dict) -> dict[str, dict]:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--check", action="store_true")
+    p.add_argument("--freeze", choices=["T1", "T2", "T3", "T4"])
+    p.add_argument("--decision", help="冻结的 D 编号（--freeze 时必填）")
     a = p.parse_args()
     base = json.loads(BASE.read_text(encoding="utf-8"))
+    if base.get("frozen") is True:
+        raise SystemExit("configs/w1.json 已冻结，不再生成或冻结调参的臂")
+    if a.freeze:
+        if not a.decision:
+            raise SystemExit("--freeze 要给 --decision D<nnn>")
+        arm = arms(base)[a.freeze]
+        path = OUT_DIR / f"{a.freeze}.json"
+        if path.read_text(encoding="utf-8") != json.dumps(arm, ensure_ascii=False, indent=1) + "\n":
+            raise SystemExit(f"{path.relative_to(ROOT)} 与由当前 configs/w1.json 生成的结果不同，先查清")
+        arm_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        arm["name"] = base["name"]
+        arm["status"] = (f"已冻结（{a.decision}）：W1 预注册 §10b 选中臂 {a.freeze}（configs/w1_tune/{a.freeze}.json，sha256 {arm_sha}），"
+                         "内容与该臂相同，只改 name、status、frozen。之后不再改动；开发-检查集与 test 只用这一份。")
+        arm["frozen"] = True
+        text = json.dumps(arm, ensure_ascii=False, indent=1) + "\n"
+        BASE.write_text(text, encoding="utf-8")
+        print(f"冻结：configs/w1.json ← {a.freeze}，sha256 {hashlib.sha256(text.encode()).hexdigest()}")
+        return 0
     for key in ("final_round_tools", "capped_tools"):
         if key not in base["protocol"]:
             raise SystemExit(f"configs/w1.json 的 protocol 没有 {key}（DEV-0053 合入了吗？）")
