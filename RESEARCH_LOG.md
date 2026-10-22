@@ -1831,3 +1831,10 @@
   - **新开 W2**：LLM 只提框与挑候选，工具生成候选；新的开发-检查集 500 句；对 W1-F 的配对 97.5% CI 下界 > 0；W2-a 约 10-29 判，W2-c 最晚 11-01 判。
   - 另要：W1 错误分析（CPU，10-24 前）、打包脚本 scripts/make_review_bundle.sh。
   - W2 预算 100 GPU 小时。
+- 10-22 21:xx UTC：W2 起步。
+  - 打包脚本 scripts/make_review_bundle.sh：打的是 commit 的内容，不含 .git 与 experiments/，附上全部 metrics.json；实测 8.4 MB，2,966 个文件，其中 metrics.json 2,024 个。
+  - 写 docs/w2_plan.md（接口约定）与三份开发任务书：
+    - DEV-0057：W1 错误分析，重放 W1 开发-检查集的每一步，分四类；
+    - DEV-0058：候选生成器与挑选图渲染；
+    - DEV-0059：回路、新的开发-检查集 devcheck2、对照、w2_gate.py（97.5%、10,000 次重抽样）。
+  - 三个任务并行派发。devcheck2 与错误分析都要在 HPC 上用 CPU 跑，开发机没有 RefCOCO 的数据；合入后合成一个 CPU 的 RUN。
