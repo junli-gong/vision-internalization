@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RUN-0062（ITSC HPC）：W1 去留判定的开发-检查集运行（D103 §三；W1 预注册 §8、§10b；协议已冻结，configs/w1.json 的 frozen = true）。
+# RUN-0063（ITSC HPC）：W1 去留判定的开发-检查集运行（D103 §三；W1 预注册 §8、§10b；协议已冻结，configs/w1.json 的 frozen = true）。
 #   1. 两条基线与 W1-0、W1-F：开发-检查集 500 句（同一模型、同一套协议，D103 §三"两条基线都要在这 500 句上补跑"）。
 #   2. 9B 完整工作台（W1-1），开发-检查集 500 句。
 #   3. w1_gate.py：去留判定（规则写死在脚本里；判定点核对全部为真时才是正式结论）。
@@ -9,7 +9,7 @@
 #
 # 用法（经 srun 启动，见任务书）：srun --jobid=<本节点的任务> --overlap -n1 env PATH=… NODE=hpcgpu07 TQ_STATUS=train_0057-hpcgpu07.status EV_CAP_H=… bash …/devcheck.sh
 # 彩排（开发机）：TINY=1 WT=… REPO=… LOGS=… PY=… bash devcheck.sh
-RUN_ID=0062
+RUN_ID=0063
 M=qwen3.5-9b
 if [ "${TINY:-0}" = 1 ]; then
   : "${WT:?}" "${REPO:?}" "${LOGS:?}" "${PY:?}"
@@ -20,7 +20,7 @@ if [ "${TINY:-0}" = 1 ]; then
 else
   : "${NODE:?hpcgpu06 或 hpcgpu07}" "${TQ_STATUS:?本节点训练队列的心跳文件名（\$LOGS 下）}"
   VI=/home/mail/chenyuma/visint
-  WT=$VI/wt/wt0062
+  WT=$VI/wt/wt0063
   REPO=$VI/repo
   LOGS=$VI/logs
   PY=$VI/env/bin/python
@@ -34,7 +34,7 @@ else
   export EV_DF_PATH=$VI
   EV_CAP_S=$(awk -v h="${EV_CAP_H:?任务书的上限（小时）}" 'BEGIN{print int(h * 3600)}')
 fi
-OUT=$REPO/experiments/W1/0062_w1_devcheck_$NODE
+OUT=$REPO/experiments/W1/0063_w1_devcheck_$NODE
 # shellcheck disable=SC1091
 source "$WT/scripts/server/eval_lib.sh"
 cd "$WT" || exit 1
@@ -49,7 +49,7 @@ w1() {  # $1 = 步名，其余 = run_w1.py 的参数（配置一律 configs/w1.j
   step "$name" "$PY" scripts/run_w1.py --model $M ${T[@]+"${T[@]}"} ${D[@]+"${D[@]}"} --w1-config configs/w1.json --out "$OUT" "$@" || NOK=$((NOK + 1))
 }
 
-claim_gpu "0062-hpc-w1-devcheck.md" || { progress "blocked: gpu not free after ${CLAIM_MAX_S}s"; exit 1; }
+claim_gpu "0063-hpc-w1-devcheck.md" || { progress "blocked: gpu not free after ${CLAIM_MAX_S}s"; exit 1; }
 echo "$(now) start commit $(git -C "$WT" rev-parse HEAD 2>/dev/null || echo unknown) node $NODE model $M w1.json $(sha "$WT/configs/w1.json" | cut -d' ' -f1)" >> "$OUT/steps.log"
 MEMPID=""
 if [ "$TINY" != 1 ] && command -v nvidia-smi >/dev/null 2>&1; then
