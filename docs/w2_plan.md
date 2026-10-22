@@ -113,12 +113,25 @@ def render_selection(image: PIL.Image.Image, candidates: Sequence[Candidate], *,
 - W1 的工作台逐位确定，所以可以按记录里的调用序列重放每条样本，得到每一步的 mask，与真值算 IoU。
 - 由此给失败样本分类。
 
-## 5. W2-c（训练挑选，D113 第二节第 4 条；之后另起任务）
+## 5. W2-c（训练挑选，D113 第二节第 4 条；DEV-0060 数据、DEV-0061 训练与评测）
 
-- 在 RefCOCO 系列的 train 划分上：
-  - 同一个模型先用 E1 协议出框；
-  - 同一个候选生成器出 K 个候选；
-  - 用真值 IoU 最高的编号作标签。
-- LoRA 监督微调的目标是"提出的框"与"挑选的编号"，都是文本。
-- 训练数据与评测数据按图像去重，规则照旧。
-- 生成器的 CPU 开销决定能做多大的训练集：DEV-0058 报告单图的耗时。
+- **模型**：9B，判定用 9B。LoRA 与 E3 的 C3 相同：r 32、alpha 64、全部线性层、视觉塔冻结。检查点格式与 C3 相同，所以 E3 的 T 文本评测与健康检查可以原样用。
+- **两类文本监督**（都是本家族原生的文本输出，不加任何新 token）：
+  1. 提出：E1 refexp_box 的提示加原图 → GT 框。目标用 `src/e3/c3.box_target`（适配器的 `format_boxes`，label 写指代句），与 C3 的框监督逐字相同。
+  2. 挑选：挑选图（冻结的 `render` 布局与样式）加冻结的挑选提示 → 目标就是编号的十进制文本，例如 `"3"`，关思考。标签是真值 IoU 最高的候选编号，并列取编号小的。
+- **W2-c 的评测协议**：提出与挑选都用训练过的模型，都关思考。候选生成器、渲染、K 都用 W2-a 冻结的那一份。"都不对"或解析失败交 1 号。
+- **数据文件**：DEV-0060 产出，`<out>/w2c_data/<shard>.jsonl`，每行一条句子：
+
+```json
+{"id": "refcoco_unc/train/123", "source": "refcoco", "split": "train", "image": "<相对数据根的路径>", "image_size": [W, H],
+ "expression": "...", "gt_box": [x0, y0, x1, y1], "gt_rle": {...},
+ "proposal": {"box": [x0, y0, x1, y1] | null, "failure": null | "<失败码>", "raw_text": "..."},
+ "candidates": [{"index": 1, "name": "gc_default", "ok": true, "rle": {...}, "iou": 0.71}, ...] | null,
+ "label": 3 | null,
+ "spec_sha256": "<候选清单的 sha256>", "w2_config_sha256": "<冻结的 configs/w2.json 的 sha256>"}
+```
+
+  - `candidates` 已按 W2 的规则处理：1 号失败时为空 mask，其余失败的用框。
+  - `proposal.failure` 不为空时，`candidates` 与 `label` 都为 null。这条只用于"提出"的监督，不用于"挑选"。
+- **去重**（硬约束 7）：按 COCO 图像 id，排除 W2 用到的全部评测图：devtune800、devcheck2、5 个 test 子集；并沿用 E3 训练池的剔除清单。核对结果写进数据目录的 `manifest.json`。
+- **规模**：由服务器上候选生成的耗时定，每句约 4.5 s 的 CPU 时间。默认取 16,000 句，按 `hash_rank(salt='w2c_train_v1')` 抽样。
