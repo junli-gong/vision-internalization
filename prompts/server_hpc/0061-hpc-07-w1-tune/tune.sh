@@ -2,6 +2,7 @@
 # RUN-0061（ITSC HPC hpcgpu07）：W1 开发-调参（W1 预注册 §10b；D103 §二.4；W1 预算内）。只用开发-调参集（devtune），不碰开发-检查集。
 #   1. 基线（configs/w1.json）：W1-0 定位、自己的框、E1 结构强制多边形、W1-F，devtune 前 N 句。
 #   2. 四个臂 T1–T4（configs/w1_tune/T<k>.json）：9B 完整工作台，指代分割，devtune 前 N 句。
+#   输出：<OUT>/0061_base/、<OUT>/0061_T1/ … 0061_T4/（第一次发出时子目录名不带运行编号，非 tiny 的 run_w1.py 全部拒收，RUN-0061 第 1 次）。
 #   3. 每个臂对两条基线各算一次 w1_gate.py（调参集上的读数，不是判定点，结论标"调参，不作数"）。
 # 全程每秒采样一次显存，写 <OUT>/gpu_mem.csv。GPU 由 claim_gpu 从 RUN-0057 的段边界接过来（本节点自己的暂停文件），退出时交还。
 # 铁律：任何情况下都不能取消或停止 Slurm 任务 157296、157297。只用本节点自己的暂停文件。
@@ -39,9 +40,9 @@ source "$WT/scripts/server/eval_lib.sh"
 cd "$WT" || exit 1
 [ "$TINY" = 1 ] || [ "${CUDA_VISIBLE_DEVICES:-}" = 0 ] || { progress "blocked: 不在 srun 的资源范围里"; exit 1; }
 NOK=0
-w1() {  # $1 = 步名，$2 = 输出子目录，$3 = 配置，其余 = run_w1.py 的参数
+w1() {  # $1 = 步名，$2 = 输出子目录（目录名是 ${RUN_ID}_$2：run_w1.py 要求 --out 的目录名带运行编号），$3 = 配置，其余 = run_w1.py 的参数
   local name=$1 sub=$2 cfg=$3; shift 3
-  step "$name" "$PY" scripts/run_w1.py --model $M ${T[@]+"${T[@]}"} ${D[@]+"${D[@]}"} --w1-config "$cfg" --out "$OUT/$sub" "$@" || NOK=$((NOK + 1))
+  step "$name" "$PY" scripts/run_w1.py --model $M ${T[@]+"${T[@]}"} ${D[@]+"${D[@]}"} --w1-config "$cfg" --out "$OUT/${RUN_ID}_$sub" "$@" || NOK=$((NOK + 1))
 }
 
 claim_gpu "0061-hpc-07-w1-tune.md" || { progress "blocked: gpu not free after ${CLAIM_MAX_S}s"; exit 1; }
@@ -63,9 +64,9 @@ for k in "${ARMS[@]}"; do
   w1 "arm_${k}_refseg_devtune$N" "$k" "configs/w1_tune/$k.json" --task refseg --split devtune --setting full --limit $N
 done
 # 3. 每个臂对两条基线（调参集上的读数，不作数）
-G=$OUT/base/$M/refseg
+G=$OUT/${RUN_ID}_base/$M/refseg
 for k in "${ARMS[@]}"; do
-  step "gate_tune_$k" "$PY" scripts/w1_gate.py --w1 "$OUT/$k/$M/refseg/full/devtune" --ownbox "$G/baseline_ownbox/devtune" \
+  step "gate_tune_$k" "$PY" scripts/w1_gate.py --w1 "$OUT/${RUN_ID}_$k/$M/refseg/full/devtune" --ownbox "$G/baseline_ownbox/devtune" \
     --poly "$G/baseline_poly_structured/devtune" --out-json "$OUT/gate_tune_$k.json" --out-md "$OUT/gate_tune_$k.md" || NOK=$((NOK + 1))
 done
 [ -n "$MEMPID" ] && kill "$MEMPID" 2>/dev/null
