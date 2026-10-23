@@ -11,7 +11,10 @@
          [--tol 0.005] --out choice.json [--md choice.md]
          每个臂的 cIoU 与"减 W1-F"的配对差（精确的 Σinter/Σunion），取差最大的臂；与最大者相差不到 tol 的，取最简单的。
          另报：随机、最优候选（若给 --random/--oracle）、挑中最优、挑 1 号、"都不对"、解析失败的比例。
-只读运行的输出，不跑模型。
+  freeze --arm-config <选中的臂的配置> --decision D<nnn> [--final final.json]
+         冻结（W2 预注册 §5"冻结"）：把选中的臂写成新的 configs/w2.json（内容与臂相同，只改 name、status，frozen = true），
+         并把它的 sha256 填进 configs/w2c_train.json 的 w2_config.sha256。给 --final 时核对臂的配置 sha256 等于 final.json 记的。
+只读运行的输出，不跑模型（freeze 只写两个配置文件）。
 """
 
 from __future__ import annotations
@@ -173,6 +176,33 @@ def cmd_select(a) -> int:
     return 0
 
 
+def cmd_freeze(a) -> int:
+    w2 = ROOT / "configs" / "w2.json"
+    cur = json.loads(w2.read_text(encoding="utf-8"))
+    if cur.get("frozen") is True:
+        raise SystemExit("configs/w2.json 已冻结")
+    arm_bytes = Path(a.arm_config).read_bytes()
+    arm_sha = hashlib.sha256(arm_bytes).hexdigest()
+    if a.final:
+        fin = json.loads(Path(a.final).read_text(encoding="utf-8"))
+        if fin.get("sha256") != arm_sha:
+            raise SystemExit(f"臂的配置 sha256 {arm_sha} 与 final.json 记的 {fin.get('sha256')} 不同")
+    d = json.loads(arm_bytes)
+    d["name"] = cur["name"]
+    d["status"] = (f"已冻结（{a.decision}）：W2 预注册 §5 在 devtune800 上选中的臂 {Path(a.arm_config).stem}"
+                   f"（{a.arm_config}，sha256 {arm_sha}），内容与该臂相同，只改 name、status、frozen。之后不再改动；devcheck2 与 test 只用这一份。")
+    d["frozen"] = True
+    text = json.dumps(d, ensure_ascii=False, indent=1) + "\n"
+    w2.write_text(text, encoding="utf-8")
+    sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    tc = ROOT / "configs" / "w2c_train.json"
+    t = json.loads(tc.read_text(encoding="utf-8"))
+    t["w2_config"]["sha256"] = sha
+    tc.write_text(json.dumps(t, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    print(f"冻结：configs/w2.json sha256 {sha}；configs/w2c_train.json 的 w2_config.sha256 已填")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -198,8 +228,12 @@ def main(argv=None) -> int:
     s.add_argument("--out", required=True)
     s.add_argument("--md")
     s.add_argument("--step")
+    f = sub.add_parser("freeze")
+    f.add_argument("--arm-config", required=True)
+    f.add_argument("--decision", required=True)
+    f.add_argument("--final")
     a = p.parse_args(argv)
-    return {"rank": cmd_rank, "arm": cmd_arm, "select": cmd_select}[a.cmd](a)
+    return {"rank": cmd_rank, "arm": cmd_arm, "select": cmd_select, "freeze": cmd_freeze}[a.cmd](a)
 
 
 if __name__ == "__main__":

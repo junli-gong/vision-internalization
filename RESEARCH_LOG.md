@@ -1870,3 +1870,7 @@
   - W2 预注册 §9 写入 W2-c 的训练与判定，写于任何 W2-c 运行之前：9B、16,000 句、2,000 步、LoRA 同 C3、健康检查与 T 文本读数。
   - W2-c 的数据要等 W2-a 冻结后才能生成候选；出框可以先跑。
 - 10-23 01:2x UTC：发 RUN-0067：W2-c 数据的第一步，06 上 RUN-0056 跑完后自动开始，base 9B 在 train 的 16,000 句上出框。tiny 彩排 rc=0。候选与标签一步等 W2-a 冻结。
+- 10-23 03:2x UTC：准备 W2-a 调参之后的步骤：
+  - scripts/mgr/w2_tune.py 加 freeze：把选中的臂写成冻结的 configs/w2.json，并把它的 sha256 填进 configs/w2c_train.json。临时工作树里试过，配置能加载，sha 一致。
+  - RUN-0068 的驱动 gate_w2a.sh 写好：devcheck2 上跑出框、候选、w1f、w2a，再跑 w2_gate 与参照基线。tiny 彩排 8 步都 rc=0。
+  - 试冻结时发现 W2 的测试写死了草稿的取值，派 DEV-0062，让测试冻结前后都能通过。
