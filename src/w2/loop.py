@@ -17,7 +17,7 @@
   批的组成只取决于顺序（与提示长度），是确定的。
 - 解析（parse_selection，先经 E1 的 parse_generation 判思考段未闭合、截断、空回答）：去掉首尾的 strip_chars、不分大小写之后，恰是
   none_words 之一 → "none"；恰是一个十进制整数且在 1..K 内 → 编号；超出 1..K → out_of_range；其余 → no_choice。
-- 挑法（choose）：w2a = 解析出的编号，none 或解析失败交 1 号（fallback = none / parse_failure）；random_pick = random_index
+- 挑法（choose）：w2a（与 W2-c 的 w2c，DEV-0061）= 解析出的编号，none 或解析失败交 1 号（fallback = none / parse_failure）；random_pick = random_index
   （1 + int(sha256(salt|id), 16) mod K）；oracle_pick = oracle_index（真值 IoU 最高的，并列取编号小的，精确比较）；w1f = 1 号。
 - 每条样本的记录（candidate_record）：提出、各候选与真值的 inter / union / IoU、最优编号、挑选原文与思考、挑中的编号、fallback、
   最终 mask 的 RLE、计分；计算记账：每次模型调用一条 Compute（提出一次、挑选一次），工具调用 = 候选生成（有框时 1 次）。
@@ -39,7 +39,7 @@ from src.executors.raster import mask_to_rle, rle_to_mask
 from src.metrics.seg import mask_inter_union, sample_iou
 from src.parsing import ParseFailure, ParseResult, parse_generation
 from src.w1.loop import image_digest, plan_sub_batches
-from src.w2.config import PROPOSE_BOX, PROPOSE_BOX_POINTS, SelectProtocol
+from src.w2.config import MODEL_PICK_SETTINGS, PROPOSE_BOX, PROPOSE_BOX_POINTS, SelectProtocol
 
 FALLBACK_NONE = "none"
 FALLBACK_PARSE = "parse_failure"
@@ -226,10 +226,10 @@ class SelectOutcome:
 
 def choose(setting: str, *, sample_id: str, k: int, stats: Sequence[tuple[int, int]], salt: str,
            outcome: SelectOutcome | None = None) -> tuple[int, int | None, str | None]:
-    """(最终编号, 挑中的编号, fallback)。w2a 要 outcome；none 或解析失败交 1 号。"""
-    if setting == "w2a":
+    """(最终编号, 挑中的编号, fallback)。w2a、w2c 要 outcome；none 或解析失败交 1 号。"""
+    if setting in MODEL_PICK_SETTINGS:
         if outcome is None:
-            raise ValueError("w2a 要挑选的结果")
+            raise ValueError(f"{setting} 要挑选的结果")
         return (outcome.pick if outcome.pick is not None else 1), outcome.pick, outcome.fallback
     if setting == "random_pick":
         i = random_index(salt, sample_id, k)
@@ -366,8 +366,8 @@ def _tokens(calls: Sequence[Compute], inserted: int) -> dict[str, int]:
 def candidate_record(setting: str, sample: Any, gt: np.ndarray, row: Mapping[str, Any], *, salt: str,
                      proposal_rec: Mapping[str, Any], proposal_wall_s: float = 0.0,
                      outcome: SelectOutcome | None = None) -> tuple[dict[str, Any], list[Compute]]:
-    """一条样本在用候选的设置（w2a、random_pick、oracle_pick、w1f）下的记录与这条样本的模型调用（提出一次，墙钟 proposal_wall_s；
-    w2a 另加挑选一次）。记录里不含墙钟。"""
+    """一条样本在用候选的设置（w2a、random_pick、oracle_pick、w1f；W2-c 的 w2c 同 w2a）下的记录与这条样本的模型调用（提出一次，墙钟
+    proposal_wall_s；w2a、w2c 另加挑选一次）。记录里不含墙钟。"""
     w, h = row["image_size"]
     if gt.shape != (h, w):
         raise ValueError(f"{sample.id}：GT mask 形状 {gt.shape} 与原图 (H, W) = {(h, w)} 不符")
@@ -389,9 +389,9 @@ def candidate_record(setting: str, sample: Any, gt: np.ndarray, row: Mapping[str
         if first_as_empty(row):
             cands[0]["as_empty"] = True  # 裁定 A：1 号候选失败，按空 mask 用
         best = oracle_index(pairs)
-        if setting == "w2a":
+        if setting in MODEL_PICK_SETTINGS:
             if outcome is None or outcome.id != sample.id:
-                raise RuntimeError(f"{sample.id}：w2a 缺这条样本的挑选结果")
+                raise RuntimeError(f"{sample.id}：{setting} 缺这条样本的挑选结果")
             rec["select"] = dict(outcome.record)
             if outcome.compute is not None:
                 calls.append(outcome.compute)

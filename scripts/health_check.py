@@ -14,6 +14,13 @@
         # 不加载模型，从保存的输出重算三项（或只重算 IFEval），规则与一次跑完相同；记下评分时间、代码 commit、punkt_tab 哈希
 开发机彩排（本地构造的小型随机模型，CPU；数值无意义，只验证全流程；--model 选家族，不给即 Qwen3.5）：
     python scripts/health_check.py --tiny --model gemma-4-e2b-it --limit 3 --out /tmp/health_tiny.json
+训练后的检查点（DEV-0061，W2-c；简报 §8.11"对合并后的模型跑"）：加 --checkpoint <训练叶目录>/ckpt/final/model（--model 必须与检查点
+manifest 的构造方式相同）。加载方式同 T 文本评测（scripts/run_e1.py --checkpoint）：先跑评测前的合并核对（src/e3/merge_check 的 t_text
+口径，n 取 configs/e3b_train.json 的 eval.merge_check.n，可用 --merge-check-n 改；读 --data-root（默认 VISINT_DATA_ROOT）里 E1 的 grid16
+开发子集；写进 <--out 去掉 .json>_merge_check.json，不通过退出码 1），
+再 factory.load_trained(merge=True)；其余协议不变（题目、贪心、预算、读法）。输出 JSON 另记 checkpoint（manifest 的 sha256、LoRA、合并核对
+的口径）；不给 --checkpoint 时输出与原来相同。
+    python scripts/health_check.py --model qwen3.5-9b --checkpoint <叶目录>/ckpt/final/model --data-root $DATA --out <json>
 比较两次运行（门报告用；标题读数合并后比基座低超过 5 个百分点的项标出，并列给出配对 bootstrap CI 与符号检验 p 值；
 另列截断率提示）：
     python scripts/health_check.py --compare <基座 json> <合并后 json> [--out <json>]
@@ -27,7 +34,8 @@ option_logits：只看第一个生成位置，限制在本题的选项字母上�
 算力机上可加 --audit-fmt32 N：MMLU-Pro 前 N 题再真的用 max_new_tokens=32 各生成一次，与截出的读数逐字段比较
 （GPU bf16 上"前缀相同"的运行期核对；不计入记账，不改分数）。
 
-退出码：0 = 完成（分数高低不影响）；2 = 出错（运行模式下已有结果与报错先写进 --out 再退出；重评模式写出报错）；
+退出码：0 = 完成（分数高低不影响）；1 = --checkpoint 的合并核对没有通过，拒绝评测；2 = 出错（运行模式下已有结果与报错先写进 --out
+再退出；重评模式写出报错）；
 argparse 用法错误也是 2。--limit N：每项只跑前 N 题（调试用；这样的结果不能拿去比较）。
 真模型运行（以及对真模型输出的重评）要求 punkt_tab/english 与 protocol.PUNKT_TAB_ENGLISH_SHA256 逐个相同；--tiny 只记录。
 
@@ -41,6 +49,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import sys
 import tempfile
 import time
@@ -79,13 +88,17 @@ def parse_args(argv=None):
     p.add_argument("--rescore", metavar="IN_JSON", help="不加载模型，从已保存的输出重算分数，写到 --out")
     p.add_argument("--only-ifeval", action="store_true", help="与 --rescore 一起用：只重算 IFEval，其余两项原样保留")
     p.add_argument("--compare", nargs=2, metavar=("BASE_JSON", "MERGED_JSON"), help="比较两次运行，不跑模型")
+    p.add_argument("--checkpoint", help="训练后的检查点目录（DEV-0061）：合并核对 → load_trained(merge=True) 替代 base，其余协议不变")
+    p.add_argument("--merge-check-n", type=int, help="--checkpoint 的合并核对的开发样本数（默认取 configs/e3b_train.json 的 eval.merge_check.n）")
+    p.add_argument("--data-root", help="--checkpoint 的合并核对读 E1 grid16 开发子集的落地根（默认环境变量 VISINT_DATA_ROOT；--tiny 取 fixture）")
     p.add_argument("--audit-fmt32", type=int, metavar="N",
                    help="跑完后 MMLU-Pro 前 N 题再真的用 max_new_tokens=32 各生成一次，与截出的 mmlu_pro_fmt32 逐字段比较"
                         "（不计入记账，不改分数）")
     args = p.parse_args(argv)
     run_only = {"--model": args.model, "--device": args.device, "--dtype": args.dtype, "--tiny": args.tiny,
                 "--limit": args.limit, "--skip-ifeval-scoring": args.skip_ifeval_scoring,
-                "--audit-fmt32": args.audit_fmt32}
+                "--audit-fmt32": args.audit_fmt32, "--checkpoint": args.checkpoint, "--merge-check-n": args.merge_check_n,
+                "--data-root": args.data_root}
     if args.compare and args.rescore:
         p.error("--compare 与 --rescore 不能同时用")
     if args.only_ifeval and not args.rescore:
@@ -106,6 +119,15 @@ def parse_args(argv=None):
         p.error("--limit 必须是正整数")
     if args.audit_fmt32 is not None and args.audit_fmt32 < 1:
         p.error("--audit-fmt32 必须是正整数")
+    if args.checkpoint is not None:
+        if not args.model:
+            p.error("--checkpoint 要给 --model（必须与检查点 manifest 的构造方式相同）")
+        if not Path(args.checkpoint).is_dir():
+            p.error(f"--checkpoint {args.checkpoint!r} 不是目录")
+    elif args.merge_check_n is not None or args.data_root is not None:
+        p.error("--merge-check-n、--data-root 只配 --checkpoint 用")
+    if args.merge_check_n is not None and args.merge_check_n < 1:
+        p.error("--merge-check-n 必须是正整数")
     if args.tiny:
         args.device = args.device or "cpu"
         args.dtype = args.dtype or "fp32"
@@ -130,6 +152,40 @@ def vision_policy(family: str, *, tiny: bool):
 
         return TilePolicy(**internvl35.SMOKE_POLICY)
     raise ValueError(f"健康检查还不支持 {family} 家族")
+
+
+def merge_check_path(out: str | Path) -> Path:
+    """--checkpoint 的合并核对写在 --out 旁边：<--out 去掉后缀>_merge_check.json。"""
+    o = Path(out)
+    return o.with_name(o.stem + "_merge_check.json")
+
+
+def make_checkpoint_adapter(args):
+    """--checkpoint（DEV-0061）：构造方式核对 → 评测前的合并核对（不通过抛 MergeCheckFailed）→ load_trained(merge=True)。
+    返回 (adapter, 注册项, 检查点的图像口径（只记录）, 输出 JSON 的 checkpoint 一节)。同 scripts/run_e1.py 的 build_checkpoint_adapter。"""
+    from src.adapters.checkpoint import read_manifest
+    from src.e3.config import load_config
+    from src.e3.merge_check import run_merge_check, settings_from_config
+
+    entry = registry.get_model(args.model)
+    ck = Path(args.checkpoint)
+    man = read_manifest(ck)
+    spec = man.get("build_spec") or {}
+    if spec.get("key") != args.model or bool(spec.get("tiny")) != bool(args.tiny):
+        raise ValueError(f"检查点的构造方式（key {spec.get('key')!r}，tiny {spec.get('tiny')}）与 --model {args.model!r}、"
+                         f"--tiny {args.tiny} 不符")
+    mc = settings_from_config(load_config().doc, tiny=args.tiny, n=args.merge_check_n)
+    summ = run_merge_check(ck, model_key=args.model, tiny=args.tiny, n=mc["n"], checks=mc["checks"],
+                           out_json=merge_check_path(args.out), device=args.device, dtype=args.dtype,
+                           data_root=args.data_root or os.environ.get("VISINT_DATA_ROOT"), dev_subsets=None, log=_log)
+    ad, _ = factory.load_trained(ck, device=args.device, dtype=DTYPES[args.dtype], merge=True)
+    if man.get("lora") is not None and ad.lora_state != "merged":
+        raise RuntimeError(f"load_trained(merge=True) 之后 LoRA 状态是 {ad.lora_state}，应为 merged")
+    info = {"dir": str(ck), "manifest_sha256": runlog.sha256_file(ck / "manifest.json"), "build_spec": man.get("build_spec"),
+            "image_policy": man.get("image_policy"), "dtype": man.get("dtype"), "lora": man.get("lora"),
+            "trainable_token_rows": man.get("trainable_token_rows"), "n_grid_tokens": len(ad.grid_token_ids),
+            "merge_check": summ}
+    return ad, entry, ad.image_policy.as_dict(), info
 
 
 def make_adapter(args):
@@ -297,8 +353,12 @@ def main(argv=None) -> int:
         config = {"script": "scripts/health_check.py", "model": args.model, "tiny": args.tiny, "device": args.device,
                   "dtype": args.dtype, "limit": args.limit, "skip_ifeval_scoring": args.skip_ifeval_scoring,
                   "audit_fmt32": args.audit_fmt32, "protocol_version": P.PROTOCOL_VERSION, "seed": P.SEED}
+        if args.checkpoint is not None:  # DEV-0061：训练后的检查点（不给时 config 与输出 JSON 都与原来相同）
+            ad, entry, vision, report["checkpoint"] = make_checkpoint_adapter(args)
+            config["checkpoint"] = {k: report["checkpoint"][k] for k in ("manifest_sha256", "build_spec", "lora")}
         report["run"] = run_record(config, REPO_ROOT / P.ITEMS_PATH)
-        ad, entry, vision = make_adapter(args)
+        if args.checkpoint is None:
+            ad, entry, vision = make_adapter(args)
         report["model"] = {
             "key": entry.key, "family": entry.family, "repo": entry.repo, "revision": entry.revision,
             "adapter_model_key": ad.model_key, "device": str(ad.device), "dtype": str(ad.dtype),
@@ -327,8 +387,15 @@ def main(argv=None) -> int:
         report["scoring"] = scoring_block(mode="inline", benchmarks=scored, punkt=punkt)
         report["ok"] = True
     except Exception as e:  # noqa: BLE001 — 证据先落盘，再以非零码退出
+        from src.e3.merge_check import MergeCheckFailed
+
         report.update(state)
         report.update(error=repr(e), traceback=traceback.format_exc()[-4000:])
+        if isinstance(e, MergeCheckFailed):  # --checkpoint：评测前的合并核对没有通过（同 run_e1 --checkpoint 的退出码 1）
+            report["wall_time_s"] = round(time.perf_counter() - t_all, 2)
+            _write(out_path, report)
+            print(f"拒绝评测：{e}（已写出 {out_path}）", file=sys.stderr)
+            return 1
         report["wall_time_s"] = round(time.perf_counter() - t_all, 2)
         _write(out_path, report)
         print(f"失败：{e!r}（已写出 {out_path}）", file=sys.stderr)

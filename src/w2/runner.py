@@ -12,6 +12,8 @@
   baseline_e1 的结果（没跑完先跑），目录里原样复制 predictions.jsonl、compute.json，config.yaml 记路由与来源的 sha256。
 - random_pick、oracle_pick、w1f（refseg）：同一份候选，不跑模型。
 - ownbox（refseg）：E1 refexp_box 的框光栅化（同 W1 的"自己的框"）；baseline_e1：E1 零样本（refseg → refexp_poly）。
+- w2c（refseg；W2-c，DEV-0061，src/w2/w2c.py）：训练过的检查点做提出（<out>/<模型>/refexp_box/propose_w2c/<划分>）与挑选（关思考），
+  候选缓存另放 <out>/<模型>/refseg/candidates_w2c/<划分>（ensure_candidates 的 cand_setting）；config.yaml 另记 checkpoint。
 输出：predictions.jsonl（逐条，不含墙钟，逐字节可复现）、metrics.json（只由 predictions.jsonl 算：cIoU、gIoU 与 bootstrap 95% CI；
 挑中最优候选、挑中 1 号、"都不对"、解析失败的比例；失败、各候选的 cIoU……）、compute.json（每次模型调用一条：提出一次，w2a 加挑选
 一次；墙钟 = 提出 + 候选生成 + 挑选）、config.yaml（运行身份）、meta.json、README.md、logs/（timing.jsonl、run_<k>.json）。
@@ -62,7 +64,7 @@ from src.e1.tasks import DataPaths, Selection
 from src.w1 import baselines as B
 from src.w1.runner import model_record
 from src.w1.scoring import headline
-from src.w2.config import OUTPUT_KIND, PROPOSE_BOX, PROPOSE_BOX_POINTS, W2Config
+from src.w2.config import CANDIDATE_SETTINGS, MODEL_PICK_SETTINGS, OUTPUT_KIND, PROPOSE_BOX, PROPOSE_BOX_POINTS, W2C_SETTING, W2Config
 from src.w2.data import W2_SPLITS_PATH, splits_sha256
 from src.w2.loop import (
     FALLBACK_NONE,
@@ -351,8 +353,8 @@ def _proposals_by_id(mode: str, samples: Sequence[Sample], prop_recs: Sequence[M
 
 
 def candidates_identity(spec: W2RunSpec, cfg: W2Config, splits_doc: Mapping[str, Any], samples: Sequence[Sample], out: str | Path,
-                        *, mode: str, prop_dir: Path, impl: Impl, chunk_size: int) -> dict[str, Any]:
-    cspec = dataclasses.replace(spec, task="refseg", setting=candidates_setting(mode))
+                        *, mode: str, prop_dir: Path, impl: Impl, chunk_size: int, cand_setting: str | None = None) -> dict[str, Any]:
+    cspec = dataclasses.replace(spec, task="refseg", setting=cand_setting or candidates_setting(mode))
     return {"experiment": "W2", "framework": FRAMEWORK, "w2": w2_record(cspec, splits_doc, samples), "model": base_model_record(spec),
             "propose": {"mode": mode, "run": _run_ref(out, prop_dir)},
             "candidates": {"module": impl.candidates_module, "generators": list(cfg.generators), "k": cfg.k,
@@ -445,17 +447,20 @@ class _CandidateRunner:
 def ensure_candidates(spec: W2RunSpec, cfg: W2Config, samples: Sequence[Sample], out: str | Path, *, splits_doc: Mapping[str, Any],
                       mode: str, prop_dir: Path, prop_recs: Sequence[Mapping[str, Any]], impl: Impl, chunk_size: int,
                       prompts: PromptConfig, argv: Sequence[str] = (), log: Callable[[str], None] | None = None,
-                      workers: int = 1) -> tuple[Path, dict[str, dict[str, Any]]]:
+                      workers: int = 1, cand_setting: str | None = None) -> tuple[Path, dict[str, dict[str, Any]]]:
     """候选缓存（规则见模块说明）：没有就生成，生成到一半就续上（身份必须相同）。返回 (目录, {id: 行})。
-    workers：候选生成的进程数（不进运行身份；内容与单进程相同，见上面的说明）。"""
+    workers：候选生成的进程数（不进运行身份；内容与单进程相同，见上面的说明）。cand_setting：缓存目录的设置名（默认
+    candidates_setting(mode)；W2-c 用 candidates_w2c，与 base 的候选分开）。"""
     log = log or (lambda m: print(m, file=sys.stderr, flush=True))
-    leaf = w2_leaf(out, spec.model_key, "refseg", candidates_setting(mode), spec.split)
-    cfg_doc = candidates_identity(spec, cfg, splits_doc, samples, out, mode=mode, prop_dir=prop_dir, impl=impl, chunk_size=chunk_size)
+    cname = cand_setting or candidates_setting(mode)
+    leaf = w2_leaf(out, spec.model_key, "refseg", cname, spec.split)
+    cfg_doc = candidates_identity(spec, cfg, splits_doc, samples, out, mode=mode, prop_dir=prop_dir, impl=impl, chunk_size=chunk_size,
+                                  cand_setting=cand_setting)
     _prepare_leaf(leaf, cfg_doc, [cfg.path, *_splits_files(splits_doc)], resume=True)
     ids = [s.id for s in samples]
     by = _proposals_by_id(mode, samples, prop_recs, prompts, spec, cfg)
     plan = batch_plan([None] * len(ids), chunk_size)
-    what = f"W2 {spec.model_key} {candidates_setting(mode)}/{spec.split}"
+    what = f"W2 {spec.model_key} {cname}/{spec.split}"
     keep, trimmed = _resume_point(leaf / CANDIDATES, ids, lambda r: r["id"], plan, log, what)
     todo = [(a, b) for a, b in plan if a >= keep]
     if todo:
@@ -519,7 +524,9 @@ def _candidates_summary(leaf: Path, spec: W2RunSpec, cfg_doc: Mapping[str, Any],
 
 def setting_identity(spec: W2RunSpec, cfg: W2Config, splits_doc: Mapping[str, Any], samples: Sequence[Sample], out: str | Path, *,
                      mode: str, prop_dir: Path, cand_leaf: Path, cand_rows: Sequence[Mapping[str, Any]], impl: Impl, batching: Mapping[str, Any],
-                     paths: DataPaths, tiny: bool) -> dict[str, Any]:
+                     paths: DataPaths, tiny: bool, checkpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """运行身份。checkpoint（只有 w2c）：训练过的检查点的记录（src/w2/w2c.checkpoint_record），写进 config.yaml 的 checkpoint
+    （scripts/w2_gate.py 据此核对 W2-c 带检查点）；其余设置没有这个键（与原来逐字节相同）。"""
     doc: dict[str, Any] = {
         "experiment": "W2", "framework": FRAMEWORK, "w2": w2_record(spec, splits_doc, samples), "model": model_record(spec),
         "image_policy": dict(spec.image_policy), "w2_config": cfg.identity(),
@@ -529,13 +536,15 @@ def setting_identity(spec: W2RunSpec, cfg: W2Config, splits_doc: Mapping[str, An
         "batching": dict(batching),
         "data": {"config_sha256": {Path(p).name: _sha(Path(p)) for p in paths.config_files()}},
     }
-    if spec.setting == "w2a":
-        sp = cfg.select_protocol(tiny=tiny)
+    if spec.setting in MODEL_PICK_SETTINGS:
+        sp = cfg.select_protocol_for(spec.setting, tiny=tiny)
         doc["select"] = {**sp.as_dict(), "system": cfg.select_system, "prompt": cfg.data["select"]["prompt"],
                          "method": "chat_turn_batch" if sp.thinking else "generate_batch"}
         doc["render"] = {"module": impl.render_module, "layout": cfg.layout, "style": cfg.style}
     if spec.setting == "random_pick":
         doc["random_pick"] = {"salt": cfg.random_salt}
+    if checkpoint is not None:
+        doc["checkpoint"] = json.loads(json.dumps(dict(checkpoint), ensure_ascii=False))
     return doc
 
 
@@ -584,7 +593,7 @@ def aggregate_w2(setting: str, recs: Sequence[Mapping[str, Any]]) -> dict[str, A
         m.setdefault("tokens", {})[key] = distribution(r["tokens"][key] for r in recs)
     m["n_model_calls"] = distribution(r["n_model_calls"] for r in recs)
     m["n_tool_calls"] = distribution(r["n_tool_calls"] for r in recs)
-    if setting == "w2a":
+    if setting in MODEL_PICK_SETTINGS:
         sel = [r["select"] for r in wc]
         m["select"] = {"method": _counts(s["method"] for s in sel), "thinking_end": {k: v for k, v in sorted(Counter(str(s.get("thinking_end")) for s in sel).items())},
                        "parse_failure": _counts(s["parse_failure"] for s in sel if s["parse_failure"] is not None),
@@ -601,6 +610,9 @@ def _readme(spec: W2RunSpec, cfg_doc: Mapping[str, Any], m: Mapping[str, Any]) -
              f"- 配置：{cfg_doc['w2_config']['config']} sha256 {cfg_doc['w2_config']['config_sha256'][:16]}…（frozen = "
              f"{cfg_doc['w2_config']['frozen']}）；提出 mode = {cfg_doc['propose']['mode']}（{cfg_doc['propose']['run']['leaf']}）",
              f"- 候选：{cfg_doc['candidates']['leaf']}（{cfg_doc['candidates']['module']}，K = {cfg_doc['candidates']['k']}）"]
+    if cfg_doc.get("checkpoint"):
+        ck = cfg_doc["checkpoint"]
+        lines.append(f"- 检查点：{ck.get('path')}（manifest sha256 {str(ck.get('manifest_sha256'))[:16]}…；训练 {ck.get('training')}）")
     if "select" in cfg_doc:
         s = cfg_doc["select"]
         lines.append(f"- 挑选：{s['method']}，思考 {s['thinking']}（预算 {s['thinking_budget']}），作答 {s['answer_budget']}；渲染 "
@@ -626,18 +638,24 @@ def run_candidate_setting(adapter: Any, spec: W2RunSpec, cfg: W2Config, samples:
                           prop_recs: Sequence[Mapping[str, Any]], cand_leaf: Path, cand_rows: Mapping[str, Mapping[str, Any]],
                           impl: Impl, prompts: PromptConfig, batch_size: int, chunk_size: int, max_batch_tokens: int | None,
                           resume: bool, argv: Sequence[str] = (), log: Callable[[str], None] | None = None,
-                          warmup: bool = True) -> dict[str, Any]:
-    """w2a、random_pick、oracle_pick、w1f（refseg）在一个划分上跑，返回 metrics。adapter 只有 w2a 用。"""
+                          warmup: bool = True, checkpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """w2a、random_pick、oracle_pick、w1f（refseg）在一个划分上跑，返回 metrics。adapter 只有 w2a 用。
+    w2c（W2-c，DEV-0061）：同 w2a，只是挑选关思考（W2Config.select_protocol_for），adapter 是加载了检查点的模型，checkpoint 必须给
+    （记进 config.yaml）；其余设置不能给 checkpoint。"""
     log = log or (lambda m: print(m, file=sys.stderr, flush=True))
-    if spec.task != "refseg" or spec.setting not in ("w2a", "random_pick", "oracle_pick", "w1f"):
+    if spec.task != "refseg" or spec.setting not in CANDIDATE_SETTINGS + (W2C_SETTING,):
         raise ValueError(f"{spec.task}/{spec.setting} 不是用候选的设置")
+    if (spec.setting == W2C_SETTING) != (checkpoint is not None):
+        raise ValueError(f"{spec.setting}：w2c 必须带训练过的检查点，其余设置不能带（收到 checkpoint = {checkpoint is not None}）")
+    if spec.setting == W2C_SETTING and cfg.select_system is not None:
+        raise ValueError("w2c 的挑选关思考，走 build_inputs + generate_batch，没有 system 轮：configs/w2.json 的 select.system 必须是 null")
     tiny = spec.tiny
     ids = [s.id for s in samples]
     rows = [cand_rows[i] for i in ids]
     batching = {"batch_size": batch_size, "chunk_size": chunk_size, "max_batch_tokens": max_batch_tokens}
     cfg_doc = setting_identity(spec, cfg, splits_doc, samples, out, mode=mode, prop_dir=prop_dir, cand_leaf=cand_leaf, cand_rows=rows,
-                               impl=impl, batching=batching if spec.setting == "w2a" else {"chunk_size": chunk_size}, paths=paths,
-                               tiny=tiny)
+                               impl=impl, batching=batching if spec.setting in MODEL_PICK_SETTINGS else {"chunk_size": chunk_size},
+                               paths=paths, tiny=tiny, checkpoint=checkpoint)
     leaf = w2_leaf(out, spec.model_key, spec.task, spec.setting, spec.split)
     _prepare_leaf(leaf, cfg_doc, [cfg.path, *_splits_files(splits_doc), *paths.config_files()], resume=resume)
     props = _proposals_by_id(mode, samples, prop_recs, prompts, spec, cfg)
@@ -650,10 +668,10 @@ def run_candidate_setting(adapter: Any, spec: W2RunSpec, cfg: W2Config, samples:
     run_k, run_path, run_log = _start_run_log(leaf, argv, n_done_before=keep, n_remaining=len(ids) - keep, **batching,
                                               trimmed_to_batch_boundary=trimmed)
     t_all = time.perf_counter()
-    protocol = cfg.select_protocol(tiny=tiny)
-    if spec.setting == "w2a":
+    protocol = cfg.select_protocol_for(spec.setting, tiny=tiny) if spec.setting in MODEL_PICK_SETTINGS else None
+    if spec.setting in MODEL_PICK_SETTINGS:
         if impl.render is None:
-            raise ValueError("w2a 要渲染（render_selection）")
+            raise ValueError(f"{spec.setting} 要渲染（render_selection）")
         if todo and warmup and hasattr(adapter, "warmup"):
             run_log["warmup_wall_s"] = adapter.warmup(load_images(samples[keep]), batch_size=min(batch_size, len(ids) - keep))
     for n_chunk, (a, b) in enumerate(todo):
@@ -661,7 +679,7 @@ def run_candidate_setting(adapter: Any, spec: W2RunSpec, cfg: W2Config, samples:
         images = {s.id: load_images(s)[0] for s in chunk}
         outcomes: dict[str, Any] = {}
         render_s: dict[str, float] = {}
-        if spec.setting == "w2a":
+        if spec.setting in MODEL_PICK_SETTINGS:
             items = []
             for s in chunk:
                 row = cand_rows[s.id]

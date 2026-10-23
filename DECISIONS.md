@@ -2825,3 +2825,27 @@
    - 冻结的 W2-a 若用 `box_points`，W2-c 的数据与评测仍只用 E1 的框，与 §5 一致。依赖点的生成器在 W2-c 里走"没有点"的路径。
    - GT 为空时 IoU 与 label 的口径差异照 W2 现有的规则，计数报告。
 4. **测试**：管理员在主分支上跑 `tests/test_w2c_data.py`，12 passed；开发 agent 跑 W2 的全部测试，148 passed。
+
+## D119（2026-10-23，管理员）：DEV-0061 合入，W2-c 的训练与评测接入
+
+1. **合入**：
+   - 新建：`configs/w2c_train.json`、`src/w2/{w2c_train,w2c}.py`、`scripts/train_w2c.py`、`tests/{_w2c_fakes,test_w2c_train,test_w2c_eval}.py`；
+   - 修改：`src/w2/{config,loop,runner}.py`、`scripts/run_w2.py`（加 `--setting w2c`、`--checkpoint`、`--merge-check-n`）、`scripts/w2_gate.py`（W2-c 对应 w2c 设置）、`scripts/health_check.py`（加 `--checkpoint`，不给时行为不变）、`tests/test_w2_gate.py`；
+   - E3 的代码与配置一行没改。
+2. **设计**：另写训练脚本，复用 `src/e3/train.Trainer`，只覆盖 `optimize`。
+   - LoRA 与优化器同 C3：r 32、alpha 64、lr 2e-4，warmup 3% 加余弦；
+   - 每步 8 条提出 + 8 条挑选，两条流分别按各自的监督 token 数平均，再 1 : 1 相加；
+   - 默认 2,000 步，种子 0；检查点与 C3 同格式。
+3. **偏离**，全部接受：
+   - "提出"样本的图文顺序用 `image_first`，即 E1 评测时出框的协议；C3 是 `instruction_first`。提示与目标文本与 C3 逐字相同。
+   - gate 的 W2-c 对应设置 `w2c`；
+   - W2-c 评测时的提出固定用 box；
+   - 冻结配置的 `select.system` 必须为 null；
+   - 健康检查脚本加 `--checkpoint`，最小改动。
+4. **管理员的集成彩排**（开发机，tiny）：
+   - DEV-0060 的 `build_w2c_data.py` 出数据：出框之后按测试的做法换成 GT 内缩的框，9/10 句有候选与标签；
+   - `train_w2c.py` 训 4 步，rc=0，写出检查点；
+   - `run_w2.py --setting w2c --checkpoint <叶目录>/ckpt/final/model` 跑完，rc=0。
+   - 两个任务的数据格式对接无误。
+5. **测试**：管理员在主分支上跑 W2 与 W2-c 的全部测试，186 passed。开发 agent 另跑了 E3、健康检查相关的测试，613 passed、14 skipped。
+6. **冻结之后要做的**：`configs/w2c_train.json` 的 `w2_config.sha256` 填上冻结的 `configs/w2.json` 的 sha256，记一个 D 条目；在那之前，非 tiny 的训练拒跑。

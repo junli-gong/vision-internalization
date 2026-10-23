@@ -8,6 +8,12 @@
 - w2a（主方法）：refseg 走 提出 → 候选 → 挑选（configs/w2.json）；refexp_box、count 按输出类型路由到 E1 单轮（= baseline_e1 的结果）。
 - random_pick、oracle_pick、w1f（refseg）：同一份候选里伪随机挑、用真值挑、交 1 号（= W1-F），不跑模型（候选与框没写完时先跑，要模型）。
 - ownbox（refseg）：E1 refexp_box 的框光栅化；baseline_e1：E1 零样本（refseg → refexp_poly、refexp_box、count），E1 冻结的批大小（64）。
+- w2c（refseg；W2-c，DEV-0061，src/w2/w2c.py）：要给 --checkpoint <W2-c 的训练叶目录>/ckpt/final/model（scripts/train_w2c.py 的输出）。
+  先做评测前的合并核对（口径同 E3 的 T 文本评测，写进 <out>/<模型>/w2c_merge_check.json，不通过退出码 1），再 load_trained(merge=True)；
+  提出（训练过的模型按 E1 refexp_box 协议重新出框）→ <out>/<模型>/refexp_box/propose_w2c/<划分>（与 base 的 baseline_e1 分开），候选 →
+  <out>/<模型>/refseg/candidates_w2c/<划分>，挑选（关思考）→ <out>/<模型>/refseg/w2c/<划分>；候选生成器、渲染、K 用 --w2-config 那一份
+  （必须与检查点训练时的 sha256 相同）。config.yaml 记 checkpoint（路径、manifest 的 sha256、合并核对的口径）。判定：
+      python scripts/w2_gate.py --main-name W2-c --main <out>/qwen3.5-9b/refseg/w2c/devcheck2 --w1f <base 的 w1f/devcheck2>
 "提出"的框 = 同一个 --out 里的 <out>/<模型>/refexp_box/baseline_e1/<划分>，没写完先按 E1 的协议跑完；候选只生成一次
 （<out>/<模型>/refseg/candidates/<划分>/candidates.jsonl），w2a、random_pick、oracle_pick、w1f 共用。
 划分：devtune800（W1 的 800 句，可以随便用）、devcheck2（新的 500 句，只用于判定）、test_*（同 W1）——refseg、refexp_box；
@@ -19,7 +25,7 @@ devtune_countbench、test_countbench——count。清单在 configs/w2_splits.js
 info 里的耗时外与单进程相同，不进运行身份）。
 候选与渲染的实现（--candidates-module、--render-module，默认 src.w2.candidates、src.w2.render，DEV-0058）与挑选的适配器
 （--adapter-factory MODULE:ATTR）可以换成测试的假实现（tests._w2_fakes），只配 --tiny。
-退出码：0 = 跑完；2 = 出错（报错先写进 <out>/<模型>/errors/，argparse 用法错误也是 2）。
+退出码：0 = 跑完；1 = --checkpoint 的合并核对没有通过，拒绝评测；2 = 出错（报错先写进 <out>/<模型>/errors/，argparse 用法错误也是 2）。
 """
 
 from __future__ import annotations
@@ -45,7 +51,16 @@ from src.e1.prompts import PROMPTS_PATH, load_prompt_config  # noqa: E402
 from src.e1.tasks import DataPaths  # noqa: E402
 from src.w1.loop import TASKS  # noqa: E402
 from src.w2 import runner as R  # noqa: E402
-from src.w2.config import PROPOSE_BOX, SETTING_TASKS, SETTINGS, W2_CONFIG_PATH, load_w2_config  # noqa: E402
+from src.w2 import w2c as W2C  # noqa: E402
+from src.w2.config import (  # noqa: E402
+    CLI_SETTINGS,
+    PROPOSE_BOX,
+    SETTING_TASKS,
+    W2_CONFIG_PATH,
+    W2C_CANDIDATES_SETTING,
+    W2C_SETTING,
+    load_w2_config,
+)
 from src.w2.data import W2_SPLITS_PATH, load_splits, needs_frozen, split_names, tiny_paths, tiny_splits, w2_items  # noqa: E402
 
 DTYPES = {"bf16": torch.bfloat16, "fp32": torch.float32}
@@ -59,7 +74,7 @@ def parse_args(argv=None):
     p.add_argument("--model", required=True, help="注册键（src/adapters/registry.py）")
     p.add_argument("--task", required=True, choices=TASKS)
     p.add_argument("--split", required=True, help="划分名（configs/w2_splits.json 的 splits）")
-    p.add_argument("--setting", required=True, choices=SETTINGS)
+    p.add_argument("--setting", required=True, choices=CLI_SETTINGS)
     p.add_argument("--out", required=True, help="本次运行的目录（experiments/W2/<NNNN_slug>）")
     p.add_argument("--batch-size", type=int, help="挑选：默认 configs/w2.json 的 batching.batch_size；E1 的运行：默认 E1 冻结的 64")
     p.add_argument("--chunk-size", type=int, help="组大小（续跑粒度；默认 batching.chunk_size）")
@@ -76,6 +91,8 @@ def parse_args(argv=None):
     p.add_argument("--render-module", default=R.DEFAULT_RENDER_MODULE, help="挑选图渲染的模块（默认真实现；别的只配 --tiny）")
     p.add_argument("--adapter-factory", help="MODULE:ATTR，返回挑选一步的适配器（只配 --tiny）")
     p.add_argument("--allow-unfrozen-batch", action="store_true", help="E1 的运行允许用冻结值以外的批大小（不是协议口径）")
+    p.add_argument("--checkpoint", help="--setting w2c 必给：W2-c 的检查点 <训练叶目录>/ckpt/final/model（scripts/train_w2c.py）")
+    p.add_argument("--merge-check-n", type=int, help="--checkpoint 的合并核对的开发样本数（默认取 configs/e3b_train.json 的 eval.merge_check.n）")
     a = p.parse_args(argv)
     if a.model not in registry.MODELS:
         p.error(f"未登记的模型键 {a.model!r}")
@@ -84,7 +101,16 @@ def parse_args(argv=None):
     if not a.tiny and (a.candidates_module != R.DEFAULT_CANDIDATES_MODULE or a.render_module != R.DEFAULT_RENDER_MODULE
                        or a.adapter_factory):
         p.error("--candidates-module、--render-module（非默认）与 --adapter-factory 只配 --tiny")
-    for name in ("batch_size", "chunk_size", "limit", "candidate_workers"):
+    if (a.setting == W2C_SETTING) != (a.checkpoint is not None):
+        p.error("--setting w2c 必须给 --checkpoint（W2-c 的检查点），其余设置不能给")
+    if a.merge_check_n is not None and a.checkpoint is None:
+        p.error("--merge-check-n 只配 --checkpoint 用")
+    if a.checkpoint is not None:
+        if a.adapter_factory:
+            p.error("--setting w2c 的提出与挑选都用加载了检查点的模型，不能配 --adapter-factory")
+        if not Path(a.checkpoint).is_dir():
+            p.error(f"--checkpoint {a.checkpoint!r} 不是目录")
+    for name in ("batch_size", "chunk_size", "limit", "candidate_workers", "merge_check_n"):
         v = getattr(a, name)
         if v is not None and v < 1:
             p.error(f"--{name.replace('_', '-')} 必须是正整数")
@@ -175,6 +201,26 @@ def cmd(a, argv) -> int:
         spec = run_spec(a, entry, policy, akey)
         src_dir, _ = R.ensure_e1_run(get_model, spec, a.task, cfg, samples, paths, a.out, batch_size=e1_bs, **common)
         m = R.run_routed(spec, cfg, samples, a.out, splits_doc=splits_doc, src_dir=src_dir, resume=a.resume, argv=argv)
+    elif a.setting == W2C_SETTING:  # W2-c（DEV-0061）：训练过的检查点做提出与挑选（src/w2/w2c.py）
+        W2C.refuse_mixing(a.out, entry.key, a.split, a.checkpoint)
+        ad, ck_info, extra = W2C.load_checkpoint_adapter(
+            a.checkpoint, model_key=a.model, tiny=a.tiny, device=a.device, dtype=a.dtype, torch_dtype=DTYPES[a.dtype], w2=cfg,
+            merge_check_json=Path(a.out) / a.model / W2C.MERGE_CHECK_JSON, data_root=a.data_root or os.environ.get("VISINT_DATA_ROOT"),
+            merge_check_n=a.merge_check_n)
+        pol = ad.image_policy
+        spec = R.W2RunSpec(model_key=entry.key, family=entry.family, repo=entry.repo, revision=entry.revision,
+                           adapter_model_key=str(getattr(ad, "model_key", entry.key)), task=a.task, split=a.split, setting=a.setting,
+                           tiny=a.tiny, limit=a.limit, image_policy={"tag": "checkpoint", "type": type(pol).__name__, **pol.as_dict()})
+        prop_dir, prop_recs = W2C.ensure_proposal(ad, entry, spec, cfg, samples, paths, a.out, checkpoint=ck_info, batch_size=e1_bs,
+                                                  run_extra=extra, **common)
+        impl = R.load_impl(a.candidates_module, a.render_module)
+        cand_leaf, cand_rows = R.ensure_candidates(spec, cfg, samples, a.out, mode=PROPOSE_BOX, prop_dir=prop_dir, prop_recs=prop_recs,
+                                                   impl=impl, chunk_size=chunk, workers=a.candidate_workers,
+                                                   cand_setting=W2C_CANDIDATES_SETTING, **common)
+        m = R.run_candidate_setting(ad, spec, cfg, samples, paths, a.out, splits_doc=splits_doc, mode=PROPOSE_BOX, prop_dir=prop_dir,
+                                    prop_recs=prop_recs, cand_leaf=cand_leaf, cand_rows=cand_rows, impl=impl, prompts=prompts,
+                                    batch_size=a.batch_size or bat["batch_size"], chunk_size=chunk,
+                                    max_batch_tokens=bat["max_batch_tokens"], resume=a.resume, argv=argv, checkpoint=ck_info)
     elif a.setting == "ownbox":
         spec = run_spec(a, entry, policy, akey)
         box_dir, box_recs = R.ensure_e1_run(get_model, spec, "refexp_box", cfg, samples, paths, a.out, batch_size=e1_bs, **common)
@@ -206,8 +252,13 @@ def cmd(a, argv) -> int:
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     a = parse_args(argv)
+    from src.e3.merge_check import MergeCheckFailed
+
     try:
         return cmd(a, argv)
+    except MergeCheckFailed as e:  # --checkpoint：评测前的合并核对没有通过（同 run_e1 --checkpoint）
+        print(f"拒绝评测：{e}", file=sys.stderr)
+        return 1
     except Exception as e:  # noqa: BLE001 — 证据先落盘，再以非零码退出
         err_dir = Path(a.out) / a.model / "errors"
         err_dir.mkdir(parents=True, exist_ok=True)

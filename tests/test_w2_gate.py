@@ -44,6 +44,7 @@ def rows(ious, n=500, seed=0, noise=0.0, prefix="refcoco_unc/val"):
 def test_rule_constants(gate):
     assert (gate.LEVEL, gate.N_RESAMPLES, gate.GATE_MODEL, gate.GATE_SPLIT, gate.GATE_N) == (0.975, 10_000, "qwen3.5-9b", "devcheck2", 500)
     assert (gate.MAIN_SETTING, gate.BASE_SETTING, gate.BASE_PROPOSE_MODE) == ("w2a", "w1f", "box")
+    assert gate.MAIN_SETTINGS == {"W2-a": "w2a", "W2-c": "w2c"}  # W2-c = run_w2.py --setting w2c（DEV-0061）
 
 
 def test_pass_and_fail(gate):
@@ -141,9 +142,12 @@ def test_gate_input_errors(gate, tmp_path):
     bad("split", "split", b_kw={"split": "devtune800"})
     bad("ids", "id 集合", bb=rows(0.57, seed=2, prefix="other"))
     bad("incomplete", "没有写完", m_kw={"complete": False})
+    bad("w2c_as_w2a", "w2c", m_kw={"checkpoint": {"sha256": "x"}}, main_name="W2-c")  # W2-c 的设置是 w2c（DEV-0061）
+    bad("w2a_as_w2c", "w2a", m_setting="w2c", m_kw={"checkpoint": {"sha256": "x"}})
     root = tmp_path / "w2c_ok"
-    d = gate.evaluate(make_leaf(root / "m", "w2a", m, checkpoint={"sha256": "c"}), make_leaf(root / "b", "w1f", b), "W2-c")
-    assert d["main_name"] == "W2-c" and d["runs"]["main"]["checkpoint"] == {"sha256": "c"}
+    d = gate.evaluate(make_leaf(root / "m", "w2c", m, checkpoint={"sha256": "c"}), make_leaf(root / "b", "w1f", b), "W2-c")
+    assert d["main_name"] == "W2-c" and d["runs"]["main"]["checkpoint"] == {"sha256": "c"} and d["runs"]["main"]["setting"] == "w2c"
+    assert "W2-c（w2c）cIoU" in gate.markdown(d)
 
 
 def test_gate_cli_writes_json_and_md(gate, tmp_path):

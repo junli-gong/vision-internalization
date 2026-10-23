@@ -4,14 +4,16 @@
 
     python scripts/w2_gate.py --main-name W2-a --main <out>/qwen3.5-9b/refseg/w2a/devcheck2 \\
         --w1f <out>/qwen3.5-9b/refseg/w1f/devcheck2 --out-dir <目录>   # 写 <目录>/gate.json 与 <目录>/gate.md
+    python scripts/w2_gate.py --main-name W2-c --main <W2-c 的 out>/qwen3.5-9b/refseg/w2c/devcheck2 \\
+        --w1f <out>/qwen3.5-9b/refseg/w1f/devcheck2 --out-dir <目录>   # W2-c：run_w2.py --setting w2c --checkpoint 的输出（DEV-0061）
 
 规则：主配置（W2-a 或 W2-c）的 cIoU 显著高于 W1-F：两者 cIoU 之差（主配置 − W1-F），配对 bootstrap（src/stats.paired_bootstrap_ci，
 statistic = ratio_of_sums，即 Σinter / Σunion，同 w1_gate.py），置信水平 0.975（两个主配置的多重比较校正），重抽样 10,000 次，种子取
 src/constants.BOOTSTRAP_SEED；CI 下界 > 0 才算通过。两个主配置各跑一次；"至少一个通过"不在这里合并，由管理员在门报告里写。
 
 核对（不满足就报错，退出码 2）：两个目录的 predictions 都写完；id 集合相同；同一个模型键与 revision；都是 refseg、同一个划分（名字与
-sha256）、同样的 tiny 与 --limit；主配置的设置是 w2a、W1-F 的设置是 w1f 且由 E1 协议的框得出（propose mode = box）；
-W2-c 的主配置必须带训练的检查点、W2-a 与 W1-F 不能带。
+sha256）、同样的 tiny 与 --limit；主配置的设置是 W2-a → w2a、W2-c → w2c（DEV-0061 的 run_w2.py --setting w2c），W1-F 的设置是 w1f
+且由 E1 协议的框得出（propose mode = box）；W2-c 的主配置必须带训练的检查点、W2-a 与 W1-F 不能带。
 判定点核对（另行报出；不是判定点时照算，但结论标为"彩排，不作数"）：模型 qwen3.5-9b、划分 devcheck2、n = 500、不是 --tiny、没有
 --limit、两个运行用的 configs/w2.json 都已冻结（frozen = true）且是同一份（sha256 相同）。
 """
@@ -39,7 +41,8 @@ GATE_N = 500
 GATE_TASK = "refseg"
 LEVEL = 0.975
 N_RESAMPLES = 10_000
-MAIN_SETTING = "w2a"
+MAIN_SETTING = "w2a"  # W2-a 的设置
+MAIN_SETTINGS = {"W2-a": MAIN_SETTING, "W2-c": "w2c"}  # 主配置 → 它的设置（W2-c：run_w2.py --setting w2c，DEV-0061）
 BASE_SETTING = "w1f"
 BASE_PROPOSE_MODE = "box"
 MAIN_NAMES = ("W2-a", "W2-c")
@@ -82,7 +85,7 @@ def evaluate(main_leaf: Path, w1f_leaf: Path, main_name: str) -> dict:
     if main_name not in MAIN_NAMES:
         raise GateInputError(f"--main-name 必须是 {MAIN_NAMES} 之一")
     (im, rm), (ib, rb) = load_run(Path(main_leaf), "主配置"), load_run(Path(w1f_leaf), "W1-F")
-    for what, i, want in (("主配置", im, MAIN_SETTING), ("W1-F", ib, BASE_SETTING)):
+    for what, i, want in ((f"主配置（{main_name}）", im, MAIN_SETTINGS[main_name]), ("W1-F", ib, BASE_SETTING)):
         if i["task"] != GATE_TASK or i["setting"] != want:
             raise GateInputError(f"{what}：应是 {GATE_TASK}/{want}，收到 {i['task']}/{i['setting']}")
     if ib["propose_mode"] != BASE_PROPOSE_MODE:
@@ -118,7 +121,7 @@ def markdown(doc: dict) -> str:
         f"# W2 去留判定：{doc['main_name']}（D113 第六条，规则写死）", "",
         f"- 模型 {i['model']}@{str(i['revision'])[:12]}…，划分 {i['split']}，n = {doc['n']}；判定点核对：{doc['gate_point']['checks']}", "",
         "| 读数 | 值 |", "|---|---|",
-        f"| {doc['main_name']}（w2a）cIoU | {doc['ciou']['main']:.4f} |",
+        f"| {doc['main_name']}（{doc['runs']['main']['setting']}）cIoU | {doc['ciou']['main']:.4f} |",
         f"| W1-F（w1f）cIoU | {doc['ciou']['w1f']:.4f} |", "",
         f"- {doc['rule']}：差 {doc['diff']:.4f}（{doc['diff_exact']}），{doc['level'] * 100:.1f}% CI [{doc['ci_low']:.4f}, "
         f"{doc['ci_high']:.4f}]（{doc['n_resamples']} 次，种子 {doc['seed']}）→ **{doc['decision']}**", "",

@@ -22,8 +22,16 @@ MAX_THINKING_BUDGET = 2048  # D113：每轮思考至多 2,048 个 token
 # 的 w2a 按 E1 单轮作答（= baseline_e1 的结果）
 SETTINGS: tuple[str, ...] = ("w2a", "random_pick", "oracle_pick", "w1f", "ownbox", "baseline_e1")
 SETTING_TASKS: Mapping[str, tuple[str, ...]] = {"w2a": TASKS, "random_pick": ("refseg",), "oracle_pick": ("refseg",),
-                                                "w1f": ("refseg",), "ownbox": ("refseg",), "baseline_e1": TASKS}
+                                                "w1f": ("refseg",), "ownbox": ("refseg",), "baseline_e1": TASKS,
+                                                "w2c": ("refseg",)}  # w2c 的说明见下面的 W2C_SETTING
 CANDIDATE_SETTINGS: tuple[str, ...] = ("w2a", "random_pick", "oracle_pick", "w1f")  # 共用同一份候选（refseg）
+# W2-c（DEV-0061；docs/w2_plan.md §5）：训练过的挑选。只用于 refseg，要给 --checkpoint；提出（训练过的模型按 E1 refexp_box 协议重新出框）
+# 与候选都另放目录（不与 base 的 baseline_e1、candidates 混用）；挑选关思考。不在 SETTINGS 里（那是 docs/w2_plan.md §3 的六种）
+W2C_SETTING = "w2c"
+W2C_PROPOSE_SETTING = "propose_w2c"  # <out>/<模型>/refexp_box/propose_w2c/<划分>：训练过的模型的 E1 refexp_box 运行
+W2C_CANDIDATES_SETTING = "candidates_w2c"  # <out>/<模型>/refseg/candidates_w2c/<划分>：由它的框生成的候选缓存
+MODEL_PICK_SETTINGS: tuple[str, ...] = ("w2a", W2C_SETTING)  # 由模型挑选（render + run_selection）的设置
+CLI_SETTINGS: tuple[str, ...] = SETTINGS + (W2C_SETTING,)  # scripts/run_w2.py --setting 的取值
 OUTPUT_KIND: Mapping[str, str] = {"refseg": "mask", "refexp_box": "box", "count": "count"}
 MASK_TASKS: tuple[str, ...] = tuple(t for t in TASKS if OUTPUT_KIND[t] == "mask")
 PROPOSE_BOX = "box"
@@ -218,6 +226,16 @@ class W2Config:
             p = replace(p, **{k: int(v) for k, v in self.data["tiny"]["select"].items()})
         return p
 
+    def select_protocol_for(self, setting: str, *, tiny: bool = False) -> SelectProtocol:
+        """某个设置的挑选协议：w2a 原样取 select；w2c（W2-c，DEV-0061）同一份，只是关思考（D113：W2-c 的提出与挑选都关思考；
+        thinking = false 走 build_inputs + generate_batch，预算只用 answer_budget）。"""
+        p = self.select_protocol(tiny=tiny)
+        if setting == W2C_SETTING:
+            return replace(p, thinking=False)
+        if setting != "w2a":
+            raise ValueError(f"{setting!r} 不是由模型挑选的设置")
+        return p
+
     @property
     def select_system(self) -> str | None:
         return self.data["select"]["system"]
@@ -264,6 +282,8 @@ def load_w2_config(path: str | Path = W2_CONFIG_PATH) -> W2Config:
 __all__ = [
     "BOX_POINTS_PLACEHOLDERS",
     "CANDIDATE_SETTINGS",
+    "CLI_SETTINGS",
+    "MODEL_PICK_SETTINGS",
     "FIRST_GENERATOR",
     "LAYOUTS",
     "MASK_TASKS",
@@ -278,6 +298,9 @@ __all__ = [
     "SelectProtocol",
     "W2Config",
     "W2ConfigError",
+    "W2C_CANDIDATES_SETTING",
+    "W2C_PROPOSE_SETTING",
+    "W2C_SETTING",
     "W2_CONFIG_PATH",
     "file_sha256",
     "load_w2_config",
