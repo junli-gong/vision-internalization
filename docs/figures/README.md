@@ -2,8 +2,8 @@
 
 <!-- 由 scripts/figures/make_paper_figures.py 生成；不要手改。数据补齐后重跑：python scripts/figures/make_paper_figures.py -->
 
-- 生成时间：2026-10-22 01:36 UTC
-- 代码 commit：a264e30f7654ddaa540ae04ac7fb0e3084d50db6 (working tree has uncommitted changes)
+- 生成时间：2026-10-23 09:31 UTC
+- 代码 commit：725e3d32b315db8e9ad17fd5f026969d027add80 (working tree has uncommitted changes)
 - 结果树：`仓库根`
 - matplotlib 3.11.2；PDF 是矢量（TrueType 字体，无 Type 3），PNG 300 dpi；宽度：单栏 3.3 in，双栏 6.9 in。
 - 配色：dataviz 参考调色板。Qwen3.5 四个尺寸用一个有序的蓝色阶（浅→深 = 0.8B→9B），InternVL3.5 用第二个有序色阶（橙）；两类对比用分类槽 1（蓝）与槽 2（橙）。都在白底上过了 validate_palette.js（有序：单色相、亮度单调、相邻 ΔL ≥ 0.06；分类两色全对 CVD ΔE 24.7）。
@@ -11,8 +11,8 @@
 
 ## 缺的数据（missing）
 
-- E3 9B: RUN-0056 的评测目录 experiments/E3/0056_hpc_9b_eval_hpcgpu06 还没有
-- 干扰 9B: RUN-0056 的评测目录 experiments/E3/0056_hpc_9b_eval_hpcgpu06 还没有
+- 干扰 9B: P_seg（RUN-0056 还没有两臂配对的读数）
+- 干扰 9B: P_depth（RUN-0056 还没有两臂配对的读数）
 
 E3 表里缺的格子（按种子）：
 
@@ -20,6 +20,8 @@ E3 表里缺的格子（按种子）：
 - E3 2B e3b seed 1: depth structured grid（rejected by merge check）
 - E3 4B e3b seed 2: refseg structured grid（rejected by merge check）
 - E3 4B e3b seed 2: depth structured grid（rejected by merge check）
+- E3 9B e3b seed 0: refseg structured grid（no result file）
+- E3 9B e3b seed 0: depth structured grid（no result file）
 
 ## 1. E1 差距图：`fig_e1_gap.pdf` / `fig_e1_gap.png`
 
@@ -79,7 +81,7 @@ Linear probes on frozen Qwen3.5 hidden states (E2). x: relative depth = layer in
   - 0.8B（hpcgpu07；RUN-0050）：臂 `experiments/E3/0050_hpc_eval_08b_hpcgpu07`；基座 `experiments/E3/0050_hpc_eval_08b_hpcgpu07/qwen3.5-0.8b`
   - 2B（B200；RUN-0038, RUN-0039, RUN-0046; base: RUN-0027, RUN-0030, RUN-0033）：臂 `experiments/E3/0038_e3_eval_2b_s0, experiments/E3/0039_e3b_diag_2b_s0, experiments/E3/0046_e3_eval_2b_h1`；基座 `experiments/E1/0027_e1_main/qwen3.5-2b, experiments/E1/0030_e1_posthoc/qwen3.5-2b, experiments/E1/0033_e1_posthoc2/qwen3.5-2b`
   - 4B（hpcgpu06；RUN-0052）：臂 `experiments/E3/0052_hpc_eval_4b_hpcgpu06`；基座 `experiments/E3/0052_hpc_eval_4b_hpcgpu06/qwen3.5-4b`
-  - 9B（hpcgpu06；RUN-0056）：臂 `experiments/E3/0056_hpc_9b_eval_hpcgpu06`；基座 `experiments/E3/0056_hpc_9b_eval_hpcgpu06/qwen3.5-9b`——**还没有（missing）**
+  - 9B（hpcgpu06；RUN-0056）：臂 `experiments/E3/0056_hpc_9b_eval_hpcgpu06`；基座 `experiments/E3/0056_hpc_9b_eval_hpcgpu06/qwen3.5-9b`
   - 臂的 T 文本：`<目录>/t_text/<变体>/seed<k>/<模型>/<任务>/metrics.json`；网格：`<目录>/eval/<变体>/<模型>/seed<k>/<refseg|depth>__structured/metrics.json`；基座：`<基座目录>/<任务>/metrics.json`；合并核对：同一层目录的 `merge_check.json`。
 - 口径：列是 §13 的 8 个 T 文本读数（`scripts/mgr/interference.py` 的 L_ITEMS，标题读数 = metrics.json 第一个 headline 的严格值，×100），加结构强制网格的指代分割 cIoU（×100）与深度 AbsRel（单轮、guided，D83-3）。种子平均 ± 样本标准差（statistics.stdev，同 interference.summary）。
 - 行：基座、C3、E3b+C3、E3b（基座放在每组第一行作参照）。任务书写的是"9B 有了就加一列组"；列已经是 10 个读数，所以尺寸做成行组，9B 有了就多一个行组。
@@ -88,11 +90,10 @@ Linear probes on frozen Qwen3.5 hidden states (E2). x: relative depth = layer in
 
 - Seed mean ± sample standard deviation over seeds 0–2 (0.8B, 2B, 4B); seed 0 only (9B) (E3 preregistration §3); n=k marks cells with fewer seeds than planned. Base rows are single deterministic evaluations.
 - T-text columns are the 8 readouts of the interference analysis (§13), ×100: strict grounding Acc@0.5, polygon cIoU, counting accuracy and COCO detection F1@0.5; NYU depth pairs with letter swap; position-debiased BLINK, CV-Bench and EmbSpatial. RefSeg cIoU (×100) and depth AbsRel use structure-forced decoding of the pixel-token grid, single turn, guided upsampling.
-- Machines (all effects computed within one machine, D93-1; each base row was evaluated on the same machine as its arms): 0.8B: hpcgpu07 (NVIDIA A100-PCIE-40GB); 2B: B200 (NVIDIA B200); 4B: hpcgpu06 (NVIDIA A100-PCIE-40GB).
+- Machines (all effects computed within one machine, D93-1; each base row was evaluated on the same machine as its arms): 0.8B: hpcgpu07 (NVIDIA A100-PCIE-40GB); 2B: B200 (NVIDIA B200); 4B: hpcgpu06 (NVIDIA A100-PCIE-40GB); 9B: hpcgpu06 (NVIDIA A100-PCIE-40GB).
 - Seeds without readings because the pre-evaluation merge check (criteria v1) rejected them (N37, kept as v1 per D102-2): 2B E3b seed 1 (grid, B200): restricted decoding vs. generate_batch exact-row agreement 0.945 < 0.95; 4B E3b seed 2 (grid, hpcgpu06): restricted decoding vs. generate_batch exact-row agreement 0.930 < 0.95.
 - E3b T-text readouts exist only for 2B seed 0 (grid-only LoRA; T-text is not part of the E3b protocol elsewhere); other E3b T-text cells are --.
 - n/a: Base and C3 have no pixel-token channel.
-- Missing (not yet available): Qwen3.5-9B (RUN-0056).
 
 被合并核对拒绝的种子（N37；判据 v1 的 failures 原文）：
 
@@ -109,10 +110,11 @@ Linear probes on frozen Qwen3.5 hidden states (E2). x: relative depth = layer in
   - 0.8B r128：computed with scripts/mgr/interference.py size_block: C3/E3b+C3 from experiments/E3/0054_r128_eval_hpcgpu07; E3b from experiments/E3/0050_hpc_eval_08b_hpcgpu07
   - 2B：docs/analysis/e3_interference_by_size.json
   - 4B：docs/analysis/e3_interference_by_size.json
+  - 9B：computed with scripts/mgr/interference.py size_block over experiments/E3/0056_hpc_9b_eval_hpcgpu06
 
 **图注（英文）**
 
-Interference vs. model size (E3, exploratory analysis §13). L = C3 − (E3b+C3), mean difference over the 8 T-text readouts of Table E3 (points). P_seg = E3b − (E3b+C3) referring-segmentation cIoU and P_depth = (E3b+C3) − E3b depth AbsRel, both with structure-forced grid decoding (positive = mixing in text hurts the pixel channel). R_seg = P_seg / cIoU(E3b), post hoc and descriptive (D96-4). Hollow markers: individual seeds (paired within seed); filled: seed mean. x: nominal parameter count, log scale. Effects are computed within one machine (D93-1): 0.8B: hpcgpu07; 2B: B200; 4B: hpcgpu06. Seeds with paired readings, where fewer than planned (see Table E3 for seeds rejected by the merge check): 2B P_seg: 2 of 3 seeds; 2B P_depth: 2 of 3 seeds; 4B P_seg: 2 of 3 seeds; 4B P_depth: 2 of 3 seeds. Star: 0.8B with LoRA rank 128 for both C3 and E3b+C3 (post hoc, §13a/D99-1; P uses the rank-32 E3b), drawn slightly right of 0.8B. Missing: Qwen3.5-9B (RUN-0056) not yet available.
+Interference vs. model size (E3, exploratory analysis §13). L = C3 − (E3b+C3), mean difference over the 8 T-text readouts of Table E3 (points). P_seg = E3b − (E3b+C3) referring-segmentation cIoU and P_depth = (E3b+C3) − E3b depth AbsRel, both with structure-forced grid decoding (positive = mixing in text hurts the pixel channel). R_seg = P_seg / cIoU(E3b), post hoc and descriptive (D96-4). Hollow markers: individual seeds (paired within seed); filled: seed mean. x: nominal parameter count, log scale. Effects are computed within one machine (D93-1): 0.8B: hpcgpu07; 2B: B200; 4B: hpcgpu06; 9B: hpcgpu06. Seeds with paired readings, where fewer than planned (see Table E3 for seeds rejected by the merge check): 2B P_seg: 2 of 3 seeds; 2B P_depth: 2 of 3 seeds; 4B P_seg: 2 of 3 seeds; 4B P_depth: 2 of 3 seeds; 9B P_seg: 0 of 1 seeds; 9B P_depth: 0 of 1 seeds. Star: 0.8B with LoRA rank 128 for both C3 and E3b+C3 (post hoc, §13a/D99-1; P uses the rank-32 E3b), drawn slightly right of 0.8B. Missing: Qwen3.5-9B (RUN-0056): P_seg not yet available; Qwen3.5-9B (RUN-0056): P_depth not yet available.
 
 核对：
 

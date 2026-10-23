@@ -14,11 +14,14 @@
 |  | C3 | 88.3 ± 0.4 | 23.8 ± 1.5 | 56.5 ± 3.5 | 21.8 ± 0.3 | 93.4 ± 0.4 | 86.0 ± 1.4 | 82.0 ± 1.3 | 73.5 ± 0.7 | n/a | n/a |
 |  | E3b+C3 | 86.0 ± 0.5 | 15.1 ± 4.0 | 51.6 ± 7.7 | 8.8 ± 8.6 | 91.1 ± 0.8 | 84.8 ± 3.1 | 77.0 ± 0.5 | 65.2 ± 3.3 | 60.7 ± 0.7 | 0.261 ± 0.010 |
 |  | E3b | — | — | — | — | — | — | — | — | 64.5 ± 0.8 (n=2) | 0.270 ± 0.009 (n=2) |
+| 9B | Base | 87.1 | 0.0 | 89.4 | 54.4 | 90.9 | 90.2 | 87.5 | 79.9 | n/a | n/a |
+|  | C3 | 90.2 | 25.5 | 68.8 | 50.9 | 95.2 | 91.1 | 84.9 | 77.6 | n/a | n/a |
+|  | E3b+C3 | 87.6 | 26.3 | 45.7 | 33.8 | 93.5 | 94.6 | 79.5 | 69.2 | 62.8 | 0.449 |
+|  | E3b | — | — | — | — | — | — | — | — | — | — |
 
 - Seed mean ± sample standard deviation over seeds 0–2 (0.8B, 2B, 4B); seed 0 only (9B) (E3 preregistration §3); n=k marks cells with fewer seeds than planned. Base rows are single deterministic evaluations.
 - T-text columns are the 8 readouts of the interference analysis (§13), ×100: strict grounding Acc@0.5, polygon cIoU, counting accuracy and COCO detection F1@0.5; NYU depth pairs with letter swap; position-debiased BLINK, CV-Bench and EmbSpatial. RefSeg cIoU (×100) and depth AbsRel use structure-forced decoding of the pixel-token grid, single turn, guided upsampling.
-- Machines (all effects computed within one machine, D93-1; each base row was evaluated on the same machine as its arms): 0.8B: hpcgpu07 (NVIDIA A100-PCIE-40GB); 2B: B200 (NVIDIA B200); 4B: hpcgpu06 (NVIDIA A100-PCIE-40GB).
+- Machines (all effects computed within one machine, D93-1; each base row was evaluated on the same machine as its arms): 0.8B: hpcgpu07 (NVIDIA A100-PCIE-40GB); 2B: B200 (NVIDIA B200); 4B: hpcgpu06 (NVIDIA A100-PCIE-40GB); 9B: hpcgpu06 (NVIDIA A100-PCIE-40GB).
 - Seeds without readings because the pre-evaluation merge check (criteria v1) rejected them (N37, kept as v1 per D102-2): 2B E3b seed 1 (grid, B200): restricted decoding vs. generate_batch exact-row agreement 0.945 < 0.95; 4B E3b seed 2 (grid, hpcgpu06): restricted decoding vs. generate_batch exact-row agreement 0.930 < 0.95.
 - E3b T-text readouts exist only for 2B seed 0 (grid-only LoRA; T-text is not part of the E3b protocol elsewhere); other E3b T-text cells are --.
 - n/a: Base and C3 have no pixel-token channel.
-- Missing (not yet available): Qwen3.5-9B (RUN-0056).
