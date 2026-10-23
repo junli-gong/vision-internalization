@@ -8,6 +8,8 @@
   解析失败，第二条是整图的框，GrabCut 必然失败）→ 候选与标签（真的候选生成器）；§5 的格式、分片、运行身份、统计。
 - 续跑逐字节相同（删掉一片、留下半片 .tmp；--stop-after-shards 分段跑）；--candidate-workers 2 与单进程逐字节相同；
   配置未冻结时非 tiny 拒跑（候选一步与 all），出框一步不受限；身份或清单不同就拒绝混写；出框写完不再跑模型。
+- DEV-0062：拒跑用草稿夹具（tests/_w2_draft，未冻结）核对；默认的仓库配置未冻结时拒跑、冻结后放行。--tiny 彩排照用仓库配置
+  （候选清单就是冻结的那一份），只核对与它一致，不假定它未冻结。
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from src.w1.baselines import workbench_grabcut
 from src.w2 import w2c_data as D
 from src.w2.config import load_w2_config
 from src.w2.data import load_splits
+from tests._w2_draft import W2_DRAFT, W2_DRAFT_PATH, w2_draft_doc
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "build_w2c_data.py"
@@ -286,7 +289,7 @@ def test_end_to_end_format_and_identity(tiny_run):
     assert m["best_iou"]["mean_on_rows_with_candidates"] >= m["first_iou"]["mean_on_rows_with_candidates"]
     c = yaml.safe_load((out / "config.yaml").read_text())
     assert c["model"]["key"] == "qwen3.5-0.8b" and c["model"]["tiny"] is True and len(c["model"]["revision"]) == 40
-    assert c["w2_config"]["config_sha256"] == cfg.sha256 and c["w2_config"]["frozen"] is False
+    assert c["w2_config"]["config_sha256"] == cfg.sha256 and c["w2_config"]["frozen"] is cfg.frozen  # 仓库配置，冻结前后都成立（DEV-0062）
     assert c["candidates"]["spec_sha256"] == cfg.candidates_digest() and c["candidates"]["generators"] == list(cfg.generators)
     assert c["sampling"]["salt"] == "w2c_train_v1" and c["sampling"]["purpose"] == "w2c_train" and c["sampling"]["n"] == 10
     msha = hashlib.sha256(D.manifest_path(out).read_bytes()).hexdigest()
@@ -350,11 +353,12 @@ def test_rerun_all_reads_proposals_without_the_model(tiny_run, tmp_path):
 def test_mixing_is_refused(tiny_run, tmp_path):
     out = tmp_path / "mix"
     shutil.copytree(tiny_run["out"], out)
-    k4 = tmp_path / "w2_k4.json"
+    other = tmp_path / "w2_other_gens.json"
     d = json.loads(W2_JSON.read_text())
-    d["candidates"]["generators"] = d["candidates"]["generators"][:4]
-    k4.write_text(json.dumps(d, ensure_ascii=False, indent=1) + "\n")
-    p = run(["--tiny", "--stage", "candidates", "--out", str(out), "--w2-config", str(k4)], tmp_path, ok=False)
+    gens = d["candidates"]["generators"]  # 换一份一定不同的清单（冻结后的 K 可能已经是 4，DEV-0062）
+    d["candidates"]["generators"] = gens[:-1] if len(gens) > 2 else gens + [{"type": "box"}]
+    other.write_text(json.dumps(d, ensure_ascii=False, indent=1) + "\n")
+    p = run(["--tiny", "--stage", "candidates", "--out", str(out), "--w2-config", str(other)], tmp_path, ok=False)
     assert p.returncode == 2 and "拒绝混写" in p.stderr  # 换了候选清单：身份不同
     p = run(["--tiny", "--stage", "candidates", "--out", str(out), "--n", "9"], tmp_path, ok=False)
     assert p.returncode == 2 and "拒绝混用" in p.stderr  # 换了 n：清单不同
@@ -363,22 +367,31 @@ def test_mixing_is_refused(tiny_run, tmp_path):
 
 def test_unfrozen_config_is_refused_without_tiny(tmp_path):
     common = ["--train-data-root", str(tmp_path / "train"), "--eval-data-root", str(tmp_path / "eval")]
-    assert json.loads(W2_JSON.read_text())["frozen"] is False  # 入库的配置还没冻结（W2-a 调参之后由管理员冻结）
+    draft = ["--w2-config", str(W2_DRAFT_PATH)]  # 草稿夹具：未冻结（DEV-0062：不依赖仓库配置是否冻结）
+    assert W2_DRAFT.frozen is False
     for stage in ("candidates", "all"):
         out = tmp_path / f"0099_w2c_{stage}"
-        p = run(["--stage", stage, "--out", str(out), *common], tmp_path, ok=False)
+        p = run(["--stage", stage, "--out", str(out), *draft, *common], tmp_path, ok=False)
         assert p.returncode == 2 and "未冻结" in p.stderr and not out.exists(), stage  # 什么都不写
     sys.path.insert(0, str(REPO / "scripts"))
     try:
         import build_w2c_data as B
     finally:
         sys.path.pop(0)
-    a = B.parse_args(["--stage", "propose", "--out", str(tmp_path / "0099_w2c_p"), *common])  # 出框不读候选清单：不受限
+    a = B.parse_args(["--stage", "propose", "--out", str(tmp_path / "0099_w2c_p"), *draft, *common])  # 出框不读候选清单：不受限
     assert a.model == "qwen3.5-9b" and a.n == 16000 and a.shard_size == 1000 and a.candidate_workers == 1
     frozen = tmp_path / "w2_frozen.json"
-    frozen.write_text(json.dumps({**json.loads(W2_JSON.read_text()), "frozen": True}, ensure_ascii=False, indent=1) + "\n")
+    frozen.write_text(json.dumps({**w2_draft_doc(), "frozen": True}, ensure_ascii=False, indent=1) + "\n")
     a = B.parse_args(["--stage", "candidates", "--out", str(tmp_path / "0099_w2c_c"), "--w2-config", str(frozen), *common])
     assert a.stage == "candidates"
+    # 默认 --w2-config（仓库配置）：未冻结时拒跑，冻结后（W2-a 调参之后由管理员冻结）放行
+    repo_args = ["--stage", "candidates", "--out", str(tmp_path / "0099_w2c_r"), *common]
+    if load_w2_config().frozen:
+        assert B.parse_args(repo_args).w2_config == str(W2_JSON)
+    else:
+        with pytest.raises(SystemExit) as ex:
+            B.parse_args(repo_args)
+        assert ex.value.code == 2
     for bad in (["--out", str(tmp_path / "w2c_no_number"), *common], ["--out", str(tmp_path / "0099_x"), "--shard-size", "4", *common],
                 ["--out", str(tmp_path / "0099_x"), "--eval-data-root", "e"]):
         with pytest.raises(SystemExit):

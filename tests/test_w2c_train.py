@@ -10,6 +10,8 @@
   与训练样本逐个相同（含 1 号失败画空）。
 - 日程无状态；tiny 训练：损失有限、梯度只在 LoRA 上；中途崩溃后续跑、分段运行（stop_after_steps）与一次跑完逐位相同；不读任何评测集；
   命令行彩排与用法错误。
+- DEV-0062：占位（w2_config.sha256 = null）与未冻结的拒跑读草稿夹具（tests/_w2_draft：冻结前的 configs/w2c_train.json 与 configs/w2.json
+  原样），不依赖仓库配置是否冻结；其余照读仓库配置（W2 = configs/w2.json，冻结前后都成立：数据、样本、挑选图随它的 K 与 layout）。
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ from src.w2 import runner as R
 from src.w2 import w2c_train as T
 from src.w2.config import W2_CONFIG_PATH, load_w2_config
 from tests import _w2c_fakes as FK
+from tests._w2_draft import W2_DRAFT, W2_DRAFT_PATH, W2C_TRAIN_DRAFT_PATH, w2_draft_doc
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "train_w2c.py"
@@ -137,19 +140,21 @@ def test_config_validation(tmp_path, edit, msg):
 
 
 def test_w2_config_pinning(tmp_path):
-    d = copy.deepcopy(dict(CFG.doc))
-    d["w2_config"]["sha256"] = None
+    """草稿夹具（DEV-0062）：w2c_train 的草稿（sha256 是占位）指向 W2 的草稿（未冻结），与仓库配置冻结与否无关。"""
+    d = json.loads(W2C_TRAIN_DRAFT_PATH.read_text())
+    assert d["w2_config"]["sha256"] is None
+    d["w2_config"]["path"] = str(W2_DRAFT_PATH)
     (tmp_path / "c.json").write_text(json.dumps(d, ensure_ascii=False))
     c = T.load_w2c_config(tmp_path / "c.json")
     with pytest.raises(T.W2CConfigError, match="占位"):
         T.resolve_w2_config(c, tiny=False)
     w2, info = T.resolve_w2_config(c, tiny=True)  # tiny 不核对
-    assert info["pinned_sha256"] is None and info["config_sha256"] == W2.sha256 and info["k"] == W2.k
-    d["w2_config"]["sha256"] = W2.sha256  # 写死了，但 configs/w2.json 还没冻结
+    assert info["pinned_sha256"] is None and info["config_sha256"] == W2_DRAFT.sha256 and info["k"] == W2_DRAFT.k
+    d["w2_config"]["sha256"] = W2_DRAFT.sha256  # 写死了，但 W2 的配置还没冻结
     (tmp_path / "c.json").write_text(json.dumps(d, ensure_ascii=False))
     with pytest.raises(T.W2CConfigError, match="没有冻结"):
         T.resolve_w2_config(T.load_w2c_config(tmp_path / "c.json"), tiny=False)
-    wd = json.loads(W2_CONFIG_PATH.read_text())
+    wd = w2_draft_doc()
     wd["frozen"] = True
     (tmp_path / "w2f.json").write_text(json.dumps(wd, ensure_ascii=False))
     d["w2_config"].update(path=str(tmp_path / "w2f.json"), sha256=load_w2_config(tmp_path / "w2f.json").sha256)
@@ -548,10 +553,9 @@ def test_cli_tiny_segments_and_rules(data_dir, tmp_path):
     bad = run(["--model", QWEN, "--w2c-data", str(data_dir), "--out", str(tmp_path / "0001_x"), "--data-root", "/x",
                "--w2-config", str(W2_CONFIG_PATH)], tmp_path, ok=False)
     assert bad.returncode == 2 and "只配 --tiny" in bad.stderr
-    bad = run(["--model", QWEN, "--w2c-data", str(data_dir), "--out", str(tmp_path / "0001_x"), "--data-root", str(FK.ROOT)], tmp_path,
-              ok=False)  # 非 tiny：w2_config.sha256 还是占位 → 拒跑（报错写进 errors/）
-    if CFG.doc["w2_config"]["sha256"] is None:
-        assert bad.returncode == 2 and "占位" in bad.stderr
-        assert list((tmp_path / "0001_x" / "w2c").rglob("errors/error_*.json"))
+    bad = run(["--model", QWEN, "--w2c-data", str(data_dir), "--out", str(tmp_path / "0001_x"), "--data-root", str(FK.ROOT),
+               "--config", str(W2C_TRAIN_DRAFT_PATH)], tmp_path, ok=False)  # 非 tiny：w2_config.sha256 还是占位（草稿）→ 拒跑（报错写进 errors/）
+    assert bad.returncode == 2 and "占位" in bad.stderr
+    assert list((tmp_path / "0001_x" / "w2c").rglob("errors/error_*.json"))
     p = run(base[:-2] + ["--out", str(tmp_path / "t2"), "--steps", "2", "--seed", "1"], tmp_path)
     assert "steps=2" in p.stdout and leaf_dir(tmp_path / "t2", "w2c", QWEN, 1).exists()

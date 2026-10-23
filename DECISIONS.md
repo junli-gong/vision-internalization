@@ -2849,3 +2849,16 @@
    - 两个任务的数据格式对接无误。
 5. **测试**：管理员在主分支上跑 W2 与 W2-c 的全部测试，186 passed。开发 agent 另跑了 E3、健康检查相关的测试，613 passed、14 skipped。
 6. **冻结之后要做的**：`configs/w2c_train.json` 的 `w2_config.sha256` 填上冻结的 `configs/w2.json` 的 sha256，记一个 D 条目；在那之前，非 tiny 的训练拒跑。
+
+## D120（2026-10-23，管理员）：DEV-0062 合入，W2 的测试冻结前后都能通过
+
+1. **合入**：只改了 `tests/`。
+   - 草稿夹具：`tests/fixtures/w2/w2_draft.json`（sha256 `a4c013c3…`）、`w2c_train_draft.json`（`ac450a95…`）。草稿的定义只在 `tests/_w2_draft.py` 一处。
+   - 依赖草稿取值的测试改读夹具。
+   - 新增 8 项与冻结无关的仓库配置检查：冻结前与草稿逐字节相同；冻结后满足不变量，并能过冻结保护。
+2. **验证**（开发 agent）：未冻结，以及三种不同的冻结臂，都是 194 passed。三种臂分别是 separate/关思考/K4/box、grid/开思考/K8/box_points、grid/关思考/K6/box_points。改前的测试在冻结副本上会失败 10–11 项。
+3. **偏离**，接受：
+   - 只要求与当前配置一致的几组测试，有意继续读仓库配置，冻结后正好对选中的臂做 tiny 彩排；
+   - `test_mixing_is_refused` 换清单的写法改为一定不同。
+4. **冻结时**：`--arm-config` 用仓库内的相对路径，即 RUN-0066 推回来的 `experiments/W2/0066_w2_tune_hpcgpu07/cfg/<臂>.json`，这样臂的 sha256 与内容的核对才生效。
+5. **管理员在主分支上复跑改过的 6 个测试文件**：104 passed。

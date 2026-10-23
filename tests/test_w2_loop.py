@@ -1,5 +1,8 @@
 """DEV-0059：src/w2/loop.py（挑选的解析、回退、三种不用模型的挑法、挑选一步的批与预检、每条样本的记录），用假候选与假适配器
-（tests/_w2_fakes.py，签名照 docs/w2_plan.md §1、§2）。"""
+（tests/_w2_fakes.py，签名照 docs/w2_plan.md §1、§2）。
+
+DEV-0062：挑选的协议与提示取草稿夹具（tests/_w2_draft：思考开、预算 2048 / 64），不取仓库配置，所以 configs/w2.json 冻结成任何一个臂
+（例如关思考）之后照样成立。"""
 
 from __future__ import annotations
 
@@ -15,11 +18,11 @@ from src.e1.scoring import gt_mask
 from src.parsing import ParseFailure, parse_generation
 from src.w1 import baselines as B
 from src.w2 import loop as Lp
-from src.w2.config import load_w2_config
 from src.w2.data import tiny_paths, tiny_splits, w2_items
 from tests import _w2_fakes as F
+from tests._w2_draft import W2_DRAFT
 
-CFG = load_w2_config()
+CFG = W2_DRAFT  # 草稿夹具（思考开、预算 2048 / 64；DEV-0062：仓库配置冻结之后照样成立）
 P = CFG.select_protocol()
 GENS = ({"type": "grabcut_default"}, {"type": "box_scale", "percent": 20}, {"type": "box_scale", "percent": -20}, {"type": "box"})
 

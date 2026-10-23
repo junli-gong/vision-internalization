@@ -1874,3 +1874,4 @@
   - scripts/mgr/w2_tune.py 加 freeze：把选中的臂写成冻结的 configs/w2.json，并把它的 sha256 填进 configs/w2c_train.json。临时工作树里试过，配置能加载，sha 一致。
   - RUN-0068 的驱动 gate_w2a.sh 写好：devcheck2 上跑出框、候选、w1f、w2a，再跑 w2_gate 与参照基线。tiny 彩排 8 步都 rc=0。
   - 试冻结时发现 W2 的测试写死了草稿的取值，派 DEV-0062，让测试冻结前后都能通过。
+- 10-23 04:xx UTC：DEV-0062 合入（D120）：W2 的测试冻结前后都能通过。RUN-0069 的驱动写好，即 W2-c 在 06 上的数据、训练、判定、健康检查与 T 文本读数；tiny 彩排 9 步都 rc=0。等 W2-a 冻结后发。

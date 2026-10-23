@@ -10,6 +10,8 @@
 - 拒绝：w2c 不给 --checkpoint、别的设置给 --checkpoint、检查点不是 W2-c（C3 的检查点）、检查点训练时的 W2 配置与本次不同、同一个 --out
   换了检查点（提出不混用）。
 - 健康检查与 T 文本读数：现有脚本加 --checkpoint 就能跑（health_check 的 --checkpoint 是本任务加的最小改动；run_e1 原样）。
+- DEV-0062：临时的 W2 配置从草稿夹具（tests/_w2_draft，冻结前的 configs/w2.json 原样）改生成器得到，不读仓库配置，所以
+  configs/w2.json 冻结成任何一个臂之后照样成立。
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ import pytest
 import yaml
 
 from tests import _w2c_fakes as FK
+from tests._w2_draft import w2_draft_doc
 
 REPO = Path(__file__).resolve().parents[1]
 RUN_W2 = REPO / "scripts" / "run_w2.py"
@@ -86,7 +89,7 @@ def train_ckpt(tmp: Path, name: str, w2cfg: Path, *extra) -> Path:
 def env(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("w2c_eval")
     cfg = tmp / "w2_k4.json"
-    d = json.loads((REPO / "configs" / "w2.json").read_text())
+    d = w2_draft_doc()  # 草稿夹具（DEV-0062：不随仓库配置冻结而变）
     d["candidates"]["generators"] = GENS
     cfg.write_text(json.dumps(d, ensure_ascii=False, indent=1) + "\n")
     ck = train_ckpt(tmp, "train", cfg)

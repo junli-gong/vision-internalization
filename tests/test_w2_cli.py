@@ -8,6 +8,8 @@
 - 挑选的解析与回退（--adapter-factory 的脚本化适配器）：编号、none、乱写、超出范围。
 - 续跑逐字节相同；冻结保护（devcheck2、test 拒跑，退出码 2，什么都不写；devtune800 不受限；--tiny 不受限）；w2_gate 在 devcheck2 的彩排上跑通，
   结论标为彩排。
+- DEV-0062：临时配置都从草稿夹具（tests/_w2_draft，冻结前的 configs/w2.json 原样：思考开、box、grid、frozen = false）改几项得到，
+  不读仓库配置，所以 configs/w2.json 冻结成任何一个臂之后照样成立。
 """
 
 from __future__ import annotations
@@ -21,6 +23,8 @@ from pathlib import Path
 
 import pytest
 import yaml
+
+from tests._w2_draft import w2_draft_doc
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "run_w2.py"
@@ -70,7 +74,7 @@ def inject_boxes(box_leaf: Path, split: str) -> None:
 def runs(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("w2cli")
     cfg = tmp / "w2_k4.json"
-    d = json.loads((REPO / "configs" / "w2.json").read_text())
+    d = w2_draft_doc()  # 草稿夹具（DEV-0062：不随仓库配置冻结而变）
     d["candidates"]["generators"] = GENS
     cfg.write_text(json.dumps(d, ensure_ascii=False, indent=1) + "\n")
     out = tmp / "out"
@@ -297,7 +301,7 @@ def test_box_points_with_valid_points_in_process(tmp_path):
     from src.w2.data import tiny_paths, tiny_splits, w2_items
     from tests import _w2_fakes as F
 
-    d = json.loads((REPO / "configs" / "w2.json").read_text())
+    d = w2_draft_doc()  # 草稿夹具（DEV-0062：不随仓库配置冻结而变）
     d["propose"]["mode"] = "box_points"
     d["candidates"]["generators"] = [{"type": "grabcut_default"}, {"type": "points_box"}, {"type": "box"}]
     (tmp_path / "c.json").write_text(json.dumps(d, ensure_ascii=False))
@@ -349,7 +353,7 @@ def test_candidate_workers_give_identical_content(tmp_path):
     from src.w2.loop import candidates_digest_rows
     from tests import _w2_fakes as F
 
-    d = json.loads((REPO / "configs" / "w2.json").read_text())
+    d = w2_draft_doc()  # 草稿夹具（DEV-0062：不随仓库配置冻结而变）
     d["propose"]["mode"] = "box_points"
     d["candidates"]["generators"] = [{"type": "grabcut_default"}, {"type": "points_box"}, {"type": "box_scale", "percent": 20}, {"type": "box"}]
     (tmp_path / "c.json").write_text(json.dumps(d, ensure_ascii=False))
