@@ -135,3 +135,8 @@ def render_selection(image: PIL.Image.Image, candidates: Sequence[Candidate], *,
   - `proposal.failure` 不为空时，`candidates` 与 `label` 都为 null。这条只用于"提出"的监督，不用于"挑选"。
 - **去重**（硬约束 7）：按 COCO 图像 id，排除 W2 用到的全部评测图：devtune800、devcheck2、5 个 test 子集；并沿用 E3 训练池的剔除清单。核对结果写进数据目录的 `manifest.json`。
 - **规模**：由服务器上候选生成的耗时定，每句约 4.5 s 的 CPU 时间。默认取 16,000 句，按 `hash_rank(salt='w2c_train_v1')` 抽样。
+- **落地的细节**（DEV-0060，D118）：
+  - `manifest.json` 与分片同在 `<out>/w2c_data/`，分片名是 `00000.jsonl`、`00001.jsonl`……，按抽样的哈希顺序写；
+  - `image` 是相对训练数据根的路径；
+  - 出框一步不要求配置冻结，候选与标签一步要求冻结；
+  - W2-c 的数据与评测都只用 E1 的框，即使冻结的 W2-a 用 `box_points`。

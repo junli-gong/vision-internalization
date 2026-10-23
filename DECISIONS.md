@@ -2806,3 +2806,22 @@
 3. **服务器上候选生成的耗时**：RUN-0065，Xeon Gold 6342，40 张 COCO 640×480 图 × 3 个框。`DEFAULT_SPEC` 每次中位 4.55 s，均值 6.09 s，最大 39 s；当时 OpenCV 用 8 个线程。
    - devtune800 用 8 个进程约 8–10 分钟。
    - W2-c 若取 RefCOCO train 的 2 万句，约 25 CPU 小时，8 个进程约 3 小时。
+
+## D118（2026-10-23，管理员）：DEV-0060 合入，W2-c 的训练数据生成
+
+1. **合入**：只新增文件：
+   - `src/w2/w2c_data.py`、`scripts/build_w2c_data.py`；
+   - `tests/test_w2c_data.py`（12 项）、`tests/fixtures/w2c/`。
+   - `docs/w2_plan.md` §5 补了落地的细节。
+2. **规则**：
+   - 总体：E3 的 refseg 训练池，即三个数据集的 train，已按 E3 的剔除清单剔除；
+   - 去重：按 COCO 图像 id，排除 W2 全部 7 个评测划分的图；
+   - 抽样：`hash_rank(w2c_train_v1)`，默认 16,000 句，用带数据集前缀的样本 id 排序；
+   - 出框：base 9B、E1 协议；
+   - 候选：冻结的清单，1 号失败当空；
+   - 标签：`oracle_index`，并列取编号小的。
+3. **偏离**，全部接受：
+   - 出框一步不要求配置冻结：出框不读候选清单，可以在 W2-a 调参期间先跑；
+   - 冻结的 W2-a 若用 `box_points`，W2-c 的数据与评测仍只用 E1 的框，与 §5 一致。依赖点的生成器在 W2-c 里走"没有点"的路径。
+   - GT 为空时 IoU 与 label 的口径差异照 W2 现有的规则，计数报告。
+4. **测试**：管理员在主分支上跑 `tests/test_w2c_data.py`，12 passed；开发 agent 跑 W2 的全部测试，148 passed。
