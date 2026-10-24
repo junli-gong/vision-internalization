@@ -1,0 +1,135 @@
+experiment: W2
+framework: src/w2（DEV-0059；docs/w2_plan.md）
+w2:
+  task: refseg
+  split: devtune800
+  setting: w2a
+  splits_config: configs/w2_splits.json
+  splits_sha256: 9dd22dff2ad422ec5d51106bb6e40227ec51afa27130f2a968c945d69055c0f1
+  split_sha256: c8c1f298eedd88f402c0dce6de0816493bc0a01640ffebbe5ca42f62c6d25efd
+  split_n: 800
+  n_samples: 800
+  limit: null
+  sample_ids_sha256: 3450c5b9f53bbb21cc26e931df982660adb453b688997012801a9d34da90a07d
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  adapter_model_key: qwen3.5-9b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+w2_config:
+  config: /home/mail/chenyuma/visint/repo/experiments/W2/0066_w2_tune_hpcgpu06/cfg/sep_on.json
+  config_sha256: d0e4a65433881f6ff3052feaa671a842b95e9f867c07208ad66b504a7af1a6ae
+  frozen: false
+propose:
+  mode: box
+  run:
+    leaf: <out>/qwen3.5-9b/refexp_box/baseline_e1/devtune800
+    predictions_sha256: 265e929fc9074e458d81f9343a96e6eaab3b68001c5f6e5493495b1ecc2c7486
+    config_sha256: 0529d1512050713729eba11ebc951f2855b5d7779d3dbcea0dfceb7403a28427
+candidates:
+  leaf: <out>/qwen3.5-9b/refseg/candidates/devtune800
+  module: src.w2.candidates
+  generators:
+  - type: grabcut_default
+  - type: grabcut
+    iterations: 5
+    box_pct: 10.0
+    init: rect
+  - type: grabcut
+    iterations: 5
+    box_pct: -10.0
+    init: mask
+  - type: grabcut_default
+    post:
+    - largest_cc
+    - fill_holes
+  - type: slic
+    n_segments: 30
+    threshold_pct: 50.0
+    compactness: 10.0
+    context_pct: 25.0
+  - type: slic
+    n_segments: 100
+    threshold_pct: 50.0
+    compactness: 10.0
+    context_pct: 25.0
+  - type: watershed
+    use_points: true
+    fg_shrink_pct: 30.0
+    bg_margin_pct: 0.0
+    seed_radius_pct: 4.0
+  - type: box
+  k: 8
+  content_sha256: ba62cc816ff8b0d7ee79b937570511aee674ef7e73c760530c3b1526e605af0d
+batching:
+  batch_size: 16
+  chunk_size: 64
+  max_batch_tokens: 48000
+data:
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+select:
+  thinking: true
+  thinking_budget: 2048
+  answer_budget: 64
+  none_words:
+  - none
+  strip_chars: " \t\r\n.,;:!?\"'`*()[]{}<>#"
+  system: null
+  prompt: You are given {k} numbered candidate masks for one object in this image.
+    Each candidate is drawn as a colored overlay with its number in the corner. Which
+    candidate best covers {expression}? Answer with the number of that candidate only
+    (an integer from 1 to {k}), or with none if no candidate covers it.
+  method: chat_turn_batch
+render:
+  module: src.w2.render
+  layout: separate
+  style:
+    fill_rgb:
+    - 0
+    - 114
+    - 178
+    fill_alpha: 0.4
+    contour_rgb:
+    - 240
+    - 228
+    - 66
+    contour_px: 2
+    halo_rgb:
+    - 0
+    - 0
+    - 0
+    halo_px: 1
+    label_text_rgb:
+    - 255
+    - 255
+    - 255
+    label_bg_rgb:
+    - 0
+    - 0
+    - 0
+    grid_label_px: 22
+    separate_label_px: 32
+    label_pad_px: 4
+    reference: true
+    reference_label: ''
+    grid_long_side: 640
+    grid_cols: 0
+    gutter_px: 4
+    gutter_rgb:
+    - 255
+    - 255
+    - 255
+    separate_max_wh:
+    - 640
+    - 480
