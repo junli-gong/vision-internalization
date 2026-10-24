@@ -1,0 +1,65 @@
+experiment: W2
+kind: w2c_train_data
+framework: src/w2/w2c_data（DEV-0060；docs/w2_plan.md §5）
+format: docs/w2_plan.md §5
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  tiny: false
+w2_config:
+  config: configs/w2.json
+  config_sha256: c4d083489783039d46718e19ede810370bd4b9272ef94e99f406104c2e0f9b29
+  frozen: true
+  propose_mode_in_config: box
+candidates:
+  module: src.w2.candidates
+  generators:
+  - type: grabcut_default
+  - type: grabcut
+    iterations: 5
+    box_pct: -10.0
+    init: mask
+  - type: grabcut_default
+    post:
+    - largest_cc
+    - fill_holes
+  - type: watershed
+    use_points: true
+    fg_shrink_pct: 30.0
+    bg_margin_pct: 0.0
+    seed_radius_pct: 4.0
+  k: 4
+  spec_sha256: c134cfab5d94adaebf57db2e94ff9a7ac7159d48f38425ed322673f31d1e46b2
+  first_not_ok: 1 号候选 ok = False（生成器失败）：与 W1-F 一致，回路按空 mask 用（评分、挑选图都是空）
+  rule: src/w2/runner.candidate_job（同 W2-a 的候选缓存）
+propose:
+  mode: box
+  protocol: E1 refexp_box（configs/e1_prompts.json 的提示、关思考、贪心、E1 冻结的批大小；src/e1/runner.run_task
+    原样，leaf = <out>/propose）
+  run:
+    leaf: <out>/propose
+    predictions_sha256: aca0f84dd915556c83a31a88837c755a729a62e4225f6a541e4bc0add0d84279
+    config_sha256: 557605dfcbfcc888120cf1cab1591fd0bcdde3b1cc46b841770ab04d3986f398
+sampling:
+  salt: w2c_train_v1
+  purpose: w2c_train
+  n_requested: 16000
+  n: 16000
+  ordered_sha256: eb4ee124cf20e389adf0654cb64df136a4577c2e20ca574d553104612f179e98
+  rule: 总体按图像排除 W2 评测图之后，按 sha256(w2c_train_v1|w2c_train|样本 id) 升序（src/data/subsets.hash_rank）取前
+    n 句；处理与写出都按这个顺序
+dedupe:
+  manifest: w2c_data/manifest.json
+  manifest_sha256: 22fd7767342d6f4f5cf6ccfb003329b9042e8087cbf3870f452d819f0f38bb83
+  e3_exclusions_sha256: 40f214fb14315c990de811ef9d23172d6c36ea661e40a241ad46fc667f3c1838
+  w2_splits:
+    path: configs/w2_splits.json
+    sha256: 9dd22dff2ad422ec5d51106bb6e40227ec51afa27130f2a968c945d69055c0f1
+  w2_eval_images_sha256: 2b5c42f9e070d471642a26c3b575bdcd300265661c2e6331344124c59a0b0bc3
+label_rule: label = 真值 IoU 最高的候选编号（1 起；IoU 按整数 inter / union 精确比较，src/w2/loop.oracle_index，同
+  oracle_pick），并列取编号小的；1 号候选 ok = False 时按空 mask 算（裁定 A）；提出失败时 candidates 与 label
+  为 null
+shard_size: 1000
+image_root: image 是相对训练数据根（--train-data-root）的路径
