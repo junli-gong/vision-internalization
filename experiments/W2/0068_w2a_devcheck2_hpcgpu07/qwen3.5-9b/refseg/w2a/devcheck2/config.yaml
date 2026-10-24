@@ -1,0 +1,120 @@
+experiment: W2
+framework: src/w2（DEV-0059；docs/w2_plan.md）
+w2:
+  task: refseg
+  split: devcheck2
+  setting: w2a
+  splits_config: configs/w2_splits.json
+  splits_sha256: 9dd22dff2ad422ec5d51106bb6e40227ec51afa27130f2a968c945d69055c0f1
+  split_sha256: e0c090322dc324a27283aa78d3a5ce6ee5f910822646369cd6b2cac36307c546
+  split_n: 500
+  n_samples: 500
+  limit: null
+  sample_ids_sha256: d575b6c53b584ae812193a01093c0c882be68a9d1f68820e703e58f25a50af95
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  adapter_model_key: qwen3.5-9b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+w2_config:
+  config: configs/w2.json
+  config_sha256: c4d083489783039d46718e19ede810370bd4b9272ef94e99f406104c2e0f9b29
+  frozen: true
+propose:
+  mode: box
+  run:
+    leaf: <out>/qwen3.5-9b/refexp_box/baseline_e1/devcheck2
+    predictions_sha256: 1730a7fcdb3794d1e5cf153201c1f10b1c9485596eba31d27d1cedf2c1e7eab6
+    config_sha256: 0955a45577617c6ba6a63a870bfa15050e1109602334139539a171faa6edc441
+candidates:
+  leaf: <out>/qwen3.5-9b/refseg/candidates/devcheck2
+  module: src.w2.candidates
+  generators:
+  - type: grabcut_default
+  - type: grabcut
+    iterations: 5
+    box_pct: -10.0
+    init: mask
+  - type: grabcut_default
+    post:
+    - largest_cc
+    - fill_holes
+  - type: watershed
+    use_points: true
+    fg_shrink_pct: 30.0
+    bg_margin_pct: 0.0
+    seed_radius_pct: 4.0
+  k: 4
+  content_sha256: df2c55bd515c9dfbdde69047ddf70b37d45a3d19f23366b086d3e44a56db7234
+batching:
+  batch_size: 16
+  chunk_size: 64
+  max_batch_tokens: 48000
+data:
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+select:
+  thinking: true
+  thinking_budget: 2048
+  answer_budget: 64
+  none_words:
+  - none
+  strip_chars: " \t\r\n.,;:!?\"'`*()[]{}<>#"
+  system: null
+  prompt: You are given {k} numbered candidate masks for one object in this image.
+    Each candidate is drawn as a colored overlay with its number in the corner. Which
+    candidate best covers {expression}? Answer with the number of that candidate only
+    (an integer from 1 to {k}), or with none if no candidate covers it.
+  method: chat_turn_batch
+render:
+  module: src.w2.render
+  layout: separate
+  style:
+    fill_rgb:
+    - 0
+    - 114
+    - 178
+    fill_alpha: 0.4
+    contour_rgb:
+    - 240
+    - 228
+    - 66
+    contour_px: 2
+    halo_rgb:
+    - 0
+    - 0
+    - 0
+    halo_px: 1
+    label_text_rgb:
+    - 255
+    - 255
+    - 255
+    label_bg_rgb:
+    - 0
+    - 0
+    - 0
+    grid_label_px: 22
+    separate_label_px: 32
+    label_pad_px: 4
+    reference: true
+    reference_label: ''
+    grid_long_side: 640
+    grid_cols: 0
+    gutter_px: 4
+    gutter_rgb:
+    - 255
+    - 255
+    - 255
+    separate_max_wh:
+    - 640
+    - 480
