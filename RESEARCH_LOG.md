@@ -1911,3 +1911,7 @@
   - w2_tune.py select 加 --max-parse-failure、--max-propose-failure；用手造的记录核对过。
   - 发 RUN-0070：06 跑 K = 4，07 跑 K = 6，之后在 hpcmgt 上重新选臂。
   - 预期：devtune800 上没有一个有效的臂超过 W1-F，W2-a 在 devcheck2 上大概率不通过。
+- 10-24 13:xx UTC：**RUN-0070 完成**（06 的 K4 用 5,331 s，07 的 K6 用 5,998 s，0 失败）。按 D121 选臂：第 1 步得 sep_on，第 2 步得 **sep_on_k4**，减 W1-F +0.023，cIoU 0.596，挑中最优 39%。
+  - **W2 配置冻结（D122）**：configs/w2.json sha256 c4d08348…；w2c_train.json 的 sha 已填。
+  - 冻结后测试 178 passed。
+  - 预注册 §5 记下选定与修订后的预测：W2-a 通过约 25%。

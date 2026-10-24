@@ -2879,3 +2879,31 @@
    - 第 2 步以 sep_on 为底重跑 K = 4、6（RUN-0070，06、07 各一个臂）；
    - 第 3 步 `box_points` 无效，不重跑。
 4. **对判定的预期**：devtune800 上，没有一个有效的臂超过 W1-F，最好的是 sep_on，−0.011。W2-a 在 devcheck2 上大概率不通过；W2-c（训练过的挑选）是主要的希望。这一预期写进当日清单报负责人。
+
+## D122（2026-10-24，管理员）：W2 配置冻结，选中调参臂 sep_on_k4
+
+依据：W2 预注册 §5，加补记 2（D121）；RUN-0066、RUN-0070，都在 devtune800 上，800 句。
+
+1. **选臂**：
+
+   | 步 | 有效的臂：减 W1-F 的配对 cIoU 差 | 选中 |
+   |---|---|---|
+   | 第 1 步（D121 重选） | grid_off −0.053、grid_on −0.025、sep_on −0.011；sep_off 解析失败 91%，无效 | sep_on |
+   | 第 2 步（重做） | sep_on_k4 **+0.023**、sep_on_k6 −0.005、sep_on（K = 8）−0.011 | sep_on_k4 |
+   | 第 3 步 | box_points 出框失败 88%，无效 | 不变 |
+
+   - 参照：W1-F 0.572，随机挑选 0.527，最优候选（K = 8）0.647。
+   - sep_on_k4 的 cIoU 0.596，CI [0.573, 0.619]；挑中最优 39%，挑 1 号 44%，解析失败 2.7%。
+2. **冻结的内容**（`configs/w2.json` ← `experiments/W2/0070_w2_tune_r2_hpcgpu06/cfg/sep_on_k4.json`，sha256 `68fbaa69…`）：
+   - 提出：E1 协议的框；
+   - 渲染：separate，K 张叠加图加一张原图；
+   - 挑选：开思考，至多 2,048 个 token；
+   - K = 4，生成器依次是 `gc_default`（= W1-F）、`gc_soft_box_minus10`、`gc_default+lcc+fill`、`ws_pts`（即 DEFAULT_SPEC 的 1、3、4、7 号）。
+   - 冻结后 `configs/w2.json` 的 sha256 是 `c4d083489783039d46718e19ede810370bd4b9272ef94e99f406104c2e0f9b29`。
+   - `configs/w2c_train.json` 的 `w2_config.sha256` 已填成它，`w2c_train.json` 的 sha256 是 `709b24ae…`。
+   - 由 `scripts/mgr/w2_tune.py freeze` 写出。
+3. **之后**：
+   - devcheck2 与 test 只用这一份；
+   - W2-c 用同一份候选清单与渲染，自己的挑选关思考，D119；
+   - 发 RUN-0068（07，W2-a 判定）与 RUN-0069（06，W2-c 全流程）。
+4. **测试**：主分支上 W2 与 W2-c 的测试，冻结后 178 passed。

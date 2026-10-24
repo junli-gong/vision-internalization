@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "name": "W2 候选加挑选：提出、候选、渲染、挑选、对照与划分（D113；docs/w2_plan.md）",
- "status": "初稿，未冻结（DEV-0059）。candidates 与 render.style 已换成 DEV-0058 的默认值（D116 的更正）；其余在开发-调参集（devtune800）上按 W2 预注册 §5 定，跑 devcheck2 与 test 之前冻结。",
- "frozen": false,
+ "status": "已冻结（D122）：W2 预注册 §5 在 devtune800 上选中的臂 sep_on_k4（experiments/W2/0070_w2_tune_r2_hpcgpu06/cfg/sep_on_k4.json，sha256 68fbaa696ce984ece6933c03c648ff6b528bcb9c15355fadce577c280eb88737），内容与该臂相同，只改 name、status、frozen。之后不再改动；devcheck2 与 test 只用这一份。",
+ "frozen": true,
  "basis": "D113（负责人 2026-10-22 指令第二节第 3 条）：只有提出与挑选两轮，没有修改轮；每轮思考至多 2,048 个 token，到上限强制收尾；按输出类型路由（要 mask 的任务走 提出 → 候选 → 挑选；要框或数字的任务按 E1 协议单轮作答，不用工具）；\"都不对\"或解析失败时交 1 号候选（= W1-F）；每条样本记 token 数、工具调用（候选生成）次数与墙钟。",
  "propose": {
   "mode": "box",
@@ -28,12 +28,6 @@
    {
     "type": "grabcut",
     "iterations": 5,
-    "box_pct": 10.0,
-    "init": "rect"
-   },
-   {
-    "type": "grabcut",
-    "iterations": 5,
     "box_pct": -10.0,
     "init": "mask"
    },
@@ -45,35 +39,18 @@
     ]
    },
    {
-    "type": "slic",
-    "n_segments": 30,
-    "threshold_pct": 50.0,
-    "compactness": 10.0,
-    "context_pct": 25.0
-   },
-   {
-    "type": "slic",
-    "n_segments": 100,
-    "threshold_pct": 50.0,
-    "compactness": 10.0,
-    "context_pct": 25.0
-   },
-   {
     "type": "watershed",
     "use_points": true,
     "fg_shrink_pct": 30.0,
     "bg_margin_pct": 0.0,
     "seed_radius_pct": 4.0
-   },
-   {
-    "type": "box"
    }
   ],
   "status": "默认取 src/w2/candidates.DEFAULT_SPEC 的 8 个生成器（DEV-0058，D115；管理员合入 DEV-0059 后换上，D116 的更正）；K 与清单在 devtune800 上按 W2 预注册 §5 定，跑 devcheck2 之前冻结。",
   "rule": "src/w2/candidates.generate_candidates(原图 RGB, 提出的框（原图绝对像素 xyxy）, fg_points_abs, bg_points_abs, spec = CandidateSpec(generators))，按清单顺序产出 K 个候选，编号 1..K；某个生成器失败时候选的 mask 用框本身、ok = False，编号与 K 不变；完全相同的候选不去重。例外（管理员审查 DEV-0059 的裁定 A，与 W1-F 完全一致）：1 号候选 ok = False 时，回路一律把它当作空 mask（w1f 交空；w2a、random_pick、oracle_pick 里选中或回退到 1 号也交空；评分与最优候选按空 mask 算；渲染给 LLM 的 1 号也画空叠加，info 记原因）；candidates.jsonl 里存的仍是生成器给的原样。每个划分只生成一次，存进 <out>/<模型>/refseg/candidates/<划分>/candidates.jsonl（每个候选的 COCO RLE、名字、ok、info（参数、耗时、失败原因）），w2a、random_pick、oracle_pick、w1f 共用。"
  },
  "render": {
-  "layout": "grid",
+  "layout": "separate",
   "style": {
    "fill_rgb": [
     0,
