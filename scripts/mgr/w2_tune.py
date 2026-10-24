@@ -131,7 +131,8 @@ def _rates(recs: list[dict]) -> dict:
     wc = [r for r in recs if r.get("candidates")]
     n = len(wc)
     f = lambda k: (sum(1 for r in wc if k(r)) / n) if n else None  # noqa: E731
-    return {"n_with_candidates": n, "final_is_best": f(lambda r: r.get("final_is_best")),
+    prop_fail = (sum(1 for r in recs if (r.get("proposal") or {}).get("failure")) / len(recs)) if recs else None
+    return {"n_with_candidates": n, "propose_failure": prop_fail, "final_is_best": f(lambda r: r.get("final_is_best")),
             "final_is_1": f(lambda r: r.get("final_index") == 1), "none": f(lambda r: r.get("fallback") == "none"),
             "parse_failure": f(lambda r: r.get("fallback") == "parse_failure")}
 
@@ -150,26 +151,41 @@ def cmd_select(a) -> int:
         diff = _ciou(s, ids) - _ciou(sw, ids)
         arms.append({"name": name, "predictions": path, "ciou": float(_ciou(s, ids)), "diff_vs_w1f": float(diff),
                      "diff_exact": f"{diff.numerator}/{diff.denominator}", "_diff": diff, **_rates(recs)})
-    best = max(arms, key=lambda x: x["_diff"])
+    # 仪器有效性（W2 预注册 §5 补记 2，D121）：挑选的解析失败率或出框的失败率超过上限的臂不参选（照样列出）
+    for x in arms:
+        bad = []
+        if a.max_parse_failure is not None and (x["parse_failure"] or 0) > a.max_parse_failure:
+            bad.append(f"parse_failure {x['parse_failure']:.3f} > {a.max_parse_failure}")
+        if a.max_propose_failure is not None and (x["propose_failure"] or 0) > a.max_propose_failure:
+            bad.append(f"propose_failure {x['propose_failure']:.3f} > {a.max_propose_failure}")
+        x["eligible"] = not bad
+        x["ineligible_reason"] = "; ".join(bad) or None
+    pool = [x for x in arms if x["eligible"]]
+    if not pool:
+        raise SystemExit("没有一个臂通过仪器有效性过滤")
+    best = max(pool, key=lambda x: x["_diff"])
     tol = Fraction(str(a.tol))
-    chosen = next(x for x in arms if x["_diff"] >= best["_diff"] - tol)  # 按给出的顺序，越前越简单
+    chosen = next(x for x in pool if x["_diff"] >= best["_diff"] - tol)  # 按给出的顺序，越前越简单
     for x in arms:
         x.pop("_diff")
     refs = {}
     for lab, p in (("w1f", a.w1f), ("random_pick", a.random), ("oracle_pick", a.oracle)):
         if p:
             refs[lab] = float(_ciou(_sums(_jsonl(p)), ids))
-    doc = {"rule": f"W2 预注册 §5：取减 W1-F 的配对 cIoU 差最大的臂；与最大者相差不到 {a.tol} 的取最简单的（给出的顺序，越前越简单）",
+    doc = {"rule": f"W2 预注册 §5：取减 W1-F 的配对 cIoU 差最大的臂；与最大者相差不到 {a.tol} 的取最简单的（给出的顺序，越前越简单）"
+                   + (f"；只在仪器有效的臂里选（挑选解析失败 ≤ {a.max_parse_failure}、出框失败 ≤ {a.max_propose_failure}；§5 补记 2，D121）"
+                      if (a.max_parse_failure is not None or a.max_propose_failure is not None) else ""),
            "n": len(ids), "references": refs, "arms": arms, "max_arm": best["name"], "chosen": chosen["name"]}
     Path(a.out).write_text(json.dumps(doc, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     if a.md:
         lines = [f"# W2 调参：{a.step or ''} 选臂", "", f"- 规则：{doc['rule']}", f"- n = {len(ids)}；参照 cIoU：" +
                  "，".join(f"{k} {v:.4f}" for k, v in refs.items()), "",
-                 "| 臂（简单→复杂） | cIoU | 减 W1-F | 挑中最优 | 挑 1 号 | 都不对 | 解析失败 |", "|---|---:|---:|---:|---:|---:|---:|"]
+                 "| 臂（简单→复杂） | cIoU | 减 W1-F | 挑中最优 | 挑 1 号 | 都不对 | 解析失败 | 出框失败 | 参选 |", "|---|---:|---:|---:|---:|---:|---:|---:|---|"]
         fm = lambda v: "—" if v is None else f"{v:.3f}"  # noqa: E731
         for x in arms:
             lines.append(f"| {x['name']} | {x['ciou']:.4f} | {x['diff_vs_w1f']:+.4f} | {fm(x['final_is_best'])} | {fm(x['final_is_1'])} | "
-                         f"{fm(x['none'])} | {fm(x['parse_failure'])} |")
+                         f"{fm(x['none'])} | {fm(x['parse_failure'])} | {fm(x['propose_failure'])} | "
+                         f"{'是' if x['eligible'] else '否（' + x['ineligible_reason'] + '）'} |")
         lines += ["", f"**差最大**：{best['name']}；**选中**：{chosen['name']}"]
         Path(a.md).write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(chosen["name"])
@@ -228,6 +244,8 @@ def main(argv=None) -> int:
     s.add_argument("--out", required=True)
     s.add_argument("--md")
     s.add_argument("--step")
+    s.add_argument("--max-parse-failure", type=float, help="仪器有效性：挑选解析失败率的上限（§5 补记 2）")
+    s.add_argument("--max-propose-failure", type=float, help="仪器有效性：出框失败率的上限（§5 补记 2）")
     f = sub.add_parser("freeze")
     f.add_argument("--arm-config", required=True)
     f.add_argument("--decision", required=True)
