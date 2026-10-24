@@ -1,0 +1,31 @@
+experiment: W2
+framework: src/w2（DEV-0059；docs/w2_plan.md）
+w2:
+  task: refseg
+  split: devtune800
+  setting: ownbox
+  splits_config: configs/w2_splits.json
+  splits_sha256: 9dd22dff2ad422ec5d51106bb6e40227ec51afa27130f2a968c945d69055c0f1
+  split_sha256: c8c1f298eedd88f402c0dce6de0816493bc0a01640ffebbe5ca42f62c6d25efd
+  split_n: 800
+  n_samples: 800
+  limit: null
+  sample_ids_sha256: 3450c5b9f53bbb21cc26e931df982660adb453b688997012801a9d34da90a07d
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  adapter_model_key: qwen3.5-9b
+  tiny: false
+box_run:
+  leaf: <out>/qwen3.5-9b/refexp_box/baseline_e1/devtune800
+  predictions_sha256: 265e929fc9074e458d81f9343a96e6eaab3b68001c5f6e5493495b1ecc2c7486
+  config_sha256: 0529d1512050713729eba11ebc951f2855b5d7779d3dbcea0dfceb7403a28427
+raster_rule: 框 = 框记录的 parsed.box（parse_one_box 换算好的原图绝对像素 xyxy，同 E1 定位）；解析失败（parsed
+  为 null）的框是空 mask（同 E1：失败的预测 inter = 0、union = GT 面积）。多边形对照：框的四个角 (x0, y0)、(x1, y0)、(x1,
+  y1)、(x0, y1) 当作一个多边形，经 E1 多边形的同一个光栅化（src/executors/raster.polygons_to_mask，pycocotools）得到
+  mask，与 GT mask 算 inter / union；cIoU = Σinter / Σunion，gIoU = 逐条 IoU 的平均。网格对照：同一个框
+  mask 经 src/grid/codec.mask_to_grid 填进 16×16 网格（格内前景占比 ≥ GRID_FG_AREA_THRESHOLD =
+  0.5 记 1，与网格的 GT 目标同一条规则），再 grid_to_mask 回填到原图，与 GT 算 gIoU 与 cIoU，同 E1 grid16 的评分。
+posthoc_config_sha256: 9a5607826bae8b2387cd9b5bbd88cd71d5887ebf86237b786546ab13ac613ce1
