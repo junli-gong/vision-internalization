@@ -14,6 +14,15 @@
 - 口径只在一处定义：§13 的 8 个 T 文本读数、L/P/R 的算法、标题读数的取法都 import 自
   scripts/mgr/interference.py；E2 的标题指标取法 import 自 scripts/mgr/e2_summary.py。本文件只放
   "数据在哪"（路径）与"怎么画"（英文标签、配色、尺寸）。
+- 补评目录（DEV-0063，D102-2 = N37(b)：E3 的结构强制网格评测按判据 e5-v2 补评被拒的种子与机内配对的另一臂）：
+
+      python scripts/figures/make_paper_figures.py \\
+          --e3-prepend 2B=experiments/E3/00NN_e3_reeval_e5v2_hpcgpu07 --e3-prepend 4B=experiments/E3/00NN_e3_reeval_e5v2_hpcgpu07
+
+  把补评目录放在该尺寸目录列表的最前面（先找到的为准）：补评过的种子从新目录读，其余照旧。干扰的 JSON
+  （docs/analysis/e3_interference_by_size.json）要先用 interference.py 按同样的目录顺序重出，否则 README 的核对报"不一致"。
+  网格读数的判据取它自己的 metrics.json（interference.grid_criteria）；有 e5-v2 的读数时表注与干扰图注各加一句，
+  全是 v1 时输出与改动前相同。
 """
 
 from __future__ import annotations
@@ -356,12 +365,25 @@ def e3_present(root: Path, spec: dict) -> bool:
     return any((root / d).is_dir() for d in spec["dirs"])
 
 
-def collect_e3(root: Path) -> dict:
+def prepend_dirs(sizes, prepend: dict) -> tuple:
+    """--e3-prepend（DEV-0063）：把补评目录放在对应尺寸的目录列表最前面（先找到的为准，于是补评过的种子覆盖原目录里的同一路径）。
+    prepend = {尺寸: [目录…]}；没有给的尺寸原样。"""
+    out = []
+    for spec in sizes:
+        extra = tuple(prepend.get(spec["size"], ()))
+        out.append({**spec, "dirs": extra + tuple(spec["dirs"]), "prepended": list(extra)} if extra else spec)
+    return tuple(out)
+
+
+def collect_e3(root: Path, sizes=E3_SIZES) -> dict:
     out = {"sizes": [], "missing": [], "rejected": [], "gaps": [], "ttext_tasks": [t for _, t in ITF.L_ITEMS]}
-    for spec in E3_SIZES:
+    non_v1 = []  # DEV-0063：判据不是 v1 的网格读数（e5-v2 补评）
+    for spec in sizes:
         rec = {"size": spec["size"], "model": spec["model"], "machine": spec["machine"], "runs": spec["runs"],
                "dirs": list(spec["dirs"]), "base_dirs": list(spec["base"]), "seeds": list(spec["seeds"]),
                "present": e3_present(root, spec), "rows": {}, "gpus": []}
+        if spec.get("prepended"):  # DEV-0063：只在给了 --e3-prepend 时有这个键
+            rec["prepended"] = list(spec["prepended"])
         if not rec["present"]:
             out["missing"].append(f"E3 {spec['size']}: {spec['runs']} 的评测目录 {', '.join(spec['dirs'])} 还没有")
             out["sizes"].append(rec)
@@ -402,6 +424,11 @@ def collect_e3(root: Path) -> dict:
                 vals = {s: v for s, v in vals.items() if v is not None}
                 mean, sd = ITF.summary(vals)
                 row[task] = {"seeds": vals, "mean": mean, "sd": sd, "n": len(vals)}
+                for s in vals:  # DEV-0063：读数自己的 metrics.json 记的判据（interference.grid_criteria）
+                    c = ITF.grid_criteria(dirs, arm, s, spec["model"], task)
+                    if c != ITF.DEFAULT_CRITERIA:
+                        gpu = next((m.get("gpu") for m in mcs if (m["arm"], m["seed"], m["channel"]) == (arm, s, "grid")), None)
+                        non_v1.append({"size": spec["size"], "arm": arm, "seed": s, "task": task, "criteria": c, "gpu": gpu})
                 for s in spec["seeds"]:
                     if s not in vals:
                         why = "rejected by merge check" if (arm, s, "grid") in rejected else "no result file"
@@ -410,6 +437,8 @@ def collect_e3(root: Path) -> dict:
                         out["gaps"].append(f"不一致：E3 {spec['size']} {arm} seed {s} 的网格核对没过，却有 {task} 的读数")
             rec["rows"][arm] = row
         out["sizes"].append(rec)
+    if non_v1:  # 全是 v1 时不加这个键（输出与改动前相同）
+        out["non_v1_grid"] = non_v1
     return out
 
 
@@ -452,7 +481,7 @@ def _r128_block(root: Path) -> dict | None:
     return b
 
 
-def collect_interference(root: Path) -> dict:
+def collect_interference(root: Path, sizes=E3_SIZES) -> dict:
     out = {"blocks": [], "missing": [], "checks": [], "json": INTERFERENCE_JSON, "trend": None}
     j = _load(root / INTERFERENCE_JSON)
     if j is None:
@@ -466,7 +495,7 @@ def collect_interference(root: Path) -> dict:
         nb["source"] = INTERFERENCE_JSON
         nb["x_size"] = nb["size"]
         in_json[nb["size"]] = nb
-    for spec in E3_SIZES:
+    for spec in sizes:
         size = spec["size"]
         present = e3_present(root, spec)
         if size in in_json:
@@ -504,6 +533,10 @@ def collect_interference(root: Path) -> dict:
     else:
         out["missing"].append(f"干扰 {E3_R128['label']}: 目录在，但还没有两臂配对的读数")
     out["blocks"].sort(key=lambda b: (size_value(b["x_size"]), b.get("rank", 32)))
+    for b in out["blocks"]:  # DEV-0063：两臂判据不同的一对（interference.size_block 没有算它）
+        for x in b.get("mismatched_criteria") or []:
+            out["checks"].append(f"不一致：{b['size']} 种子 {x['seed']} {x['task']} 的两臂判据不同（E3b {x['e3b']}、E3b+C3 {x['e3b_c3']}），"
+                                 "这一对没有算 P、R；补评目录要两臂都有")
     for b in out["blocks"]:
         b["means"] = {}
         for q, *_ in INTERFERENCE_PANELS + (("R_depth",),):
@@ -735,10 +768,25 @@ def e3_table_notes(e3: dict) -> list[str]:
     notes.append("Machines (all effects computed within one machine, D93-1; each base row was evaluated on the same machine "
                  "as its arms): " + "; ".join(mach) + ".")
     if e3["rejected"]:
+        all_v1 = all(r.get("criteria_version") in (None, ITF.DEFAULT_CRITERIA) for r in e3["rejected"])
         rj = "; ".join(f"{r['size']} {dict(E3_ARMS)[r['arm']]} seed {r['seed']} ({'grid' if r['channel'] == 'grid' else 'T-text'}"
-                       f", {r['machine']}): {r['reason_en']}" for r in e3["rejected"])
-        notes.append("Seeds without readings because the pre-evaluation merge check (criteria v1) rejected them (N37, kept as "
-                     "v1 per D102-2): " + rj + ".")
+                       f", {r['machine']}" + ("" if all_v1 else f", criteria {r.get('criteria_version')}") + f"): {r['reason_en']}"
+                       for r in e3["rejected"])
+        if all_v1:  # 改动前的原文（DEV-0063 之前只有 v1）
+            notes.append("Seeds without readings because the pre-evaluation merge check (criteria v1) rejected them (N37, kept as "
+                         "v1 per D102-2): " + rj + ".")
+        else:
+            notes.append("Seeds without readings because the pre-evaluation merge check rejected them (N37): " + rj + ".")
+    non_v1 = e3.get("non_v1_grid") or []
+    if non_v1:  # DEV-0063（D102-2）：按 e5-v2 补评的网格读数
+        seen: dict = {}
+        for r in non_v1:
+            seen.setdefault((r["size"], r["arm"], r["seed"], r["criteria"], r.get("gpu")), []).append(r["task"])
+        items = "; ".join(f"{size} {dict(E3_ARMS)[arm]} seed {seed} ({'/'.join(tasks)}; criteria {c}" + (f"; {gpu}" if gpu else "") + ")"
+                          for (size, arm, seed, c, gpu), tasks in seen.items())
+        notes.append("Pre-evaluation merge check: criteria v1 (D50-3) for all readings except these structure-forced grid readings, "
+                     "re-evaluated under criteria e5-v2 (the E5 criteria, which tolerate tie flips between the two decoding "
+                     "implementations; unified per N34, decided before the rejected seeds' readings were seen; D102-2): " + items + ".")
     ttext_e3b = [(s["size"], sorted(c["seeds"]) ) for s in sizes for c in [s["rows"].get("e3b", {}).get(ITF.L_ITEMS[0][1], {})] if c.get("seeds")]
     if ttext_e3b:
         notes.append("E3b T-text readouts exist only for " + ", ".join(f"{sz} seed {','.join(map(str, sd))}" for sz, sd in ttext_e3b) +
@@ -871,6 +919,11 @@ def caption_interference(itf: dict) -> str:
     if seeds:
         s += (" Seeds with paired readings, where fewer than planned (see Table E3 for seeds rejected by the merge check): " +
               "; ".join(seeds) + ".")
+    e5 = sorted({(b["size"], int(k), c) for b in main for d in (b.get("pair_criteria") or {}).values() for k, c in d.items()
+                 if c != ITF.DEFAULT_CRITERIA}, key=lambda x: (size_value(x[0]), x[1]))
+    if e5:  # DEV-0063（D102-2）：全是 v1 时没有这一句
+        s += (" Pixel pairs re-evaluated under merge-check criteria e5-v2, both arms (see Table E3): " +
+              "; ".join(f"{sz} seed {k}" for sz, k, _c in e5) + ".")
     if any(b.get("rank") for b in itf["blocks"]):
         s += (" Star: 0.8B with LoRA rank 128 for both C3 and E3b+C3 (post hoc, §13a/D99-1; P uses the rank-32 E3b), "
               "drawn slightly right of 0.8B.")
@@ -942,7 +995,8 @@ def write_readme(root: Path, out: Path, e1, e2, e3, itf, captions: dict, files: 
           "- 数据（每个尺寸的目录，先到先得，与 interference.py 同一套相对路径）："]
     for s in e3["sizes"]:
         L.append(f"  - {s['size']}（{s['machine']}；{s['runs']}）：臂 `{', '.join(s['dirs'])}`；基座 `{', '.join(s['base_dirs'])}`" +
-                 ("" if s["present"] else "——**还没有（missing）**"))
+                 ("" if s["present"] else "——**还没有（missing）**") +
+                 (f"；补评目录（--e3-prepend，排在最前、先到先得）`{', '.join(s['prepended'])}`" if s.get("prepended") else ""))
     L += ["  - 臂的 T 文本：`<目录>/t_text/<变体>/seed<k>/<模型>/<任务>/metrics.json`；网格：`<目录>/eval/<变体>/<模型>/seed<k>/<refseg|depth>__structured/metrics.json`；"
           "基座：`<基座目录>/<任务>/metrics.json`；合并核对：同一层目录的 `merge_check.json`。",
           "- 口径：列是 §13 的 8 个 T 文本读数（`scripts/mgr/interference.py` 的 L_ITEMS，标题读数 = metrics.json 第一个 headline 的严格值，×100），"
@@ -983,12 +1037,26 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", default=str(REPO), help="结果树的根（默认仓库根）")
     ap.add_argument("--out", default=None, help="输出目录（默认 <root>/docs/figures）")
+    ap.add_argument("--e3-prepend", action="append", default=[], metavar="SIZE=DIR[,DIR…]",
+                    help="DEV-0063：把补评目录（相对 --root）放在该尺寸 E3 目录列表的最前面（先找到的为准；可重复）。"
+                         "干扰的 JSON 要用 interference.py 按同样的目录顺序重出，否则核对报不一致")
     a = ap.parse_args(argv)
     root = Path(a.root).resolve()
+    known = [s["size"] for s in E3_SIZES]
+    prepend: dict = {}
+    for item in a.e3_prepend:
+        size, sep, dirs = item.partition("=")
+        if not sep or size not in known or not dirs:
+            ap.error(f"--e3-prepend 要写成 SIZE=DIR[,DIR…]，SIZE 取 {known}，收到 {item!r}")
+        for d in dirs.split(","):
+            if not (root / d).is_dir():
+                ap.error(f"--e3-prepend 的目录 {d!r} 不在 {root} 下")
+            prepend.setdefault(size, []).append(d)
+    sizes = prepend_dirs(E3_SIZES, prepend)
     out = Path(a.out).resolve() if a.out else root / "docs" / "figures"
     (out / "data").mkdir(parents=True, exist_ok=True)
     plt.rcParams.update(STYLE)
-    e1, e2, e3, itf = collect_e1(root), collect_e2(root), collect_e3(root), collect_interference(root)
+    e1, e2, e3, itf = collect_e1(root), collect_e2(root), collect_e3(root, sizes), collect_interference(root, sizes)
     files = {"fig_e1_gap": fig_e1(e1, out), "fig_e2_layers": fig_e2(e2, out), "tab_e3_comparison": tab_e3(e3, out),
              "fig_interference_size": fig_interference(itf, out)}
     captions = {"fig_e1_gap": caption_e1(e1), "fig_e2_layers": caption_e2(e2), "fig_interference_size": caption_interference(itf)}

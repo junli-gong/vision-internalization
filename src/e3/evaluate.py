@@ -3,6 +3,11 @@
 **加载**（调用方：scripts/eval_e3b.py）：先跑评测前的合并核对（src/e3/merge_check：check_training_interfaces --checkpoint 的同一套
 函数，判据 v1 = D50-3；检查项取配置的 eval.merge_check.checks.grid_eval：merge 加 restricted，restricted 用检查点自己的网格 token 与
 本模块的单轮设置，DEV-0032；不通过就不评测），再 factory.load_trained(检查点, merge=True)，attach_vocab 取回网格 token 的布局。
+**判据 e5-v2**（DEV-0063，D102-2；resolve_eval(merge_criteria = "e5-v2")，scripts/eval_e3b.py --merge-criteria e5-v2，只配
+decode = structured）：合并核对的读数照旧，判法换成 E5 的 e5-v2（src/e3/merge_check 的模块说明）。设置与运行身份（config.yaml 的
+eval.merge_criteria）、metrics.json 的 merge_criteria、README 各记一笔；不给（或给 v1）时没有这个键，输出与原来逐字节相同（tests 用
+8207cec 的快照钉住）。叶目录名不变：换了判据的评测写进新的 --out（续跑时判据不同就是运行身份不同，拒绝混写；指令检查的正常一侧
+判据不同不配对）。
 
 **单轮**（主要数字）：图 + 网格指令（tasks.<任务>.grid_template / grid_instruction，指令在前）→ adapter.generate_restricted，
 允许集合 = tokens.allowed_ids(任务, allowed_scope)（与训练损失同一个函数、同一个集合），max_new_tokens = 目标序列长度 n(n + 1) + 1，
@@ -115,7 +120,9 @@ from src.e3 import eval_scoring as ES
 from src.e3.config import E3Config
 from src.e3.data import load_rgb
 from src.e3.feedback import DEPTH_COLORMAP, feedback_image
-from src.e3.merge_check import settings_from_config
+from src.e3.merge_check import CRITERIA as MERGE_CRITERIA
+from src.e3.merge_check import DEFAULT_CRITERIA as DEFAULT_MERGE_CRITERIA
+from src.e3.merge_check import E5V2_E3_BASIS, settings_from_config
 from src.e3.targets import parse_target, seq_len
 from src.e3.tokens import GRID_TASKS, GridTokens
 from src.grid.structured_decode import STRUCTURED_RULE, GridStructure, StructuredGridProcessor, check_structured_ids
@@ -142,6 +149,9 @@ SAMPLING_KW = {"top_k": 0, "top_p": 1.0, "repetition_penalty": 1.0}  # 采样不
 GROUPS = ("person", "non_person", "unknown")
 DECODE_MODES = ("restricted", "structured")  # DEV-0041 §2：restricted = generate_restricted（默认，不进运行身份）
 STRUCTURED_SUFFIX = "__structured"
+# 评测前合并核对的判据（DEV-0063，D102-2；模块说明）：v1 是默认、不进运行身份；e5-v2 只配结构强制解码
+MERGE_CRITERIA_RULE = ("评测前的合并核对按 e5-v2 判（src/e3/merge_check.rejudge_e5v2 → src/e5/trained_eval.judge_e5v2，同一个函数）；读数"
+                       "照旧来自 scripts/check_training_interfaces.py --checkpoint；v1 的判定只报告（merge_check.json 的 v1_report_only）")
 INSTRUCTION_CHECKS = ("none", "swap")  # DEV-0041 §1
 SWAP_PAIRS = "swap_pairs.jsonl"
 SWAP_SEED = 20261008  # swap 候选的取法的种子（事先固定，DEV-0041 §1）
@@ -216,10 +226,11 @@ def k_values_prefix(config_ks: Sequence[int], requested: Sequence[int]) -> list[
 
 def resolve_eval(cfg: E3Config, *, tiny: bool, batch_size: int | None = None, score_workers: int | None = None,
                  merge_check_n: int | None = None, k_values: Sequence[int] | None = None,
-                 decode: str | None = None) -> dict[str, Any]:
+                 decode: str | None = None, merge_criteria: str | None = None) -> dict[str, Any]:
     """configs/e3b_train.json 的 eval 节 → 本次生效的设置（--tiny 时按 eval.tiny 覆盖规模；命令行可再覆盖批大小、评分进程数、
     合并核对的 n，以及只跑配置 K 那一列的前缀：k_values，规则见模块说明）。decode（DEV-0041 §2）：None 或 restricted = 原来的
-    受限解码，设置里没有 decode 这个键（逐字节不变）；structured = 结构强制，设置里加 decode。结构不合规就报错。"""
+    受限解码，设置里没有 decode 这个键（逐字节不变）；structured = 结构强制，设置里加 decode。merge_criteria（DEV-0063）：None 或 v1 =
+    原来的判据，设置里没有这个键（逐字节不变）；e5-v2 = 设置里加 merge_criteria（进运行身份），只配 structured。结构不合规就报错。"""
     e = cfg.doc["eval"]
     config_ks = config_k_values(cfg)
     ks = config_ks if k_values is None else k_values_prefix(config_ks, k_values)
@@ -257,6 +268,12 @@ def resolve_eval(cfg: E3Config, *, tiny: bool, batch_size: int | None = None, sc
                                    "[StructuredGridProcessor], do_sample = False)",
                          "sampling": "匹配计算量的采样：同上，do_sample = True，temperature 与 sampling_kw 同 matched_compute",
                          "basis": "D83：E3b+C3 与 E5 全部网格任务的正式口径；现有各臂另报作诊断"}
+    if merge_criteria is not None and merge_criteria not in MERGE_CRITERIA:
+        raise ValueError(f"merge_criteria 必须是 {MERGE_CRITERIA} 之一，收到 {merge_criteria!r}")
+    if merge_criteria not in (None, DEFAULT_MERGE_CRITERIA):  # 只在 e5-v2 时加这个键（DEV-0063）：v1 的设置与运行身份逐字节不变
+        if decode != "structured":
+            raise ValueError(f"merge_criteria {merge_criteria} 只用于结构强制的网格评测（decode = structured，D102-2），收到 decode {decode!r}")
+        out["merge_criteria"] = {"version": merge_criteria, "rule": MERGE_CRITERIA_RULE, "basis": E5V2_E3_BASIS}
     return out
 
 
@@ -264,6 +281,12 @@ def decode_mode(settings: Mapping[str, Any]) -> str:
     """本次的解码方式（DEV-0041 §2）：设置里没有 decode 就是 restricted。"""
     d = settings.get("decode")
     return "restricted" if d is None else str(d["mode"])
+
+
+def merge_criteria_version(settings: Mapping[str, Any]) -> str:
+    """本次评测前合并核对的判据（DEV-0063）：设置里没有 merge_criteria 就是 v1。"""
+    c = settings.get("merge_criteria")
+    return DEFAULT_MERGE_CRITERIA if c is None else str(c["version"])
 
 
 def leaf_name(task: str, settings: Mapping[str, Any] | None = None, check: str | None = None) -> str:
@@ -936,6 +959,9 @@ def readme_text(spec: EvalSpec, ident: Mapping[str, Any], metrics: Mapping[str, 
     dec = ident["eval"].get("decode")
     if dec:  # DEV-0041 §2：结构强制（restricted 时没有这一行，README 与原来逐字节相同）
         lines += ["", f"- 解码：{dec['mode']}（{dec['rule']}）"]
+    mcr = ident["eval"].get("merge_criteria")
+    if mcr:  # DEV-0063：判据 e5-v2（v1 时没有这一行，README 与原来逐字节相同）
+        lines += ["", f"- 评测前合并核对的判据：{mcr['version']}（{mcr['rule']}；{mcr['basis']}）"]
     lines += ["", "- K = 1 的多轮与单轮是同一次调用（逐个相同）；匹配的单轮 = 贪心 + K − 1 次受限采样，逐格合成（规则见 src/e3/evaluate.py）",
               "- GPU 墙钟（call_time_s）与端到端墙钟（wall_time_s）在记账文件里（compute*.json）；本表只列由输出决定的计数",
               "", "## 文件", "",
@@ -987,6 +1013,8 @@ def finalize(leaf: Path, spec: EvalSpec, ident: Mapping[str, Any], ctx: TaskCont
                "config_sha256": ident["config"]["sha256"], **body}
     if decode_mode(settings) == "structured":  # DEV-0041 §2：只在结构强制时加（restricted 的 metrics.json 逐字节不变）
         metrics["decode"] = settings["decode"]
+    if merge_criteria_version(settings) != DEFAULT_MERGE_CRITERIA:  # DEV-0063：只在 e5-v2 时加（v1 的 metrics.json 逐字节不变）
+        metrics["merge_criteria"] = settings["merge_criteria"]
     (leaf / METRICS).write_text(json.dumps(metrics, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     (leaf / README).write_text(readme_text(spec, ident, metrics), encoding="utf-8")
     return metrics
@@ -1131,7 +1159,7 @@ def instruction_check_plan(kind: str, ctx: TaskContext, samples: Sequence[Sample
 
 
 NORMAL_SAME_KEYS = ("task", "model", "checkpoint", "context", "tokens", "grid_code", "config")
-NORMAL_SAME_EVAL = ("version", "batch_size", "upsample", "decode")
+NORMAL_SAME_EVAL = ("version", "batch_size", "upsample", "decode", "merge_criteria")  # merge_criteria：DEV-0063，判据不同不配对
 
 
 def _read_jsonl_any(leaf: Path, name: str) -> tuple[list[dict[str, Any]], Path] | None:
@@ -1252,6 +1280,8 @@ def finalize_instruction_check(leaf: Path, spec: EvalSpec, ident: Mapping[str, A
     }
     if decode_mode(settings) == "structured":
         metrics["decode"] = settings["decode"]
+    if merge_criteria_version(settings) != DEFAULT_MERGE_CRITERIA:  # DEV-0063：只在 e5-v2 时加（v1 的输出逐字节不变）
+        metrics["merge_criteria"] = settings["merge_criteria"]
     (leaf / METRICS).write_text(json.dumps(metrics, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     (leaf / README).write_text(instruction_readme(spec, ident, metrics), encoding="utf-8")
     return metrics
@@ -1269,6 +1299,8 @@ def instruction_readme(spec: EvalSpec, ident: Mapping[str, Any], metrics: Mappin
              f"- 上采样：{prim}；{metrics['definition']}", ""]
     if metrics.get("decode"):
         lines += [f"- 解码：{metrics['decode']['mode']}（{metrics['decode']['rule']}）", ""]
+    if metrics.get("merge_criteria"):  # DEV-0063（v1 时没有这一行）
+        lines += [f"- 评测前合并核对的判据：{metrics['merge_criteria']['version']}（{metrics['merge_criteria']['basis']}）", ""]
     lines += ["| 目标 | 检查 cIoU | 正常 cIoU | 检查 gIoU | 正常 gIoU | 正常 − 检查 cIoU | 正常 − 检查 gIoU |", "|---|---|---|---|---|---|---|"]
 
     def pd(x: Mapping[str, Any] | None) -> str:
@@ -1348,6 +1380,7 @@ __all__ = [
     "load_eval_set",
     "load_normal_side",
     "make_context",
+    "merge_criteria_version",
     "model_dir",
     "multi_proc",
     "no_instruction_text",

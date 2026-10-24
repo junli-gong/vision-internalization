@@ -19,6 +19,17 @@
   的两次加载（都没有 LoRA），退化为"加载两次、受限 logits 相同"的复现核对，判据照旧（v1 的 merge 一节；CPU fp32 时逐个相同）。
   跳过的项记在输出 JSON 的 skipped_checks 与摘要里。跳过之后一项都不剩（T 文本评测只有 merge）时不调那个脚本，只写一份说明跳过的
   JSON（format = SKIPPED_FORMAT，pass = true）：T 文本评测的模型就是 base 加上训练过的网格 token 行，没有合并这一步。
+- **判据**（DEV-0063；D102-2 = N37(b)）：criteria = "v1"（默认，D50-3，那个脚本自己的判定，行为与改动前逐字节相同）或 "e5-v2"（只给
+  scripts/eval_e3b.py --merge-criteria e5-v2，即 E3 的结构强制网格评测）。e5-v2 时：
+  * 读数照旧：同一个脚本、同一组检查项与样本跑一遍（读数与 v1 完全相同，那个脚本按 v1 判一次、写出 JSON）；
+  * 再按 e5-v2 重判：src/e5/trained_eval.judge_document_e5v2（即 judge_e5v2，阈值 E5V2_THRESHOLDS，同一个函数，不复制）。改写 JSON 的
+    criteria_version = e5-v2、criteria = e5v2_criteria(exact)（applies_to 换成 E3 的适用范围，见 E5V2_APPLIES_TO）、failures、pass、
+    checks.<节>.pass；那个脚本的 v1 判定原样移到 v1_report_only（criteria_version、failures、pass、criteria，只报告）；
+  * 只收带 LoRA 的检查点（judge_e5v2 要 merge 一节；C1′ 的 merge 是跳过的，拒绝），检查项必须同时有 merge 与 restricted；
+  * 退出码 1（v1 判不过）不是失败：pass 只由 e5-v2 决定；出错（退出码 2，JSON 的 error 不空）e5-v2 照样判不过。
+- **判据不同的文件互不复用、也不覆盖**：复用要求 JSON 的 criteria_version 就是本次的判据（v1 的文件不当 e5-v2 用，反过来也一样）；输出
+  位置已有另一版判据（criteria_version 是别的字符串）的 JSON 时拒绝运行（MergeCriteriaConflict），不改动它——换了判据的评测写进新的
+  --out（scripts/eval_e3b.py 的模块说明）。读不出来的旧文件照旧重跑、覆盖（与改动前相同）。
 """
 
 from __future__ import annotations
@@ -45,6 +56,10 @@ class MergeCheckFailed(RuntimeError):
         self.summary = dict(summary)
 
 
+class MergeCriteriaConflict(ValueError):
+    """输出位置已有另一版判据的合并核对（模块说明）：不覆盖，换一个新的 --out。"""
+
+
 def load_cti() -> Any:
     """按路径载入 scripts/check_training_interfaces.py（scripts 不是包）；只载入一次。"""
     global _CTI
@@ -62,6 +77,17 @@ PURPOSES: tuple[str, ...] = ("grid_eval", "t_text")  # eval.merge_check.checks �
 DEFAULT_PURPOSE = "t_text"  # scripts/run_e1.py --checkpoint 调 settings_from_config 时不传 purpose
 NEEDS_LORA: tuple[str, ...] = ("merge",)  # 没有 LoRA 的检查点（C1′）跳过的检查项（模块说明）
 SKIPPED_FORMAT = "visint-merge-check-skipped/1"
+# 判据（DEV-0063；模块说明）。版本名就是两边脚本里的 CRITERIA_VERSION（tests 钉住两者相等），这里只列可选值
+V1 = "v1"  # = scripts/check_training_interfaces.CRITERIA_VERSION（D50-3）
+E5V2 = "e5-v2"  # = src/e5/trained_eval.CRITERIA_VERSION（D96-1）
+CRITERIA: tuple[str, ...] = (V1, E5V2)
+DEFAULT_CRITERIA = V1
+E5V2_E3_BASIS = ("D102-2（N37(b)，项目负责人 2026-10-19）：E3 的结构强制网格评测统一到 e5-v2，补评被拒的种子（4B E3b 种子 2、2B E3b 种子 1，"
+                 "连同机内配对所需的重评）；按 N34 统一判据，决定于看到被拒种子的读数之前")
+E5V2_APPLIES_TO = ("E5 训练后评测前的合并核对（src/e5/trained_eval.stacked_merge_check，D96-1）；以及 E3 的结构强制网格评测前的合并核对"
+                   "（scripts/eval_e3b.py --merge-criteria e5-v2 --decode structured，DEV-0063，" + E5V2_E3_BASIS + "）。E3 这一侧读数照旧"
+                   "来自 scripts/check_training_interfaces.py --checkpoint（merge 与 restricted，两种思考开关的 merge 都判），判法是同一个 "
+                   "src/e5/trained_eval.judge_e5v2。T 文本评测与不加这个开关的网格评测仍是 v1（D50-3）")
 
 
 def settings_from_config(doc: Mapping[str, Any], *, tiny: bool, n: int | None = None,
@@ -97,6 +123,8 @@ def _summary(doc: Mapping[str, Any], out_json: Path, *, reused: bool) -> dict[st
            "error": (doc.get("error") or {}).get("repr") if doc.get("error") else None}
     if doc.get("skipped_checks"):  # 没有 LoRA 的检查点（模块说明）；有 LoRA 的检查点摘要不变
         out["skipped_checks"] = list(doc["skipped_checks"])
+    if isinstance(doc.get("v1_report_only"), Mapping):  # 判据 e5-v2（DEV-0063）：v1 的判定只报告；v1 的文件摘要不变
+        out["v1_report_only_pass"] = doc["v1_report_only"].get("pass")
     return out
 
 
@@ -116,6 +144,34 @@ def _reusable(doc: Mapping[str, Any], *, manifest_sha: str, n: int, checks: Sequ
         return False
 
 
+def rejudge_e5v2(doc: Mapping[str, Any]) -> dict[str, Any]:
+    """那个脚本写出的 JSON（判据 v1）→ 按 e5-v2 重判后的 JSON（模块说明）；不改 doc。判法、阈值与判据说明都取自 src/e5/trained_eval
+    （judge_document_e5v2、e5v2_criteria、CRITERIA_VERSION），这里只搬字段。"""
+    from src.e5 import trained_eval as TE  # 晚导入：src/e5/trained_eval 自己 import 本模块
+
+    if doc.get("criteria_version") != load_cti().CRITERIA_VERSION:
+        raise ValueError(f"只重判那个脚本按 v1 写出的 JSON，收到 criteria_version {doc.get('criteria_version')!r}")
+    exact = bool((doc.get("criteria") or {}).get("exact", False))
+    verdict = TE.judge_document_e5v2(doc)
+    out = json.loads(json.dumps(doc, ensure_ascii=False))
+    out["v1_report_only"] = {"criteria_version": doc.get("criteria_version"), "report_only": True,
+                             "failures": doc.get("failures"), "pass": doc.get("pass"), "criteria": doc.get("criteria")}
+    out["criteria_version"] = verdict["criteria_version"]
+    out["criteria"] = {**TE.e5v2_criteria(exact), "applies_to": E5V2_APPLIES_TO, "e3_basis": E5V2_E3_BASIS}
+    out["failures"] = verdict["failures"]
+    out["pass"] = verdict["pass"]
+    for name, bad in verdict["failures"].items():
+        if isinstance(out.get("checks"), dict) and isinstance(out["checks"].get(name), dict):
+            out["checks"][name]["pass"] = not bad
+    return out
+
+
+def _write_json(path: Path, doc: Mapping[str, Any]) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(doc, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
 def _skipped_document(ck: Path, manifest: Mapping[str, Any], manifest_sha: str, *, model_key: str, tiny: bool, dtype: str,
                       n: int, skipped: Sequence[str], criteria_version: str) -> dict[str, Any]:
     """没有 LoRA、检查项全部跳过时写的说明（模块说明）。"""
@@ -130,17 +186,46 @@ def _skipped_document(ck: Path, manifest: Mapping[str, Any], manifest_sha: str, 
             "failures": {}, "error": None}
 
 
+def existing_criteria(out_json: str | Path) -> str | None:
+    """输出位置已有的合并核对的判据版本（criteria_version）；没有文件、读不出来或没有这个字段时 None。"""
+    p = Path(out_json)
+    if not p.is_file():
+        return None
+    try:
+        v = json.loads(p.read_text(encoding="utf-8")).get("criteria_version")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return v if isinstance(v, str) else None
+
+
+def check_criteria_conflict(out_json: str | Path, criteria: str) -> None:
+    """输出位置已有另一版判据的合并核对 → MergeCriteriaConflict（不覆盖，模块说明）。"""
+    old = existing_criteria(out_json)
+    if old is not None and old != criteria:
+        raise MergeCriteriaConflict(f"{out_json} 是判据 {old} 的合并核对，本次是 {criteria}：判据不同的结果互不复用、也不覆盖；"
+                                    "换一个新的 --out（DEV-0063）")
+
+
 def run_merge_check(checkpoint: str | Path, *, model_key: str, tiny: bool, n: int, checks: Sequence[str], out_json: str | Path,
                     device: str, dtype: str, data_root: str | Path | None = None, dev_subsets: str | Path | None = None,
-                    e3b_config: str | Path | None = None, log: Callable[[str], None] | None = None) -> dict[str, Any]:
+                    e3b_config: str | Path | None = None, log: Callable[[str], None] | None = None,
+                    criteria: str = DEFAULT_CRITERIA) -> dict[str, Any]:
     """跑（或复用）合并核对；通过返回摘要，否则抛 MergeCheckFailed（规则见模块说明）。e3b_config：透传给那个脚本的
-    --e3b-config（None = 那个脚本的默认 configs/e3b_train.json）。"""
+    --e3b-config（None = 那个脚本的默认 configs/e3b_train.json）。criteria：判据（CRITERIA；默认 v1，与改动前相同）。"""
     log = log or (lambda m: print(m, file=sys.stderr, flush=True))
+    if criteria not in CRITERIA:
+        raise ValueError(f"判据必须是 {CRITERIA} 之一，收到 {criteria!r}")
     cti = load_cti()
     ck = Path(checkpoint)
     out = Path(out_json)
+    check_criteria_conflict(out, criteria)
     manifest_sha = _sha256(ck / "manifest.json")
     manifest = json.loads((ck / "manifest.json").read_text(encoding="utf-8"))
+    if criteria == E5V2:
+        if manifest.get("lora") is None:
+            raise ValueError("判据 e5-v2 只用于带 LoRA 的检查点（judge_e5v2 要 merge 一节；没有 LoRA 的检查点如 C1′ 跳过 merge）")
+        if sorted(checks) != sorted(cti.CHECKS):
+            raise ValueError(f"判据 e5-v2 要同时核对 {list(cti.CHECKS)}（judge_e5v2 判 merge、restricted 与 across_merge），收到 {list(checks)}")
     skipped: list[str] = []
     if manifest.get("lora") is None:  # 没有 LoRA（C1′）：merge 一项跳过（模块说明）
         skipped = [c for c in checks if c in NEEDS_LORA]
@@ -160,7 +245,7 @@ def run_merge_check(checkpoint: str | Path, *, model_key: str, tiny: bool, n: in
         except (OSError, ValueError):
             old = {}
         if _reusable(old, manifest_sha=manifest_sha, n=n, checks=checks, tiny=tiny, dtype=dtype,
-                     criteria_version=cti.CRITERIA_VERSION, e3b_config_sha=cfg_sha):
+                     criteria_version=cti.CRITERIA_VERSION if criteria == V1 else criteria, e3b_config_sha=cfg_sha):
             log(f"[合并核对] 复用已通过的 {out}")
             return _summary(old, out, reused=True)
     argv = ["--model", model_key, "--checks", *checks, "--n", str(int(n)), "--checkpoint", str(ck), "--out", str(out),
@@ -188,6 +273,15 @@ def run_merge_check(checkpoint: str | Path, *, model_key: str, tiny: bool, n: in
     if skipped:  # 跳过的项记进输出 JSON（模块说明）
         doc["skipped_checks"] = list(skipped)
         out.write_text(json.dumps(doc, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    if criteria == E5V2:  # 按 e5-v2 重判（模块说明）：退出码 1 只是 v1 判不过，pass 只由 e5-v2 决定
+        doc = rejudge_e5v2(doc)
+        _write_json(out, doc)
+        summ = _summary(doc, out, reused=False)
+        summ["exit_code"] = code
+        log(f"[合并核对] 判据 e5-v2：pass={doc['pass']}（v1 只报告：pass={doc['v1_report_only']['pass']}）")
+        if not doc.get("pass"):
+            raise MergeCheckFailed(f"评测前的合并核对按判据 e5-v2 没有通过：{summ['failures'] or summ['error']}；拒绝评测（{out}）", summ)
+        return summ
     summ = _summary(doc, out, reused=False)
     summ["exit_code"] = code
     if code != 0 or not doc.get("pass"):
@@ -196,5 +290,6 @@ def run_merge_check(checkpoint: str | Path, *, model_key: str, tiny: bool, n: in
     return summ
 
 
-__all__ = ["CTI_PATH", "DEFAULT_PURPOSE", "MergeCheckFailed", "NEEDS_LORA", "PURPOSES", "SKIPPED_FORMAT", "load_cti",
-           "run_merge_check", "settings_from_config"]
+__all__ = ["CRITERIA", "CTI_PATH", "DEFAULT_CRITERIA", "DEFAULT_PURPOSE", "E5V2", "E5V2_APPLIES_TO", "E5V2_E3_BASIS",
+           "MergeCheckFailed", "MergeCriteriaConflict", "NEEDS_LORA", "PURPOSES", "SKIPPED_FORMAT", "V1", "check_criteria_conflict",
+           "existing_criteria", "load_cti", "rejudge_e5v2", "run_merge_check", "settings_from_config"]

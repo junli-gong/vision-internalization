@@ -6,6 +6,7 @@
 - 缺 9B（RUN-0056）或秩 128（RUN-0054）时不报错，README 与图注写明缺；目录出现后自动纳入；
 - 秩 128 的 C3、E3b+C3 不回退到秩 32 的读数；被合并核对拒绝的种子在表注里列出、不进平均；
 - JSON 与重算不一致时 README 报"不一致"。
+- DEV-0063：--e3-prepend 把按 e5-v2 补评的目录放在最前，补评的种子（两臂）覆盖原目录，表注与干扰图注写明 e5-v2。
 """
 
 from __future__ import annotations
@@ -462,6 +463,64 @@ def test_interference_json_mismatch_is_flagged(tmp_path):
     d = data(out, "fig_interference_size")
     b = next(b for b in d["blocks"] if b["size"] == "0.8B")
     assert b["L"]["0"] == pytest.approx(_expected_L("0.8B", [0])[0] + 1.0)
+
+
+REEVAL = "experiments/E3/0071_e3_reeval_e5v2_hpcgpu07"  # 补评目录（DEV-0063；运行编号是假的）
+
+
+def test_e3_prepend_reeval_dir_overrides_and_is_marked(tmp_path):
+    """DEV-0063（D102-2）：4B 的 E3b 种子 2 被拒；补评目录里有按 e5-v2 补评的 E3b 种子 2 与机内配对的 E3b+C3 种子 2。--e3-prepend 把它放在
+    4B 目录列表的最前面：两臂的种子 2 从补评目录读（覆盖原来 E3b+C3 种子 2 的读数），表注与干扰图注写明 e5-v2；不给时与原来相同。"""
+    root = build_tree(tmp_path / "tree")
+    spec = next(s for s in MPF.E3_SIZES if s["size"] == "4B")
+    new_vals = {("e3b", "refseg"): 0.71, ("e3b_c3", "refseg"): 0.55, ("e3b", "depth"): 0.21, ("e3b_c3", "depth"): 0.26}
+    for (arm, task), v in new_vals.items():
+        gdir = root / REEVAL / "eval" / arm / spec["model"] / "seed2"
+        mc = _merge_check(True, "NVIDIA A100-PCIE-40GB")
+        mc["criteria_version"] = "e5-v2"
+        _w(gdir / "merge_check.json", mc)
+        m = _grid_metrics(task, v)
+        m["merge_criteria"] = {"version": "e5-v2"}
+        _w(gdir / f"{task}__structured" / "metrics.json", m)
+    sizes = MPF.prepend_dirs(MPF.E3_SIZES, {"4B": [REEVAL]})
+    blocks = [ITF.size_block(s["size"], s["machine"], s["model"], [str(root / d) for d in s["dirs"]])
+              for s in sizes if s["size"] != "9B"]  # 干扰的 JSON 按同样的目录顺序重出（模块说明）
+    _w(root / MPF.INTERFERENCE_JSON, {"blocks": blocks, "trend": {"L": "随尺寸缩小"}, "relative_trend_descriptive": {}})
+    out = tmp_path / "out"
+    assert MPF.main(["--root", str(root), "--out", str(out), "--e3-prepend", f"4B={REEVAL}"]) == 0
+    t = data(out, "tab_e3_comparison")
+    s4 = next(s for s in t["sizes"] if s["size"] == "4B")
+    assert s4["dirs"][0] == REEVAL and s4["prepended"] == [REEVAL]
+    vals = [grid_value("4B", "e3b", s, "refseg") for s in (0, 1)] + [0.71]
+    cell = s4["rows"]["e3b"]["refseg"]
+    assert cell["n"] == 3 and cell["mean"] == pytest.approx(statistics.mean(vals))
+    assert s4["rows"]["e3b_c3"]["refseg"]["seeds"]["2"] == pytest.approx(0.55)  # 机内配对的另一臂也从补评目录读
+    assert t["rejected"] == [] and not any("4B e3b seed 2" in g for g in t["gaps"])
+    assert sorted((r["arm"], r["task"]) for r in t["non_v1_grid"]) == sorted(new_vals)
+    assert {(r["size"], r["seed"], r["criteria"], r["gpu"]) for r in t["non_v1_grid"]} == {("4B", 2, "e5-v2", "NVIDIA A100-PCIE-40GB")}
+    md = (out / "tab_e3_comparison.md").read_text(encoding="utf-8")
+    assert "re-evaluated under criteria e5-v2" in md and "4B E3b seed 2 (refseg/depth; criteria e5-v2" in md
+    assert "4B E3b+C3 seed 2 (refseg/depth; criteria e5-v2" in md and "kept as v1 per D102-2" not in md
+    d = data(out, "fig_interference_size")
+    b4 = next(b for b in d["blocks"] if b["size"] == "4B")
+    assert b4["P_seg"]["2"] == pytest.approx(0.71 - 0.55) and b4["P_depth"]["2"] == pytest.approx(0.26 - 0.21)
+    assert b4["pair_criteria"]["refseg"]["2"] == "e5-v2" and "mismatched_criteria" not in b4
+    assert all(c.startswith("一致") for c in d["checks"])
+    cap = (out / "fig_interference_size_caption.tex").read_text(encoding="utf-8")
+    assert "re-evaluated under merge-check criteria e5-v2, both arms (see Table E3): 4B seed 2" in cap
+    assert "4B P\\_seg: 2 of 3 seeds" not in cap
+    assert f"补评目录（--e3-prepend，排在最前、先到先得）`{REEVAL}`" in (out / "README.md").read_text(encoding="utf-8")
+    # 不给 --e3-prepend：JSON 是按补评目录重出的，重算对不上 → 核对报不一致（提醒两边的目录顺序要一致）
+    out2 = tmp_path / "out2"
+    assert MPF.main(["--root", str(root), "--out", str(out2)]) == 0
+    assert any(c.startswith("不一致：4B") for c in data(out2, "fig_interference_size")["checks"])
+    t2 = data(out2, "tab_e3_comparison")
+    assert "non_v1_grid" not in t2 and [(r["size"], r["arm"], r["seed"]) for r in t2["rejected"]] == [("4B", "e3b", 2)]
+    # 用法错误
+    for bad in ("4B", f"5B={REEVAL}", "4B=experiments/E3/nope"):
+        with pytest.raises(SystemExit) as e:
+            MPF.main(["--root", str(root), "--out", str(tmp_path / "o3"), "--e3-prepend", bad])
+        assert e.value.code == 2
 
 
 def test_size_value_parses_labels():

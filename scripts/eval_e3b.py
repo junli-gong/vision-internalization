@@ -17,6 +17,15 @@
     #   python scripts/eval_e3b.py --checkpoint <叶>/ckpt/final/model --model qwen3.5-2b --seed 0 --data-root $PROJ/data \\
     #       --out experiments/E3/00NN_e3b_instr --instruction-check swap --limit 2048 \\
     #       --normal-leaf experiments/E3/0038_e3_eval_2b_s0/eval/e3b/qwen3.5-2b/seed0/refseg
+    # 合并核对换用 E5 的判据 e5-v2（DEV-0063，D102-2 = N37(b)；只配 --decode structured）：加 --merge-criteria e5-v2。读数照旧（同一套核对），
+    # 判法是 src/e5/trained_eval.judge_e5v2（规则见 src/e3/merge_check.py 的模块说明）；merge_check.json 记 criteria_version = e5-v2 与
+    # v1_report_only，运行身份（config.yaml 的 eval.merge_criteria）、metrics.json 的 merge_criteria、README 与打印行各记一笔。不给（或给 v1）
+    # 时一切与原来逐字节相同。**目录约定**：换了判据的评测写进一个新的 --out（新的运行编号），叶目录名不变（<任务>__structured），原评测
+    # 目录一个字节都不碰；同一个 --out 里已有另一版判据的 merge_check.json 时是用法错误（退出码 2，什么都不写），已有的叶目录换判据续跑
+    # 也拒绝（运行身份不同）。下游读法（scripts/mgr/interference.py、scripts/figures/make_paper_figures.py）：把新目录放在目录列表最前面，
+    # 先找到的为准，于是补评的种子覆盖原目录里的同一路径，其余种子照旧从原目录读。例：
+    #   python scripts/eval_e3b.py --checkpoint <叶>/ckpt/final/model --model qwen3.5-4b --variant e3b --seed 2 --data-root $VI/b200/data \\
+    #       --out experiments/E3/00NN_e3_reeval_e5v2_hpcgpu07 --k-values 1 --decode structured --merge-criteria e5-v2 --task refseg
 开发机彩排（小型随机模型、CPU fp32；检查点用 scripts/train_e3b.py --tiny 训出来的；分割用 tests/fixtures/e3/eval_root，
 深度用 tests/fixtures/e1/root 的 NYU 测试图）：
     python scripts/train_e3b.py --tiny --model qwen3.5-0.8b --supervision grid --seed 0 --out /tmp/t
@@ -25,12 +34,12 @@
 
 顺序：读检查点 manifest（构造方式必须与 --model、--tiny 相符）→ 评测前的合并核对（scripts/check_training_interfaces.py --checkpoint
 的同一套函数，n 取配置的 eval.merge_check.n，可用 --merge-check-n 改；--config 透传给它的 --e3b-config，带网格 token 的检查点做
-restricted 时读同一份配置；不通过就不评测）→ factory.load_trained(merge=True) → 逐任务评测。
+restricted 时读同一份配置；判据取 --merge-criteria，默认 v1；不通过就不评测）→ factory.load_trained(merge=True) → 逐任务评测。
 其他检查点（DEV-0035）：网格格式预热（scripts/train_e3b.py --supervision warmup，LoRA + 网格 token 行，与 E3b 同一种检查点）照常评，
 --variant warmup；C1′（--supervision grid --variant c1prime，冻结 LLM、只有网格 token 的行、没有 LoRA）：合并核对跳过 merge 一项、
 restricted 照做（含义见 src/e3/merge_check.py），--variant c1prime。批大小默认取配置冻结的 eval.batch_size（64，与 E1 相同）；真模型给别的值要加 --allow-unfrozen-batch。
-退出码：0 = 跑完；1 = 合并核对没有通过，拒绝评测；2 = 出错（报错先写进 <out>/eval/<变体>/<模型>/seed<k>/errors/；argparse 用法
-错误也是 2）。
+退出码：0 = 跑完；1 = 合并核对没有通过（按本次的判据），拒绝评测；2 = 出错（报错先写进 <out>/eval/<变体>/<模型>/seed<k>/errors/；
+argparse 用法错误也是 2）。
 """
 
 from __future__ import annotations
@@ -53,7 +62,8 @@ from src.adapters import factory, registry  # noqa: E402
 from src.adapters.checkpoint import read_manifest  # noqa: E402
 from src.e3 import evaluate as EV  # noqa: E402
 from src.e3.config import CONFIG_PATH, load_config  # noqa: E402
-from src.e3.merge_check import MergeCheckFailed, run_merge_check  # noqa: E402
+from src.e3.merge_check import CRITERIA, DEFAULT_CRITERIA, MergeCheckFailed, MergeCriteriaConflict, check_criteria_conflict  # noqa: E402
+from src.e3.merge_check import run_merge_check  # noqa: E402
 from src.e3.tokens import GRID_TASKS, attach_vocab  # noqa: E402
 from src.runlog import sha256_file  # noqa: E402
 
@@ -88,6 +98,9 @@ def parse_args(argv=None):
                         "另一个物体的指代句。结果目录 refseg__instr_<种类>")
     p.add_argument("--normal-leaf", help="--instruction-check 的正常评测一侧：已有的 refseg 叶目录（默认同一 --out 里同一解码的 refseg/）")
     p.add_argument("--merge-check-n", type=int, help="合并核对的开发样本数（默认取配置的 eval.merge_check.n）")
+    p.add_argument("--merge-criteria", choices=CRITERIA, default=DEFAULT_CRITERIA,
+                   help="DEV-0063（D102-2）：评测前合并核对的判据。v1（默认，D50-3，与原来逐字节相同）或 e5-v2（E5 的判据，只配 "
+                        "--decode structured；写进新的 --out，见模块说明）")
     p.add_argument("--score-workers", type=int, help="评分的进程数（默认取配置的 eval.score_workers；0 = 串行）")
     p.add_argument("--device", help="默认：真模型 cuda，--tiny 时 cpu")
     p.add_argument("--dtype", choices=sorted(DTYPES), help="默认：真模型 bf16，--tiny 时 fp32")
@@ -122,6 +135,12 @@ def parse_args(argv=None):
         p.error("真模型运行要给 --data-root（或设 VISINT_DATA_ROOT）")
     if not a.tiny and not RUN_DIR_NAME.fullmatch(Path(a.out).name):
         p.error(f"--out 的目录名必须带运行编号，形如 0050_e3b_eval（CLAUDE.md：experiments/<phase>/<NNNN_slug>/），收到 {a.out!r}")
+    if a.merge_criteria != DEFAULT_CRITERIA and a.decode != "structured":  # DEV-0063：D102-2 只针对结构强制的网格评测
+        p.error(f"--merge-criteria {a.merge_criteria} 只用于结构强制的网格评测，要同时给 --decode structured")
+    try:  # DEV-0063：同一个 --out 里已有另一版判据的合并核对 → 用法错误，什么都不写（换一个新的 --out）
+        check_criteria_conflict(merge_check_path(a), a.merge_criteria)
+    except MergeCriteriaConflict as e:
+        p.error(str(e))
     if a.k_values is not None:  # DEV-0039：取值规则与 resolve_eval 同一个函数（EV.k_values_prefix），不合规是用法错误
         try:
             config_ks = EV.config_k_values(load_config(a.config))
@@ -132,6 +151,11 @@ def parse_args(argv=None):
         except ValueError as e:
             p.error(str(e))
     return a
+
+
+def merge_check_path(a) -> Path:
+    """评测前合并核对的输出：<out>/eval/<变体>/<模型>/seed<k>/merge_check.json（= EV.model_dir 下的 EV.MERGE_CHECK）。"""
+    return Path(a.out) / EV.EVAL_SUB / a.variant / a.model / f"seed{int(a.seed)}" / EV.MERGE_CHECK
 
 
 def eval_paths(a) -> EV.EvalPaths:
@@ -154,7 +178,7 @@ def checkpoint_block(ck_dir: Path, man: dict) -> dict:
 def cmd_run(a, argv) -> int:
     cfg = load_config(a.config)
     settings = EV.resolve_eval(cfg, tiny=a.tiny, batch_size=a.batch_size, score_workers=a.score_workers,
-                               merge_check_n=a.merge_check_n, k_values=a.k_values, decode=a.decode)
+                               merge_check_n=a.merge_check_n, k_values=a.k_values, decode=a.decode, merge_criteria=a.merge_criteria)
     if not a.tiny and settings["batch_size"] != settings["batch_size_config"] and not a.allow_unfrozen_batch:
         raise ValueError(f"--batch-size {settings['batch_size']} 不是配置的 eval.batch_size {settings['batch_size_config']}；"
                          "确要换就加 --allow-unfrozen-batch")
@@ -174,9 +198,11 @@ def cmd_run(a, argv) -> int:
     mdir = EV.model_dir(a.out, probe)
     mdir.mkdir(parents=True, exist_ok=True)
     mc = settings["merge_check"]
+    crit = EV.merge_criteria_version(settings)  # DEV-0063：判据与运行身份同一个来源
+    kw = {} if crit == DEFAULT_CRITERIA else {"criteria": crit}  # v1：调用与原来相同
     summ = run_merge_check(ck, model_key=a.model, tiny=a.tiny, n=mc["n"], checks=mc["checks"], out_json=mdir / EV.MERGE_CHECK,
                            device=a.device, dtype=a.dtype, data_root=a.data_root or os.environ.get("VISINT_DATA_ROOT"),
-                           dev_subsets=None, e3b_config=a.config)  # 核对读评测用的同一份配置（D67-4(a)）
+                           dev_subsets=None, e3b_config=a.config, **kw)  # 核对读评测用的同一份配置（D67-4(a)）
     ad, _ = factory.load_trained(ck, device=a.device, dtype=DTYPES[a.dtype], merge=True)
     if man.get("lora") is not None and ad.lora_state != "merged":
         raise RuntimeError(f"load_trained(merge=True) 之后 LoRA 状态是 {ad.lora_state}，应为 merged")
@@ -201,7 +227,8 @@ def cmd_run(a, argv) -> int:
         m = EV.run_eval_task(ad, cfg, settings, spec, ctx, sel, a.out, resume=a.resume, argv=argv, run_extra=extra)
         h = m["headline"]
         vals = "  ".join(f"{k}={(h[k] or {}).get('value')}" for k in h if isinstance(h[k], dict))
-        print(f"{entry.key} {a.variant} seed{a.seed} {task} n={m['n']} single/{h['upsample']}: {vals}")
+        tag = "" if crit == DEFAULT_CRITERIA else f" merge_criteria={crit}"  # DEV-0063：v1 的打印行不变
+        print(f"{entry.key} {a.variant} seed{a.seed} {task} n={m['n']} single/{h['upsample']}: {vals}{tag}")
     return 0
 
 

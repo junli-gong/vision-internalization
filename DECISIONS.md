@@ -2907,3 +2907,27 @@
    - W2-c 用同一份候选清单与渲染，自己的挑选关思考，D119；
    - 发 RUN-0068（07，W2-a 判定）与 RUN-0069（06，W2-c 全流程）。
 4. **测试**：主分支上 W2 与 W2-c 的测试，冻结后 178 passed。
+
+## D123（2026-10-24，管理员）：DEV-0063 合入，E3 网格评测可选 e5-v2 判据；N37(b) 补评
+
+依据：D102-2（N37 → 检查点之后按 (b) 补）、D113-2（在 GPU 空档里做）；任务书 `prompts/dev/0063-e3-merge-criteria-e5v2.md`。
+
+1. **合入**：
+   - `scripts/eval_e3b.py --merge-criteria {v1,e5-v2}`：默认 v1，逐字节不变；e5-v2 只配 `--decode structured`。
+   - `src/e3/merge_check.py`：e5-v2 复用 `src/e5/trained_eval.judge_document_e5v2`，v1 判定原样另存，判据互不复用、不覆盖。
+   - `src/e3/evaluate.py`：运行身份、metrics、README 记判据。
+   - `scripts/mgr/interference.py`：两臂判据不同的配对不算 P、R，并警告。
+   - `scripts/figures/make_paper_figures.py --e3-prepend`：表注、图注注明补评。
+   - 测试：`tests/test_merge_check_e3_criteria.py`（44 项）、改动前的快照、31 份真实核对文件。
+2. **偏离**，全部接受：
+   - e5-v2 只配结构强制；
+   - 补评目录排在最前，也会换掉配对那一臂在 E3 表里的读数，即 2B E3b+C3 s1、4B E3b+C3 s2 改用 07 上的新读数，表注写明；
+   - 干扰 JSON 的机器标注照旧，文字由管理员写明；
+   - E3 的核对多判一项，关、开思考都判；
+   - `configs/e3b_train.json` 的 basis 文字不改，否则会改变所有运行身份，同 D97-2。
+3. **回归**：31 份真实的 E3 网格核对，v1 复现原判定。按 e5-v2 重判，全部通过；按 v1，只有 3 份被拒，就是这次要补评的两个种子。
+4. **测试**：管理员在主分支上跑相关的 4 个测试文件：
+   - 1 failed、156 passed、4 skipped；
+   - 失败的是 `test_v1_default_identical_to_8207cec[restricted_all_K]`，单独重跑 2 passed，判为机器负载下的偶发。
+   - 开发 agent 另跑过 E3、E5、W2-c 相关的 284 项，全部通过。
+5. **发 RUN-0071**：07 上补评 2B E3b s1 与 4B E3b s2，连同机内配对的 E3b+C3，约 10 GPU 小时，在 12 小时线内。标"按 N34 统一判据，决定于看到被拒种子的读数之前"：被拒种子的读数至今没有人看过。
