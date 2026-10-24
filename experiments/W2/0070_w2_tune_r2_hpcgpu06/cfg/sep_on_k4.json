@@ -1,0 +1,185 @@
+{
+ "schema_version": 1,
+ "name": "W2 调参臂 sep_on_k4（W2 预注册 §5；scripts/mgr/w2_tune.py arm）",
+ "status": "调参用，只能跑 devtune800。底配置 /home/mail/chenyuma/visint/repo/experiments/W2/0066_w2_tune_hpcgpu06/cfg/sep_on.json（sha256 d0e4a65433881f6ff3052feaa671a842b95e9f867c07208ad66b504a7af1a6ae）；改动：k=4 keep=[1, 3, 4, 7]。",
+ "frozen": false,
+ "basis": "D113（负责人 2026-10-22 指令第二节第 3 条）：只有提出与挑选两轮，没有修改轮；每轮思考至多 2,048 个 token，到上限强制收尾；按输出类型路由（要 mask 的任务走 提出 → 候选 → 挑选；要框或数字的任务按 E1 协议单轮作答，不用工具）；\"都不对\"或解析失败时交 1 号候选（= W1-F）；每条样本记 token 数、工具调用（候选生成）次数与墙钟。",
+ "propose": {
+  "mode": "box",
+  "box_points": {
+   "prompt": "Locate {expression} in the image. Report in JSON format: one object with \"bbox_2d\" for its bounding box, at most {max_points} objects with \"point_2d\" and the label \"foreground\" for points on it, and at most {max_points} objects with \"point_2d\" and the label \"background\" for points near it that are not on it.",
+   "placeholders": [
+    "expression",
+    "max_points"
+   ],
+   "max_points": 3,
+   "max_new_tokens": 256,
+   "families": [
+    "qwen3.5"
+   ]
+  },
+  "rule": "mode = box（默认）：提出的框就是 E1 refexp_box 协议的原生框（configs/e1_prompts.json 的提示、关思考、贪心、E1 冻结的批大小），直接读同一个输出目录里的 <out>/<模型>/refexp_box/baseline_e1/<划分>（没跑完就先按 E1 的协议跑完，同 W1 的 ensure_box_run），所以就是\"自己的框\"与 W1-F 用的那个框；没有点。mode = box_points（调参选项）：另跑一次单轮生成（<out>/<模型>/refseg/propose_box_points/<划分>；同 E1：关思考、贪心、E1 冻结的批大小、图在前），提示是 box_points.prompt（Qwen 的原生格式 bbox_2d、point_2d）；由适配器的 parse_box_points 解析（模型相关的格式与换算在 src/adapters/：框按本家族的 parse_one_box，只看带 bbox_2d 的对象；点是 0–1000、x 在前、按原图宽高换算的绝对像素），label 为 background（不分大小写）的是背景点、其余是前景点，各取前 max_points 个，坐标不是两个 [0, 1000] 内的数的点丢掉并计数；只给 families 里的家族用。框解析失败时这一条没有候选，按空 mask 计分（同 W1-F）。"
+ },
+ "candidates": {
+  "generators": [
+   {
+    "type": "grabcut_default"
+   },
+   {
+    "type": "grabcut",
+    "iterations": 5,
+    "box_pct": -10.0,
+    "init": "mask"
+   },
+   {
+    "type": "grabcut_default",
+    "post": [
+     "largest_cc",
+     "fill_holes"
+    ]
+   },
+   {
+    "type": "watershed",
+    "use_points": true,
+    "fg_shrink_pct": 30.0,
+    "bg_margin_pct": 0.0,
+    "seed_radius_pct": 4.0
+   }
+  ],
+  "status": "默认取 src/w2/candidates.DEFAULT_SPEC 的 8 个生成器（DEV-0058，D115；管理员合入 DEV-0059 后换上，D116 的更正）；K 与清单在 devtune800 上按 W2 预注册 §5 定，跑 devcheck2 之前冻结。",
+  "rule": "src/w2/candidates.generate_candidates(原图 RGB, 提出的框（原图绝对像素 xyxy）, fg_points_abs, bg_points_abs, spec = CandidateSpec(generators))，按清单顺序产出 K 个候选，编号 1..K；某个生成器失败时候选的 mask 用框本身、ok = False，编号与 K 不变；完全相同的候选不去重。例外（管理员审查 DEV-0059 的裁定 A，与 W1-F 完全一致）：1 号候选 ok = False 时，回路一律把它当作空 mask（w1f 交空；w2a、random_pick、oracle_pick 里选中或回退到 1 号也交空；评分与最优候选按空 mask 算；渲染给 LLM 的 1 号也画空叠加，info 记原因）；candidates.jsonl 里存的仍是生成器给的原样。每个划分只生成一次，存进 <out>/<模型>/refseg/candidates/<划分>/candidates.jsonl（每个候选的 COCO RLE、名字、ok、info（参数、耗时、失败原因）），w2a、random_pick、oracle_pick、w1f 共用。"
+ },
+ "render": {
+  "layout": "separate",
+  "style": {
+   "fill_rgb": [
+    0,
+    114,
+    178
+   ],
+   "fill_alpha": 0.4,
+   "contour_rgb": [
+    240,
+    228,
+    66
+   ],
+   "contour_px": 2,
+   "halo_rgb": [
+    0,
+    0,
+    0
+   ],
+   "halo_px": 1,
+   "label_text_rgb": [
+    255,
+    255,
+    255
+   ],
+   "label_bg_rgb": [
+    0,
+    0,
+    0
+   ],
+   "grid_label_px": 22,
+   "separate_label_px": 32,
+   "label_pad_px": 4,
+   "reference": true,
+   "reference_label": "",
+   "grid_long_side": 640,
+   "grid_cols": 0,
+   "gutter_px": 4,
+   "gutter_rgb": [
+    255,
+    255,
+    255
+   ],
+   "separate_max_wh": [
+    640,
+    480
+   ]
+  },
+  "rule": "src/w2/render.render_selection(原图, 候选, layout, style) → 挑选图（grid：一张拼图；separate：K 张，可选再加一张原图）。编号从 1 开始，与候选的顺序一致。style 原样传给 render_selection，键与默认值以 src/w2/render 为准。",
+  "style_status": "默认取 src/w2/render.DEFAULT_STYLE（DEV-0058，D115）；style 的键原样传给 render_selection，未知的键会报错。"
+ },
+ "select": {
+  "system": null,
+  "prompt": "You are given {k} numbered candidate masks for one object in this image. Each candidate is drawn as a colored overlay with its number in the corner. Which candidate best covers {expression}? Answer with the number of that candidate only (an integer from 1 to {k}), or with none if no candidate covers it.",
+  "placeholders": [
+   "k",
+   "expression"
+  ],
+  "thinking": true,
+  "thinking_budget": 2048,
+  "answer_budget": 64,
+  "parse": {
+   "none_words": [
+    "none"
+   ],
+   "strip_chars": " \t\r\n.,;:!?\"'`*()[]{}<>#"
+  },
+  "rule": "单轮、不给工具：user 内容 = 挑选图（render_selection 的输出，按顺序）在前、prompt 在后（{k} = 候选数 K，{expression} 取 Sample.fields.expression，同 E1）；system 为 null 时不发 system 消息。thinking = true：adapter.chat_turn_batch（开思考、贪心；思考写满 thinking_budget 由适配器强制收尾，作答至多 answer_budget）；thinking = false：adapter.build_inputs(挑选图, prompt, image_first) + generate_batch（关思考、贪心，E1 的解码参数，至多 answer_budget 个 token）。解析（先按 E1 的 parse_generation 判思考段未闭合、截断、空回答，都算解析失败）：作答原文去掉首尾的 strip_chars 后不分大小写，恰是 none_words 之一 → none；恰是一个十进制整数且在 1..K 内 → 那个编号；其余（超出 1..K 的整数、多个数、带别的字）都算解析失败。none 与解析失败都交 1 号候选，分别记 fallback = none、parse_failure。"
+ },
+ "random_pick": {
+  "salt": "w2_random_pick_v1",
+  "rule": "同一组候选里挑编号 1 + int(sha256(salt|id), 16) mod K（id 是样本 id，sha256 取十六进制摘要按整数解释）；与模型无关，可复现。"
+ },
+ "batching": {
+  "batch_size": 16,
+  "chunk_size": 64,
+  "max_batch_tokens": 48000,
+  "rule": "样本按划分的固定顺序每 chunk_size 条成一组（续跑的粒度：没写完的那一组整组重跑）；组内挑选一步先用 adapter.chat_inputs 逐条预检（拒收的记 parse_failure，原因 input_rejected，不进批），再按顺序贪心拆子批（src/w1/loop.plan_sub_batches：行数 ≤ batch_size，且 行数 × 子批里最长的提示 ≤ max_batch_tokens）；thinking = false 时按顺序每 batch_size 条一批。批的组成只取决于顺序与提示长度，是确定的。三个数都进运行身份。",
+  "status": "初值，照 W1 冻结的批参数（D111）；挑选一步每条只有一轮、提示比 W1 短，服务器上实测显存后与协议一起冻结。"
+ },
+ "splits": {
+  "devtune800": {
+   "w1_splits": [
+    "devtune",
+    "devcheck"
+   ],
+   "rule": "W1 的开发-调参集 300 句加开发-检查集 500 句（configs/w1_splits.json 原样），可以随便用。"
+  },
+  "devcheck2": {
+   "population": "refcoco_unc_val",
+   "dataset": "refcoco",
+   "split_by": "unc",
+   "split": "val",
+   "exclude_images_of": "devtune800",
+   "salt": "w2_dev_v1",
+   "purpose": "w2_devcheck",
+   "n": 500,
+   "rule": "总体 = load_refcoco('refcoco', 'val', subset='eval') 的全部句子（E1 的 refcoco_unc_val，已按 E1 的去重规则剔除开发子集与 D20 探针图；条数与 sha256 须等于 configs/e1_eval_subsets.json 的 populations.refcoco_unc_val）；按图像（image_keys，coco:<image_id>）排除 devtune800 那 800 句所在的全部图；剩下的句子按 sha256(salt|purpose|sent_id) 升序（src/data/subsets.hash_rank）取前 n 句，按 id 自然顺序列出。只用于去留判定，判定之前不得查看任何系统在上面的结果。"
+  },
+  "test": [
+   "refcoco_unc_testA",
+   "refcoco_unc_testB",
+   "refcoco+_unc_testA",
+   "refcoco+_unc_testB",
+   "refcocog_umd_test"
+  ],
+  "count": [
+   "devtune_countbench",
+   "test_countbench"
+  ],
+  "tiny": {
+   "devcheck2_n": 3
+  },
+  "rule": "test_<数据集_划分方式_划分>：同 W1，即 E1 的 poly 子集原样，每个 1,000 句（判定通过之后才跑）。计数（按输出类型路由到 E1 单轮）：devtune_countbench、test_countbench 同 W1。清单与 sha256 在 configs/w2_splits.json（src/w2/data.py 生成与核对）。"
+ },
+ "baselines": {
+  "e1_task": {
+   "refseg": "refexp_poly",
+   "refexp_box": "refexp_box",
+   "count": "count"
+  },
+  "rule": "baseline_e1：E1 零样本（refseg → refexp_poly 多边形，refexp_box → refexp_box，count → count），E1 的运行器原样；w2a 遇到 refexp_box 与 count 也走这一条（按输出类型路由），目录里是同一份结果。ownbox：E1 refexp_box 的框按 configs/e1_posthoc.json 的 own_box.raster_rule 光栅化（同 W1 的\"自己的框\"）。w1f：1 号候选（grabcut_default，逐位等于 W1-F；GrabCut 失败、ok = False 时按空 mask，同 W1-F 的 tool_error），总是由 E1 协议的框（mode = box 的候选）得出。oracle_pick：用真值挑 IoU 最高的候选，并列取编号小的。"
+ },
+ "tiny": {
+  "select": {
+   "thinking_budget": 8,
+   "answer_budget": 16
+  },
+  "batch_size": 2,
+  "chunk_size": 2,
+  "rule": "--tiny（开发机彩排：小型随机模型、CPU、tests/fixtures 的小数据）：挑选一步的思考与作答预算缩小；批大小与组大小缩小，使彩排里也有多个批、多个组与续跑。"
+ }
+}
