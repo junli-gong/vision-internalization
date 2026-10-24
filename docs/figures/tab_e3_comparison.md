@@ -17,7 +17,7 @@
 | 9B | Base | 87.1 | 0.0 | 89.4 | 54.4 | 90.9 | 90.2 | 87.5 | 79.9 | n/a | n/a |
 |  | C3 | 90.2 | 25.5 | 68.8 | 50.9 | 95.2 | 91.1 | 84.9 | 77.6 | n/a | n/a |
 |  | E3b+C3 | 87.6 | 26.3 | 45.7 | 33.8 | 93.5 | 94.6 | 79.5 | 69.2 | 62.8 | 0.449 |
-|  | E3b | — | — | — | — | — | — | — | — | — | — |
+|  | E3b | — | — | — | — | — | — | — | — | 64.8 | 0.264 |
 
 - Seed mean ± sample standard deviation over seeds 0–2 (0.8B, 2B, 4B); seed 0 only (9B) (E3 preregistration §3); n=k marks cells with fewer seeds than planned. Base rows are single deterministic evaluations.
 - T-text columns are the 8 readouts of the interference analysis (§13), ×100: strict grounding Acc@0.5, polygon cIoU, counting accuracy and COCO detection F1@0.5; NYU depth pairs with letter swap; position-debiased BLINK, CV-Bench and EmbSpatial. RefSeg cIoU (×100) and depth AbsRel use structure-forced decoding of the pixel-token grid, single turn, guided upsampling.
