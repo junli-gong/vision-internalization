@@ -8,12 +8,12 @@
 |  | E3b | — | — | — | — | — | — | — | — | 12.3 ± 7.1 | 0.453 ± 0.042 |
 | 2B | Base | 83.1 | 0.0 | 86.4 | 41.7 | 85.5 | 54.5 | 78.6 | 74.5 | n/a | n/a |
 |  | C3 | 85.8 ± 0.3 | 11.8 ± 2.6 | 73.5 ± 4.9 | 9.8 ± 5.7 | 90.3 ± 1.0 | 82.1 ± 0.9 | 77.9 ± 1.0 | 65.0 ± 0.5 | n/a | n/a |
-|  | E3b+C3 | 80.0 ± 1.0 | 7.5 ± 1.1 | 46.0 ± 25.5 | 0.0 ± 0.0 | 85.9 ± 1.6 | 75.6 ± 5.7 | 73.1 ± 1.7 | 50.7 ± 7.8 | 31.8 ± 12.8 | 0.485 ± 0.082 |
-|  | E3b | 0.0 (n=1) | 0.0 (n=1) | 0.0 (n=1) | 0.0 (n=1) | 42.8 (n=1) | 50.9 (n=1) | 40.1 (n=1) | 37.8 (n=1) | 49.2 ± 7.2 (n=2) | 0.320 ± 0.042 (n=2) |
+|  | E3b+C3 | 80.0 ± 1.0 | 7.5 ± 1.1 | 46.0 ± 25.5 | 0.0 ± 0.0 | 85.9 ± 1.6 | 75.6 ± 5.7 | 73.1 ± 1.7 | 50.7 ± 7.8 | 31.9 ± 12.8 | 0.486 ± 0.083 |
+|  | E3b | 0.0 (n=1) | 0.0 (n=1) | 0.0 (n=1) | 0.0 (n=1) | 42.8 (n=1) | 50.9 (n=1) | 40.1 (n=1) | 37.8 (n=1) | 51.4 ± 6.4 | 0.321 ± 0.030 |
 | 4B | Base | 84.8 | 0.0 | 87.3 | 47.6 | 87.7 | 85.7 | 83.7 | 79.6 | n/a | n/a |
 |  | C3 | 88.3 ± 0.4 | 23.8 ± 1.5 | 56.5 ± 3.5 | 21.8 ± 0.3 | 93.4 ± 0.4 | 86.0 ± 1.4 | 82.0 ± 1.3 | 73.5 ± 0.7 | n/a | n/a |
 |  | E3b+C3 | 86.0 ± 0.5 | 15.1 ± 4.0 | 51.6 ± 7.7 | 8.8 ± 8.6 | 91.1 ± 0.8 | 84.8 ± 3.1 | 77.0 ± 0.5 | 65.2 ± 3.3 | 60.7 ± 0.7 | 0.261 ± 0.010 |
-|  | E3b | — | — | — | — | — | — | — | — | 64.5 ± 0.8 (n=2) | 0.270 ± 0.009 (n=2) |
+|  | E3b | — | — | — | — | — | — | — | — | 64.1 ± 0.9 | 0.293 ± 0.040 |
 | 9B | Base | 87.1 | 0.0 | 89.4 | 54.4 | 90.9 | 90.2 | 87.5 | 79.9 | n/a | n/a |
 |  | C3 | 90.2 | 25.5 | 68.8 | 50.9 | 95.2 | 91.1 | 84.9 | 77.6 | n/a | n/a |
 |  | E3b+C3 | 87.6 | 26.3 | 45.7 | 33.8 | 93.5 | 94.6 | 79.5 | 69.2 | 62.8 | 0.449 |
@@ -21,7 +21,7 @@
 
 - Seed mean ± sample standard deviation over seeds 0–2 (0.8B, 2B, 4B); seed 0 only (9B) (E3 preregistration §3); n=k marks cells with fewer seeds than planned. Base rows are single deterministic evaluations.
 - T-text columns are the 8 readouts of the interference analysis (§13), ×100: strict grounding Acc@0.5, polygon cIoU, counting accuracy and COCO detection F1@0.5; NYU depth pairs with letter swap; position-debiased BLINK, CV-Bench and EmbSpatial. RefSeg cIoU (×100) and depth AbsRel use structure-forced decoding of the pixel-token grid, single turn, guided upsampling.
-- Machines (all effects computed within one machine, D93-1; each base row was evaluated on the same machine as its arms): 0.8B: hpcgpu07 (NVIDIA A100-PCIE-40GB); 2B: B200 (NVIDIA B200); 4B: hpcgpu06 (NVIDIA A100-PCIE-40GB); 9B: hpcgpu06 (NVIDIA A100-PCIE-40GB).
-- Seeds without readings because the pre-evaluation merge check (criteria v1) rejected them (N37, kept as v1 per D102-2): 2B E3b seed 1 (grid, B200): restricted decoding vs. generate_batch exact-row agreement 0.945 < 0.95; 4B E3b seed 2 (grid, hpcgpu06): restricted decoding vs. generate_batch exact-row agreement 0.930 < 0.95.
+- Machines (all effects computed within one machine, D93-1; each base row was evaluated on the same machine as its arms): 0.8B: hpcgpu07 (NVIDIA A100-PCIE-40GB); 2B: B200 (NVIDIA A100-PCIE-40GB, NVIDIA B200); 4B: hpcgpu06 (NVIDIA A100-PCIE-40GB); 9B: hpcgpu06 (NVIDIA A100-PCIE-40GB).
+- Pre-evaluation merge check: criteria v1 (D50-3) for all readings except these structure-forced grid readings, re-evaluated under criteria e5-v2 (the E5 criteria, which tolerate tie flips between the two decoding implementations; unified per N34, decided before the rejected seeds' readings were seen; D102-2): 2B E3b+C3 seed 1 (refseg/depth; criteria e5-v2; NVIDIA A100-PCIE-40GB); 2B E3b seed 1 (refseg/depth; criteria e5-v2; NVIDIA A100-PCIE-40GB); 4B E3b+C3 seed 2 (refseg/depth; criteria e5-v2; NVIDIA A100-PCIE-40GB); 4B E3b seed 2 (refseg/depth; criteria e5-v2; NVIDIA A100-PCIE-40GB).
 - E3b T-text readouts exist only for 2B seed 0 (grid-only LoRA; T-text is not part of the E3b protocol elsewhere); other E3b T-text cells are --.
 - n/a: Base and C3 have no pixel-token channel.
