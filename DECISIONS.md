@@ -3085,3 +3085,12 @@
   4. `gate_explore.py` 也要显式给 `--unseal-devcheck3 G-EX`：**认可**。
 - **测试**：合入后在 main 上跑 `tests/test_explore_splits.py tests/test_gate_explore.py tests/test_w2_*.py`，174 passed。开发 agent 另跑 w2c 的三组测试，50 passed。
 - **下一步**：服务器在 CPU 上生成清单（RUN-0075），管理员核对后入库，把 sha256 补进预注册 X §2。
+
+## D131（2026-10-26，管理员）：devcheck3 已生成并密封
+
+- RUN-0075 在 07 上用 CPU 生成清单，只写 id，没有在上面跑任何系统。清单入库为 `configs/explore_splits.json`（`df9f6c19…`）。
+  - devcheck3：500 句，组 sha256 `dc73561d…`；
+  - explore_val：1,000 句，组 sha256 `d65231fd…`；
+  - 各项重叠全为 0（预注册 X-2a）。
+- 从现在到 11-02 的 G-EX 判定，任何任务书都不在 devcheck3 上跑系统。运行器与 `gate_explore.py` 的守卫要求显式给 `--unseal-devcheck3 G-EX`。
+- 测试修正：`tests/test_gate_explore.py` 里"待生成的清单被拒"一项原先指向入库的清单，那时它还是骨架；清单入库后改为在临时目录写一份骨架来测，测的内容不变。管理员的常量级修改。

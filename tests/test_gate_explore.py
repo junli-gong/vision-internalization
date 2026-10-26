@@ -269,9 +269,11 @@ def test_refuses_bad_inputs(gate, world, tmp_path):
     for u in (None, "G-W2"):
         with pytest.raises(EX.SealedSplitError):
             ev(gate, w, "close", unseal=u)
-    # 待生成的清单
+    # 待生成的清单（入库的 configs/explore_splits.json 自 RUN-0075 起已生成，D131；这里另写一份骨架）
+    skel = tmp_path / "explore_splits_skeleton.json"
+    skel.write_text(json.dumps(EX.build_skeleton(), ensure_ascii=False), encoding="utf-8")
     with pytest.raises(gate.GateInputError, match="还没生成"):
-        gate.evaluate(w["ref_dirs"], w["cand"]["close"], "C1", splits_file=EX.EXPLORE_SPLITS_PATH, unseal="G-EX")
+        gate.evaluate(w["ref_dirs"], w["cand"]["close"], "C1", splits_file=skel, unseal="G-EX")
 
 
 def test_candidate_without_w2_identity_is_accepted(gate, world, tmp_path):
