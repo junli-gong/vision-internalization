@@ -3051,3 +3051,17 @@
 2. **任务**：devcheck3 与 explore_val 的构造、密封守卫（门名 `G-EX`）、判定脚本 `scripts/gate_explore.py`，交 DEV-0067。
    - 判定规则在看到任何数据之前写成代码，与预注册一起固定。
    - 生成清单只写 id，不跑任何系统。
+
+## D129（2026-10-25，管理员）：DEV-0064 合入（大题量的语言读数）
+
+- `scripts/lang_battery.py`：
+  - MMLU-Pro 字母作答 2,000 题，各学科 142 题加 12 题补足，id 清单 sha256 `3ddefcec…`；与健康检查的 100 题重叠 0。
+  - IFEval 全部 541 条，其中 50 条也是健康检查的题，逐题标出。
+  - 提示、解析、打分逐题调用健康检查的同一组函数；`--checkpoint` 复用 health_check 的加载与合并核对；`--compare` 逐题配对。
+- 开发 agent 的待裁项，管理员裁定：
+  1. 按学科等额分层，与健康检查"每学科 7 + 2"同构，总准确率是学科均衡的口径：**认可**。
+  2. IFEval 不另给"去掉健康检查 50 条"的读数。要时由管理员从 predictions 的 `in_health_check` 事后算：**认可**。
+  3. 任务书外的三项：preflight（所有提示先过 build_inputs）、`--fetch`（复用 build_health_items.fetch）、fixture 辅助文件：**认可**。
+  4. 不做续跑，中途失败整次重跑，每个模型约 1.5 小时：**认可**。
+- 测试：开发 agent 报 192 passed、10 skipped（含健康检查；skip 是开发机没有 punkt_tab）；合入后在 main 上重跑 `tests/test_lang_battery.py`，17 passed。
+- 服务器用时：每个模型约 1.5 小时，三个（基座、W2-c、E3b+C3）约 4.5 小时，上限 7 小时，在 06 上同节点配对。数据经 hf-mirror 在 hpcmgt 上下载一次，不进仓库。
