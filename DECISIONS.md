@@ -3065,3 +3065,23 @@
   4. 不做续跑，中途失败整次重跑，每个模型约 1.5 小时：**认可**。
 - 测试：开发 agent 报 192 passed、10 skipped（含健康检查；skip 是开发机没有 punkt_tab）；合入后在 main 上重跑 `tests/test_lang_battery.py`，17 passed。
 - 服务器用时：每个模型约 1.5 小时，三个（基座、W2-c、E3b+C3）约 4.5 小时，上限 7 小时，在 06 上同节点配对。数据经 hf-mirror 在 hpcmgt 上下载一次，不进仓库。
+
+## D130（2026-10-26，管理员）：DEV-0067 合入（devcheck3、explore_val、密封守卫、判定脚本）
+
+- **新增**：
+  - `src/data/explore_splits.py`：构造、清单、`--build`/`--write-skeleton`/`--check`；守卫 `require_unsealed`，门名 `G-EX`。
+  - `configs/explore_splits.json`：骨架，六个划分待生成，sha256 `0c4c2ebc…`。
+  - `scripts/gate_explore.py`：
+    - 500 句合并 cIoU，直接调 `w2_gate.decide`，即 97.5%、10,000 次重抽；
+    - 规则 (i)、(ii)，标红用 `src/health/scoring.compare`；
+    - 判定点核对不满足时，结论标"彩排，不作数"。
+  - `run_w2.py` 加 `--splits-file`、`--unseal-devcheck3`，默认输出逐字节不变，开发 agent 用 HEAD 快照对照过。
+- **开发 agent 的偏离，管理员裁定**：
+  1. **5 个 test 子集的图也按图排除**：**认可**。
+     - 真实数据里 refcoco 的 val 与 refcocog 的 test 共用部分图，反之亦然：devtune800 有 17 张、devcheck2 有 14 张图在 test_refcocog_umd_test 里（RUN-0067 的清单）。
+     - 只排除两个 dev 划分的图，"与 test 按图不相交"就不成立。这一条比 D126-5、D128 更严，与负责人"W1、W2 用过的全部划分"一致。
+  2. 放行时间不进运行身份（否则不能续跑），记在 `unseal_devcheck3.jsonl`：**认可**。
+  3. 服务器生成时必须给 `--train-data-root`，与训练池按图不相交的核对必须是"核对过"：**认可**。
+  4. `gate_explore.py` 也要显式给 `--unseal-devcheck3 G-EX`：**认可**。
+- **测试**：合入后在 main 上跑 `tests/test_explore_splits.py tests/test_gate_explore.py tests/test_w2_*.py`，174 passed。开发 agent 另跑 w2c 的三组测试，50 passed。
+- **下一步**：服务器在 CPU 上生成清单（RUN-0075），管理员核对后入库，把 sha256 补进预注册 X §2。

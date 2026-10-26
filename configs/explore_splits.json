@@ -1,0 +1,221 @@
+{
+ "version": 1,
+ "kind": "explore_splits",
+ "method": "总体 = E1 的三个 val 评测总体（load_refcoco(…, 'val', subset='eval')）；按图排除 W2 清单里 refseg 的全部划分（devtune800、devcheck2、5 个 test 子集）所在的 COCO 图；按句排除 E1 评测清单里落在这个总体上的全部子集的句子；每层剩下的按 sha256(salt|purpose|样本 id) 升序（src/data/subsets.hash_rank）取前 n 句。devcheck3 先取（200/200/100，不够报错）；explore_val 再按图排除 devcheck3 的全部图（400/400/200，不够取全部）。各划分按 sent_id 自然顺序列出；组按样本 id 自然顺序；sha256 = 自然顺序、换行连接后的 sha256（src/data/subsets.population_digest）。规则见 src/data/explore_splits.py 的模块说明",
+ "seal": {
+  "group": "devcheck3",
+  "gate": "G-EX",
+  "decision": "D126-4、D126-5、D128",
+  "rule": "判定 G-EX 之前，任何人不看任何系统在 devcheck3 上的结果；运行器取 devcheck3 必须经 src/data/explore_splits.require_unsealed（--unseal-devcheck3 G-EX），只能用冻结的配置跑；入库与预注册只有 id 与 sha256"
+ },
+ "tiny": false,
+ "build_command": "python -m src.data.explore_splits --build --data-root $PROJ/data [--train-data-root <W2-c 的训练数据根>] --out <路径>/explore_splits.json",
+ "sources": {
+  "w2_splits": {
+   "path": "configs/w2_splits.json",
+   "sha256": "9dd22dff2ad422ec5d51106bb6e40227ec51afa27130f2a968c945d69055c0f1"
+  },
+  "e1_eval_subsets": {
+   "path": "configs/e1_eval_subsets.json",
+   "sha256": "29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139"
+  },
+  "e1_dev_subsets": {
+   "path": "configs/e1_dev_subsets.json",
+   "sha256": "7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad"
+  }
+ },
+ "exclusion": {
+  "images_of_w2_splits": {
+   "rule": "W1、W2 用过的全部划分所在的 COCO 图：configs/w2_splits.json 里 refseg 的全部划分（devtune800、devcheck2、5 个 test 子集；src/w2/w2c_data.eval_images，与 W2-c 训练数据排除 W2 评测图的同一个函数）",
+   "status": "pending"
+  },
+  "sentences_of_e1_subsets": {
+   "refcoco_unc_val": {
+    "rule": "configs/e1_eval_subsets.json 的 subsets 里落在这个总体上的全部句子：直接引用它的子集，以及经 population 链间接引用的",
+    "subsets": [
+     "poly:refcoco_unc_val",
+     "grid16:refcoco_unc_val",
+     "think:refexp_box",
+     "think8192:refexp_box",
+     "think:refexp_poly",
+     "think8192:refexp_poly",
+     "think:grid16",
+     "think8192:grid16",
+     "extra:refcoco_unc_val"
+    ],
+    "n": 2046,
+    "sha256": "175bc3a365985795f2d11bfb21f128d81a2fb158752458aa460c83903ad0f983"
+   },
+   "refcoco+_unc_val": {
+    "rule": "configs/e1_eval_subsets.json 的 subsets 里落在这个总体上的全部句子：直接引用它的子集，以及经 population 链间接引用的",
+    "subsets": [
+     "poly:refcoco+_unc_val"
+    ],
+    "n": 1000,
+    "sha256": "0410e697a6f1926355af1363ea0b61d6f0353a810937f5250f055e17e03122dd"
+   },
+   "refcocog_umd_val": {
+    "rule": "configs/e1_eval_subsets.json 的 subsets 里落在这个总体上的全部句子：直接引用它的子集，以及经 population 链间接引用的",
+    "subsets": [
+     "poly:refcocog_umd_val"
+    ],
+    "n": 1000,
+    "sha256": "9fda5e375599bcff549101087215d9514621c9b2df31ae7524510d325200aa97"
+   }
+  }
+ },
+ "populations": null,
+ "splits": {
+  "devcheck3_refcoco_unc_val": {
+   "kind": "refcoco",
+   "tasks": [
+    "refseg",
+    "refexp_box"
+   ],
+   "dataset": "refcoco",
+   "split_by": "unc",
+   "split": "val",
+   "unit": "sent_id",
+   "rule": "load_refcoco 的 refcoco_unc_val eval 总体（E1 的评测总体），按图排除 W2 清单里 refseg 的全部划分所在的图，按句排除 E1 落在这个总体上的评测子集，剩下的按 sha256(devcheck3_v1|devcheck3|样本 id) 升序取前 200 句（不够就报错）",
+   "group": "devcheck3",
+   "sealed": true,
+   "status": "pending",
+   "build_command": "python -m src.data.explore_splits --build --data-root $PROJ/data [--train-data-root <W2-c 的训练数据根>] --out <路径>/explore_splits.json",
+   "n": null,
+   "sha256": null,
+   "ids": null
+  },
+  "devcheck3_refcoco+_unc_val": {
+   "kind": "refcoco",
+   "tasks": [
+    "refseg",
+    "refexp_box"
+   ],
+   "dataset": "refcoco+",
+   "split_by": "unc",
+   "split": "val",
+   "unit": "sent_id",
+   "rule": "load_refcoco 的 refcoco+_unc_val eval 总体（E1 的评测总体），按图排除 W2 清单里 refseg 的全部划分所在的图，按句排除 E1 落在这个总体上的评测子集，剩下的按 sha256(devcheck3_v1|devcheck3|样本 id) 升序取前 200 句（不够就报错）",
+   "group": "devcheck3",
+   "sealed": true,
+   "status": "pending",
+   "build_command": "python -m src.data.explore_splits --build --data-root $PROJ/data [--train-data-root <W2-c 的训练数据根>] --out <路径>/explore_splits.json",
+   "n": null,
+   "sha256": null,
+   "ids": null
+  },
+  "devcheck3_refcocog_umd_val": {
+   "kind": "refcoco",
+   "tasks": [
+    "refseg",
+    "refexp_box"
+   ],
+   "dataset": "refcocog",
+   "split_by": "umd",
+   "split": "val",
+   "unit": "sent_id",
+   "rule": "load_refcoco 的 refcocog_umd_val eval 总体（E1 的评测总体），按图排除 W2 清单里 refseg 的全部划分所在的图，按句排除 E1 落在这个总体上的评测子集，剩下的按 sha256(devcheck3_v1|devcheck3|样本 id) 升序取前 100 句（不够就报错）",
+   "group": "devcheck3",
+   "sealed": true,
+   "status": "pending",
+   "build_command": "python -m src.data.explore_splits --build --data-root $PROJ/data [--train-data-root <W2-c 的训练数据根>] --out <路径>/explore_splits.json",
+   "n": null,
+   "sha256": null,
+   "ids": null
+  },
+  "explore_val_refcoco_unc_val": {
+   "kind": "refcoco",
+   "tasks": [
+    "refseg",
+    "refexp_box"
+   ],
+   "dataset": "refcoco",
+   "split_by": "unc",
+   "split": "val",
+   "unit": "sent_id",
+   "rule": "load_refcoco 的 refcoco_unc_val eval 总体（E1 的评测总体），按图排除 W2 清单里 refseg 的全部划分、devcheck3 三层所在的图，按句排除 E1 落在这个总体上的评测子集，剩下的按 sha256(explore_val_v1|explore_val|样本 id) 升序取前 400 句（不够就取全部）",
+   "group": "explore_val",
+   "sealed": false,
+   "status": "pending",
+   "build_command": "python -m src.data.explore_splits --build --data-root $PROJ/data [--train-data-root <W2-c 的训练数据根>] --out <路径>/explore_splits.json",
+   "n": null,
+   "sha256": null,
+   "ids": null
+  },
+  "explore_val_refcoco+_unc_val": {
+   "kind": "refcoco",
+   "tasks": [
+    "refseg",
+    "refexp_box"
+   ],
+   "dataset": "refcoco+",
+   "split_by": "unc",
+   "split": "val",
+   "unit": "sent_id",
+   "rule": "load_refcoco 的 refcoco+_unc_val eval 总体（E1 的评测总体），按图排除 W2 清单里 refseg 的全部划分、devcheck3 三层所在的图，按句排除 E1 落在这个总体上的评测子集，剩下的按 sha256(explore_val_v1|explore_val|样本 id) 升序取前 400 句（不够就取全部）",
+   "group": "explore_val",
+   "sealed": false,
+   "status": "pending",
+   "build_command": "python -m src.data.explore_splits --build --data-root $PROJ/data [--train-data-root <W2-c 的训练数据根>] --out <路径>/explore_splits.json",
+   "n": null,
+   "sha256": null,
+   "ids": null
+  },
+  "explore_val_refcocog_umd_val": {
+   "kind": "refcoco",
+   "tasks": [
+    "refseg",
+    "refexp_box"
+   ],
+   "dataset": "refcocog",
+   "split_by": "umd",
+   "split": "val",
+   "unit": "sent_id",
+   "rule": "load_refcoco 的 refcocog_umd_val eval 总体（E1 的评测总体），按图排除 W2 清单里 refseg 的全部划分、devcheck3 三层所在的图，按句排除 E1 落在这个总体上的评测子集，剩下的按 sha256(explore_val_v1|explore_val|样本 id) 升序取前 200 句（不够就取全部）",
+   "group": "explore_val",
+   "sealed": false,
+   "status": "pending",
+   "build_command": "python -m src.data.explore_splits --build --data-root $PROJ/data [--train-data-root <W2-c 的训练数据根>] --out <路径>/explore_splits.json",
+   "n": null,
+   "sha256": null,
+   "ids": null
+  }
+ },
+ "groups": {
+  "devcheck3": {
+   "splits": [
+    "devcheck3_refcoco_unc_val",
+    "devcheck3_refcoco+_unc_val",
+    "devcheck3_refcocog_umd_val"
+   ],
+   "sealed": true,
+   "gate": "G-EX",
+   "unit": "样本 id（Sample.id，带数据集前缀，如 refcoco+_unc/val/123）",
+   "n_target": 500,
+   "status": "pending",
+   "n": null,
+   "sha256": null,
+   "n_images": null,
+   "images_sha256": null,
+   "ids": null
+  },
+  "explore_val": {
+   "splits": [
+    "explore_val_refcoco_unc_val",
+    "explore_val_refcoco+_unc_val",
+    "explore_val_refcocog_umd_val"
+   ],
+   "sealed": false,
+   "gate": null,
+   "unit": "样本 id（Sample.id，带数据集前缀，如 refcoco+_unc/val/123）",
+   "n_target": 1000,
+   "status": "pending",
+   "n": null,
+   "sha256": null,
+   "n_images": null,
+   "images_sha256": null,
+   "ids": null
+  }
+ },
+ "checks": null
+}

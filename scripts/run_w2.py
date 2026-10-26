@@ -20,6 +20,11 @@
 devtune_countbench、test_countbench——count。清单在 configs/w2_splits.json（src/w2/data.py；devcheck2 由服务器生成）。
 冻结保护（同 D108）：划分是 devcheck2 或以 test 开头时，--w2-config（默认 configs/w2.json）必须 "frozen": true，否则退出码 2，什么都不写；
 对全部设置都适用；devtune800 不受限；--tiny 不受限。
+别的划分清单（DEV-0067）：--splits-file（默认 configs/w2_splits.json；默认时行为与输出逐字节不变），如 configs/explore_splits.json 的
+devcheck3_<总体>、explore_val_<总体>（src/data/explore_splits.py；配 --tiny 时在 tests/fixtures/explore 上按同一套规则现算）。运行身份的
+splits_config 记这份文件。devcheck3 是**密封**的（D126-4、D128）：必须显式给 --unseal-devcheck3 G-EX（src/data/explore_splits.require_unsealed），
+否则退出码 2，什么都不写；--tiny 也一样；也只能用冻结的配置跑（同上）。放行时门名记进运行身份（config.yaml 的 w2.unseal），放行的时间与
+argv 追加进 <out>/<模型>/unseal_devcheck3.jsonl（各目录的 logs/run_*.json 另有 argv 与开始时间）。
 开发机彩排：加 --tiny（小型随机模型、CPU、tests/fixtures 的小数据，划分按同一套规则现算，挑选的预算与批大小取 configs/w2.json 的 tiny）。
 候选生成可以并行：--candidate-workers N（默认 1；按组用 spawn 的进程池，子进程里 OpenCV 与 BLAS 都是 1 个线程；candidates.jsonl 除
 info 里的耗时外与单进程相同，不进运行身份）。
@@ -61,7 +66,17 @@ from src.w2.config import (  # noqa: E402
     W2C_SETTING,
     load_w2_config,
 )
-from src.w2.data import W2_SPLITS_PATH, load_splits, needs_frozen, split_names, tiny_paths, tiny_splits, w2_items  # noqa: E402
+from src.data import explore_splits as EX  # noqa: E402
+from src.w2.data import (  # noqa: E402
+    W2_SPLITS_PATH,
+    load_splits,
+    load_splits_file,
+    needs_frozen,
+    split_names,
+    tiny_paths,
+    tiny_splits,
+    w2_items,
+)
 
 DTYPES = {"bf16": torch.bfloat16, "fp32": torch.float32}
 TINY_INIT_STD = 0.05  # 与 run_e1、run_w1 相同
@@ -93,6 +108,9 @@ def parse_args(argv=None):
     p.add_argument("--allow-unfrozen-batch", action="store_true", help="E1 的运行允许用冻结值以外的批大小（不是协议口径）")
     p.add_argument("--checkpoint", help="--setting w2c 必给：W2-c 的检查点 <训练叶目录>/ckpt/final/model（scripts/train_w2c.py）")
     p.add_argument("--merge-check-n", type=int, help="--checkpoint 的合并核对的开发样本数（默认取 configs/e3b_train.json 的 eval.merge_check.n）")
+    p.add_argument("--splits-file", default=str(W2_SPLITS_PATH),
+                   help="划分清单（默认 configs/w2_splits.json；如 configs/explore_splits.json，DEV-0067）")
+    p.add_argument("--unseal-devcheck3", metavar="GATE", help=f"密封的 devcheck3 只在判定时用：门名必须是 {EX.GATE}（D126-4、D128）")
     a = p.parse_args(argv)
     if a.model not in registry.MODELS:
         p.error(f"未登记的模型键 {a.model!r}")
@@ -118,7 +136,7 @@ def parse_args(argv=None):
         p.error("真模型运行要给 --data-root（或设 VISINT_DATA_ROOT）")
     if not a.tiny and not RUN_DIR_NAME.fullmatch(Path(a.out).name):
         p.error(f"--out 的目录名必须带运行编号，形如 0063_w2_tune，收到 {a.out!r}")
-    if not a.tiny and needs_frozen(a.split):  # 冻结保护：放在最后，其余用法错误先报
+    if not a.tiny and (needs_frozen(a.split) or EX.needs_frozen(a.split)):  # 冻结保护：放在最后，其余用法错误先报
         try:
             frozen = load_w2_config(a.w2_config).data["frozen"]
         except (OSError, ValueError) as e:  # W2ConfigError、JSON 写坏都是 ValueError
@@ -126,6 +144,13 @@ def parse_args(argv=None):
         if frozen is not True:
             p.error(f"协议未冻结，不能碰判定集与 test（D113；同 D108）：--split {a.split} 要求 {a.w2_config} 的 \"frozen\" 为 true"
                     f"（现在是 {frozen!r}）")
+    if EX.is_sealed(a.split):  # 密封守卫（DEV-0067）：--tiny 也查
+        try:
+            EX.require_unsealed(a.split, a.unseal_devcheck3)
+        except EX.SealedSplitError as e:
+            p.error(str(e))
+    elif a.unseal_devcheck3 is not None:
+        p.error(f"--unseal-devcheck3 只配密封的 devcheck3 划分（--split {a.split} 不是）")
     a.device = a.device or ("cpu" if a.tiny else "cuda")
     a.dtype = a.dtype or ("fp32" if a.tiny else "bf16")
     return a
@@ -141,8 +166,27 @@ def _load_attr(spec: str):
     return obj
 
 
-def data_paths(a) -> DataPaths:
+def is_default_splits(a) -> bool:
+    return Path(a.splits_file).resolve() == W2_SPLITS_PATH.resolve()
+
+
+def load_splits_doc(a, cfg):
+    """划分清单：默认（configs/w2_splits.json）与原来相同；--splits-file 给别的清单时读它（运行身份记它的路径），配 --tiny 时只认探索
+    清单，在 fixture 上现算（src/data/explore_splits.tiny_splits）。"""
+    if is_default_splits(a):
+        return tiny_splits(cfg) if a.tiny else load_splits(W2_SPLITS_PATH)
+    doc = load_splits_file(a.splits_file)
+    if a.tiny:
+        if doc.get("kind") != EX.KIND:
+            raise ValueError(f"--tiny 配 --splits-file 只认探索清单（kind = {EX.KIND}），收到 {a.splits_file}")
+        return EX.tiny_splits()
+    return doc
+
+
+def data_paths(a, splits_doc=None) -> DataPaths:
     if a.tiny and not a.data_root:  # RefCOCO 用 tests/fixtures/w2（e1_posthoc 的 48×36 图加两张 val 图）；计数用 e1 的
+        if splits_doc is not None and splits_doc.get("kind") == EX.KIND:  # 探索清单的 --tiny：tests/fixtures/explore
+            return EX.tiny_paths()
         return DataPaths.fixtures() if a.task == "count" else tiny_paths()
     return DataPaths(root=Path(a.data_root or os.environ["VISINT_DATA_ROOT"]))
 
@@ -158,7 +202,8 @@ def build_model(a):
 def run_spec(a, entry, policy, adapter_key: str) -> R.W2RunSpec:
     return R.W2RunSpec(model_key=entry.key, family=entry.family, repo=entry.repo, revision=entry.revision, adapter_model_key=adapter_key,
                        task=a.task, split=a.split, setting=a.setting, tiny=a.tiny, limit=a.limit,
-                       image_policy={"tag": "default", "type": type(policy).__name__, **policy.as_dict()})
+                       image_policy={"tag": "default", "type": type(policy).__name__, **policy.as_dict()},
+                       unseal=getattr(a, "unseal", None))
 
 
 def e1_batch_size(a, prompts) -> int:
@@ -171,10 +216,20 @@ def e1_batch_size(a, prompts) -> int:
 
 def cmd(a, argv) -> int:
     cfg = load_w2_config(a.w2_config)
-    splits_doc = tiny_splits(cfg) if a.tiny else load_splits(W2_SPLITS_PATH)
+    splits_doc = load_splits_doc(a, cfg)
     if a.split not in split_names(a.task, splits_doc):
         raise ValueError(f"--split {a.split} 不用于 {a.task}；可用：{split_names(a.task, splits_doc)}")
-    paths = data_paths(a)
+    unseal = EX.require_unsealed(a.split, a.unseal_devcheck3, entry=splits_doc["splits"][a.split])  # 条目标了 sealed 也算
+    if unseal is not None:
+        if not a.tiny and cfg.data.get("frozen") is not True:
+            raise ValueError(f"密封的 {a.split} 只能用冻结的配置跑：{a.w2_config} 的 frozen 不是 true")
+        a.unseal = EX.seal_identity(unseal)
+        log = Path(a.out) / a.model / "unseal_devcheck3.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(json.dumps({**unseal, "split": a.split, "task": a.task, "setting": a.setting, "argv": list(argv)},
+                               ensure_ascii=False) + "\n")
+    paths = data_paths(a, splits_doc)
     samples = w2_items(a.task, a.split, paths, splits=splits_doc)
     if a.limit is not None:
         samples = samples[: a.limit]
@@ -210,7 +265,8 @@ def cmd(a, argv) -> int:
         pol = ad.image_policy
         spec = R.W2RunSpec(model_key=entry.key, family=entry.family, repo=entry.repo, revision=entry.revision,
                            adapter_model_key=str(getattr(ad, "model_key", entry.key)), task=a.task, split=a.split, setting=a.setting,
-                           tiny=a.tiny, limit=a.limit, image_policy={"tag": "checkpoint", "type": type(pol).__name__, **pol.as_dict()})
+                           tiny=a.tiny, limit=a.limit, image_policy={"tag": "checkpoint", "type": type(pol).__name__, **pol.as_dict()},
+                           unseal=getattr(a, "unseal", None))
         prop_dir, prop_recs = W2C.ensure_proposal(ad, entry, spec, cfg, samples, paths, a.out, checkpoint=ck_info, batch_size=e1_bs,
                                                   run_extra=extra, **common)
         impl = R.load_impl(a.candidates_module, a.render_module)

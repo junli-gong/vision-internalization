@@ -294,6 +294,24 @@ def load_splits(path: str | Path = W2_SPLITS_PATH) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+class SplitsDoc(dict):
+    """另一份 W2 格式的划分清单（scripts/run_w2.py --splits-file，DEV-0067；如 configs/explore_splits.json）：内容同 dict，另记来源文件
+    path，运行身份记它（src/w2/runner.w2_record）。默认的 configs/w2_splits.json 照旧用 load_splits 读成普通 dict，输出不变。"""
+
+    path: Path
+
+
+def load_splits_file(path: str | Path) -> SplitsDoc:
+    doc = SplitsDoc(load_splits(path))
+    doc.path = Path(path)
+    return doc
+
+
+def splits_path(doc: Mapping[str, Any]) -> Path:
+    """清单的来源文件：load_splits_file 读出的记它自己的 path，其余（普通 dict）是 configs/w2_splits.json。"""
+    return Path(getattr(doc, "path", W2_SPLITS_PATH))
+
+
 def split_names(task: str, doc: Mapping[str, Any]) -> list[str]:
     return [k for k, v in doc["splits"].items() if task in v["tasks"]]
 
@@ -385,6 +403,7 @@ __all__ = [
     "REFCOCO_TASKS",
     "STATUS_BUILT",
     "STATUS_PENDING",
+    "SplitsDoc",
     "SplitsError",
     "W2_FIXTURE_ROOT",
     "W2_SPLITS_PATH",
@@ -394,10 +413,12 @@ __all__ = [
     "check_devcheck2",
     "devtune800_ids",
     "load_splits",
+    "load_splits_file",
     "needs_frozen",
     "pending_devcheck2",
     "select_devcheck2",
     "split_names",
+    "splits_path",
     "splits_sha256",
     "tiny_paths",
     "tiny_splits",
