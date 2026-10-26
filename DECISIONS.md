@@ -3147,3 +3147,27 @@
   - 排在 RUN-0074 之后。
   - 这不改变 W2-c 的任何设置；W2-c 的 test 读数仍与 w1f 等同节点配对。
 - **教训**：恢复检查点时，除 manifest 列的文件外不在模型目录里留任何东西。
+
+## D135（2026-10-26，管理员）：DEV-0066 合入（LLMSeg 外部基线）
+
+- **新增**：
+  - `third_party/llmseg/`：官方 commit `f2191e66` 的 8 个文件原样引入（方法 4 个，官方离线测试与它 import 的 2 个评测模块，MIT LICENSE），加 `PROVENANCE.md`（`6be8e738…`），记来源与逐文件 sha256；没有改动。
+  - `src/llmseg/{vendor,provider,runner}.py`；`scripts/run_llmseg.py`、`scripts/compare_llmseg.py`。
+  - `configs/w2_llmseg_subsets.json`（`dfd53ce8…`）：5 个 test 划分各 300 句。
+- **本地提供方**：
+  - 运行时替换官方的 `llm._complete`；三个闭源 API 的调用函数一律抛 `ExternalCallForbidden`，有测试钉住。
+  - 关思考、贪心、图在前、PixelBudget 300，同 E1。
+  - **锁步合批**：所有在跑的管线都在等模型时成一轮，批的组成与线程快慢无关。tiny CPU fp32 上合批与逐条逐 token 相同。
+  - 坐标按官方的 Qwen-VL 约定（0–1000 网格）换算，与我们的适配器逐值相同；另统计 > 1000 的坐标。
+- **开发 agent 的偏离，管理员裁定**：
+  1. 墙钟不进 predictions.jsonl，在 logs 与 compute 里：**认可**（与 W2 相同）。
+  2. 用锁步屏障代替"短时间窗"合批：**认可**，结果确定。
+  3. 本进程内调用官方 `pipeline.run`，不像官方评测那样每条起子进程：**认可**，管线代码相同。
+  4. 各阶段的输出上限由我们定（官方的 OpenAI 兼容调用不设上限），写进预注册 §13b：**认可**。
+  5. 管线失败按官方的口径计分，最终没有 mask 的按空 mask 计：**认可**。RefCOCO 的 GT 都非空，与 W2 失败记 0 等价。
+  6. 子集的 hash_rank purpose 取划分名：**认可**。
+  7. "Qwen3.5 → 官方 Qwen-VL 约定"一处判定放在 `scripts/run_llmseg.py` 与 provider 里，不在 `src/adapters/`：作为外部基线的**例外认可**。不改 RUN-0072 钉住哈希的适配器。以后的方法代码仍照 CLAUDE.md 放在适配器里。
+  8. 合批与逐条逐 token 相同只在 CPU fp32 上核对；GPU bf16 上可能有批组成带来的数值噪声，同 D36-1：**认可**。
+- **4B**：开发 agent 估 4B 不便宜，约 5–8 GPU 小时：解码受 Python 开销限制，4B 与 9B 的每步时间接近。按 D125-4"4B 如果便宜也跑"，**先只跑 9B**；9B 的实测用时出来后再定 4B。
+- `.gitignore` 加 `experiments/**/llmseg*/**/work/`：每句的工作目录不入库。
+- **测试**：合入后在 main 上跑 `tests/test_llmseg_*.py`，30 passed；开发 agent 的全量测试 3,574 passed、19 skipped。
