@@ -38,6 +38,17 @@ mix 循环的样本日程、ExampleBuilder、运行身份、README、accounting 
 分块）；每种样本各自除以这一步里它自己的监督 token 总数，再乘 loss_weights（1 : 1）相加：loss = L_propose + L_select。train_log 的 loss 是
 这个和，loss_by_stream 是两项各自的逐 token 平均；select_number_acc 是挑选样本第一个目标位置上、只在编号 1..K 的 token 之间比较时
 argmax 等于标签的比例（教师强制的诊断，不进损失；编号不都是单 token 时为 null）。
+
+**回放（DEV-0065，D125-2 (b)；可选，配置 configs/w2c_replay_train.json 的 replay 一节）**：配置没有 replay 一节时，以下都不发生，
+run_cfg、运行身份、train_log、README、检查点与以前逐字节相同（tests/test_w2c_replay.py 与 7f53f240 的原文件对照钉住）。有这一节时：
+- 数据：src/w2/w2c_replay.load_replay_data（scripts/build_w2c_replay.py 的输出；回答由同一个 base 贪心、关思考生成，截断的行不进池）；
+- 日程：每条回放流 r 每步 per_step 条，排在提出、挑选之后（ReplaySchedule；规则同 W2CSchedule，流号 = 2、3……）；
+- 样本（ReplayBuilder）：提示、图、顺序取行原样，目标 = base 生成的 token 原样（含停止 token）；
+- 损失：每条回放流也各自除以这一步里自己的监督 token 数，再乘 loss_weight，与提出、挑选两项相加；回放流的微批同样只含这一条流的样本，
+  per_step 不是微批的整数倍时最后一个微批不满。configs/w2c_replay_train.json（管理员裁定，DEV-0065 待裁第 1 条）：两条回放流
+  replay_general（通用 3 条）、replay_count（计数 2 条），每步 8 + 8 + 3 + 2，权重 1 : 1 : 0.5 : 0.5——回放在损失里的总权重仍是 1/3，
+  计数与通用各占一半（合成一条流按 token 平均时，约 2 个 token 的计数回答只占回放损失约 1%）。
+- 记录：train_log 的 loss_by_stream、by_stream……多出回放流；运行身份多 replay 一节（回放数据的指纹、池、流）；检查点格式不变。
 """
 
 from __future__ import annotations
@@ -90,11 +101,14 @@ from src.e3.train import (
     leaf_dir,
 )
 from src.runlog import write_run_metadata
+from src.w2 import w2c_replay as RP
 from src.w2.config import W2Config, load_w2_config
 from src.w2.loop import selection_candidates
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 W2C_CONFIG_PATH = REPO_ROOT / "configs" / "w2c_train.json"
+W2C_REPLAY_CONFIG_PATH = REPO_ROOT / "configs" / "w2c_replay_train.json"  # DEV-0065：W2-c 加回放（除 replay 一节外与上面逐项相同）
+REPLAY_PREFIX = "replay"  # 回放流的名字以它开头
 SCHEMA = 1
 SUPERVISION = "w2c"
 VARIANT = "w2c"  # 叶目录 <out>/w2c/<模型>/seed<k>/；run_w2.py --setting w2c 核对检查点来自这个变体
@@ -161,6 +175,66 @@ def streams_spec(doc: Mapping[str, Any], *, tiny: bool) -> dict[str, Any]:
             "micro_batches": {k: per[k] // micro for k in STREAMS}}
 
 
+def replay_spec(doc: Mapping[str, Any], *, tiny: bool) -> dict[str, Any] | None:
+    """配置的 replay 节（DEV-0065）→ 本次生效的回放流；没有这一节返回 None（W2-c 原样，运行身份里也没有 replay 键）。
+    每条回放流：name 以 replay 开头、不与提出、挑选重名；kinds 是 src/w2/w2c_replay.KINDS 的非空子集，各流不重叠；per_step（tiny 取
+    tiny_per_step）正整数，不必是微批的整数倍（最后一个微批可以不满）；loss_weight 正数。流的先后 = 列表的顺序，排在提出、挑选之后；
+    流号（pool_position 的随机数种子里的那一项）= 2、3……"""
+    r = doc.get("replay")
+    if r is None:
+        return None
+    if not isinstance(r, Mapping):
+        raise W2CConfigError("replay 必须是一节（对象）")
+    t = doc["tiny"]
+    micro = int(t["micro_batch_size"] if tiny else doc["batch"]["micro_batch_size"])
+    data = r.get("data")
+    if not isinstance(data, Mapping) or not (data.get("path") is None or (isinstance(data.get("path"), str) and data["path"])):
+        raise W2CConfigError("replay.data 必须是一节，path 是 null（用 --replay-data）或相对仓库根的非空路径")
+    streams = r.get("streams")
+    if not isinstance(streams, list) or not streams:
+        raise W2CConfigError("replay.streams 必须是非空列表")
+    out: dict[str, dict[str, Any]] = {}
+    used: set[str] = set()
+    for i, s in enumerate(streams):
+        name = s.get("name") if isinstance(s, Mapping) else None
+        if not isinstance(name, str) or not name.startswith(REPLAY_PREFIX) or name in STREAMS or name in out:
+            raise W2CConfigError(f"replay.streams[{i}].name 必须以 {REPLAY_PREFIX} 开头且不重名，收到 {name!r}")
+        kinds = s.get("kinds")
+        if (not isinstance(kinds, list) or not kinds or len(set(kinds)) != len(kinds) or set(kinds) - set(RP.KINDS)
+                or used & set(kinds)):
+            raise W2CConfigError(f"replay.streams[{i}].kinds 必须是 {list(RP.KINDS)} 的非空子集，各流不重叠，收到 {kinds!r}")
+        used |= set(kinds)
+        per = s.get("tiny_per_step" if tiny else "per_step")
+        if not _posint(per):
+            raise W2CConfigError(f"replay.streams[{i}].{'tiny_per_step' if tiny else 'per_step'} 必须是正整数，收到 {per!r}")
+        w = s.get("loss_weight")
+        if isinstance(w, bool) or not isinstance(w, (int, float)) or not math.isfinite(float(w)) or float(w) <= 0:
+            raise W2CConfigError(f"replay.streams[{i}].loss_weight 必须是正数，收到 {w!r}")
+        out[name] = {"kinds": [str(k) for k in kinds], "per_step": int(per), "loss_weight": float(w),
+                     "micro_batches": int(math.ceil(int(per) / micro)), "index": len(STREAMS) + i}
+    return {"streams": out, "order": list(out), "per_step_total": sum(v["per_step"] for v in out.values())}
+
+
+def stream_names(rc: Mapping[str, Any]) -> tuple[str, ...]:
+    """本次的全部样本流：提出、挑选，再加回放流（有 replay 一节时）。"""
+    r = rc.get("replay")
+    return STREAMS if r is None else STREAMS + tuple(r["order"])
+
+
+def stream_order(rc: Mapping[str, Any]) -> list[str]:
+    """一步之内微批的先后：streams.order，再接回放流的顺序。"""
+    r = rc.get("replay")
+    return list(rc["streams"]["order"]) + ([] if r is None else list(r["order"]))
+
+
+def stream_weights(rc: Mapping[str, Any]) -> dict[str, float]:
+    w = {s: float(rc["streams"]["loss_weights"][s]) for s in STREAMS}
+    r = rc.get("replay")
+    if r is not None:
+        w.update({s: float(v["loss_weight"]) for s, v in r["streams"].items()})
+    return w
+
+
 def validate(doc: Mapping[str, Any]) -> None:
     bad: list[str] = []
     if doc.get("schema") != SCHEMA:
@@ -211,6 +285,7 @@ def validate(doc: Mapping[str, Any]) -> None:
         raise W2CConfigError("configs/w2c_train.json 不合格：\n- " + "\n- ".join(bad))
     for tiny in (False, True):
         streams_spec(doc, tiny=tiny)
+        replay_spec(doc, tiny=tiny)
 
 
 def load_w2c_config(path: str | Path = W2C_CONFIG_PATH) -> W2CConfig:
@@ -243,6 +318,9 @@ def resolve_w2c_run(cfg: W2CConfig, *, tiny: bool, steps: int | None = None) -> 
         "data_workers": int(d["data"]["workers"]),
         "streams": streams_spec(d, tiny=tiny),
     }
+    rs = replay_spec(d, tiny=tiny)
+    if rs is not None:  # DEV-0065：只有配置有 replay 一节时才有这个键（默认配置的 run_cfg 与以前逐项相同）
+        out["replay"] = rs
     if tiny:
         for k in _TINY_KEYS:
             out[k] = int(d["tiny"][k])
@@ -473,17 +551,20 @@ class W2CPlan:
     sample_id: str
 
 
-def pool_position(j: int, n: int, *, seed: int, stream: str) -> tuple[int, int]:
-    """流内的第 j 个槽位 → (池下标, epoch)：第 j // n 个 epoch 的置换的第 j mod n 个（规则见模块说明）。"""
+def pool_position(j: int, n: int, *, seed: int, stream: str, index: int | None = None) -> tuple[int, int]:
+    """流内的第 j 个槽位 → (池下标, epoch)：第 j // n 个 epoch 的置换的第 j mod n 个（规则见模块说明）。index：流号（默认
+    STREAM_INDEX[stream]；回放流取 replay_spec 的 index）。"""
     if n < 1:
         raise ValueError(f"{stream}：池为空")
     ep = j // n
-    perm = np.random.default_rng([int(seed), STREAM_INDEX[stream], ep]).permutation(n)
+    perm = np.random.default_rng([int(seed), STREAM_INDEX[stream] if index is None else int(index), ep]).permutation(n)
     return int(perm[j % n]), ep
 
 
 class W2CSchedule:
-    def __init__(self, data: W2CData, *, seed: int, per_step: Mapping[str, int], order: Sequence[str]) -> None:
+    """extra_per_step：同一步里排在提出、挑选之后的回放条数（DEV-0065；只影响 W2CPlan.k 的全局编号，默认 0 = W2-c 原样）。"""
+
+    def __init__(self, data: W2CData, *, seed: int, per_step: Mapping[str, int], order: Sequence[str], extra_per_step: int = 0) -> None:
         if sorted(order) != sorted(STREAMS) or set(per_step) != set(STREAMS):
             raise ValueError(f"W2-c 的样本流必须恰好是 {STREAMS}")
         self.data = data
@@ -491,6 +572,7 @@ class W2CSchedule:
         self.per_step = {s: int(per_step[s]) for s in STREAMS}
         self.order = tuple(order)
         self.batch_size = sum(self.per_step.values())
+        self.step_size = self.batch_size + int(extra_per_step)
 
     def plan(self, stream: str, j: int) -> W2CPlan:
         pool = self.data.pool(stream)
@@ -498,11 +580,40 @@ class W2CSchedule:
         row = pool[idx]
         step = j // self.per_step[stream]
         off = sum(self.per_step[s] for s in self.order[: self.order.index(stream)])
-        return W2CPlan(stream=stream, k=step * self.batch_size + off + j % self.per_step[stream], step=step, j=j, index=idx, row=row,
+        return W2CPlan(stream=stream, k=step * self.step_size + off + j % self.per_step[stream], step=step, j=j, index=idx, row=row,
                        epoch=ep, sample_id=str(self.data.rows[row]["id"]))
 
     def step_plans(self, step: int) -> list[W2CPlan]:
         return [self.plan(s, step * self.per_step[s] + i) for s in self.order for i in range(self.per_step[s])]
+
+
+class ReplaySchedule:
+    """回放流的日程（DEV-0065）：规则同 W2CSchedule（无状态；流 s 的第 j 个槽位 = pool_position(j, |池|, 种子, 流号)），每步排在提出、
+    挑选之后；W2CPlan.k 从 base_batch（提出 + 挑选的条数）往后接。"""
+
+    def __init__(self, data: RP.ReplayData, *, seed: int, spec: Mapping[str, Any], base_batch: int) -> None:
+        self.data = data
+        self.seed = int(seed)
+        self.streams = {s: dict(v) for s, v in spec["streams"].items()}
+        self.order = tuple(spec["order"])
+        self.base_batch = int(base_batch)
+        self.batch_size = self.base_batch + sum(v["per_step"] for v in self.streams.values())
+        if set(self.order) != set(data.pools):
+            raise ValueError(f"回放流 {list(self.order)} 与回放数据的池 {list(data.pools)} 不同")
+
+    def plan(self, stream: str, j: int) -> W2CPlan:
+        v = self.streams[stream]
+        pool = self.data.pool(stream)
+        idx, ep = pool_position(j, len(pool), seed=self.seed, stream=stream, index=v["index"])
+        row = pool[idx]
+        per = int(v["per_step"])
+        step = j // per
+        off = self.base_batch + sum(self.streams[s]["per_step"] for s in self.order[: self.order.index(stream)])
+        return W2CPlan(stream=stream, k=step * self.batch_size + off + j % per, step=step, j=j, index=idx, row=row, epoch=ep,
+                       sample_id=str(self.data.rows[row]["id"]))
+
+    def step_plans(self, step: int) -> list[W2CPlan]:
+        return [self.plan(s, step * self.streams[s]["per_step"] + i) for s in self.order for i in range(self.streams[s]["per_step"])]
 
 
 # ---------------------------------------------------------------------------
@@ -601,6 +712,31 @@ class W2CBuilder:
                           info={"label": int(row["label"]), "k": len(row["candidates"])})
 
 
+class ReplayBuilder:
+    """回放样本（DEV-0065）：提示、图（计数：原图 load_pil，与生成回答时同一个函数）与顺序取回放数据的行原样，目标 = base 生成的 token
+    原样（含停止 token），全部监督。stop_ids：本家族的停止 token（目标的最后一个必须是其中之一，开训前核对）。"""
+
+    def __init__(self, data: RP.ReplayData, *, data_root: str | Path, stop_ids: Sequence[int]) -> None:
+        self.data = data
+        self.root = Path(data_root)
+        self.stop_ids = {int(i) for i in stop_ids}
+        bad = [str(data.rows[i]["id"]) for p in data.pools.values() for i in p if int(data.rows[i]["token_ids"][-1]) not in self.stop_ids]
+        if bad:
+            raise RP.ReplayDataError(f"{len(bad)} 条回放样本的目标不以本家族的停止 token 结尾（例如 {bad[:3]}）")
+
+    def build(self, plan: W2CPlan) -> W2CExample:
+        row = self.data.rows[plan.row]
+        if str(row["id"]) != plan.sample_id:
+            raise RuntimeError(f"日程与回放数据对不上：{plan.sample_id} ≠ {row['id']}")
+        images = [load_pil(self.root / p) for p in row["images"]]
+        for im in images:
+            if list(im.size) != list(row["image_size"]):
+                raise ValueError(f"{row['id']}：图像 {im.size} 与 image_size {row['image_size']} 不符")
+        ids = [int(t) for t in row["token_ids"]]
+        return W2CExample(plan, images, row["prompt"], row["order"], ids, [1] * len(ids), row["answer"],
+                          info={"kind": row["kind"], "replay_id": row["id"]})
+
+
 # ---------------------------------------------------------------------------
 # 训练器：两条文本样本流各自归一
 # ---------------------------------------------------------------------------
@@ -646,19 +782,22 @@ class W2CTrainer(Trainer):
         if not examples:
             raise ValueError("这一步没有样本")
         dev = device if device is not None else self.ad.device
-        st = self.rc["streams"]
+        names = stream_names(self.rc)  # 默认配置：恰是 STREAMS（DEV-0065 之前的两条流）
+        order = stream_order(self.rc)
         micro = int(self.rc["micro_batch_size"])
-        by = {s: [e for e in examples if e.plan.stream == s] for s in STREAMS}
-        n_by = {s: sum(e.n_supervised for e in by[s]) for s in STREAMS}
-        if any(by[s] and n_by[s] <= 0 for s in STREAMS):
+        if any(e.plan.stream not in names for e in examples):
+            raise ValueError(f"样本流 {sorted({e.plan.stream for e in examples} - set(names))} 不在本次的流 {list(names)} 里")
+        by = {s: [e for e in examples if e.plan.stream == s] for s in names}
+        n_by = {s: sum(e.n_supervised for e in by[s]) for s in names}
+        if any(by[s] and n_by[s] <= 0 for s in names):
             raise ValueError("某种样本没有监督 token")
-        weights = {s: float(st["loss_weights"][s]) for s in STREAMS}
-        chunks = [(s, by[s][i: i + micro]) for s in st["order"] for i in range(0, len(by[s]), micro)]
+        weights = stream_weights(self.rc)
+        chunks = [(s, by[s][i: i + micro]) for s in order for i in range(0, len(by[s]), micro)]
         chunk_size = int(self.rc["chunk_size"])
         self.opt.zero_grad(set_to_none=True)
-        sums = {s: 0.0 for s in STREAMS}
+        sums = {s: 0.0 for s in names}
         cnt_by = {s: {"n_samples": len(by[s]), "n_supervised_tokens": int(n_by[s]), "n_target_tokens": 0, "n_prompt_tokens": 0,
-                      "n_visual_tokens": 0, "n_image_pixels": 0} for s in STREAMS}
+                      "n_visual_tokens": 0, "n_image_pixels": 0} for s in names}
         hits = [0, 0]
         times = {"build_inputs_s": 0.0, "fwd_s": 0.0, "bwd_s": 0.0, "opt_s": 0.0}
         computes: list[Compute] = []
@@ -705,12 +844,12 @@ class W2CTrainer(Trainer):
         self.opt.zero_grad(set_to_none=True)
         _sync(dev)
         times["opt_s"] = time.perf_counter() - t4
-        loss_by = {s: (sums[s] / n_by[s] if n_by[s] else None) for s in STREAMS}
-        loss = sum(weights[s] * loss_by[s] for s in st["order"] if loss_by[s] is not None)
-        tot = {k: int(sum(cnt_by[s][k] for s in STREAMS)) for k in ("n_target_tokens", "n_prompt_tokens", "n_visual_tokens",
-                                                                      "n_image_pixels")}
-        rec = {"lr": lr, "loss": loss, "loss_by_stream": loss_by, "n_supervised_by_stream": {s: int(n_by[s]) for s in STREAMS},
-               "n_samples": len(examples), "n_by_stream": {s: len(by[s]) for s in STREAMS},
+        loss_by = {s: (sums[s] / n_by[s] if n_by[s] else None) for s in names}
+        loss = sum(weights[s] * loss_by[s] for s in order if loss_by[s] is not None)
+        tot = {k: int(sum(cnt_by[s][k] for s in names)) for k in ("n_target_tokens", "n_prompt_tokens", "n_visual_tokens",
+                                                                    "n_image_pixels")}
+        rec = {"lr": lr, "loss": loss, "loss_by_stream": loss_by, "n_supervised_by_stream": {s: int(n_by[s]) for s in names},
+               "n_samples": len(examples), "n_by_stream": {s: len(by[s]) for s in names},
                "n_supervised_tokens": int(sum(n_by.values())), **tot, "grad_norm": float(gn),
                "select_number_acc": (hits[0] / hits[1]) if hits[1] else None, "by_stream": cnt_by}
         return rec, times, computes
@@ -739,8 +878,9 @@ class W2CRunSpec:
 
 
 def run_identity(spec: W2CRunSpec, cfg: W2CConfig, rc: Mapping[str, Any], trainer: W2CTrainer, builder: W2CBuilder, data: W2CData,
-                 w2_info: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+                 w2_info: Mapping[str, Any], replay: RP.ReplayData | None = None) -> dict[str, Any]:
+    """运行身份（config.yaml）。replay（DEV-0065）给了才加 replay 一节；不给时与以前逐项相同。"""
+    ident = {
         "experiment": "W2-c",
         "framework": "src/w2/w2c_train.py（DEV-0061；docs/w2_plan.md §5）；训练器 src/e3/train.Trainer",
         "model": {"key": spec.model_key, "family": spec.family, "repo": spec.repo, "revision": spec.revision,
@@ -762,6 +902,11 @@ def run_identity(spec: W2CRunSpec, cfg: W2CConfig, rc: Mapping[str, Any], traine
                    "rows": "candidates 与 label 都不为 null 的行", "number_token_ids": trainer.number_ids},
         "data": data.identity(),
     }
+    if replay is not None:
+        ident["replay"] = {**replay.identity(), "streams": {k: dict(v) for k, v in rc["replay"]["streams"].items()},
+                           "sample": "提示、图（计数：原图 load_pil）、order 取回放数据的行原样；目标 = base 生成的 token 原样（含停止 token）",
+                           "loss": "每条回放流各自除以这一步里自己的监督 token 数，再乘 loss_weight，与提出、挑选两项相加"}
+    return ident
 
 
 def readme_text(spec: W2CRunSpec, ident: Mapping[str, Any], summary: Mapping[str, Any], log: Sequence[Mapping[str, Any]]) -> str:
@@ -769,8 +914,17 @@ def readme_text(spec: W2CRunSpec, ident: Mapping[str, Any], summary: Mapping[str
     st = tr["streams"]
     first, last = (log[0], log[-1]) if log else ({}, {})
     d = ident["data"]
-    tot = {s: {k: int(sum(r["by_stream"][s][k] for r in log)) for k in ("n_samples", "n_supervised_tokens")} for s in STREAMS} if log else {}
+    tot = {s: {k: int(sum(r["by_stream"][s][k] for r in log)) for k in ("n_samples", "n_supervised_tokens")}
+           for s in stream_names(tr)} if log else {}
     w2 = ident["w2_config"]
+    rp = ident.get("replay")
+    replay_lines = [] if rp is None else [
+        f"- 回放（DEV-0065，自蒸馏）：每步另加 {tr['replay']['per_step_total']} 条，"
+        + "；".join(f"{s} {v['per_step']} 条（{'+'.join(v['kinds'])}，损失权重 {v['loss_weight']:g}，按本流的监督 token 数平均）"
+                    for s, v in tr["replay"]["streams"].items())
+        + f"（回放的权重合计 {sum(v['loss_weight'] for v in tr['replay']['streams'].values()):g}，提出、挑选各 1）"
+        + f"；数据 manifest sha256 {rp['manifest_sha256'][:16]}…，由 {rp['model']['key']}@{str(rp['model']['revision'])[:12]} 贪心、关思考生成；"
+        f"池 { {s: v['n'] for s, v in rp['pools'].items()} }（截断的不用）"]
     return "\n".join([
         f"# W2-c 训练 · {spec.model_key} · seed {spec.seed}", "",
         f"- 模型：{spec.repo}@{spec.revision}（{spec.family}；适配器 {spec.adapter_model_key}；{spec.model_dtype}）；图像口径 {spec.image_policy}",
@@ -781,6 +935,7 @@ def readme_text(spec: W2CRunSpec, ident: Mapping[str, Any], summary: Mapping[str
         f"{st['loss_weights']['propose']:g} × 提出的逐 token 平均 + {st['loss_weights']['select']:g} × 挑选的逐 token 平均",
         f"- LoRA r {tr['lora']['r']} / alpha {tr['lora']['alpha']} / dropout {tr['lora']['dropout']}，AdamW lr {tr['optim']['lora']['lr']}，"
         f"warmup {tr['warmup_steps']} 步 + 余弦（同 C3）",
+        *replay_lines,
         f"- W2 配置：{w2['config']} sha256 {w2['config_sha256'][:16]}…（frozen = {w2['frozen']}；K = {w2['k']}，layout = {w2['layout']}）",
         f"- 数据：{len(d['shards'])} 个分片，{d['n_rows']} 句（提出池 {d['n_propose']}，挑选池 {d['n_select']}；提出失败 {d['n_proposal_failed']}）；"
         f"标签分布 {d['label_counts']}；manifest sha256 {d['manifest_sha256']}",
@@ -795,13 +950,17 @@ def run_w2c_training(adapter: Any, cfg: W2CConfig, spec: W2CRunSpec, run_cfg: Ma
                      w2_info: Mapping[str, Any], impl: Any, data_root: str | Path, out_dir: str | Path, resume: bool = False,
                      argv: Sequence[str] = (), ckpt_root: str | Path | None = None, stop_after_steps: int | None = None,
                      keep_optimizer_state: bool = False, log: Callable[[str], None] | None = None,
-                     _fail_after_step: int | None = None) -> dict[str, Any] | None:
+                     _fail_after_step: int | None = None, replay: RP.ReplayData | None = None) -> dict[str, Any] | None:
     """跑一次 W2-c 训练；返回 train_summary（stop_after_steps 到了时返回 None）。adapter 必须是刚挂好的 base。
-    布局、续跑、分段运行、检查点、记账与 src/e3/train.run_training 逐条对应（模块说明）。"""
+    布局、续跑、分段运行、检查点、记账与 src/e3/train.run_training 逐条对应（模块说明）。
+    replay（DEV-0065）：回放数据（src/w2/w2c_replay.load_replay_data），当且仅当 run_cfg 有 replay 一节时给；每步在提出、挑选之后
+    另加回放流的样本（ReplaySchedule、ReplayBuilder），损失多一项（W2CTrainer.optimize）。不给时与以前逐字节相同。"""
     log = log or (lambda m: print(m, file=sys.stderr, flush=True))
     rc = dict(run_cfg)
     if rc["supervision"] != SUPERVISION or rc["variant"] != VARIANT:
         raise ValueError(f"run_cfg（{rc['supervision']}/{rc['variant']}）不是 W2-c 的")
+    if (replay is None) != (rc.get("replay") is None):
+        raise ValueError("回放数据与 run_cfg 的 replay 一节必须同时有或同时没有（--replay-data 只配有 replay 一节的配置）")
     leaf = leaf_dir(out_dir, VARIANT, spec.model_key, spec.seed)
     ckpt = (Path(ckpt_root) / VARIANT / spec.model_key / f"seed{spec.seed}") if ckpt_root else leaf / "ckpt"
     latest = ckpt / LATEST
@@ -825,10 +984,19 @@ def run_w2c_training(adapter: Any, cfg: W2CConfig, spec: W2CRunSpec, run_cfg: Ma
         trainer.setup_fresh()
     builder = W2CBuilder(cfg, data, w2=w2, impl=impl, data_root=data_root, stop_id=trainer.stop_id, encode=encode, family=spec.family,
                          format_boxes=adapter.format_boxes)
-    schedule = W2CSchedule(data, seed=spec.seed, per_step=rc["streams"]["per_step"], order=rc["streams"]["order"])
+    rbuilder = rsched = None
+    if replay is not None:
+        if not spec.tiny and replay.config.get("image_policy") != spec.image_policy:
+            raise ValueError(f"回放数据生成时的图像口径 {replay.config.get('image_policy')} 与训练的 {spec.image_policy} 不同")
+        rbuilder = ReplayBuilder(replay, data_root=data_root, stop_ids=adapter.stop_token_ids())
+    schedule = W2CSchedule(data, seed=spec.seed, per_step=rc["streams"]["per_step"], order=rc["streams"]["order"],
+                           extra_per_step=0 if replay is None else int(rc["replay"]["per_step_total"]))
     if schedule.batch_size != int(rc["batch_size"]):
         raise ValueError(f"W2-c 每步 {schedule.batch_size} 条，与 run_cfg 的 batch_size {rc['batch_size']} 不同")
-    ident = run_identity(spec, cfg, rc, trainer, builder, data, w2_info)
+    if replay is not None:
+        rsched = ReplaySchedule(replay, seed=spec.seed, spec=rc["replay"], base_batch=schedule.batch_size)
+    names = stream_names(rc)
+    ident = run_identity(spec, cfg, rc, trainer, builder, data, w2_info, replay=replay)
     ident_sha = identity_sha256(ident)
     if exists:
         if not (leaf / CONFIG).exists():
@@ -839,7 +1007,8 @@ def run_w2c_training(adapter: Any, cfg: W2CConfig, spec: W2CRunSpec, run_cfg: Ma
             raise ValueError(f"{leaf}：续跑的运行身份与已有的不同（{diff}），拒绝混写")
     else:
         leaf.mkdir(parents=True, exist_ok=True)
-        files = [REPO_ROOT / cfg.path if not Path(cfg.path).is_absolute() else Path(cfg.path), Path(w2.path), *data.files()]
+        files = [REPO_ROOT / cfg.path if not Path(cfg.path).is_absolute() else Path(cfg.path), Path(w2.path), *data.files(),
+                 *([] if replay is None else replay.file_paths())]
         write_run_metadata(leaf, config=ident, seed=spec.seed, data_files=files, repo_root=REPO_ROOT)
     start = 0
     if st is not None:
@@ -860,6 +1029,8 @@ def run_w2c_training(adapter: Any, cfg: W2CConfig, spec: W2CRunSpec, run_cfg: Ma
                                "device": str(dev), "gpu": torch.cuda.get_device_name(dev) if dev.type == "cuda" else None,
                                "paths": {"w2c_data": str(data.data_dir), "data_root": str(data_root), "w2_config": str(w2.path)},
                                "ckpt_dir": str(ckpt), "start_step": start, "finished_utc": None, "audit": trainer.audit}
+    if replay is not None:
+        run_log["paths"]["replay_data"] = str(replay.run_dir)
     run_path.write_text(json.dumps(run_log, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     t_all = time.perf_counter()
     done_box = [0]
@@ -872,7 +1043,7 @@ def run_w2c_training(adapter: Any, cfg: W2CConfig, spec: W2CRunSpec, run_cfg: Ma
         acc, comp = accounting_doc(leaf)
         tlog = _read_log(leaf / TRAIN_LOG)
         if tlog:
-            acc["by_stream"] = {s: {k: int(sum(r["by_stream"][s][k] for r in tlog)) for k in tlog[0]["by_stream"][s]} for s in STREAMS}
+            acc["by_stream"] = {s: {k: int(sum(r["by_stream"][s][k] for r in tlog)) for k in tlog[0]["by_stream"][s]} for s in names}
         (leaf / ACCOUNTING).write_text(json.dumps(acc, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
         write_compute_json(leaf / COMPUTE, comp)
 
@@ -897,12 +1068,15 @@ def run_w2c_training(adapter: Any, cfg: W2CConfig, spec: W2CRunSpec, run_cfg: Ma
     workers = int(rc["data_workers"])
     pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="w2c-data") if workers > 0 else None
 
+    def build(plan: W2CPlan) -> W2CExample:
+        return rbuilder.build(plan) if rbuilder is not None and plan.stream in rc["replay"]["streams"] else builder.build(plan)
+
     def submit(step: int) -> list[Any]:
-        plans = schedule.step_plans(step)
-        return [pool.submit(builder.build, p) for p in plans] if pool is not None else plans
+        plans = schedule.step_plans(step) + ([] if rsched is None else rsched.step_plans(step))
+        return [pool.submit(build, p) for p in plans] if pool is not None else plans
 
     def collect(handle: list[Any]) -> list[W2CExample]:
-        return [h.result() for h in handle] if pool is not None else [builder.build(p) for p in handle]
+        return [h.result() for h in handle] if pool is not None else [build(p) for p in handle]
 
     try:
         adapter.train_mode()
@@ -922,7 +1096,7 @@ def run_w2c_training(adapter: Any, cfg: W2CConfig, spec: W2CRunSpec, run_cfg: Ma
             if step == start:
                 trainer.audit["first_step_examples"] = [
                     {"id": e.plan.sample_id, "stream": e.plan.stream, "n_images": len(e.images), "n_target": len(e.target_ids),
-                     "target_text": e.target_text} for s in STREAMS for e in [x for x in examples if x.plan.stream == s][:4]]
+                     "target_text": e.target_text} for s in names for e in [x for x in examples if x.plan.stream == s][:4]]
             _append(leaf / TRAIN_LOG, [_jsonl({"step": step, **rec})])
             _append(timing_path, [_jsonl({"step": step, "data_s": t_data, **times, "step_s": step_s,
                                           "peak_mem_bytes": int(torch.cuda.max_memory_allocated(dev)) if dev.type == "cuda" else None,
@@ -932,8 +1106,9 @@ def run_w2c_training(adapter: Any, cfg: W2CConfig, spec: W2CRunSpec, run_cfg: Ma
             done_box[0] = done
             s1 = step + 1
             if s1 % 10 == 0 or s1 == steps:
+                extra = "".join(f"，{s} {rec['loss_by_stream'][s]}" for s in names[len(STREAMS):])
                 log(f"[{VARIANT} {spec.model_key} seed{spec.seed}] 第 {s1}/{steps} 步 loss {rec['loss']:.4f}（提出 "
-                    f"{rec['loss_by_stream']['propose']}，挑选 {rec['loss_by_stream']['select']}；{step_s:.2f} s/步）")
+                    f"{rec['loss_by_stream']['propose']}，挑选 {rec['loss_by_stream']['select']}{extra}；{step_s:.2f} s/步）")
             stop = stop_after_steps is not None and done >= stop_after_steps and s1 < steps
             if (s1 % every == 0 and s1 < steps) or stop:
                 save_latest(s1)
@@ -960,7 +1135,9 @@ def run_w2c_training(adapter: Any, cfg: W2CConfig, spec: W2CRunSpec, run_cfg: Ma
                    "lora": man.get("lora"), "trainable_token_rows": man.get("trainable_token_rows"),
                    "w2_config_sha256": w2.sha256,
                    "by_stream": {s: {k: int(sum(r["by_stream"][s][k] for r in tlog)) for k in tlog[0]["by_stream"][s]}
-                                 for s in STREAMS} if tlog else None}
+                                 for s in names} if tlog else None}
+        if replay is not None:
+            summary["replay"] = {"manifest_sha256": replay.manifest_sha256, "pools": {s: len(p) for s, p in replay.pools.items()}}
         (leaf / README).write_text(readme_text(spec, ident, summary, tlog), encoding="utf-8")
         _atomic_write_text(leaf / SUMMARY, json.dumps(summary, indent=1, ensure_ascii=False) + "\n")
         finish_log("complete")
@@ -980,6 +1157,9 @@ def run_w2c_training(adapter: Any, cfg: W2CConfig, spec: W2CRunSpec, run_cfg: Ma
 
 __all__ = [
     "DATA_MANIFEST",
+    "REPLAY_PREFIX",
+    "ReplayBuilder",
+    "ReplaySchedule",
     "STREAMS",
     "SUPERVISION",
     "VARIANT",
@@ -994,6 +1174,7 @@ __all__ = [
     "W2CSchedule",
     "W2CTrainer",
     "W2C_CONFIG_PATH",
+    "W2C_REPLAY_CONFIG_PATH",
     "check_label",
     "load_pil",
     "load_w2c_config",
@@ -1001,11 +1182,15 @@ __all__ = [
     "number_token_ids",
     "pool_position",
     "readme_text",
+    "replay_spec",
     "resolve_w2_config",
     "resolve_w2c_run",
     "row_problems",
     "run_identity",
     "run_w2c_training",
     "selection_row_view",
+    "stream_names",
+    "stream_order",
+    "stream_weights",
     "streams_spec",
 ]

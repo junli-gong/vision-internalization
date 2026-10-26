@@ -1,0 +1,148 @@
+{
+ "schema": 1,
+ "version": "w2c-train-v1",
+ "status": "草稿（DEV-0061）。w2_config.sha256 是占位（null）：W2-a 在 devtune800 上调参、configs/w2.json 冻结之后由管理员填；占位时非 --tiny 拒跑。其余条目取 E3 的 C3（configs/e3b_train.json）同名项，tests/test_w2c_train.py 钉住两者相同",
+ "framework": "src/w2/w2c_train.py（DEV-0061：W2-c 的样本、日程与训练循环）；训练器 src/e3/train.Trainer（搭建、LoRA、优化器、续跑状态、检查点格式与 C3 相同）；入口 scripts/train_w2c.py",
+ "basis": "D113 第二节第 4 条（负责人 2026-10-22 指令）、docs/w2_plan.md §5：W2-c 在 9B 上做 LoRA 的文本监督微调，两类文本目标：提出（E1 refexp_box 的提示加原图 → GT 框，与 C3 的框监督逐字相同）与挑选（挑选图加挑选提示 → 编号的十进制文本）；不加任何新 token",
+ "model": {
+  "default_key": "qwen3.5-9b",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "image_policy": "E1 冻结的口径（factory.make_adapter 不给 image_policy 时取 src/adapters/image_policy.E1_IMAGE_POLICIES），与 C3 相同；W2-c 评测时 run_w2.py 核对检查点的口径就是它",
+  "basis": "判定用 9B（D113）；dtype、梯度检查点同 configs/e3b_train.json 的 model 节（C3）"
+ },
+ "w2_config": {
+  "path": "configs/w2.json",
+  "sha256": "c4d083489783039d46718e19ede810370bd4b9272ef94e99f406104c2e0f9b29",
+  "rule": "W2-a 冻结的那一份 configs/w2.json（候选生成器、K、渲染的 layout 与 style、挑选提示）：训练时挑选图按它在线渲染，提示按它的 select.prompt；sha256 写死在这里。非 --tiny：sha256 不能是 null、必须等于文件的 sha256、文件必须 frozen = true；数据每行的 w2_config_sha256 必须等于它、spec_sha256 必须等于它的候选清单 sha256（W2Config.candidates_digest）。--tiny：可以用 --w2-config 换一份（不核对这里的 sha256，运行身份照记）；select.system 必须是 null（关思考的挑选走 build_inputs，没有 system 轮）"
+ },
+ "data": {
+  "format": "docs/w2_plan.md §5：<DEV-0060 的输出>/w2c_data/<分片>.jsonl，每行一句；同一目录的 manifest.json 是 DEV-0060 的去重与抽样记录（非 --tiny 必须有，sha256 进运行身份）",
+  "sources": [
+   "refcoco",
+   "refcoco+",
+   "refcocog"
+  ],
+  "split": "train",
+  "workers": 4,
+  "rule": "只读训练集：每行的 split 必须是 train、source 必须在 sources 里，否则拒绝训练；不读任何评测集。分片按文件名升序拼接，行序就是池序。提出的池 = 全部行；挑选的池 = candidates 与 label 都不为 null 的行（proposal.failure 不为空的行只用于提出）。图像路径相对 --data-root。",
+  "basis": "去重（硬约束 7）由 DEV-0060 做（按 COCO 图像 id 排除 W2 的全部评测图，并沿用 E3 训练池的剔除清单），结果在 manifest.json；workers 同 configs/e3b_train.json 的 data.workers（下一步的样本由线程池在本步的计算期间构造，线程数不改变任何结果）"
+ },
+ "enable_thinking": false,
+ "enable_thinking_basis": "D113：W2-c 的提出与挑选都关思考（训练与评测同一个开关；非思考的对话模板）",
+ "propose": {
+  "box_template_from": {
+   "config": "configs/e1_prompts.json",
+   "task": "refexp_box"
+  },
+  "order": "image_first",
+  "rule": "每一行都做一条提出样本：提示 = E1 refexp_box 本家族的提示原文（src/e3/c3.load_box_template，要求 native = true；render_e1_template(模板, 指代句.strip())），目标 = src/e3/c3.box_target(adapter.format_boxes, gt_box, W, H, label = 指代句.strip()) + 回合结束 token，与 C3 的框监督逐字相同。",
+  "order_basis": "W2-c 评测时提出一步走 E1 的 refexp_box 协议（configs/e1_prompts.json 的 image_order = image_first），训练取同一个顺序。注意：C3 的框监督用的是 E3 的 instruction_first（configs/e3b_train.json tasks.refseg.order），这一项与 C3 不同，已在完成总结里上报待裁"
+ },
+ "select": {
+  "order": "image_first",
+  "target": "decimal",
+  "rule": "candidates 与 label 都不为 null 的行做一条挑选样本：挑选图 = 冻结的 render_selection(原图, 候选, layout, style)（候选由 src/w2/loop.selection_candidates 从 RLE 解码，1 号 ok = False 时画空叠加，与 W2-a 评测逐位相同）；提示 = W2Config.select_prompt(K, 指代句)（W2-a 冻结的挑选提示）；目标 = str(label)（十进制，如 \"3\"）+ 回合结束 token；关思考。order 必须等于 configs/e1_prompts.json 的 image_order（W2 评测时挑选一步 build_inputs 用的就是它；load 时核对）"
+ },
+ "streams": {
+  "per_step": {
+   "propose": 8,
+   "select": 8
+  },
+  "order": [
+   "propose",
+   "select"
+  ],
+  "loss_weights": {
+   "propose": 1,
+   "select": 1
+  },
+  "basis": "任务书 DEV-0061：每步 16 条 = 提出 8 + 挑选 8，两种损失 1 : 1（同 E3b+C3 的 mixed 节）：一步的损失 = 1 × 提出样本的逐 token 平均 + 1 × 挑选样本的逐 token 平均（各自除以这一步里自己的监督 token 数）；每个微批只含一种样本（提出的 2 个微批在前）。挑选的目标只有 2 个 token（编号 + 回合结束），按 token 混合平均时只占约 6%，所以分开归一"
+ },
+ "lora": {
+  "r": 32,
+  "alpha": 64,
+  "dropout": 0.05,
+  "basis": "同 C3（configs/e3b_train.json 的 lora 节）：rank 32，作用于所有线性层（adapter.lora_target_modules()：LLM 内全部 nn.Linear，视觉塔冻结），alpha = 2r，dropout 0.05"
+ },
+ "optim": {
+  "optimizer": "adamw",
+  "betas": [
+   0.9,
+   0.999
+  ],
+  "eps": 1e-08,
+  "lora": {
+   "lr": 0.0002,
+   "weight_decay": 0.0
+  },
+  "max_grad_norm": 1.0,
+  "schedule": "warmup_cosine",
+  "warmup_ratio": 0.03,
+  "min_lr_ratio": 0.0,
+  "basis": "同 C3（configs/e3b_train.json 的 optim 节，去掉没有用到的 token_rows 一组：W2-c 不加任何新 token）：AdamW lr 2e-4、weight_decay 0，warmup_ratio 0.03（2000 步时 60 步）+ 余弦到 0，max_grad_norm 1.0"
+ },
+ "batch": {
+  "micro_batch_size": 4,
+  "grad_accum_steps": 4,
+  "basis": "同 C3：每步 16 条（4 × 4 累积）= streams.per_step 两项之和；每种样本各 2 个微批"
+ },
+ "loss": {
+  "reduction": "per_stream_token_mean",
+  "chunk_size": 1024,
+  "basis": "两种样本各自的逐 token 平均（streams.basis），文本损失用 chunked_lm_loss（全词表、分块，chunk_size 同 configs/e3b_train.json 的 c3.chunk_size）"
+ },
+ "steps": 2000,
+ "steps_basis": "任务书 DEV-0061 的默认：2000 步 × 16 条 = 提出 16,000 条（DEV-0060 默认 16,000 句，约 1 个 epoch）+ 挑选 16,000 条（挑选池略小于 16,000 句时略多于 1 个 epoch）；scripts/train_w2c.py --steps 可改（运行身份照记）",
+ "ckpt_every": 250,
+ "ckpt_basis": "每 ckpt_every 步写一次续跑检查点（LoRA、manifest、优化器、调度器、随机数状态；只留最新一份），训练完成后另存 final（只有 save_trained，与 C3 同格式），续跑状态默认删掉。9B 每步约 7 s 时约 30 分钟一次",
+ "seed": 0,
+ "seed_basis": "任务书：种子 0（决定 LoRA 初始化、dropout 与样本顺序；scripts/train_w2c.py --seed 可改）",
+ "tiny": {
+  "basis": "--tiny：小型随机模型 + CPU + fp32 + 测试造的小数据。只改下面这些规模参数，其余同正式配置",
+  "steps": 4,
+  "micro_batch_size": 2,
+  "grad_accum_steps": 2,
+  "per_step": {
+   "propose": 2,
+   "select": 2
+  },
+  "ckpt_every": 2,
+  "warmup_steps": 1,
+  "image_policies": {
+   "qwen3.5": "pixel_budget:64",
+   "gemma4": "soft_tokens:70",
+   "internvl3.5": "tiles:false:1"
+  },
+  "init_std": 0.05
+ },
+ "replay": {
+  "basis": "D125-2 (b)（项目负责人 2026-10-25）与任务书 DEV-0065：W2-c 的训练里混入约 25% 的自蒸馏回放数据——base 9B 自己对一组通用指令与计数提示的回答（贪心、关思考），其余设置不变（本文件除 replay 一节外与 configs/w2c_train.json 逐项相同，tests/test_w2c_replay.py 钉住），1 个种子；不用 devcheck2 判定，只在 test 上作描述，与 W2-c 并列。回放的是 base 自己的行为，不引入任何外部模型或新的监督",
+  "data": {
+   "path": null,
+   "format": "scripts/build_w2c_replay.py 的 --out（config.yaml、replay/manifest.json、replay/general.jsonl、replay/count.jsonl；规则与核对见 src/w2/w2c_replay.py）",
+   "rule": "scripts/train_w2c.py --replay-data 优先，不给就用 path（相对仓库根；占位 null 时必须给 --replay-data）。回放数据必须由本次训练的同一个模型（注册键、revision、tiny 都相同）生成；非 --tiny 时生成时的图像口径必须等于训练的（E1 冻结的口径）；两类的行恰是 manifest 的全部条目（跑完）；截断的行（truncated = true）不进池；目标的最后一个 token 必须是本家族的停止 token。数据的指纹（各文件的 sha256、manifest 的 sha256、池的 id 指纹）进运行身份"
+  },
+  "streams": [
+   {
+    "name": "replay_general",
+    "kinds": [
+     "general"
+    ],
+    "per_step": 3,
+    "tiny_per_step": 2,
+    "loss_weight": 0.5
+   },
+   {
+    "name": "replay_count",
+    "kinds": [
+     "count"
+    ],
+    "per_step": 2,
+    "tiny_per_step": 1,
+    "loss_weight": 0.5
+   }
+  ],
+  "streams_basis": "管理员裁定（DEV-0065 待裁第 1 条，2026-10-25）：两条回放流，每步 8 + 8 + 3 + 2（回放 5 / 21 ≈ 24%，同任务书）。四条流各自除以这一步里本流的监督 token 数，权重 1 : 1 : 0.5 : 0.5：回放在损失里的总权重仍是 1/3（0.5 + 0.5 = 1，与任务书的 1 : 1 : 1 相同），计数与通用各占一半。理由：通用回答约几百个 token、计数回答约 2 个 token（数字 + 回合结束），合成一条流按 token 平均时计数只占回放损失约 1%，而做回放首先是为了补计数（W2-c 的计数 −13 点）。每条流的池 = 本类里没有截断的行，样本按 pool_position 的置换取（流号 replay_general = 2、replay_count = 3）。微批：正式 4 → 通用 3、计数 2 各一个不满的微批；tiny 2 → 通用 2、计数 1。"
+ }
+}

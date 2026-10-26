@@ -41,6 +41,21 @@ src/e3/merge_check 的 t_text，n = configs/e3b_train.json 的 eval.merge_check.
      # 合并核对在 <out>/t_text/w2c/seed0/qwen3.5-9b/merge_check.json。同一节点上已有的 9B 基座 T 文本（如 RUN-0056 在 hpcgpu06 上的
      # ttext base）可以直接配对，不必重跑基座；换了节点就在同一节点上重跑（D93-1：效应都在机内算）
 
+W2-c 加回放（DEV-0065；D125-2 (b)；配置 configs/w2c_replay_train.json = W2-c 的配置 + replay 一节；规则见 src/w2/w2c_train.py 的
+"回放"一段与 src/w2/w2c_replay.py；回放数据由 scripts/build_w2c_replay.py 生成，那里的文档字符串有全流程的命令与用时）：
+    python scripts/train_w2c.py --config configs/w2c_replay_train.json --model qwen3.5-9b \
+        --w2c-data experiments/W2/0067_w2c_data_hpcgpu06/w2c_data --replay-data experiments/W2/<NNNN>_w2c_replay_data \
+        --data-root $VI/data/train_data --out experiments/W2/<NNNN>_w2c_replay_train [--resume] [--stop-after-steps N]
+    # --replay-data：build_w2c_replay.py 的 --out（回放数据必须由同一个 9B 生成；截断的行不用）；--data-root 同 W2-c（计数回放的图
+    #   也相对它）。叶目录、检查点、记账与 W2-c 相同（<out>/w2c/qwen3.5-9b/seed0/，config.yaml 的 variant 仍是 w2c、多 replay 一节），
+    #   所以训练之后的 1–3 三条评测命令原样可用（--checkpoint 换成这次的；--out 换新目录，run_w2 拒绝同一个 --out 混用两个检查点）。
+    # 回放：两条流（管理员裁定），每步 8 + 8 + 3 + 2 = 21 条——replay_general 3 条通用、replay_count 2 条计数，四条流各自按本流的监督
+    #   token 数平均，权重 1 : 1 : 0.5 : 0.5（回放总权重 1/3，计数与通用各占一半）。
+    # 用时：W2-c（RUN-0069，06）每步中位 10.9 s、显存峰值 26.5 GB；回放的 3 条通用是纯文本（提示约 100–1,000 个 token、回答至多 512），
+    #   2 条计数是一张原图 + 约 2 个目标 token（与提出的样本同形），按样本的计算量估每步约 13–14 s，2000 步约 7–8 小时；回放每步两个
+    #   微批（3 条、2 条），都比挑选的微批（4 × 约 2,800 个 token）短，显存峰值预计不变（≤ 约 29 GB）。
+    # 没有 replay 一节的配置不收 --replay-data；有 replay 一节时必须给 --replay-data（或配置的 replay.data.path）。
+
 开发机彩排（小型随机模型、CPU、fp32；数据用测试造的假数据，图像在 tests/fixtures/e3/root）：
     python -m tests._w2c_fakes <dir>/w2c_data            # 按当前的 configs/w2.json 造 §5 格式的假数据
     python scripts/train_w2c.py --tiny --model qwen3.5-0.8b --w2c-data <dir>/w2c_data --out <dir>/t
@@ -70,6 +85,7 @@ from src.adapters.factory import make_adapter  # noqa: E402
 from src.adapters.image_policy import parse_policy  # noqa: E402
 from src.e3.data import FIXTURE_REFSEG_ROOT  # noqa: E402
 from src.w2 import runner as R  # noqa: E402
+from src.w2 import w2c_replay as RP  # noqa: E402
 from src.w2 import w2c_train as T  # noqa: E402
 
 DTYPES = {"bf16": torch.bfloat16, "fp32": torch.float32}
@@ -90,7 +106,8 @@ def parse_args(argv=None):
     p.add_argument("--stop-after-steps", type=int, help="本次只跑 N 步，写检查点后退出（下次 --resume）")
     p.add_argument("--keep-optimizer-state", action="store_true", help="训练完成后保留 <ckpt>/latest（默认删掉）")
     p.add_argument("--tiny", action="store_true", help="小型随机模型 + CPU + fp32（开发机彩排）")
-    p.add_argument("--config", default=str(T.W2C_CONFIG_PATH), help="默认 configs/w2c_train.json")
+    p.add_argument("--config", default=str(T.W2C_CONFIG_PATH), help="默认 configs/w2c_train.json（加回放：configs/w2c_replay_train.json）")
+    p.add_argument("--replay-data", help="DEV-0065：回放数据（scripts/build_w2c_replay.py 的 --out）；只配有 replay 一节的配置")
     p.add_argument("--w2-config", help="换一份 W2 配置（只配 --tiny；正式运行用 configs/w2c_train.json 写死的那一份）")
     p.add_argument("--candidates-module", default=R.DEFAULT_CANDIDATES_MODULE, help="Candidate 类所在的模块（非默认只配 --tiny）")
     p.add_argument("--render-module", default=R.DEFAULT_RENDER_MODULE, help="render_selection 所在的模块（非默认只配 --tiny）")
@@ -135,6 +152,23 @@ def build_adapter(a, cfg: T.W2CConfig, key: str):
     return entry, ad, dtype
 
 
+def load_replay(a, cfg: T.W2CConfig, rc, key: str, root: Path):
+    """DEV-0065：配置有 replay 一节时读回放数据（--replay-data 优先，其次配置的 replay.data.path）；没有这一节时不收 --replay-data。"""
+    if rc.get("replay") is None:
+        if a.replay_data is not None:
+            raise T.W2CConfigError(f"{cfg.path} 没有 replay 一节，不收 --replay-data")
+        return None
+    path = a.replay_data or cfg.doc["replay"]["data"]["path"]
+    if path is None:
+        raise T.W2CConfigError(f"{cfg.path} 的 replay.data.path 是占位（null）：要给 --replay-data")
+    p = Path(path)
+    if a.replay_data is None and not p.is_absolute():
+        p = REPO_ROOT / p
+    entry = registry.get_model(key)
+    streams = {s: v["kinds"] for s, v in rc["replay"]["streams"].items()}
+    return RP.load_replay_data(p, streams=streams, model_key=entry.key, revision=entry.revision, tiny=a.tiny, data_root=root)
+
+
 def cmd_run(a, argv) -> int:
     cfg = T.load_w2c_config(a.config)
     key = a.model or cfg.doc["model"]["default_key"]
@@ -144,13 +178,14 @@ def cmd_run(a, argv) -> int:
     root = data_root(a)
     data = T.load_w2c_data(a.w2c_data, w2=w2, sources=cfg.doc["data"]["sources"], data_root=root, require_manifest=not a.tiny)
     rc = T.resolve_w2c_run(cfg, tiny=a.tiny, steps=a.steps)
+    replay = load_replay(a, cfg, rc, key, root)
     entry, ad, dtype = build_adapter(a, cfg, key)
     spec = T.W2CRunSpec(model_key=entry.key, family=entry.family, repo=entry.repo, revision=entry.revision,
                         adapter_model_key=str(getattr(ad, "model_key", entry.key)), tiny=a.tiny, image_policy=policy_spec(ad.image_policy),
                         model_dtype=dtype, seed=seed)
     s = T.run_w2c_training(ad, cfg, spec, rc, data, w2=w2, w2_info=w2_info, impl=impl, data_root=root, out_dir=a.out, resume=a.resume,
                            argv=argv, ckpt_root=a.ckpt_root, stop_after_steps=a.stop_after_steps,
-                           keep_optimizer_state=a.keep_optimizer_state)
+                           keep_optimizer_state=a.keep_optimizer_state, **({} if replay is None else {"replay": replay}))
     if s is None:
         print(f"{entry.key} w2c seed{seed}：按 --stop-after-steps 停下，检查点已写；加 --resume 接着跑")
         return 0
