@@ -54,8 +54,10 @@ def metrics(lf: Path) -> dict | None:
 
 
 def preds(lf: Path) -> dict[str, dict] | None:
+    """只读跑完的叶目录（metrics.json 的 complete 为 true）：同步循环会推上写到一半的目录。"""
     p = lf / "predictions.jsonl"
-    if not p.exists():
+    m = metrics(lf)
+    if not p.exists() or m is None or m.get("complete") is not True:
         return None
     out = {}
     for line in p.read_text(encoding="utf-8").splitlines():
