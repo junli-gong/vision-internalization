@@ -8,7 +8,7 @@
   - RefCOCO 系列 train；
   - devtune800；
   - devcheck2，自 G-W2 起只作开发集；
-  - explore_val（DEV-0067 生成）。
+  - explore_val：1,000 句，`configs/explore_splits.json`，D131。
 - **test 与 devcheck3 在判定前不碰。**
 - 硬边界：
   - 只用不含学习的工具，只用开源模型，单一权重；
@@ -54,6 +54,10 @@
   4. 更大的不含学习的生成器库：GrabCut 的参数变体、SLIC 或 Felzenszwalb 超像素合并、分水岭变体、形态学后处理的组合；看最优候选随 K 的上升。
 - **读数**：各通道、各预算下的 cIoU；所需的输出 token 数（按我们的文本格式估）；在好框与坏框上分别报。
 - **之后**：挑一到两个上限最高的通道，先让 9B 零样本试，即 X-2；再用 LoRA SFT 训练，目标从真值得到，即 X-3。
+
+## 进展
+
+- 10-26 03:44Z：devcheck3（密封）与 explore_val 生成（RUN-0075，D131）。探索可以在 explore_val 上评测了。
 
 ## 候选方向（directive 第五节；按 X-0 的结论排序）
 
