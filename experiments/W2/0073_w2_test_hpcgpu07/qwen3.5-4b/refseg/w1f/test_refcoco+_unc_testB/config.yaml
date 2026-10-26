@@ -1,0 +1,63 @@
+experiment: W2
+framework: src/w2（DEV-0059；docs/w2_plan.md）
+w2:
+  task: refseg
+  split: test_refcoco+_unc_testB
+  setting: w1f
+  splits_config: configs/w2_splits.json
+  splits_sha256: 9dd22dff2ad422ec5d51106bb6e40227ec51afa27130f2a968c945d69055c0f1
+  split_sha256: 69c4229fbdbf35ee036c664c593942eb3ac5a72edc9f34b458fedbe69aeb6791
+  split_n: 1000
+  n_samples: 1000
+  limit: null
+  sample_ids_sha256: 2e22ebd320b2ca64c9c8c068be19dc8a412e5a9c60490df8f872bd2017f4fb34
+model:
+  key: qwen3.5-4b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-4B
+  revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+  adapter_model_key: qwen3.5-4b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+w2_config:
+  config: configs/w2.json
+  config_sha256: c4d083489783039d46718e19ede810370bd4b9272ef94e99f406104c2e0f9b29
+  frozen: true
+propose:
+  mode: box
+  run:
+    leaf: <out>/qwen3.5-4b/refexp_box/baseline_e1/test_refcoco+_unc_testB
+    predictions_sha256: 57424d9d10068a602b76e059b1c9a2fcba4f9e12884603d97f0e07140a99b560
+    config_sha256: 3e347dd78514c3aeb83da93f996ce715cbbcf2f9ffbf99448eaef2af6e3521bc
+candidates:
+  leaf: <out>/qwen3.5-4b/refseg/candidates/test_refcoco+_unc_testB
+  module: src.w2.candidates
+  generators:
+  - type: grabcut_default
+  - type: grabcut
+    iterations: 5
+    box_pct: -10.0
+    init: mask
+  - type: grabcut_default
+    post:
+    - largest_cc
+    - fill_holes
+  - type: watershed
+    use_points: true
+    fg_shrink_pct: 30.0
+    bg_margin_pct: 0.0
+    seed_radius_pct: 4.0
+  k: 4
+  content_sha256: d980fcf89d317d75dd5a370c1732cc3f895f046272f7d98b07edb95945568288
+batching:
+  chunk_size: 64
+data:
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
