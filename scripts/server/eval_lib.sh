@@ -7,7 +7,8 @@
 #                        每条命令之前先查停止线：拿到 GPU 之后的墙钟超过 EV_CAP_S（任务书的上限），根盘剩余低于 3 GB（D6），
 #                        本项目根盘占用超过 15 GB（D28-8；给了 PROJ 才查）。触线就推送已有结果、写 blocked 心跳，退出码 3。
 #   shrink_large         $OUT 下超过 20 MB 的文件压成 .gz（gzip -n），同目录 LARGE_FILES.sha256 记原文件与 .gz 的 sha256 与字节数，
-#                        核对之后删原文件（RUN-0027 的约定；省根盘份额，D28-8）。
+#                        核对之后删原文件（RUN-0027 的约定；省根盘份额，D28-8）。路径里含 /ckpt/ 的不压：检查点本来就不入库，
+#                        压了加载器读不到（RUN-0069 的 W2-c 适配器被压，RUN-0072 开跑前原地解压恢复，D127）。
 #   push_out <说明>      只提交 $OUT 下的改动，在 git 锁里 rebase 后推送（同 train_queue.sh）。
 #   progress <说明>      心跳写 $LOGS/eval_<RUN_ID>.status。
 # 调用方先设好：RUN_ID、REPO、OUT（在 REPO 里）、LOGS；TINY=1 时不查 GPU、不写暂停文件。
@@ -93,7 +94,7 @@ step() {
 
 shrink_large() {
   local f d b o g
-  find "$OUT" -type f -size +20M ! -name '*.gz' | LC_ALL=C sort | while IFS= read -r f; do
+  find "$OUT" -type f -size +20M ! -name '*.gz' ! -path '*/ckpt/*' | LC_ALL=C sort | while IFS= read -r f; do
     d=$(dirname "$f"); b=$(basename "$f")
     o=$(sha "$f" | awk '{print $1}')
     gzip -n -c "$f" > "$f.gz.part" && mv "$f.gz.part" "$f.gz" || { echo "gzip 失败：$f" >&2; continue; }
