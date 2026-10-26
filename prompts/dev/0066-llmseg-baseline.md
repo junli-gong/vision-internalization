@@ -36,7 +36,7 @@
    - 参数：官方主配置，`--iterations` 默认 8，其余开关都关，即它论文的主配置。
    - 输出与 W2 相同的格式：`predictions.jsonl`（每句的最终 mask 的 RLE、各阶段的调用数、token 数、墙钟）、`metrics.json`（cIoU、gIoU 与 bootstrap 95% CI）、`compute.json`、`config.yaml`（运行身份：官方 commit、PROVENANCE 的 sha256、模型、迭代数）。
    - 计分与 W2 完全相同，同一份 GT 与同一个 `mask_inter_union`。
-   - 再写一个比较脚本：同样 300 句上，W2-c 与 LLMSeg 的配对 cIoU 差与 95% CI。W2-c 的读数取 RUN-0072 的结果目录。
+   - 再写一个比较脚本：同样 300 句上，W2-c 与 LLMSeg 的配对 cIoU 差与 95% CI，gIoU 同样给一份（负责人要求同报 gIoU，便于与它论文的后端图对照）。W2-c 的读数取 RUN-0072 的结果目录。
 4. **用时估计**：
    - tiny 与开发机上测单句调用次数；
    - 按 9B 每次调用的实测，估 5 × 300 句的 GPU 小时，4B 另估；
