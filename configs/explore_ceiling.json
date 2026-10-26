@@ -41,10 +41,12 @@
   "light": {"point_jitter_frac": 0.02, "point_wrong_rate": 0.05, "ctrl_jitter_frac": 0.01, "corr_box_jitter_frac": 0.1,
             "corr_sign_flip_rate": 0.05},
   "medium": {"point_jitter_frac": 0.05, "point_wrong_rate": 0.15, "ctrl_jitter_frac": 0.03, "corr_box_jitter_frac": 0.25,
-             "corr_sign_flip_rate": 0.15}
+             "corr_sign_flip_rate": 0.15},
+  "heavy": {"point_jitter_frac": 0.1, "point_wrong_rate": 0.25, "ctrl_jitter_frac": 0.06, "corr_box_jitter_frac": 0.4,
+            "corr_sign_flip_rate": 0.25}
  },
  "noise_rule": "点与控制点的抖动 σ = *_jitter_px + *_jitter_frac × 真值外接框的短边；错点率：点换成对方区域里均匀抽的一个像素；修正框的抖动 σ = corr_box_jitter_frac × 该框的宽（x）/ 高（y）；符号错误率：翻转符号。每个格点一个独立的随机数生成器（oracle_sim.rng_for）。",
- "grid_rule": "格点名与计算见 src/explore/ceiling.py 的模块说明（cell_names 给出固定顺序）。first 是先跑的子网格（无噪声），full 是任务书的全网格（另加点的框内初始化 pr_fgd），tiny 只给 --tiny 彩排。tools 的数值等于 src/explore/guidance 的缺省常量（测试核对）。",
+ "grid_rule": "格点名与计算见 src/explore/ceiling.py 的模块说明（cell_names 给出固定顺序）。first 是先跑的子网格（无噪声），full 是任务书的全网格（另加点的框内初始化 pr_fgd），tiny 只给 --tiny 彩排；noise（管理员加，RUN-0079）只测样条与局部修正对噪声的敏感度，另加 heavy 档。tools 的数值等于 src/explore/guidance 的缺省常量（测试核对）。",
  "grids": {
   "full": {
    "generators": {"K": [4, 8, 12, 16]},
@@ -65,6 +67,13 @@
    "points": {"k": [1, 4], "bg": [false, true], "box_init": ["pr_bgd", "pr_fgd"], "noise": ["none", "medium"]},
    "spline": {"n": [8, 16], "use": ["raster", "gc_soft", "gc_trimap"], "noise": ["none", "light"]},
    "corrections": {"rounds": 2, "m": [1, 2], "lock": [true, false], "rule": ["grabcut", "direct"], "noise": ["none", "light"],
+                   "starts": ["gc_default", "w2c_final"]}
+  },
+  "noise": {
+   "generators": {"K": [4]},
+   "points": {"k": [], "bg": [true], "box_init": ["pr_fgd"], "noise": ["none"]},
+   "spline": {"n": [12, 16, 24], "use": ["raster", "gc_trimap"], "noise": ["none", "light", "medium", "heavy"]},
+   "corrections": {"rounds": 3, "m": [2], "lock": [true, false], "rule": ["grabcut"], "noise": ["light", "medium", "heavy"],
                    "starts": ["gc_default", "w2c_final"]}
   }
  },
