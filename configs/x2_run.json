@@ -1,0 +1,46 @@
+{
+ "schema": 1,
+ "version": "x2-run-v1",
+ "status": "DEV-0069 的初值；第一个检查点的读数出来之前不调（任务书：提前停、轮数等参数都不调）。改动要写进探索日志并换 version",
+ "framework": "src/explore/x2_runner.py（DEV-0069）；入口 scripts/run_x2.py",
+ "rounds": 3,
+ "rounds_basis": "x2_select_corR、x2_select5_corR 的 R = 1、2、3（任务书）；同一条轨迹的前 R 轮，R 轮的结果只用前 R 次修正调用",
+ "correction": {
+  "rule": "grabcut",
+  "soft_lock": true,
+  "gate": true,
+  "early_stop": "model_empty_or_parse_failure",
+  "basis": "guidance.correction_round 的缺省（grabcut 规则、软锁定 α = LOCK_ALPHA、effect gate 门槛 EFFECT_MIN_PX / EFFECT_MIN_FRAC、局部 GrabCut 的 context_pct 与迭代次数），约束框 = 提出的框。模型输出 [] 就提前停（任务书）；解析失败也停（mask 不变，计数）——修正轮是在已有 mask 上的可选改进，失败时保留已有结果"
+ },
+ "spline": {
+  "trimap": {
+   "mode": "trimap"
+  },
+  "failure_fallback": "candidate_1",
+  "basis": "x2_spline_raster = x2_prompts.spline_mask（guidance.rasterize_loops，采样点夹在提出的框内）；x2_spline_trimap = guidance.spline_grabcut(mode = trimap，带宽与裁剪取 guidance 的缺省；GrabCut 跑不起来时用光栅化本身，ToolResult.ok = false 计数)。样条解析失败（含截断）时交 1 号候选（W1-F，同 W2 的\"解析失败交 1 号\"），fallback 记 parse_failure"
+ },
+ "select5": {
+  "fifth": "spline_trimap",
+  "spline_failure": "empty",
+  "basis": "4 个候选（冻结的 W2 配置）+ 第 5 个 = x2_spline_trimap 的 mask；样条解析失败时第 5 个画空叠加（同 W2 的裁定 A：失败的候选按空 mask）。挑选的提示与渲染沿用 W2（render_selection、select_prompt(K = 5)），关思考；none 或解析失败交 1 号。挑选没在 K = 5 上训练过，照实标注"
+ },
+ "ablations": {
+  "randbox": {
+   "salt": "x2_randbox_v1",
+   "rule": "修正框换成同数量、同大小（网格宽高相同，即同面积分布）、同符号的随机框：模型那条轨迹第 r 轮给了几个框，随机轨迹第 r 轮就用几个，每个框的左上角在提出的框（网格整数）里均匀抽，框比提出的框大时贴左上并截到提出的框；随机数 oracle_sim.rng_for(salt, 样本 id, 基础设置, 轮次)；施加规则与模型轨迹相同；模型那条轨迹停在哪一轮，随机轨迹也停在哪一轮。不另调模型，计算量记成与模型轨迹相同（它用了模型的框数与大小）"
+  },
+  "ellipse": {
+   "rule": "样条换成提出的框的内切椭圆：椭圆按弧长 256 点采样，guidance.fit_closed_bspline 拟合 n 个控制点（n 同检查点训练的描样条），取整到 0–1000 网格，之后光栅化与 trimap 与模型的样条走同一套。不调模型"
+  }
+ },
+ "batching": {
+  "batch_size": 16,
+  "chunk_size": 64,
+  "max_batch_tokens": 48000,
+  "basis": "生成（描样条、指修正框）与挑选都按顺序每 batch_size 条一批（关思考，E1 的解码参数）；chunk_size 是续跑的粒度（没写完的那一组整组重跑），同 configs/w2.json 的 batching"
+ },
+ "tiny": {
+  "batch_size": 2,
+  "chunk_size": 2
+ }
+}

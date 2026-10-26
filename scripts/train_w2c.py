@@ -56,6 +56,27 @@ W2-c 加回放（DEV-0065；D125-2 (b)；配置 configs/w2c_replay_train.json = 
     #   微批（3 条、2 条），都比挑选的微批（4 × 约 2,800 个 token）短，显存峰值预计不变（≤ 约 29 GB）。
     # 没有 replay 一节的配置不收 --replay-data；有 replay 一节时必须给 --replay-data（或配置的 replay.data.path）。
 
+探索 X-2（DEV-0069；配置 configs/x2_train.json = W2-c 加回放的配置 + x2_data、spline、correct 三节；规则见 src/w2/w2c_train.py 的
+"X-2 的两条流"一段与 src/explore/x2_data.py；数据由 scripts/build_x2_data.py 在 CPU 上生成）：
+    python scripts/train_w2c.py --config configs/x2_train.json --model qwen3.5-9b \
+        --w2c-data experiments/W2/0067_w2c_data_hpcgpu06/w2c_data --x2-data experiments/X/<NNNN>_x2_data \
+        --replay-data experiments/W2/<NNNN>_w2c_replay_data --data-root $VI/data/train_data \
+        --out experiments/X/<NNNN>_x2_train [--steps 1500] [--resume] [--stop-after-steps N]
+    # --x2-data：build_x2_data.py 的 --out（必须由同一份 --w2c-data 生成，参数等于配置的 spline、correct 两节）；--replay-data 同 W2-c 加回放
+    #   （回放数据由同一个 9B 生成）。叶目录、检查点、记账与 W2-c 相同（<out>/w2c/qwen3.5-9b/seed0/，variant 仍是 w2c，多 x2、replay 两节），
+    #   所以 run_w2.py --setting w2c、health_check.py、run_e1.py --checkpoint 原样可用；X-2 的管线用 scripts/run_x2.py。
+    # 每步 8 + 8 + 6 + 6 + 3 + 2 = 33 条：提出、挑选、样条、修正、回放通用、回放计数，六条流各自按本流的监督 token 数平均，权重
+    #   1 : 1 : 1 : 1 : 0.5 : 0.5；微批 4：样条、修正各两个微批（4 + 2）。
+    # 用时（按 RUN-0069 的每步中位 10.9 s 折算；16 条 = 8 提出 + 8 挑选）：
+    #   - 按条数等比折算：10.9 / 16 × 33 ≈ 22.5 s/步，2,000 步 ≈ 12.5 GPU 小时；
+    #   - 按样本的计算量：挑选的样本是 K + 1 = 5 张图（约 1,500 个视觉 token），提出、样条、修正都是 1 张图（约 300 个视觉 token）+ 约 50–160
+    #     个目标 token（样条 16 点约 160 个、修正约 50 个）；设挑选每条约是提出的 3 倍，10.9 s = 8p + 24p → p ≈ 0.34 s；样条、修正 12 条约
+    #     4–5.5 s，回放约 2.5–3 s（W2-c 加回放的估计 13–14 s/步）→ 约 17.5–19.5 s/步，2,000 步 ≈ 9.7–10.8 GPU 小时。
+    #   - 上界超过 12 GPU 小时，所以备选 1,500 步（--steps 1500；样条 9,000 条 ≈ 0.6 个 epoch、修正 9,000 条 ≈ 0.4 个 epoch）：约 7.3–9.4 GPU 小时。
+    #   - 显存峰值：样条的微批（4 × 约 600 个 token）、修正的微批（4 × 约 500 个 token）都比挑选的微批（4 × 约 2,800 个 token）短，预计不变
+    #     （≤ 约 29 GB）。前 50 步跑完先报每步的中位耗时与显存峰值，外推超过 12 小时就停下来定步数。
+    # 没有 spline、correct 两节的配置不收 --x2-data；有这两节时必须给 --x2-data（或配置的 x2_data.path）。
+
 开发机彩排（小型随机模型、CPU、fp32；数据用测试造的假数据，图像在 tests/fixtures/e3/root）：
     python -m tests._w2c_fakes <dir>/w2c_data            # 按当前的 configs/w2.json 造 §5 格式的假数据
     python scripts/train_w2c.py --tiny --model qwen3.5-0.8b --w2c-data <dir>/w2c_data --out <dir>/t
@@ -84,6 +105,7 @@ from src.adapters.checkpoint import policy_spec  # noqa: E402
 from src.adapters.factory import make_adapter  # noqa: E402
 from src.adapters.image_policy import parse_policy  # noqa: E402
 from src.e3.data import FIXTURE_REFSEG_ROOT  # noqa: E402
+from src.explore import x2_data as XD  # noqa: E402
 from src.w2 import runner as R  # noqa: E402
 from src.w2 import w2c_replay as RP  # noqa: E402
 from src.w2 import w2c_train as T  # noqa: E402
@@ -108,6 +130,7 @@ def parse_args(argv=None):
     p.add_argument("--tiny", action="store_true", help="小型随机模型 + CPU + fp32（开发机彩排）")
     p.add_argument("--config", default=str(T.W2C_CONFIG_PATH), help="默认 configs/w2c_train.json（加回放：configs/w2c_replay_train.json）")
     p.add_argument("--replay-data", help="DEV-0065：回放数据（scripts/build_w2c_replay.py 的 --out）；只配有 replay 一节的配置")
+    p.add_argument("--x2-data", help="DEV-0069：X-2 的数据（scripts/build_x2_data.py 的 --out）；只配有 spline、correct 两节的配置")
     p.add_argument("--w2-config", help="换一份 W2 配置（只配 --tiny；正式运行用 configs/w2c_train.json 写死的那一份）")
     p.add_argument("--candidates-module", default=R.DEFAULT_CANDIDATES_MODULE, help="Candidate 类所在的模块（非默认只配 --tiny）")
     p.add_argument("--render-module", default=R.DEFAULT_RENDER_MODULE, help="render_selection 所在的模块（非默认只配 --tiny）")
@@ -169,6 +192,23 @@ def load_replay(a, cfg: T.W2CConfig, rc, key: str, root: Path):
     return RP.load_replay_data(p, streams=streams, model_key=entry.key, revision=entry.revision, tiny=a.tiny, data_root=root)
 
 
+def load_x2(a, cfg: T.W2CConfig, rc, root: Path):
+    """DEV-0069：配置有 spline、correct 两节时读 X-2 的数据（--x2-data 优先，其次配置的 x2_data.path）；没有这两节时不收 --x2-data。
+    核对：参数等于配置的；来源与 --w2c-data 是同一份 w2c_data（非 --tiny）；图像都在 --data-root 下。"""
+    if rc.get("x2") is None:
+        if a.x2_data is not None:
+            raise T.W2CConfigError(f"{cfg.path} 没有 spline、correct 两节，不收 --x2-data")
+        return None
+    path = a.x2_data or cfg.doc["x2_data"]["path"]
+    if path is None:
+        raise T.W2CConfigError(f"{cfg.path} 的 x2_data.path 是占位（null）：要给 --x2-data")
+    p = Path(path)
+    if a.x2_data is None and not p.is_absolute():
+        p = REPO_ROOT / p
+    source = None if a.tiny else XD.source_identity(a.w2c_data, require_manifest=True)
+    return XD.load_x2_data(p, params=rc["x2"]["data_params"], source=source, data_root=root)
+
+
 def cmd_run(a, argv) -> int:
     cfg = T.load_w2c_config(a.config)
     key = a.model or cfg.doc["model"]["default_key"]
@@ -179,13 +219,15 @@ def cmd_run(a, argv) -> int:
     data = T.load_w2c_data(a.w2c_data, w2=w2, sources=cfg.doc["data"]["sources"], data_root=root, require_manifest=not a.tiny)
     rc = T.resolve_w2c_run(cfg, tiny=a.tiny, steps=a.steps)
     replay = load_replay(a, cfg, rc, key, root)
+    x2 = load_x2(a, cfg, rc, root)
     entry, ad, dtype = build_adapter(a, cfg, key)
     spec = T.W2CRunSpec(model_key=entry.key, family=entry.family, repo=entry.repo, revision=entry.revision,
                         adapter_model_key=str(getattr(ad, "model_key", entry.key)), tiny=a.tiny, image_policy=policy_spec(ad.image_policy),
                         model_dtype=dtype, seed=seed)
     s = T.run_w2c_training(ad, cfg, spec, rc, data, w2=w2, w2_info=w2_info, impl=impl, data_root=root, out_dir=a.out, resume=a.resume,
                            argv=argv, ckpt_root=a.ckpt_root, stop_after_steps=a.stop_after_steps,
-                           keep_optimizer_state=a.keep_optimizer_state, **({} if replay is None else {"replay": replay}))
+                           keep_optimizer_state=a.keep_optimizer_state, **({} if replay is None else {"replay": replay}),
+                           **({} if x2 is None else {"x2": x2}))
     if s is None:
         print(f"{entry.key} w2c seed{seed}：按 --stop-after-steps 停下，检查点已写；加 --resume 接着跑")
         return 0
