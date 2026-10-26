@@ -3117,3 +3117,20 @@
     - variant 沿用 `w2c`，评测换新的 `--out`；
     - 重新冻结时两份配置联动。
 - **测试**：合入后在 main 上跑 `tests/test_w2c_*.py tests/test_w2_config.py`，90 passed。
+
+## D133（2026-10-26，管理员）：DEV-0068 合入（探索 X-1：引导工具与上限测量）
+
+- **新增**（只有新文件，W2 的代码与冻结配置不动）：
+  - `src/explore/guidance.py`：只用不含学习的工具。包括点 → GrabCut、B 样条的拟合与光栅化（框约束，与 LLMSeg 同一条曲线）、样条 → GrabCut（soft 与 trimap 两种）、带符号的局部修正（direct 与 grabcut 两种规则，软锁定，effect gate），以及 16 个生成器。前 4 个与 W2 冻结的 K = 4 逐位相同。
+  - `src/explore/oracle_sim.py`：真值模拟的理想 LLM，坐标都取整到 0–1000 网格；噪声分 light、medium 两档；token 用 Qwen3.5 的 tokenizer 实数。
+  - `src/explore/ceiling.py`、`scripts/explore_ceiling.py`、`configs/explore_ceiling.json`：网格 full、first、tiny；进程池用 spawn；可续跑；拒绝 test 与 devcheck3。
+- **开发 agent 的偏离，管理员裁定**：
+  1. 镜像 workbench 的几个纯函数（避免带进 torch），测试钉住逐位相同：**认可**。
+  2. GMM 分量数用不带图割的 GMM 颜色模型生成器代替（OpenCV 的 GrabCut 固定 5 个分量）：**认可**。
+  3. 软锁定的 α：先按论文公式 4 取 1。官方代码的 0.5 留作 X-2 用真 LLM 修正时的消融。
+     - 管理员试过把缺省改成 0.5，两项测试按 α = 1 的语义写了预期，改它们不是常量级修改，所以改回。
+  4. 样条 → GrabCut 的"未知带"有两种解读，soft 与 trimap 都留在格点里，由数据决定：**认可**。
+  5. 点通道加 pr_fgd 对照；GrabCut 在框外扩 50% 的裁剪区上跑（`gc_ctx50` 可量出裁剪的影响）；真值框也取整到 0–1000：**认可**。
+  6. 用时按 640×480 的照片测，tiny 的图太小：**认可**。
+- **用时**：first 网格约 31 CPU 小时，在 16 核上约 2 小时；full 约 101 CPU 小时。都是开发机 M4 单核的上界，服务器先用 `--bench` 换算。
+- **测试**：合入后在 main 上跑 `tests/test_explore_*.py`，51 passed。

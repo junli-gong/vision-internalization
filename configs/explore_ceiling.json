@@ -1,0 +1,74 @@
+{
+ "schema_version": 1,
+ "name": "探索 X-1：各种 LLM 输出通道的上限（真值模拟，CPU；DEV-0068；预注册 X；docs/exploration/log.md）",
+ "salt": "explore_ceiling_v1",
+ "allowed_splits": ["devtune800", "devcheck2", "explore_val"],
+ "refused_splits_rule": "名字以 test 开头或含 devcheck3 的划分一律拒绝（scripts/explore_ceiling.check_split；测试钉住），allowed_splits 之外的也拒绝。",
+ "box_kinds": ["gt", "base", "w2c"],
+ "box_sources": {
+  "devtune800": {
+   "base": "experiments/W2/0070_w2_tune_r2_hpcgpu06/0070_sep_on_k4/qwen3.5-9b/refexp_box/baseline_e1/devtune800"
+  },
+  "devcheck2": {
+   "base": "experiments/W2/0069_w2c_hpcgpu06/0069_eval/qwen3.5-9b/refexp_box/baseline_e1/devcheck2",
+   "w2c": "experiments/W2/0069_w2c_hpcgpu06/0069_eval/qwen3.5-9b/refexp_box/propose_w2c/devcheck2"
+  }
+ },
+ "start_masks": {
+  "devcheck2": {
+   "w2c_final": {"box_kind": "w2c", "leaf": "experiments/W2/0069_w2c_hpcgpu06/0069_eval/qwen3.5-9b/refseg/w2c/devcheck2"}
+  }
+ },
+ "box_rule": "gt：Sample.gt.box 经 0–1000 网格取整（理想的 LLM 也只能写整数）；base、w2c：E1 refexp_box 格式的 predictions.jsonl（parsed.box，原图绝对像素），按 W2 的提出读法对上（src/w1/baselines.matched_boxes：同一句提示、同一原图尺寸；src/w2/loop.proposal_of）。框解析失败的句子所有格点按空 mask 计分。框 IoU 与 Sample.gt.box 比（src/executors/geometry.box_iou），按 metrics.good_box_iou 分档。",
+ "start_rule": "修正通道的起点：gc_default（生成器库 v2 的 1 号，同一个框；失败时按空 mask）；devcheck2 的 w2c 框另用 W2-c 的最终 mask（RUN-0069 refseg/w2c/devcheck2 的 answer.mask，核对它的 proposal.box 与 w2c 框相同）。",
+ "tokenizer": {"model": "qwen3.5-9b", "tiny_model": "qwen3.5-0.8b",
+               "rule": "src/explore/oracle_sim.count_tokens：tokenizer(文本, add_special_tokens=False) 的长度；--tiny 用 tiny_model（= src/adapters/qwen35.TINY_SOURCE_KEY，测试核对）。"},
+ "tools": {
+  "points": {"radius_pct": 4.0, "radius_min_px": 2.0, "iterations": 5, "context_pct": 50.0,
+             "suppress_factor": 1.0, "min_suppress_px": 2.0},
+  "spline": {"parts": 1, "holes": false, "band_pct": 4.0, "band_min_px": 2.0, "iterations": 5, "context_pct": 50.0},
+  "corrections": {"context_pct": 50.0, "iterations": 5, "alpha": 1.0, "gate": true, "gate_min_px": 16, "gate_min_frac": 0.02,
+                  "confine_to_box": true}
+ },
+ "generators": {
+  "order": ["gc_default", "gc_soft_box_minus10", "gc_default+lcc+fill", "ws_pts", "gc_iter10", "gc_lab", "gc_ctx50", "slic_s50_flood",
+            "felz_k100_flood", "gmm_k3_lab+lcc+fill", "ws_lab_shrink20_margin5", "gc_default+open3+lcc+fill", "gc_hsv",
+            "slic_s100_color", "gmm_k8_rgb+lcc+fill", "gc_box_minus5+close5+fill"],
+  "rule": "名字与参数见 src/explore/guidance.LIBRARY_V2（顺序同 LIBRARY_V2_ORDER，测试核对）；前 4 个 = W2 冻结的 K = 4（configs/w2.json 的 candidates，逐位相同）。genK.K = 前 K 个里真值 IoU 最高的。"
+ },
+ "noise_levels": {
+  "none": {},
+  "light": {"point_jitter_frac": 0.02, "point_wrong_rate": 0.05, "ctrl_jitter_frac": 0.01, "corr_box_jitter_frac": 0.1,
+            "corr_sign_flip_rate": 0.05},
+  "medium": {"point_jitter_frac": 0.05, "point_wrong_rate": 0.15, "ctrl_jitter_frac": 0.03, "corr_box_jitter_frac": 0.25,
+             "corr_sign_flip_rate": 0.15}
+ },
+ "noise_rule": "点与控制点的抖动 σ = *_jitter_px + *_jitter_frac × 真值外接框的短边；错点率：点换成对方区域里均匀抽的一个像素；修正框的抖动 σ = corr_box_jitter_frac × 该框的宽（x）/ 高（y）；符号错误率：翻转符号。每个格点一个独立的随机数生成器（oracle_sim.rng_for）。",
+ "grid_rule": "格点名与计算见 src/explore/ceiling.py 的模块说明（cell_names 给出固定顺序）。first 是先跑的子网格（无噪声），full 是任务书的全网格（另加点的框内初始化 pr_fgd），tiny 只给 --tiny 彩排。tools 的数值等于 src/explore/guidance 的缺省常量（测试核对）。",
+ "grids": {
+  "full": {
+   "generators": {"K": [4, 8, 12, 16]},
+   "points": {"k": [1, 2, 4, 8], "bg": [false, true], "box_init": ["pr_bgd", "pr_fgd"], "noise": ["none", "light", "medium"]},
+   "spline": {"n": [8, 12, 16, 24], "use": ["raster", "gc_soft", "gc_trimap"], "noise": ["none", "light", "medium"]},
+   "corrections": {"rounds": 3, "m": [1, 2, 4], "lock": [true, false], "rule": ["grabcut", "direct"],
+                   "noise": ["none", "light", "medium"], "starts": ["gc_default", "w2c_final"]}
+  },
+  "first": {
+   "generators": {"K": [4, 8, 12, 16]},
+   "points": {"k": [2, 8], "bg": [false, true], "box_init": ["pr_bgd", "pr_fgd"], "noise": ["none"]},
+   "spline": {"n": [12, 24], "use": ["raster", "gc_soft", "gc_trimap"], "noise": ["none"]},
+   "corrections": {"rounds": 3, "m": [2], "lock": [true, false], "rule": ["grabcut", "direct"], "noise": ["none"],
+                   "starts": ["gc_default", "w2c_final"]}
+  },
+  "tiny": {
+   "generators": {"K": [4, 8, 16]},
+   "points": {"k": [1, 4], "bg": [false, true], "box_init": ["pr_bgd", "pr_fgd"], "noise": ["none", "medium"]},
+   "spline": {"n": [8, 16], "use": ["raster", "gc_soft", "gc_trimap"], "noise": ["none", "light"]},
+   "corrections": {"rounds": 2, "m": [1, 2], "lock": [true, false], "rule": ["grabcut", "direct"], "noise": ["none", "light"],
+                   "starts": ["gc_default", "w2c_final"]}
+  }
+ },
+ "metrics": {"good_box_iou": 0.9, "bootstrap": "src/constants 的 BOOTSTRAP_N_RESAMPLES、BOOTSTRAP_CI_LEVEL、BOOTSTRAP_SEED（逐句重抽，cIoU = ratio of sums）"},
+ "chunk_size": 64,
+ "chunk_rule": "续跑的粒度：job（一句 × 一种框）按固定顺序每 chunk_size 个一组，组内交给进程池（按输入顺序收回），整组写完才落盘；没写完的那一组整组重跑。64 让 16 个进程每组各有约 4 个 job，组尾的空等少。"
+}
