@@ -40,6 +40,8 @@ candidates[].index / name / ok / rle / iou……；按文件名升序）与同�
 
 **读取**（load_x2_data，训练用）：manifest 与每个文件的 sha256 对得上；参数等于训练配置的；来源的 w2c_data 与训练读的那一份是同一份
 （manifest 与分片的 sha256）；每行的 target_text 等于按 x2_prompts 重新写出的文本、且能被严格解析回同样的目标。
+只读一部分类（kinds，DEV-0070 的 X-3：只训描样条）：只读、只核对这几类的文件与行，参数只比这几类的那几节（manifest 的其余类不看）；
+kinds 缺省 = params 里有的类，两类都有时与以前逐字节相同。
 
 只 import 不含学习的模块（tests/test_x2_data.py 在干净的子进程里核对）。
 """
@@ -98,22 +100,46 @@ def _num01(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v)) and 0.0 <= float(v) <= 1.0
 
 
-def check_params(doc: Mapping[str, Any]) -> dict[str, Any]:
+def check_kinds(kinds: Sequence[str]) -> tuple[str, ...]:
+    """kinds（DEV-0070）：KINDS 的非空子集，按 KINDS 的先后、不重复。"""
+    t = tuple(kinds)
+    if not t or len(set(t)) != len(t) or set(t) - set(KINDS) or list(t) != [k for k in KINDS if k in t]:
+        raise X2DataError(f"kinds 必须是 {list(KINDS)} 的非空子集（按这个先后），收到 {list(t)}")
+    return t
+
+
+def check_params(doc: Mapping[str, Any], *, kinds: Sequence[str] = KINDS) -> dict[str, Any]:
     """数据参数（configs/x2_train.json 的 spline、correct 两节里与数据有关的键）→ 规范化的 {"spline": {...}, "correct": {...}}。
-    缺的键报错（不补缺省）；多余的键忽略（训练用的键也在这两节里）。"""
+    缺的键报错（不补缺省）；多余的键忽略（训练用的键也在这两节里）。kinds（DEV-0070）：只核对、只返回这几类（缺省两类，与以前相同）。"""
+    kinds = check_kinds(kinds)
     bad: list[str] = []
     sp, co = doc.get("spline"), doc.get("correct")
-    if not isinstance(sp, Mapping) or not isinstance(co, Mapping):
+    if kinds != KINDS:
+        if any(not isinstance(doc.get(k), Mapping) for k in kinds):
+            raise X2DataError(f"参数必须有 {'、'.join(kinds)} 一节")
+    elif not isinstance(sp, Mapping) or not isinstance(co, Mapping):
         raise X2DataError("参数必须有 spline 与 correct 两节")
-    out_sp: dict[str, Any] = {}
-    try:
-        out_sp["n"] = XP.check_n(sp.get("n"))
-    except ValueError as e:
-        bad.append(f"spline.n：{e}")
-    if not _num01(sp.get("min_box_iou")):
-        bad.append(f"spline.min_box_iou 必须是 [0, 1] 内的数，收到 {sp.get('min_box_iou')!r}")
-    else:
-        out_sp["min_box_iou"] = float(sp["min_box_iou"])
+    out: dict[str, Any] = {}
+    if "spline" in kinds:
+        out_sp: dict[str, Any] = {}
+        try:
+            out_sp["n"] = XP.check_n(sp.get("n"))
+        except ValueError as e:
+            bad.append(f"spline.n：{e}")
+        if not _num01(sp.get("min_box_iou")):
+            bad.append(f"spline.min_box_iou 必须是 [0, 1] 内的数，收到 {sp.get('min_box_iou')!r}")
+        else:
+            out_sp["min_box_iou"] = float(sp["min_box_iou"])
+        out["spline"] = out_sp
+    if "correct" in kinds:
+        out["correct"] = _check_correct(co, bad)
+    if bad:
+        raise X2DataError("X-2 的数据参数不合格：\n- " + "\n- ".join(bad))
+    return out
+
+
+def _check_correct(co: Mapping[str, Any], bad: list[str]) -> dict[str, Any]:
+    """correct 一节的数据参数（check_params 的后半；问题追加进 bad）。"""
     out_co: dict[str, Any] = {}
     try:
         out_co["m"] = XP.check_m(co.get("m"))
@@ -141,9 +167,7 @@ def check_params(doc: Mapping[str, Any]) -> dict[str, Any]:
         bad.append(f"correct.round2_apply 必须恰是 {{rule: {list(ROUND2_APPLY_RULES)} 之一, soft_lock: bool}}，收到 {ap!r}")
     else:
         out_co["round2_apply"] = {"rule": ap["rule"], "soft_lock": bool(ap["soft_lock"])}
-    if bad:
-        raise X2DataError("X-2 的数据参数不合格：\n- " + "\n- ".join(bad))
-    return {"spline": out_sp, "correct": out_co}
+    return out_co
 
 
 def tool_constants() -> dict[str, Any]:
@@ -576,7 +600,8 @@ def finalize(out: Path, w2c_dir: str | Path, params: Mapping[str, Any], source: 
 
 @dataclass(frozen=True)
 class X2Data:
-    """X-2 的数据：rows（spline 与 correct 行，按 manifest 的文件顺序）；pools：kind → rows 的下标。"""
+    """X-2 的数据：rows（读进来的类的行：spline 与 correct，或只有 spline（DEV-0070），按 manifest 的文件顺序）；pools：kind → rows 的下标
+    （键 = 读进来的类）。"""
 
     run_dir: Path
     rows: tuple[Mapping[str, Any], ...]
@@ -587,13 +612,23 @@ class X2Data:
     def pool(self, kind: str) -> tuple[int, ...]:
         return self.pools[kind]
 
+    @property
+    def kinds(self) -> tuple[str, ...]:
+        return tuple(self.pools)
+
+    @property
+    def params(self) -> dict[str, Any]:
+        """读进来的类的数据参数（manifest 的 params 里的这几节；两类都读时就是 manifest 的 params，load_x2_data 核对过）。"""
+        return {k: v for k, v in self.manifest["params"].items() if k in self.pools}
+
     def file_paths(self) -> list[Path]:
+        """读进来的类的数据文件与 manifest（两类都读时 = manifest 的全部文件）。"""
         d = self.run_dir / DATA_DIR
-        return [d / f["file"] for f in self.manifest["files"]] + [d / MANIFEST]
+        return [d / f["file"] for f in self.manifest["files"] if f["kind"] in self.pools] + [d / MANIFEST]
 
     def identity(self) -> dict[str, Any]:
-        """运行身份里的 X-2 数据一节：manifest 的 sha256、参数、来源、池的条数与 id 指纹；不含路径。"""
-        return {"format": FRAMEWORK, "manifest_sha256": self.manifest_sha256, "params": dict(self.manifest["params"]),
+        """运行身份里的 X-2 数据一节：manifest 的 sha256、参数（读进来的类的）、来源、池的条数与 id 指纹；不含路径。"""
+        return {"format": FRAMEWORK, "manifest_sha256": self.manifest_sha256, "params": self.params,
                 "tools": dict(self.manifest["tools"]), "source_manifest_sha256": self.manifest["source"]["manifest_sha256"],
                 "pools": {k: {"n": len(p), "ids_sha256": hashlib.sha256("\n".join(str(self.rows[i]["id"]) for i in p).encode("utf-8"))
                               .hexdigest()} for k, p in self.pools.items()},
@@ -624,18 +659,25 @@ def row_problems(r: Mapping[str, Any], kind: str, params: Mapping[str, Any]) -> 
 
 
 def load_x2_data(run_dir: str | Path, *, params: Mapping[str, Any], source: Mapping[str, Any] | None,
-                 data_root: str | Path | None = None, kinds: Sequence[str] = KINDS) -> X2Data:
+                 data_root: str | Path | None = None, kinds: Sequence[str] | None = None) -> X2Data:
     """读 build 的输出并核对（模块说明）。params：训练配置里的数据参数（check_params 之后）；source：训练读的 w2c_data 的指纹
-    （source_identity；None = 不核对，只给 --tiny 的彩排）；data_root 给了就核对图像在。"""
+    （source_identity；None = 不核对，只给 --tiny 的彩排）；data_root 给了就核对图像在。
+    kinds（DEV-0070）：读哪几类（缺省 = params 里有的类）。不是两类时只读、只核对这几类的文件与行，参数只比这几节。"""
+    kinds = check_kinds([k for k in KINDS if k in params] if kinds is None else kinds)
     rd = Path(run_dir)
     d = rd / DATA_DIR
     mp = d / MANIFEST
     if not mp.is_file():
         raise X2DataError(f"{mp} 不在（数据没生成完）")
     man = json.loads(mp.read_text(encoding="utf-8"))
-    want = check_params(params)
-    if man.get("params") != want:
-        raise X2DataError(f"X-2 数据的参数 {man.get('params')} 与训练配置的 {want} 不同")
+    want = check_params(params, kinds=kinds)
+    if kinds == KINDS:
+        if man.get("params") != want:
+            raise X2DataError(f"X-2 数据的参数 {man.get('params')} 与训练配置的 {want} 不同")
+    else:
+        got = man.get("params") if isinstance(man.get("params"), Mapping) else {}
+        if {k: got.get(k) for k in kinds} != want:
+            raise X2DataError(f"X-2 数据的参数 {man.get('params')} 的 {list(kinds)} 与训练配置的 {want} 不同")
     if source is not None and man["source"] != dict(source):
         raise X2DataError("X-2 数据来自另一份 w2c_data（manifest 或分片的 sha256 不同）：与训练读的提出、挑选数据必须是同一份")
     rows: list[Mapping[str, Any]] = []
@@ -643,6 +685,8 @@ def load_x2_data(run_dir: str | Path, *, params: Mapping[str, Any], source: Mapp
     problems: list[str] = []
     seen: set[str] = set()
     for f in man["files"]:
+        if f["kind"] in KINDS and f["kind"] not in kinds:  # DEV-0070：没选的类不读、不核对
+            continue
         p = d / f["file"]
         if not p.is_file() or _sha(p) != f["sha256"]:
             raise X2DataError(f"{p}：文件不在或 sha256 与 manifest 不符")
@@ -669,7 +713,7 @@ def load_x2_data(run_dir: str | Path, *, params: Mapping[str, Any], source: Mapp
 
 
 __all__ = [
-    "DATA_DIR", "DEFAULT_PARAMS", "KINDS", "MANIFEST", "TIERS", "X2Data", "X2DataError", "build", "check_params", "correction_targets",
-    "finalize", "input_problems", "iou_ranking", "load_image", "load_x2_data", "out_name", "row_problems", "sentence_job",
+    "DATA_DIR", "DEFAULT_PARAMS", "KINDS", "MANIFEST", "TIERS", "X2Data", "X2DataError", "build", "check_kinds", "check_params",
+    "correction_targets", "finalize", "input_problems", "iou_ranking", "load_image", "load_x2_data", "out_name", "row_problems", "sentence_job",
     "source_identity", "spline_row", "start_choice", "tool_constants", "wants_round2",
 ]

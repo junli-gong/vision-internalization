@@ -77,6 +77,23 @@ W2-c 加回放（DEV-0065；D125-2 (b)；配置 configs/w2c_replay_train.json = 
     #     （≤ 约 29 GB）。前 50 步跑完先报每步的中位耗时与显存峰值，外推超过 12 小时就停下来定步数。
     # 没有 spline、correct 两节的配置不收 --x2-data；有这两节时必须给 --x2-data（或配置的 x2_data.path）。
 
+探索 X-3（DEV-0070；配置 configs/x3_train.json = configs/x2_train.json 去掉 correct 一节、spline.per_step 6 → 10；依据：探索日志 X-2 一节——
+修正无用、与随机框相近，样条的损失到 2,000 步仍在降）：只训描样条，数据用 X-2 的同一份（--x2-data 指向 build_x2_data.py 的 --out，只读、
+只核对其中的样条行与样条文件，参数只比 spline 一节）：
+    python scripts/train_w2c.py --config configs/x3_train.json --model qwen3.5-9b \
+        --w2c-data experiments/W2/0067_w2c_data_hpcgpu06/w2c_data --x2-data experiments/X/0080_x2_hpcgpu07/0080_x2_data \
+        --replay-data experiments/W2/0076_w2c_replay_hpcgpu07/0076_replay_data --data-root $VI/data/train_data \
+        --out experiments/X/<NNNN>_x3_train [--resume] [--stop-after-steps N]
+    # 每步 8 + 8 + 10 + 3 + 2 = 31 条：提出、挑选、样条、回放通用、回放计数，五条流各自按本流的监督 token 数平均，权重 1 : 1 : 1 : 0.5 : 0.5；
+    #   微批 4：样条三个微批（4 + 4 + 2）。2,000 步：样条 20,000 条 ≈ 1.43 个 epoch（RUN-0080 的样条池 13,987 行）。
+    # 用时（按 RUN-0080 的每步中位 17.5 s 折算；X-2 每步 33 条 = 8 + 8 + 6 + 6 + 3 + 2）：
+    #   - 按条数等比：17.5 / 33 × 31 ≈ 16.4 s/步；
+    #   - 按 RUN-0080 的 train_log 里各流每步的 token 数（提示 + 目标；提出 3,122、挑选 13,328、样条 3,446、修正 3,195、回放 990 + 685，
+    #     合计 24,766）：去掉修正、样条 × 10/6 → 23,868，× 17.5 / 24,766 ≈ 16.9 s/步；
+    #   - 合计约 16.4–16.9 s/步，2,000 步 ≈ 9.1–9.4 GPU 小时（RUN-0080 实际 9.84 小时）。显存峰值：样条的微批（4 × 约 570 个 token）比挑选的
+    #     微批短，预计同 RUN-0080（28.5 GB）。
+    # 检查点的 config.yaml 的 x2 一节没有 correct（参数、池、提示都只有样条）：scripts/run_x2.py 照常加载，修正类设置跳过并在 x2_summary 里写明。
+
 开发机彩排（小型随机模型、CPU、fp32；数据用测试造的假数据，图像在 tests/fixtures/e3/root）：
     python -m tests._w2c_fakes <dir>/w2c_data            # 按当前的 configs/w2.json 造 §5 格式的假数据
     python scripts/train_w2c.py --tiny --model qwen3.5-0.8b --w2c-data <dir>/w2c_data --out <dir>/t
@@ -130,7 +147,8 @@ def parse_args(argv=None):
     p.add_argument("--tiny", action="store_true", help="小型随机模型 + CPU + fp32（开发机彩排）")
     p.add_argument("--config", default=str(T.W2C_CONFIG_PATH), help="默认 configs/w2c_train.json（加回放：configs/w2c_replay_train.json）")
     p.add_argument("--replay-data", help="DEV-0065：回放数据（scripts/build_w2c_replay.py 的 --out）；只配有 replay 一节的配置")
-    p.add_argument("--x2-data", help="DEV-0069：X-2 的数据（scripts/build_x2_data.py 的 --out）；只配有 spline、correct 两节的配置")
+    p.add_argument("--x2-data", help="DEV-0069：X-2 的数据（scripts/build_x2_data.py 的 --out）；只配有 spline、correct 两节的配置"
+                                     "（DEV-0070：或只有 spline 一节，如 configs/x3_train.json：只读其中的样条行）")
     p.add_argument("--w2-config", help="换一份 W2 配置（只配 --tiny；正式运行用 configs/w2c_train.json 写死的那一份）")
     p.add_argument("--candidates-module", default=R.DEFAULT_CANDIDATES_MODULE, help="Candidate 类所在的模块（非默认只配 --tiny）")
     p.add_argument("--render-module", default=R.DEFAULT_RENDER_MODULE, help="render_selection 所在的模块（非默认只配 --tiny）")
@@ -194,7 +212,8 @@ def load_replay(a, cfg: T.W2CConfig, rc, key: str, root: Path):
 
 def load_x2(a, cfg: T.W2CConfig, rc, root: Path):
     """DEV-0069：配置有 spline、correct 两节时读 X-2 的数据（--x2-data 优先，其次配置的 x2_data.path）；没有这两节时不收 --x2-data。
-    核对：参数等于配置的；来源与 --w2c-data 是同一份 w2c_data（非 --tiny）；图像都在 --data-root 下。"""
+    核对：参数等于配置的；来源与 --w2c-data 是同一份 w2c_data（非 --tiny）；图像都在 --data-root 下。
+    DEV-0070：只有 spline 一节时只读、只核对样条的行与文件，参数只比 spline 一节（kinds = 本次的 X-2 流）。"""
     if rc.get("x2") is None:
         if a.x2_data is not None:
             raise T.W2CConfigError(f"{cfg.path} 没有 spline、correct 两节，不收 --x2-data")
@@ -206,7 +225,7 @@ def load_x2(a, cfg: T.W2CConfig, rc, root: Path):
     if a.x2_data is None and not p.is_absolute():
         p = REPO_ROOT / p
     source = None if a.tiny else XD.source_identity(a.w2c_data, require_manifest=True)
-    return XD.load_x2_data(p, params=rc["x2"]["data_params"], source=source, data_root=root)
+    return XD.load_x2_data(p, params=rc["x2"]["data_params"], source=source, data_root=root, kinds=tuple(rc["x2"]["order"]))
 
 
 def cmd_run(a, argv) -> int:

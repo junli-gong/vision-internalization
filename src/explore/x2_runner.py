@@ -33,6 +33,11 @@ meta.json），scripts/gate_explore.py 能直接读。参数在 configs/x2_run.j
 检查点：<叶目录>/ckpt/final/model，叶目录的 config.yaml 必须有 x2 一节（n、m 取它的 params）、variant = w2c、训练用的 W2 配置与本次相同
 （src/w2/w2c.load_checkpoint_adapter 的核对与合并核对）。
 
+**只训了样条的检查点**（DEV-0070，X-3：configs/x3_train.json，x2 一节的 params 没有 correct）：轨迹里不调修正（第 3 条的"修正"与"随机框"
+两步都不做，m = None）；涉及修正的设置（kind 是 cor、randbox，即 *_cor*、*_randbox）跳过，不写输出目录，在 summary.json 的 skipped 里
+写明"检查点没有修正流"；其余设置（x2_select、x2_spline_*、x2_select5、最优候选、椭圆消融）照常，输出格式不变。有修正流的检查点与以前
+逐字节相同（trace 的运行身份、summary 都不多键）。
+
 工具只用 src/explore/guidance（不含学习）；本模块不 import torch 等（tests/test_explore_guidance.py 扫描 src/explore 的源码）。工具一步可以
 用 spawn 的进程池（tool_workers；子进程单线程），结果与单进程逐位相同。
 """
@@ -84,6 +89,8 @@ BASES: tuple[str, ...] = ("select", "select5")
 FIFTH_NAME = "spline_trimap"
 STOP_EMPTY = "empty"
 STOP_PARSE = "parse_failure"
+CORRECTION_KINDS: tuple[str, ...] = ("cor", "randbox")  # 用到修正流的设置（DEV-0070：没有修正流的检查点上跳过）
+NO_CORRECTION = "检查点没有修正流"
 
 
 class X2RunError(ValueError):
@@ -171,7 +178,8 @@ def setting_defs(rounds: int) -> dict[str, dict[str, Any]]:
 
 
 def checkpoint_x2_params(checkpoint: str | Path) -> dict[str, Any]:
-    """检查点的训练叶目录（<叶>/ckpt/final/model）的 config.yaml 的 x2 一节 → {"n", "m", "params", "manifest_sha256"}。"""
+    """检查点的训练叶目录（<叶>/ckpt/final/model）的 config.yaml 的 x2 一节 → {"n", "m", "params", "manifest_sha256"}。
+    DEV-0070：params 没有 correct 一节（只训了样条，configs/x3_train.json）时 m = None，不核对叠加图的版本（训练时没有叠加图）。"""
     from src.e3.train import checkpoint_leaf
 
     leaf = checkpoint_leaf(checkpoint)
@@ -180,12 +188,19 @@ def checkpoint_x2_params(checkpoint: str | Path) -> dict[str, Any]:
     doc = yaml.safe_load((leaf / CONFIG).read_text(encoding="utf-8")) or {}
     x = doc.get("x2")
     if not x or not isinstance(x.get("params"), Mapping):
-        raise X2RunError(f"{leaf / CONFIG} 没有 x2 一节：这个检查点不是 X-2 的训练结果（configs/x2_train.json）")
-    if (x.get("prompts") or {}).get("version") != XP.PROMPT_VERSION or (x.get("render") or {}).get("version") != XR.RENDER_VERSION:
+        raise X2RunError(f"{leaf / CONFIG} 没有 x2 一节：这个检查点不是 X-2 的训练结果（configs/x2_train.json、configs/x3_train.json）")
+    cor = "correct" in x["params"]
+    if (x.get("prompts") or {}).get("version") != XP.PROMPT_VERSION or \
+            (cor and (x.get("render") or {}).get("version") != XR.RENDER_VERSION):
         raise X2RunError(f"检查点训练时的提示 / 叠加图版本 {x.get('prompts', {}).get('version')} / {x.get('render', {}).get('version')} "
                          f"与本次的 {XP.PROMPT_VERSION} / {XR.RENDER_VERSION} 不同")
-    return {"n": int(x["params"]["spline"]["n"]), "m": int(x["params"]["correct"]["m"]), "params": dict(x["params"]),
+    return {"n": int(x["params"]["spline"]["n"]), "m": int(x["params"]["correct"]["m"]) if cor else None, "params": dict(x["params"]),
             "manifest_sha256": x.get("manifest_sha256")}
+
+
+def correction_trained(x2: Mapping[str, Any]) -> bool:
+    """检查点训练过修正流（checkpoint_x2_params 的 m 不是 None）。"""
+    return x2["m"] is not None
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +257,7 @@ class ChunkContext:
     impl: Any
     prompts: PromptConfig
     n: int
-    m: int
+    m: int | None  # None：检查点没有修正流（DEV-0070），轨迹不调修正
     batch_size: int
     max_batch_tokens: int | None
     tiny: bool
@@ -326,7 +341,9 @@ def process_chunk(ctx: ChunkContext, chunk: Sequence[Sample], cand_rows: Mapping
     for s in live:
         tr[s.id]["select5"] = {**dict(o5[s.id].record), "fifth": FIFTH_NAME if tr[s.id]["spline"].get("trimap_rle") else "empty"}
         tm[s.id]["model_s"]["select5"] = float(o5[s.id].wall_time_s)
-    # 5. 修正（两条轨迹）与随机框
+    # 5. 修正（两条轨迹）与随机框；检查点没有修正流（DEV-0070）时不做
+    if ctx.m is None:
+        return [tr[s.id] for s in chunk], [tm[s.id] for s in chunk]
     cor = rc["correction"]
     salt = rc["ablations"]["randbox"]["salt"]
     for base, outs, cands in (("select", o4, cand_masks), ("select5", o5, m5)):
@@ -392,6 +409,10 @@ def trace_identity(spec: R.W2RunSpec, cfg: W2Config, rc: X2RunConfig, splits_doc
                    *, prop_dir: Path, cand_leaf: Path, cand_rows: Sequence[Mapping[str, Any]], impl: Any, checkpoint: Mapping[str, Any],
                    x2: Mapping[str, Any], batching: Mapping[str, Any]) -> dict[str, Any]:
     tspec = dataclasses.replace(spec, setting=TRACE_SETTING)
+    xs = {"n": int(x2["n"]), "m": None if x2["m"] is None else int(x2["m"]), "train_params": dict(x2["params"]), "prompts": XP.PROMPT_VERSION,
+          "run_config": rc.identity(), "rounds": rc.rounds}
+    if not correction_trained(x2):  # DEV-0070：只在没有修正流时多这一键（有修正流的运行身份与以前相同）
+        xs["correction"] = f"{NO_CORRECTION}：轨迹不调修正，修正类设置跳过"
     return {"experiment": "X-2", "framework": FRAMEWORK, "w2": R.w2_record(tspec, splits_doc, samples), "model": model_record(spec),
             "image_policy": dict(spec.image_policy), "w2_config": cfg.identity(),
             "propose": {"mode": "box", "run": R._run_ref(out, prop_dir)},
@@ -399,8 +420,7 @@ def trace_identity(spec: R.W2RunSpec, cfg: W2Config, rc: X2RunConfig, splits_doc
                            "k": cfg.k, "content_sha256": candidates_digest_rows(cand_rows)},
             "render": {"select_module": impl.render_module, "layout": cfg.layout, "style": cfg.style, "overlay": XR.RENDER_VERSION},
             "checkpoint": json.loads(json.dumps(dict(checkpoint), ensure_ascii=False)),
-            "x2": {"n": int(x2["n"]), "m": int(x2["m"]), "train_params": dict(x2["params"]), "prompts": XP.PROMPT_VERSION,
-                   "run_config": rc.identity(), "rounds": rc.rounds},
+            "x2": xs,
             "batching": dict(batching)}
 
 
@@ -612,15 +632,20 @@ def setting_identity(trace_ident: Mapping[str, Any], name: str, d: Mapping[str, 
 def derive_settings(spec: R.W2RunSpec, rc: X2RunConfig, samples: Sequence[Sample], out: str | Path, *, splits_doc: Mapping[str, Any],
                     trace_leaf: Path, trace_ident: Mapping[str, Any], trace: Sequence[Mapping[str, Any]], timing: Mapping[str, Any],
                     cand_rows: Mapping[str, Mapping[str, Any]], cand_leaf: Path, prop_recs: Mapping[str, Mapping[str, Any]], prop_dir: Path,
-                    files: Sequence[str | Path], settings: Sequence[str] | None = None) -> dict[str, Any]:
-    """各设置的输出目录（只读轨迹，整份重写）与 summary.json。返回 summary。"""
+                    files: Sequence[str | Path], settings: Sequence[str] | None = None, correction: bool = True) -> dict[str, Any]:
+    """各设置的输出目录（只读轨迹，整份重写）与 summary.json。返回 summary。
+    correction = False（DEV-0070：检查点没有修正流）：kind 是 cor、randbox 的设置跳过，summary 的 skipped 写明原因。"""
     defs = setting_defs(rc.rounds)
     names = list(defs) if settings is None else [s for s in defs if s in settings]
+    skipped = [] if correction else [s for s in names if defs[s]["kind"] in CORRECTION_KINDS]
+    names = [s for s in names if s not in skipped]
     by_t = {t["id"]: t for t in trace}
     prop_t = R._timing_by_id(prop_dir)
     cand_t = R._timing_by_id(cand_leaf)
     summ: dict[str, Any] = {"experiment": "X-2", "split": spec.split, "model": spec.model_key, "checkpoint": trace_ident["checkpoint"]["manifest_sha256"],
                             "n": len(samples), "settings": {}}
+    if not correction:
+        summ["skipped"] = {"reason": NO_CORRECTION, "settings": skipped}
     for name in names:
         d = defs[name]
         leaf = R.w2_leaf(out, spec.model_key, TASK, name, spec.split)
@@ -700,17 +725,19 @@ def run_split(adapter: Any, entry: Any, spec: R.W2RunSpec, w2: W2Config, rc: X2R
     files = [w2.path, REPO_ROOT / rc.path if not Path(rc.path).is_absolute() else Path(rc.path), *R._splits_files(splits_doc),
              *paths.config_files()]
     with ToolPool(tool_workers) as pool:
-        ctx = ChunkContext(adapter=adapter, w2=w2, rc=rc, impl=impl, prompts=prompts, n=int(x2["n"]), m=int(x2["m"]),
+        ctx = ChunkContext(adapter=adapter, w2=w2, rc=rc, impl=impl, prompts=prompts, n=int(x2["n"]),
+                           m=int(x2["m"]) if correction_trained(x2) else None,
                            batch_size=bat["batch_size"], max_batch_tokens=bat["max_batch_tokens"], tiny=spec.tiny, pool=pool)
         trace_leaf, trace, timing = run_trace(ctx, spec, samples, cand_rows, out, ident=ident, files=files, chunk_size=bat["chunk_size"],
                                               resume=resume, argv=argv, log=log)
     props = R._proposals_by_id(PROPOSE_BOX, samples, prop_list, prompts, spec, w2)
     return derive_settings(spec, rc, samples, out, splits_doc=splits_doc, trace_leaf=trace_leaf, trace_ident=ident, trace=trace, timing=timing,
-                           cand_rows=cand_rows, cand_leaf=cand_leaf, prop_recs=props, prop_dir=prop_dir, files=files, settings=settings)
+                           cand_rows=cand_rows, cand_leaf=cand_leaf, prop_recs=props, prop_dir=prop_dir, files=files, settings=settings,
+                           correction=correction_trained(x2))
 
 
 __all__ = [
-    "BASES", "ChunkContext", "FIFTH_NAME", "TRACE_SETTING", "X2RunConfig", "X2RunError", "X2_RUN_CONFIG_PATH", "aggregate",
-    "checkpoint_x2_params", "derive_settings", "final_of", "generate_parse", "load_run_config", "process_chunk", "run_trace",
-    "run_split", "setting_defs", "setting_record", "trace_identity",
+    "BASES", "CORRECTION_KINDS", "ChunkContext", "FIFTH_NAME", "NO_CORRECTION", "TRACE_SETTING", "X2RunConfig", "X2RunError",
+    "X2_RUN_CONFIG_PATH", "aggregate", "checkpoint_x2_params", "correction_trained", "derive_settings", "final_of", "generate_parse",
+    "load_run_config", "process_chunk", "run_trace", "run_split", "setting_defs", "setting_record", "trace_identity",
 ]

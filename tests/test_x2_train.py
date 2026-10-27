@@ -182,7 +182,7 @@ def test_config_is_replay_config_plus_x2_sections():
 
 
 @pytest.mark.parametrize("edit,msg", [
-    (lambda d: d.pop("correct"), "同时有"),
+    (lambda d: d.pop("spline"), "不能单独有"),  # DEV-0070：可以只有 spline（tests/test_x2_spline_only.py），只有 correct 仍然报错
     (lambda d: d.pop("x2_data"), "x2_data"),
     (lambda d: d["x2_data"].update(path=""), "x2_data"),
     (lambda d: d["spline"].update(per_step=0), "per_step"),

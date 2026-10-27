@@ -61,6 +61,12 @@ run_cfg、运行身份、train_log、README、检查点与以前逐字节相同�
   整数倍时最后一个微批不满（同回放流）；
 - 记录：loss_by_stream、by_stream……多出 spline、correct；运行身份多 x2 一节（数据的指纹、参数、提示原文、流）；检查点格式不变（variant 仍是
   w2c，scripts/run_w2.py --setting w2c 与 scripts/run_x2.py 都能加载）。
+
+**只有样条一条流（DEV-0070，探索 X-3；配置 configs/x3_train.json = X-2 的配置去掉 correct 一节，样条每步 10 条）**：配置有 spline、没有 correct
+一节时只开样条流（流号仍是 4），其余同上；数据仍是 X-2 的同一份（scripts/build_x2_data.py 的输出），只读、只核对其中的样条行与样条文件，
+数据参数只比 spline 一节（src/explore/x2_data.load_x2_data 的 kinds）。运行身份的 x2 一节：参数、池只有 spline，提示只有描样条的，没有
+叠加图（render）一项；scripts/run_x2.py 据此跳过修正类设置。两节都在时与 DEV-0069 逐字节相同（tests/test_x2_spline_only.py 与 51dffb25 的原文件
+对照钉住）；只有 correct 一节仍然报错。
 """
 
 from __future__ import annotations
@@ -125,13 +131,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 W2C_CONFIG_PATH = REPO_ROOT / "configs" / "w2c_train.json"
 W2C_REPLAY_CONFIG_PATH = REPO_ROOT / "configs" / "w2c_replay_train.json"  # DEV-0065：W2-c 加回放（除 replay 一节外与上面逐项相同）
 X2_CONFIG_PATH = REPO_ROOT / "configs" / "x2_train.json"  # DEV-0069：探索 X-2（W2-c 加回放，再加 spline、correct 两条流）
+X3_CONFIG_PATH = REPO_ROOT / "configs" / "x3_train.json"  # DEV-0070：探索 X-3（X-2 去掉 correct 流，样条每步 10 条）
 REPLAY_PREFIX = "replay"  # 回放流的名字以它开头
 SCHEMA = 1
 SUPERVISION = "w2c"
 VARIANT = "w2c"  # 叶目录 <out>/w2c/<模型>/seed<k>/；run_w2.py --setting w2c 核对检查点来自这个变体
 STREAMS: tuple[str, ...] = ("propose", "select")
 STREAM_INDEX = {s: i for i, s in enumerate(STREAMS)}
-X2_STREAMS: tuple[str, ...] = ("spline", "correct")  # DEV-0069：X-2 的两条流（配置的 spline、correct 两节）
+X2_STREAMS: tuple[str, ...] = ("spline", "correct")  # DEV-0069：X-2 的两条流（配置的 spline、correct 两节）；DEV-0070：可以只有 spline
+assert X2_STREAMS == XD.KINDS
 X2_STREAM_INDEX = {"spline": 4, "correct": 5}  # pool_position 的流号：回放流至多 len(RP.KINDS) 条，占 2、3
 assert len(STREAMS) + len(RP.KINDS) <= min(X2_STREAM_INDEX.values())
 X2_DOC_KEYS = ("rule", "basis", "note")  # spline、correct 两节里只作说明的键
@@ -241,21 +249,22 @@ def replay_spec(doc: Mapping[str, Any], *, tiny: bool) -> dict[str, Any] | None:
 
 def x2_spec(doc: Mapping[str, Any], *, tiny: bool) -> dict[str, Any] | None:
     """配置的 spline、correct 两节（DEV-0069）→ 本次生效的 X-2 流；两节都没有返回 None（W2-c 原样，运行身份里也没有 x2 键）。
-    两节必须同时有（数据的参数同时含两类），且要有 x2_data 一节。每条流：per_step（tiny 取 tiny_per_step）正整数，不必是微批的整数倍；
-    loss_weight 正数；order 等于 E1 的 image_order；数据参数按 src/explore/x2_data.check_params 核对。流的先后 = (spline, correct)，排在
-    提出、挑选之后、回放之前；流号 = X2_STREAM_INDEX。"""
+    两节都有，或只有 spline 一节（DEV-0070：只开样条流，数据参数只核对 spline 一节）；只有 correct 一节报错。要有 x2_data 一节。
+    每条流：per_step（tiny 取 tiny_per_step）正整数，不必是微批的整数倍；loss_weight 正数；order 等于 E1 的 image_order；数据参数按
+    src/explore/x2_data.check_params（kinds = 有的那几节）核对。流的先后 = (spline, correct) 里有的，排在提出、挑选之后、回放之前；
+    流号 = X2_STREAM_INDEX。"""
     have = [s for s in X2_STREAMS if s in doc]
     if not have:
         return None
-    if len(have) != len(X2_STREAMS):
-        raise W2CConfigError(f"spline、correct 两节必须同时有（X-2 的数据同时含两类），只有 {have}")
+    if "spline" not in have:
+        raise W2CConfigError(f"correct 一节不能单独有（X-2 的流要有 spline 一节；DEV-0070 起可以只有 spline），只有 {have}")
     xd = doc.get("x2_data")
     if not isinstance(xd, Mapping) or not (xd.get("path") is None or (isinstance(xd.get("path"), str) and xd["path"])):
         raise W2CConfigError("x2_data 必须是一节，path 是 null（用 --x2-data）或相对仓库根的非空路径")
     t = doc["tiny"]
     micro = int(t["micro_batch_size"] if tiny else doc["batch"]["micro_batch_size"])
     out: dict[str, dict[str, Any]] = {}
-    for name in X2_STREAMS:
+    for name in have:
         sec = doc[name]
         if not isinstance(sec, Mapping):
             raise W2CConfigError(f"{name} 必须是一节（对象）")
@@ -273,20 +282,20 @@ def x2_spec(doc: Mapping[str, Any], *, tiny: bool) -> dict[str, Any] | None:
         out[name] = {"per_step": int(per), "loss_weight": float(w), "order": str(sec["order"]),
                      "micro_batches": int(math.ceil(int(per) / micro)), "index": X2_STREAM_INDEX[name]}
     try:
-        params = XD.check_params({k: {kk: doc[k][kk] for kk in X2_DATA_KEYS[k] if kk in doc[k]} for k in X2_STREAMS})
+        params = XD.check_params({k: {kk: doc[k][kk] for kk in X2_DATA_KEYS[k] if kk in doc[k]} for k in have}, kinds=have)
     except XD.X2DataError as e:
         raise W2CConfigError(str(e)) from None
-    return {"streams": out, "order": list(X2_STREAMS), "per_step_total": sum(v["per_step"] for v in out.values()), "data_params": params}
+    return {"streams": out, "order": list(have), "per_step_total": sum(v["per_step"] for v in out.values()), "data_params": params}
 
 
 def stream_names(rc: Mapping[str, Any]) -> tuple[str, ...]:
-    """本次的全部样本流：提出、挑选，再加 X-2 的两条流（有 spline、correct 两节时）、回放流（有 replay 一节时）。"""
+    """本次的全部样本流：提出、挑选，再加 X-2 的流（有 spline、correct 两节时两条，只有 spline 时一条）、回放流（有 replay 一节时）。"""
     x, r = rc.get("x2"), rc.get("replay")
     return STREAMS + (() if x is None else tuple(x["order"])) + (() if r is None else tuple(r["order"]))
 
 
 def stream_order(rc: Mapping[str, Any]) -> list[str]:
-    """一步之内微批的先后：streams.order，再接 X-2 的两条流、回放流的顺序。"""
+    """一步之内微批的先后：streams.order，再接 X-2 的流、回放流的顺序。"""
     x, r = rc.get("x2"), rc.get("replay")
     return list(rc["streams"]["order"]) + ([] if x is None else list(x["order"])) + ([] if r is None else list(r["order"]))
 
@@ -390,7 +399,7 @@ def resolve_w2c_run(cfg: W2CConfig, *, tiny: bool, steps: int | None = None) -> 
     if rs is not None:  # DEV-0065：只有配置有 replay 一节时才有这个键（默认配置的 run_cfg 与以前逐项相同）
         out["replay"] = rs
     xs = x2_spec(d, tiny=tiny)
-    if xs is not None:  # DEV-0069：只有配置有 spline、correct 两节时才有这个键
+    if xs is not None:  # DEV-0069：只有配置有 spline、correct 两节（DEV-0070：或只有 spline）时才有这个键
         out["x2"] = xs
     if tiny:
         for k in _TINY_KEYS:
@@ -1044,7 +1053,7 @@ def run_identity(spec: W2CRunSpec, cfg: W2CConfig, rc: Mapping[str, Any], traine
         ident["replay"] = {**replay.identity(), "streams": {k: dict(v) for k, v in rc["replay"]["streams"].items()},
                            "sample": "提示、图（计数：原图 load_pil）、order 取回放数据的行原样；目标 = base 生成的 token 原样（含停止 token）",
                            "loss": "每条回放流各自除以这一步里自己的监督 token 数，再乘 loss_weight，与提出、挑选两项相加"}
-    if x2 is not None:
+    if x2 is not None and "correct" in rc["x2"]["streams"]:
         ident["x2"] = {**x2.identity(), "streams": {k: dict(v) for k, v in rc["x2"]["streams"].items()},
                        "prompts": {"version": XP.PROMPT_VERSION, "spline": XP.SPLINE_TEMPLATE, "correct": XP.CORRECT_TEMPLATE},
                        "render": {"version": XR.RENDER_VERSION, "module": "src/explore/x2_render.render_overlay", "box_rgb": list(XR.BOX_RGB),
@@ -1052,6 +1061,12 @@ def run_identity(spec: W2CRunSpec, cfg: W2CConfig, rc: Mapping[str, Any], traine
                        "sample": "描样条：原图 + spline_prompt → 控制点 JSON；指修正框：叠加图（起点 mask + 提出的框，训练时现画）+ correct_prompt → "
                                  "修正框 JSON 或 []；目标加回合结束 token，全部监督",
                        "loss": "两条流各自除以这一步里自己的监督 token 数，再乘 loss_weight，与其余各项相加"}
+    elif x2 is not None:  # DEV-0070：只有样条一条流（没有修正：提示只有描样条的，没有叠加图）
+        ident["x2"] = {**x2.identity(), "streams": {k: dict(v) for k, v in rc["x2"]["streams"].items()},
+                       "prompts": {"version": XP.PROMPT_VERSION, "spline": XP.SPLINE_TEMPLATE},
+                       "sample": "描样条：原图 + spline_prompt → 控制点 JSON；目标加回合结束 token，全部监督。没有修正流（DEV-0070：配置没有 correct 一节，"
+                                 "X-2 数据里的修正行不读）",
+                       "loss": "样条流除以这一步里自己的监督 token 数，再乘 loss_weight，与其余各项相加"}
     return ident
 
 
@@ -1075,7 +1090,8 @@ def readme_text(spec: W2CRunSpec, ident: Mapping[str, Any], summary: Mapping[str
     x2_lines = [] if x2 is None else [
         f"- X-2（DEV-0069，目标来自真值）：每步另加 {tr['x2']['per_step_total']} 条，"
         + "；".join(f"{s} {v['per_step']} 条（损失权重 {v['loss_weight']:g}，按本流的监督 token 数平均）" for s, v in tr["x2"]["streams"].items())
-        + f"；参数 {x2['params']}；数据 manifest sha256 {x2['manifest_sha256'][:16]}…，池 { {s: v['n'] for s, v in x2['pools'].items()} }"]
+        + f"；参数 {x2['params']}；数据 manifest sha256 {x2['manifest_sha256'][:16]}…，池 { {s: v['n'] for s, v in x2['pools'].items()} }"
+        + ("" if "correct" in tr["x2"]["streams"] else "；没有修正流（DEV-0070，X-3：只读 X-2 数据里的样条行）")]
     return "\n".join([
         f"# W2-c 训练 · {spec.model_key} · seed {spec.seed}", "",
         f"- 模型：{spec.repo}@{spec.revision}（{spec.family}；适配器 {spec.adapter_model_key}；{spec.model_dtype}）；图像口径 {spec.image_policy}",
@@ -1109,7 +1125,8 @@ def run_w2c_training(adapter: Any, cfg: W2CConfig, spec: W2CRunSpec, run_cfg: Ma
     replay（DEV-0065）：回放数据（src/w2/w2c_replay.load_replay_data），当且仅当 run_cfg 有 replay 一节时给；每步在提出、挑选之后
     另加回放流的样本（ReplaySchedule、ReplayBuilder），损失多一项（W2CTrainer.optimize）。不给时与以前逐字节相同。
     x2（DEV-0069）：X-2 的数据（src/explore/x2_data.load_x2_data），当且仅当 run_cfg 有 x2 一节时给；每步在提出、挑选之后、回放之前另加
-    spline、correct 两条流的样本（X2Schedule、X2Builder）。不给时与以前逐字节相同。"""
+    spline、correct 两条流（DEV-0070：或只有 spline 一条）的样本（X2Schedule、X2Builder）；数据读进来的类必须恰是 run_cfg 的流、参数
+    等于 run_cfg 的 data_params。不给时与以前逐字节相同。"""
     log = log or (lambda m: print(m, file=sys.stderr, flush=True))
     rc = dict(run_cfg)
     if rc["supervision"] != SUPERVISION or rc["variant"] != VARIANT:
@@ -1117,9 +1134,9 @@ def run_w2c_training(adapter: Any, cfg: W2CConfig, spec: W2CRunSpec, run_cfg: Ma
     if (replay is None) != (rc.get("replay") is None):
         raise ValueError("回放数据与 run_cfg 的 replay 一节必须同时有或同时没有（--replay-data 只配有 replay 一节的配置）")
     if (x2 is None) != (rc.get("x2") is None):
-        raise ValueError("X-2 的数据与 run_cfg 的 x2 一节必须同时有或同时没有（--x2-data 只配有 spline、correct 两节的配置）")
-    if x2 is not None and dict(x2.manifest["params"]) != dict(rc["x2"]["data_params"]):
-        raise ValueError(f"X-2 数据的参数 {x2.manifest['params']} 与 run_cfg 的 {rc['x2']['data_params']} 不同")
+        raise ValueError("X-2 的数据与 run_cfg 的 x2 一节必须同时有或同时没有（--x2-data 只配有 spline 一节、可再有 correct 一节的配置）")
+    if x2 is not None and x2.params != dict(rc["x2"]["data_params"]):  # x2.params：读进来的类的参数（两类都读时 = manifest 的 params）
+        raise ValueError(f"X-2 数据的参数 {x2.params} 与 run_cfg 的 {rc['x2']['data_params']} 不同")
     leaf = leaf_dir(out_dir, VARIANT, spec.model_key, spec.seed)
     ckpt = (Path(ckpt_root) / VARIANT / spec.model_key / f"seed{spec.seed}") if ckpt_root else leaf / "ckpt"
     latest = ckpt / LATEST
@@ -1310,7 +1327,7 @@ def run_w2c_training(adapter: Any, cfg: W2CConfig, spec: W2CRunSpec, run_cfg: Ma
             summary["replay"] = {"manifest_sha256": replay.manifest_sha256, "pools": {s: len(p) for s, p in replay.pools.items()}}
         if x2 is not None:
             summary["x2"] = {"manifest_sha256": x2.manifest_sha256, "pools": {s: len(p) for s, p in x2.pools.items()},
-                             "params": dict(x2.manifest["params"])}
+                             "params": x2.params}
         (leaf / README).write_text(readme_text(spec, ident, summary, tlog), encoding="utf-8")
         _atomic_write_text(leaf / SUMMARY, json.dumps(summary, indent=1, ensure_ascii=False) + "\n")
         finish_log("complete")
@@ -1351,6 +1368,7 @@ __all__ = [
     "X2Builder",
     "X2Schedule",
     "X2_CONFIG_PATH",
+    "X3_CONFIG_PATH",
     "X2_STREAMS",
     "X2_STREAM_INDEX",
     "check_label",

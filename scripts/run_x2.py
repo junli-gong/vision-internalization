@@ -25,6 +25,10 @@
     #   - 修正：每轮一张叠加图 + 约 50 个输出 token，约 4–5 分钟一轮；两条轨迹各至多 3 轮，提前停使后几轮的句子变少，约 15–30 分钟；
     #   - 工具（trimap、局部 GrabCut、随机框）：每句约 1–2.5 s 的 CPU，--tool-workers 8 时与模型调用交替，约 5–10 分钟；
     #   合计约 1.0–1.5 GPU 小时 / 1,000 句；devtune800 约 0.8–1.2 小时。第一组（64 句）跑完先看 logs 的耗时再外推。
+    # 只训了样条的检查点（DEV-0070，X-3：scripts/train_w2c.py --config configs/x3_train.json；叶目录 config.yaml 的 x2 一节没有 correct）：
+    #   命令同上（--checkpoint 换成 X-3 的）。轨迹不调修正；涉及修正的设置（x2_select_cor*、x2_select5_cor*、*_randbox，共 12 个）跳过，
+    #   不写输出目录，x2_summary/<划分>.json 的 skipped 写明"检查点没有修正流"；其余 8 个设置照常，输出格式不变。少了两条修正轨迹
+    #   （RUN-0080 的 refcoco 层：修正调用每句约 0.6 + 0.6 s，另加工具），用时约省三成。
 开发机彩排（--tiny：小型随机模型、CPU、fixture 的小数据；候选与挑选图的渲染可以换成 tests._w2_fakes）：
     python scripts/run_x2.py --tiny --model qwen3.5-0.8b --checkpoint <tiny 训练的检查点> --split devcheck2 --out <dir> \\
         --candidates-module tests._w2_fakes --render-module tests._w2_fakes
@@ -82,7 +86,8 @@ def is_test_split(split: str) -> bool:
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", required=True, help="注册键（src/adapters/registry.py）")
-    p.add_argument("--checkpoint", required=True, help="X-2 的检查点 <训练叶目录>/ckpt/final/model（scripts/train_w2c.py --config configs/x2_train.json）")
+    p.add_argument("--checkpoint", required=True, help="X-2 的检查点 <训练叶目录>/ckpt/final/model（scripts/train_w2c.py --config "
+                                                        "configs/x2_train.json；DEV-0070：或 configs/x3_train.json，只训了样条，修正类设置跳过）")
     p.add_argument("--split", required=True, help="划分名（--splits-file 的 splits；test 一律拒绝）")
     p.add_argument("--splits-file", default=str(W2_SPLITS_PATH), help="划分清单（默认 configs/w2_splits.json；探索：configs/explore_splits.json）")
     p.add_argument("--unseal-devcheck3", metavar="GATE", help=f"密封的 devcheck3 只在判定时用：门名必须是 {EX.GATE}")
@@ -183,7 +188,9 @@ def cmd(a, argv) -> int:
                         impl=impl, e1_batch_size=TINY_E1_BATCH_SIZE if a.tiny else frozen_bs, resume=a.resume, tool_workers=a.tool_workers,
                         candidate_workers=a.candidate_workers, argv=argv, run_extra=extra, settings=a.settings)
     head = "; ".join(f"{k}={v['cIoU']}" for k, v in summ["settings"].items())
-    print(f"X-2 {a.model} {a.split} n={summ['n']} {head}")
+    sk = summ.get("skipped")
+    tail = "" if sk is None else f"（跳过 {len(sk['settings'])} 个设置：{sk['reason']}）"
+    print(f"X-2 {a.model} {a.split} n={summ['n']} {head}{tail}")
     return 0
 
 

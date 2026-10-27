@@ -3258,3 +3258,18 @@
   - 输出到 `experiments/W2/0076_w2c_replay_ttext_hpcgpu06/`。
 - **已核对的其余步骤**：B 段的 `lang_battery.py --out "$OUT/lb_w2c_replay"` 与 `health_check.py --out <文件>` 都不受这条规则约束（RUN-0074 同样的写法跑通了）。
 - `scripts/mgr/lang_cost_table.py` 的回放一列改读新路径。
+
+## D142（2026-10-27，管理员）：DEV-0070 合入（X-3：只训描样条）
+
+- `x2_spec` 可以只有 spline 一节，只有 correct 一节仍报错。`load_x2_data(kinds=…)` 只读样条。两节都在时与 DEV-0069 逐字节相同：51dffb25 的快照对照。
+- `configs/x3_train.json`，sha256 `bae8942a…`：
+  - 等于 x2 去掉 correct，`spline.per_step` 10；
+  - 每步 8 + 8 + 10 + 3 + 2 = 31 条，2,000 步；
+  - 约 1.43 个样条 epoch，预计 9.1–9.4 GPU 小时。
+- `run_x2` 在没有修正流的检查点上跳过 12 个修正类设置，并记进 `x2_summary`。
+- 开发 agent 的三处出入（三段说明文字照实改、测试文件命名为 `test_x2_spline_only.py`、4 个快照文件）：**认可**。
+- 依据（探索日志 X-2）：
+  - 描样条 + trimap 在 explore_val 三层与 devtune800 上都比挑工具候选高 0.07–0.11；
+  - 修正无用，与随机框相近；
+  - 样条的损失到 2,000 步仍在降。
+- 测试：开发 agent 报 188 passed；合入后在 main 上跑 `tests/test_x2_spline_only.py tests/test_x2_train.py tests/test_x2_runner.py tests/test_x2_data.py tests/test_w2c_replay.py`，86 passed。

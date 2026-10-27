@@ -355,10 +355,13 @@ def test_cli_end_to_end_outputs_resume_and_gate_reader(x2_ckpt, tmp_path):
         assert g["identity"]["setting"] == name and g["identity"]["checkpoint"]["manifest_sha256"] == ck_sha and len(g["records"]) == 3
     summ = json.loads((m / "refseg" / XR.SUMMARY_DIR / "devcheck2.json").read_text())
     assert set(summ["settings"]) == set(XR.setting_defs(3)) and "x2_select_cor3" in summ["compute_pairing"]
+    assert "skipped" not in summ  # DEV-0070：有修正流的检查点不跳过任何设置，summary 不多键
     pair = summ["compute_pairing"]["x2_select_cor1"]["single_round_at_most_this_compute"]
     assert all(c <= summ["compute_pairing"]["x2_select_cor1"]["calls_per_sample"] for _, c in pair)
     tr = jsonl(m / "refseg" / XR.TRACE_SETTING / "devcheck2" / "trace.jsonl")
     assert len(tr) == 3 and tr[0]["failure"] is not None and all(t["spline"]["call"]["failure"] for t in tr[1:])  # 随机模型：样条失败
+    tcfg = yaml.safe_load((m / "refseg" / XR.TRACE_SETTING / "devcheck2" / "config.yaml").read_text())
+    assert tcfg["x2"]["m"] == 2 and "correction" not in tcfg["x2"] and all("cor" in t for t in tr[1:])
     before = {n: (m / "refseg" / n / "devcheck2" / "predictions.jsonl").read_bytes() for n in XR.setting_defs(3)}
     run(RUN_X2, base + ["--resume"], tmp)
     assert all((m / "refseg" / n / "devcheck2" / "predictions.jsonl").read_bytes() == b for n, b in before.items())
