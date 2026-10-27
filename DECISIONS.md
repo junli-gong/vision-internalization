@@ -3249,3 +3249,12 @@
   - `--out` 的运行编号；
   - tiny 彩排之外，逐项对照正式参数；
   - 放宽停止线时，同时核对总上限。
+
+## D141（2026-10-27，管理员）：回放变体的 T 文本一步同样因 --out 命名失败，重跑
+
+- **事故**：RUN-0076 B 段的 `ttext_w2c_replay` 一步 rc=2。`run_e1.py` 的 `--out` 是 `$OUT/ttext`，与 D140 同一个错。写 B 段驱动时没有逐项对照正式参数，管理员的错误。
+- **处理**：RUN-0076 补充 3（`ttext_replay.sh`），排在补充 2 之后。
+  - 代码用 wt0072。从 7f53f240 到 d38a5205，`run_e1` / E1 / 适配器都没有改动，与 RUN-0069 的 T 文本基座可比。
+  - 输出到 `experiments/W2/0076_w2c_replay_ttext_hpcgpu06/`。
+- **已核对的其余步骤**：B 段的 `lang_battery.py --out "$OUT/lb_w2c_replay"` 与 `health_check.py --out <文件>` 都不受这条规则约束（RUN-0074 同样的写法跑通了）。
+- `scripts/mgr/lang_cost_table.py` 的回放一列改读新路径。

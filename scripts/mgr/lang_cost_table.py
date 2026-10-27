@@ -40,7 +40,7 @@ SYSTEMS = {
     "W2-c+回放": {
         "health": f"{W2}/0076_w2c_replay_eval_hpcgpu06/health/health_compare.json",
         "battery": f"{W2}/0076_w2c_replay_eval_hpcgpu06/lb_compare_w2c_replay.json",
-        "ttext": f"{W2}/0076_w2c_replay_eval_hpcgpu06/ttext/t_text/w2c_replay/seed0/qwen3.5-9b",
+        "ttext": f"{W2}/0076_w2c_replay_ttext_hpcgpu06/t_text/w2c_replay/seed0/qwen3.5-9b",
         "ttext_base": f"{W2}/0069_w2c_hpcgpu06/0069_ttext/qwen3.5-9b", "pending": "待 RUN-0076"},
 }
 HEALTH_ROWS = [("mmlu_pro_letter", "accuracy"), ("gsm8k", "flexible"), ("ifeval", "prompt_level_strict")]
