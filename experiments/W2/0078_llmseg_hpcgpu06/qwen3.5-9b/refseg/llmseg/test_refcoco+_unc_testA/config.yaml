@@ -1,0 +1,124 @@
+experiment: W2-ext-LLMSeg
+framework: src/llmseg（DEV-0066；D125-4）
+w2:
+  task: refseg
+  split: test_refcoco+_unc_testA
+  setting: llmseg
+  splits_config: configs/w2_splits.json
+  splits_sha256: 9dd22dff2ad422ec5d51106bb6e40227ec51afa27130f2a968c945d69055c0f1
+  split_sha256: 18782733cda29f6f8b5fc2cbc7b4b573c1c29e322290f2017660473a8a632778
+  split_n: 1000
+  subset:
+    config: configs/w2_llmseg_subsets.json
+    rule: 每个 W2 test 划分（configs/w2_splits.json，各 1,000 句）按 sha256(w2_llmseg_v1|<划分名>|sent_id)
+      升序（src/data/subsets.hash_rank，purpose = 划分名）取前 300 句，按 id 自然顺序列出；sha256 = population_digest（自然顺序、换行连接后的
+      sha256）
+    salt: w2_llmseg_v1
+    n: 300
+    sha256: 6447673051b83fc0d557cd774c51f0405e1a2531c9366036b51191fd4a71e01c
+  n_samples: 300
+  limit: null
+  sample_ids_sha256: b35235e25e575b052a9650218cdeccf215625281be39d14ce34bce512ed45f53
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  adapter_model_key: qwen3.5-9b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+llmseg:
+  code:
+    upstream: https://github.com/ajhamdi/llmseg-code
+    commit: f2191e6605e40a5be5d932187fc055708ae098cf
+    license: MIT
+    dir: third_party/llmseg
+    provenance_sha256: 6be8e7382736e8f0a31ad7fdd1fe0ac7105e07d647169c7c237d301ed266240d
+    files_sha256:
+      LICENSE: c4781a2606ae22d8afb98f76a150dea46584184bd9f0e7e0c071261386b26401
+      llm.py: e68e315656b723a5a75545b4ddd5a7b75caabea60da25326ede74829fea0552f
+      pipeline.py: a467455548d2a5539d864e49f94031f00f85af04151726bb760b73099130337c
+      prompts.py: 184d331447bd3c4eb487c183a6f5a531c9d46e66d9db6ca506ea57daf796a5e1
+      geometry.py: f41d41ef55fcfb8a75b58483befd7e8b31ff7d936e1ee29375acf90530cfd88f
+      tests/test_offline.py: 66f7d84004aff82430e7866a99df26280c7c4a1be37d7795c79cab0014f12c51
+      evals/common.py: 3f57930a770cb701bddacc326c900edaada23f67f7afdb4980f05242362196ee
+      evals/gtmask.py: 144c0f8237e5a45c759a873d729283498f618afc328abf3b9fec80c343ba99dd
+    modified_files: []
+  paper: 'arXiv 2610.29409（LLMSeg: Training-Free Text-Prompted Image Segmentation
+    with B-Splines）'
+  coordinates:
+    model_name: qwen3.5-9b
+    grid: 0-1000
+    box_order: '[x1, y1, x2, y2]（x 在前）'
+    points: '[x, y]'
+    converted_by: 官方 llm.normalize_boxes / rescale_spline_groups（判据：全部数 ≤ 1000 才按网格换算）
+    adapter_native: src/adapters/qwen35.native_box_to_xyxy：x = x_norm / 1000 · W（同一换算，测试逐值核对）
+  pipeline:
+    iterations: 8
+    topology: false
+    refine_box: false
+    postprocess: true
+    max_instances: 200
+    main_config: true
+    converge:
+      eps: 0.005
+      patience: 3
+    calls_bound: 18
+  harness: 本进程内调用官方 pipeline.run（官方评测是每条一个子进程）；mask 的取法同官方 evals/common.run_pipeline：修正后
+    = rec_mask.png（没有退回 seg_mask.png），修正前 = seg_mask.png，缺失按空 mask
+provider:
+  name: local
+  injected:
+  - llm._complete
+  - llm._call_gemini（禁用）
+  - llm._call_anthropic（禁用）
+  - llm._call_openai_compatible（禁用）
+  - llm.configure(provider='local')
+  - llm/pipeline/geometry.log
+  enable_thinking: false
+  thinking_budget: null
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  answer_cap_rule:
+    detect:
+    - 2048
+    - 0
+    segment:
+    - 256
+    - 1792
+    box_adjust:
+    - 256
+    - 128
+    focus_boxes:
+    - 256
+    - 640
+    focus_splines:
+    - 256
+    - 384
+  cap_ceil: 16384
+  cap_limit: null
+  method: generate_batch
+batching:
+  scheduler: lockstep（全部在跑的管线都在等模型时成一轮；按 (阶段, 上限) 分组、组内 plan_sub_batches）
+  slots: 150
+  batch_size: 32
+  max_batch_tokens: 48000
+  chunk_size: 150
+data:
+  config_sha256:
+    w2_splits.json: 9dd22dff2ad422ec5d51106bb6e40227ec51afa27130f2a968c945d69055c0f1
+    w2_llmseg_subsets.json: dfd53ce8e9a89d85ba828de6c0b3e331f83bfcf7d476cfc7ed1751e64c7497ae
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
