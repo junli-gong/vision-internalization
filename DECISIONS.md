@@ -3273,3 +3273,15 @@
   - 修正无用，与随机框相近；
   - 样条的损失到 2,000 步仍在降。
 - 测试：开发 agent 报 188 passed；合入后在 main 上跑 `tests/test_x2_spline_only.py tests/test_x2_train.py tests/test_x2_runner.py tests/test_x2_data.py tests/test_w2c_replay.py`，86 passed。
+
+## D143（2026-10-27，管理员）：RUN-0080 的 W2-c 参照因 --out 命名失败，并进 RUN-0082 补跑
+
+- **事故**：RUN-0080 的 5 个 `w2c_ref_*` 步骤全部 rc=2。`x2.sh` 给 `run_w2.py` 的 `--out` 是 `…/0080_eval/w2c_ref`，没有运行编号。
+  - 同一类事故的第三次。`x2.sh` 写在 D140 把规则写进 CLAUDE.md 之前，之后管理员没有回头复查已发出的驱动。
+  - X-2 的 `run_x2` 设置不受影响：它们的 `--out` 是 `0080_eval`。
+- **处理**：W2-c 参照并进 RUN-0082 的驱动 `x3.sh`，放在训练之前，输出 `0082_w2c_ref`。
+  - 划分是 explore_val 三层、devtune800、devcheck2，同节点 07，约 0.5 小时；
+  - X-2、X-3 都与它配对。
+  - 驱动开头对三个 `--out` 自查。
+- **在此之前**，devcheck2 上 W2-c 有 RUN-0069 的 0.642（06 节点），只作跨节点的参考。
+- **追加的核对**：管理员已逐行查过所有在跑或排队的驱动里的 `--out`：x3.sh 的三个、run_x2 的 `0080_eval`、`ttext_replay.sh`、`test_replay.sh`。

@@ -4,11 +4,13 @@
 #   1. 排队：等 $LOGS/eval_0080.status 以 "done 0080" 开头（X-2 的评测跑完），再 claim_gpu。
 #   2. train：train_w2c.py --config configs/x3_train.json，2,000 步（RUN-0080 的每步 17.5 s 折算约 16.4–16.9 s，约 9.3 小时）。
 #   3. eval（都在 07，与 RUN-0080 同节点配对）：run_x2 在 explore_val 三层、devtune800、devcheck2（修正类设置自动跳过）；
-#      健康检查 X-3，与 RUN-0080 在 07 上的 health_base 配对。W2-c 参照沿用 RUN-0080 的 w2c_ref（同节点）。
+#      健康检查 X-3，与 RUN-0080 在 07 上的 health_base 配对。
+#   0. 训练之前先跑 W2-c 参照（RUN-0069 的检查点；run_w2 --setting w2c）在同样 5 个划分上：RUN-0080 的 w2c_ref 因 --out 没有运行编号
+#      全部 rc=2（D143），这里补上，约 0.5 小时；X-2、X-3 都与它同节点配对。
 #   test 一律不碰；devcheck3 不碰（判定前）。
 # 铁律：任何情况下都不能取消或停止 Slurm 任务 157296、157297。只用本节点自己的暂停文件。
 # 用法：srun --jobid=157297 --overlap -n1 -c 12 env PATH=… TINY=0 EV_CAP_H=… bash …/x3.sh < /dev/null
-# 彩排（开发机）：TINY=1 WT=… REPO=… LOGS=… PY=… X2DATA=… REPLAY=… W2C_DATA=… BASE_HEALTH=… bash x3.sh
+# 彩排（开发机）：TINY=1 WT=… REPO=… LOGS=… PY=… X2DATA=… REPLAY=… W2C_DATA=… BASE_HEALTH=… W2C_CK=… bash x3.sh
 set -uo pipefail
 TINY=${TINY:-0}
 RUN_ID=0082
@@ -16,7 +18,7 @@ M=qwen3.5-9b
 EVSPLITS=(explore_val_refcoco_unc_val "explore_val_refcoco+_unc_val" explore_val_refcocog_umd_val)
 W2SPLITS=(devtune800 devcheck2)
 if [ "$TINY" = 1 ]; then
-  : "${WT:?}" "${REPO:?}" "${LOGS:?}" "${PY:?}" "${X2DATA:?}" "${REPLAY:?}" "${W2C_DATA:?}" "${BASE_HEALTH:?}"
+  : "${WT:?}" "${REPO:?}" "${LOGS:?}" "${PY:?}" "${X2DATA:?}" "${REPLAY:?}" "${W2C_DATA:?}" "${BASE_HEALTH:?}" "${W2C_CK:?}"
   NODE=tiny; M=qwen3.5-0.8b
   T=(--tiny); D=(); TD=(); CW=1; TW=1; HT=(--tiny --skip-ifeval-scoring --limit 2); LIMIT=(--limit 3)
   EVSPLITS=(explore_val_refcoco_unc_val); W2SPLITS=(devtune800)
@@ -38,6 +40,7 @@ else
   X2DATA=$REPO/experiments/X/0080_x2_hpcgpu07/0080_x2_data
   REPLAY=$REPO/experiments/W2/0076_w2c_replay_hpcgpu07/0076_replay_data
   BASE_HEALTH=$REPO/experiments/X/0080_x2_hpcgpu07/0080_eval/health/health_base.json
+  W2C_CK=$REPO/experiments/W2/0069_w2c_hpcgpu06/0069_train/w2c/qwen3.5-9b/seed0/ckpt/final/model
   export EV_PAUSE=$LOGS/train.pause.$NODE EV_STATUS_GLOB="nonexistent_queue.status" EV_NO_GIT=1
   export EV_DF_PATH=$VI
   CLAIM_MAX_S=${CLAIM_MAX_S:-3600}
@@ -46,10 +49,11 @@ fi
 OUT=$REPO/experiments/X/${RUN_ID}_x3_$NODE
 TRAIN=$OUT/0082_train
 EVAL=$OUT/0082_eval
+REF=$OUT/0082_w2c_ref
 LEAF=$TRAIN/w2c/$M/seed0
 CK=$LEAF/ckpt/final/model
 # --out 的目录名必须以运行编号开头（CLAUDE.md"服务器驱动的写法"）：训练与评测的 --out 都查
-for o in "$TRAIN" "$EVAL"; do case "$(basename "$o")" in [0-9][0-9][0-9][0-9]_*) ;; *) echo "目录名没有运行编号：$o" >&2; exit 2;; esac; done
+for o in "$TRAIN" "$EVAL" "$REF"; do case "$(basename "$o")" in [0-9][0-9][0-9][0-9]_*) ;; *) echo "目录名没有运行编号：$o" >&2; exit 2;; esac; done
 # shellcheck disable=SC1091
 source "$WT/scripts/server/eval_lib.sh"
 cd "$WT" || exit 1
@@ -78,6 +82,15 @@ if [ "$TINY" != 1 ] && command -v nvidia-smi >/dev/null 2>&1; then
   nvidia-smi --query-gpu=timestamp,memory.used,utilization.gpu --format=csv,noheader -lms 1000 >> "$OUT/gpu_mem.csv" 2>/dev/null &
   MEMPID=$!
 fi
+# 0. W2-c 参照（同节点 07；D143）
+W=(--model $M ${T[@]+"${T[@]}"} ${D[@]+"${D[@]}"} --w2-config configs/w2.json --out "$REF" --candidate-workers "$CW" ${LIMIT[@]+"${LIMIT[@]}"})
+for SP in "${EVSPLITS[@]}"; do
+  step "w2c_ref_$SP" "$PY" scripts/run_w2.py "${W[@]}" --splits-file configs/explore_splits.json --split "$SP" --task refseg --setting w2c \
+    --checkpoint "$W2C_CK" || NOK=$((NOK + 1))
+done
+for SP in "${W2SPLITS[@]}"; do
+  step "w2c_ref_$SP" "$PY" scripts/run_w2.py "${W[@]}" --split "$SP" --task refseg --setting w2c --checkpoint "$W2C_CK" || NOK=$((NOK + 1))
+done
 # 训练（叶目录已有 latest 时自动 --resume；已有最终检查点就跳过）
 if [ ! -f "$CK/manifest.json" ]; then
   RES=(); [ -d "$LEAF/ckpt/latest" ] && RES=(--resume)
