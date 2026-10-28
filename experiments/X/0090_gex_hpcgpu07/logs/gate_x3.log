@@ -1,0 +1,26 @@
+# 探索候选的判定 G-EX：x3 对 W2-c（D126-4，规则写死）
+
+- devcheck3（密封；dc73561d228c…），n = 500；模型 qwen3.5-9b；判定点核对：{'manifest_not_tiny': True, 'n_is_500': True, 'not_tiny': True, 'no_limit': True, 'same_model': True, 'same_host': True, 'reference_w2_config_frozen': True, 'unsealed_with_G-EX': True}
+
+| 读数（500 句合并） | 值 |
+|---|---|
+| x3 cIoU | 0.7119 |
+| W2-c cIoU | 0.6289 |
+| 差（候选 − W2-c） | 0.0830（34805875574561/419164187544792） |
+| 97.5% CI | [0.0557, 0.1107]（10000 次，种子 20260929） |
+
+- (i) 候选 − W2-c 的 cIoU 差（devcheck3 三层 500 句合并的 Σinter / Σunion），配对 bootstrap 97.5% CI（按句重抽 10,000 次，种子 src/constants.BOOTSTRAP_SEED），下界 > 0 → **通过**
+- (ii) 同一 CI 的下界 > −0.02，并且健康检查没有任何一项标红（scripts/health_check.py --compare 的口径：标题读数比基座低超过 5 个百分点）；没给健康检查或健康检查不完整记为无法判定 → **不通过**（CI 下界 0.0557 > -0.02；标红 ['ifeval']）
+
+**结论：通过**
+
+健康检查：完整；标红 ['ifeval']
+
+诊断（不入规则）：
+- gIoU：候选 0.7249，W2-c 0.6559，差 0.0691，97.5% CI [0.0513, 0.0865]
+- devcheck3_refcoco_unc_val（n = 200）：cIoU 候选 0.7181，W2-c 0.6528，差 +0.0652
+- devcheck3_refcoco+_unc_val（n = 200）：cIoU 候选 0.7222，W2-c 0.6105，差 +0.1118
+- devcheck3_refcocog_umd_val（n = 100）：cIoU 候选 0.6797，W2-c 0.6127，差 +0.0670
+
+最多 2 个候选，各判一次；不做多重比较校正（负责人的规则里没有）。
+
