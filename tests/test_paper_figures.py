@@ -527,3 +527,252 @@ def test_size_value_parses_labels():
     assert MPF.size_value("0.8B") == 0.8 and MPF.size_value("9B") == 9.0
     with pytest.raises(ValueError):
         MPF.size_value("big")
+
+
+# ---------------------------------------------------------------------------------------------
+# DEV-0071：W2 一节（test 主表、尺寸、语言代价、计数分档）与干扰图 (d) 的离群读数。用仓库里的真数据出一遍。
+# ---------------------------------------------------------------------------------------------
+
+# docs/figures/ 现在是这样出的（README 的 E3 节：补评目录 0071 排在 2B、4B 的最前）；原有输出逐字节比对用同一组参数
+REAL_ARGS = ["--e3-prepend", "2B=experiments/E3/0071_e3_reeval_e5v2_hpcgpu07",
+             "--e3-prepend", "4B=experiments/E3/0071_e3_reeval_e5v2_hpcgpu07"]
+W2_FIGS = ("fig_w2_size", "fig_lang_cost", "fig_count_bins")
+W2_TABS = ("tab_w2_test", "tab_w2_test_giou")
+UNCHANGED = ["fig_e1_gap.pdf", "fig_e1_gap.png", "fig_e1_gap_caption.tex", "data/fig_e1_gap.json",
+             "fig_e2_layers.pdf", "fig_e2_layers.png", "fig_e2_layers_caption.tex", "data/fig_e2_layers.json",
+             "tab_e3_comparison.tex", "tab_e3_comparison.md", "data/tab_e3_comparison.json"]
+SPLITS = ["test_refcoco_unc_testA", "test_refcoco_unc_testB", "test_refcoco+_unc_testA", "test_refcoco+_unc_testB",
+          "test_refcocog_umd_test"]
+
+
+def _repo_json(rel: str) -> dict:
+    return json.loads((REPO / rel).read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def real_run(tmp_path_factory):
+    if not (REPO / MPF.W2_TEST_JSON).is_file():
+        pytest.skip("仓库里没有 W2 的分析 JSON")
+    out = tmp_path_factory.mktemp("real")
+    assert MPF.main(["--out", str(out)] + REAL_ARGS) == 0
+    return out
+
+
+def test_split_labels_and_conventions():
+    assert list(MPF.W2T.SPLITS) == SPLITS  # 划分与目录的约定取自 scripts/mgr/w2_test_table.py
+    assert MPF.split_label("test_refcoco+_unc_testA") == "RefCOCO+ testA"
+    assert MPF.split_label("test_refcocog_umd_test", short=True) == "refcocog test"
+    assert list(MPF.CE.COARSE) == ["2–4", "5–7", "8–10"]
+    with pytest.raises(ValueError):
+        MPF.split_label("val_refcoco")
+
+
+def test_real_new_outputs_written(real_run):
+    from PIL import Image
+
+    out = real_run
+    for name in W2_FIGS:
+        pdf, png = out / f"{name}.pdf", out / f"{name}.png"
+        assert pdf.read_bytes()[:5] == b"%PDF-" and b"/Type3" not in pdf.read_bytes()
+        with Image.open(png) as im:
+            assert abs(im.info["dpi"][0] - MPF.DPI) < 1 and im.size[0] == round(MPF.SINGLE_COL_IN * MPF.DPI)
+        assert (out / f"{name}_caption.tex").read_text(encoding="utf-8").count("\\caption{") == 1
+        assert (out / "data" / f"{name}.json").is_file()
+    for name in W2_TABS:
+        tex = (out / f"{name}.tex").read_text(encoding="utf-8")
+        assert "\\toprule" in tex and "\\bottomrule" in tex and tex.count("\\caption{") == 1
+        assert (out / f"{name}.md").is_file()
+    assert (out / "data" / "tab_w2_test.json").is_file()
+    readme = (out / "README.md").read_text(encoding="utf-8")
+    for sec in ("## 5. W2 test 主表", "## 6. W2-a 随尺寸", "## 7. 语言代价", "## 8. 计数分档"):
+        assert sec in readme
+    assert readme.split("## 缺的数据（missing）")[1].split("## 1.")[0].strip() == "- 无"
+    for name in W2_FIGS + W2_TABS:
+        assert f"`{name}." in readme.split("## 文件")[1]
+    # 来源（文件与运行编号）写进图注与 README
+    for name, runs in (("fig_w2_size", ["RUN-0072", "RUN-0073", "RUN-0081"]), ("fig_lang_cost", ["RUN-0069", "RUN-0074", "RUN-0076"]),
+                       ("fig_count_bins", ["RUN-0056", "RUN-0069", "RUN-0076"])):
+        cap = (out / f"{name}_caption.tex").read_text(encoding="utf-8")
+        assert all(r in cap for r in runs), name
+    assert "RUN-0078" in (out / "tab_w2_test.tex").read_text(encoding="utf-8")
+    for src in (MPF.W2_TEST_JSON, MPF.W2_REPLAY_RUN, MPF.W2_REPLAY_MD, MPF.LLMSEG_COMPARE, MPF.LANG_COST_JSON, MPF.COUNT_ERRORS_JSON):
+        assert src in readme
+
+
+def test_real_existing_outputs_byte_identical(real_run):
+    """原有的 E1、E2、E3 输出与仓库里 docs/figures/ 的逐字节相同（只有干扰图那一张按 DEV-0071 第 5 条改）。"""
+    for f in UNCHANGED:
+        assert (real_run / f).read_bytes() == (REPO / "docs" / "figures" / f).read_bytes(), f
+
+
+def test_real_w2_table_matches_analysis_json(real_run):
+    out = real_run
+    d = data(out, "tab_w2_test")
+    j = _repo_json(MPF.W2_TEST_JSON)["models"]["qwen3.5-9b"]
+    for metric in ("cIoU", "gIoU"):
+        for key, _lab in MPF.W2_ROWS:
+            for sp in SPLITS:
+                p = d["rows"][metric][key][sp]
+                if key == "replay":
+                    m = _repo_json(f"{MPF.W2_REPLAY_RUN}/qwen3.5-9b/refseg/w2c/{sp}/metrics.json")
+                    h = next(h for h in m["headline"] if h["name"] == metric)
+                    assert (p["value"], p["low"], p["high"]) == (h["value"], h["ci"]["low"], h["ci"]["high"])
+                else:
+                    c = j["per_split"][sp][key][metric]
+                    assert (p["value"], p["low"], p["high"]) == (c["value"], c["ci"][0], c["ci"][1])
+    for key in ("w2c-w1f", "w2a-w1f"):
+        for sp in SPLITS:
+            p, c = d["pairs"][key][sp], j["pairs"][key][sp]
+            assert (p["value"], p["low"], p["high"], p["n"]) == (c["diff"], c["ci"][0], c["ci"][1], 1000)
+        p, c = d["pairs"][key]["pooled"], j["pairs_pooled"][key]
+        assert (p["value"], p["low"], p["high"], p["n"]) == (c["diff"], c["ci"][0], c["ci"][1], 5000)
+    # 回放 − W2-c：docs/analysis/w2c_replay.md §1（抽查两格）
+    rp = d["pairs"]["replay-w2c"]
+    assert (rp["pooled"]["value"], rp["pooled"]["low"], rp["pooled"]["high"], rp["pooled"]["n"]) == (0.001, -0.005, 0.007, 5000)
+    assert (rp["test_refcoco+_unc_testA"]["value"], rp["test_refcoco+_unc_testA"]["low"]) == (0.013, 0.002)
+    # LLMSeg：读数与 CI 取叶目录，合并读数与配对差取 compare.json
+    cmp_ = _repo_json(MPF.LLMSEG_COMPARE)
+    for metric in ("cIoU", "gIoU"):
+        for sp in SPLITS + ["pooled"]:
+            blk = cmp_["pooled"] if sp == "pooled" else cmp_["splits"][sp]
+            for rd in ("rec", "seg"):
+                c = blk[rd][metric]
+                p = d["llmseg"]["pairs"][metric][rd][sp]
+                assert (p["value"], p["low"], p["high"]) == (c["diff"], c["ci"]["low"], c["ci"]["high"])
+                assert d["llmseg"]["rows"][metric][rd][sp]["value"] == pytest.approx(c["a"], abs=1e-12)
+            assert d["llmseg"]["rows"][metric]["w2c"][sp]["value"] == blk["rec"][metric]["b"]
+        leaf = _repo_json(f"{MPF.LLMSEG_RUN}/qwen3.5-9b/refseg/llmseg/{SPLITS[0]}/metrics.json")
+        h = next(h for h in leaf["readouts"]["seg"]["headline"] if h["name"] == metric)
+        assert d["llmseg"]["rows"][metric]["seg"][SPLITS[0]]["low"] == h["ci"]["low"]
+    assert all(c.startswith("一致") for c in d["checks"])
+    # 抽查表里的格子（×100，一位小数）
+    md = (out / "tab_w2_test.md").read_text(encoding="utf-8")
+    w2c = j["per_split"]["test_refcoco_unc_testA"]["w2c"]["cIoU"]
+    assert f"| W2-c | {100 * w2c['value']:.1f} [{100 * w2c['ci'][0]:.1f}, {100 * w2c['ci'][1]:.1f}] |" in md
+    pool = j["pairs_pooled"]["w2c-w1f"]
+    assert f"{100 * pool['diff']:+.1f} [{100 * pool['ci'][0]:+.1f}, {100 * pool['ci'][1]:+.1f}] |" in md
+    assert "| W2-c + replay − W2-c |" in md and "+0.1 [-0.5, +0.7] |" in md
+    rec = cmp_["pooled"]["rec"]["cIoU"]
+    assert f"{100 * rec['diff']:+.1f} [{100 * rec['ci']['low']:+.1f}, {100 * rec['ci']['high']:+.1f}] |" in md
+    assert "| LLMSeg, before refinement |" in md and "| LLMSeg, after refinement (main) |" in md
+    tex = (out / "tab_w2_test.tex").read_text(encoding="utf-8")
+    assert f"${100 * w2c['value']:.1f}$\\,{{\\scriptsize $[{100 * w2c['ci'][0]:.1f}, {100 * w2c['ci'][1]:.1f}]$}}" in tex
+    giou = (out / "tab_w2_test_giou.md").read_text(encoding="utf-8")
+    assert "*Paired differences" not in giou and "| LLMSeg after − W2-c |" in giou
+    assert "all 1,000 outputs per split fail to parse" in md
+
+
+def test_real_w2_size_matches_analysis_json(real_run):
+    out = real_run
+    d = data(out, "fig_w2_size")
+    j = _repo_json(MPF.W2_TEST_JSON)["models"]
+    assert [s["size"] for s in d["sizes"]] == ["2B", "4B", "9B"]
+    cap = (out / "fig_w2_size_caption.tex").read_text(encoding="utf-8")
+    for s in d["sizes"]:
+        c = j[s["model"]]["pairs_pooled"]["w2a-w1f"]
+        assert (s["pairs"]["w2a-w1f"]["value"], s["pairs"]["w2a-w1f"]["low"], s["pairs"]["w2a-w1f"]["high"]) == \
+               (c["diff"], c["ci"][0], c["ci"][1])
+        # 解析失败率：独立地从叶目录加一遍
+        run = MPF.W2T.RUNS[s["model"]]
+        pf = [_repo_json(f"{run}/{s['model']}/refseg/w2a/{sp}/metrics.json")["pick"]["parse_failure"] for sp in SPLITS]
+        n, of = sum(x["n"] for x in pf), sum(x["of"] for x in pf)
+        assert (s["parse_failure"]["w2a"]["n"], s["parse_failure"]["w2a"]["of"]) == (n, of)
+        assert f"({n:,}/{of:,})" in cap
+    s9 = d["sizes"][-1]
+    assert s9["pairs"]["w2c-w1f"]["value"] == j["qwen3.5-9b"]["pairs_pooled"]["w2c-w1f"]["diff"]
+    assert all(s["pairs"]["w2c-w1f"] is None for s in d["sizes"][:2])
+    assert "see text" not in cap and "2B 48\\%" in cap
+
+
+def test_real_lang_cost_matches_analysis_json(real_run, tmp_path):
+    out = real_run
+    d = data(out, "fig_lang_cost")
+    j = _repo_json(MPF.LANG_COST_JSON)["systems"]
+    assert d["with_explore"] is False and [s["name"] for s in d["systems"]] == ["E3b+C3", "W2-c", "W2-c+回放"]
+    for s in d["systems"]:
+        for sec, key, _lab in MPF.LANG_READOUTS:
+            r, p = j[s["name"]][sec][key], s["values"][key]
+            assert (p["value"], p["low"], p["high"]) == (r["delta_pp"], r["ci95_pp"][0], r["ci95_pp"][1])
+    cap = (out / "fig_lang_cost_caption.tex").read_text(encoding="utf-8")
+    assert "W2-c + replay: IFEval $-$6.0 (n=50)" in cap and "W2-c: MMLU-Pro $-$6.0 (n=100), IFEval $-$6.0 (n=50)" in cap
+    assert "X-2" not in cap
+    # --with-explore：另画 X-2、X-3、X-3L（大题量取各自的 compare，T 文本没有）
+    lc = MPF.collect_lang_cost(REPO, with_explore=True)
+    ex = {s["name"]: s for s in lc["systems"] if s["explore"]}
+    assert list(ex) == ["X-2", "X-3", "X-3L"] and not lc["missing"]
+    for name, battery, _h, _node in MPF.EXPLORE_LANG:
+        rows = _repo_json(battery)["rows"]
+        r = next(r for r in rows if (r["reading"], r["metric"]) == ("mmlu_pro_letter", "accuracy"))
+        assert ex[name]["values"]["mmlu_pro_letter.accuracy"]["value"] == r["delta_pp"]
+        assert ex[name]["values"]["count"] is None
+    assert [f["reading"] for f in ex["X-3"]["health_flags"]] == ["ifeval"] and ex["X-2"]["health_flags"] == []
+    assert MPF.main(["--out", str(tmp_path), "--with-explore"] + REAL_ARGS) == 0
+    assert data(tmp_path, "fig_lang_cost")["with_explore"] is True
+    cap = (tmp_path / "fig_lang_cost_caption.tex").read_text(encoding="utf-8")
+    assert "Exploration candidates (not yet judged)" in cap and "X-3: IFEval $-$10.0 (n=50)" in cap
+    assert "--with-explore 打开" in (tmp_path / "README.md").read_text(encoding="utf-8")
+
+
+def test_real_count_bins_match_analysis_json(real_run):
+    d = data(real_run, "fig_count_bins")
+    j = _repo_json(MPF.COUNT_ERRORS_JSON)["systems"]
+    assert [s["name"] for s in d["systems"]] == ["base@0069", "W2-c", "W2-c+回放", "C3", "E3b+C3"]
+    assert d["bases_identical"] is True
+    for s in d["systems"]:
+        for b in ("2–4", "5–7", "8–10"):
+            assert s["acc"][b] == j[s["name"]]["bins"][b]["acc"]
+            if s["name"] != "base@0069":
+                vb = j[s["name"]]["bins"][b]["vs_base"]
+                assert (s["delta"][b]["value"], s["delta"][b]["low"], s["delta"][b]["high"]) == (vb["d_acc"], vb["ci95"][0], vb["ci95"][1])
+    assert {s["name"]: s["paired_base"] for s in d["systems"]}["E3b+C3"] == "base@0056"
+
+
+def test_real_rseg_outlier_drawn_off_axis(real_run):
+    """干扰图 (d)：秩 128 种子 2 的 R_seg 远在 r32 范围之外，画到轴外（箭头 + 数值）；其余点都在纵轴范围内，别的面板不动。"""
+    d = data(real_run, "fig_interference_size")
+    assert list(d["offscale"]) == ["R_seg"]
+    off = d["offscale"]["R_seg"]
+    r128 = next(b for b in d["blocks"] if b.get("rank") == 128)
+    assert [(p["block"], p["kind"], p["seed"]) for p in off["points"]] == [("0.8B r128", "seed", 2)]
+    assert off["points"][0]["value"] == r128["R_seg"]["2"] < off["ylim"][0]
+    others = [v for b in d["blocks"] for v in b["R_seg"].values()] + [b["means"]["R_seg"]["mean"] for b in d["blocks"]]
+    others.remove(r128["R_seg"]["2"])
+    assert all(off["ylim"][0] < v < off["ylim"][1] for v in others)
+    cap = (real_run / "fig_interference_size_caption.tex").read_text(encoding="utf-8")
+    assert "In (d), a rank-128 reading lies far outside" in cap and "seed 2: R\\_seg = $-$3.28" in cap
+    assert "箭头 + 数值" in (real_run / "README.md").read_text(encoding="utf-8")
+
+
+def _itf(main_vals: dict, extra_vals: dict) -> dict:
+    blocks = []
+    for size, vals in main_vals.items():
+        blocks.append({"size": size, "x_size": size, "R_seg": vals, "means": {"R_seg": {"mean": statistics.mean(vals.values())}}})
+    blocks.append({"size": "0.8B r128", "x_size": "0.8B", "rank": 128, "R_seg": extra_vals,
+                   "means": {"R_seg": {"mean": statistics.mean(extra_vals.values())}}})
+    return {"blocks": blocks}
+
+
+def test_offscale_rule():
+    main = {"0.8B": {0: 0.9, 1: 0.8}, "9B": {0: 0.1}}  # r32 范围 [0.1, 0.9]，跨度 0.8 → 窗口 [−0.7, 1.7]
+    assert MPF.offscale(_itf(main, {0: 0.5, 1: -0.6}), "R_seg") is None  # 都在窗口内：面板与改动前相同
+    off = MPF.offscale(_itf(main, {0: 0.5, 1: -3.0, 2: 0.7}), "R_seg")
+    assert [(p["seed"], p["side"]) for p in off["points"]] == [(1, "below")]  # 平均 −0.6 在窗口内，不算离群
+    assert off["ylim"][0] < -0.7 and off["ylim"][1] > 0.9
+    off = MPF.offscale(_itf(main, {0: 2.5, 1: 2.6}), "R_seg")
+    assert {p["kind"] for p in off["points"]} == {"seed", "mean"} and all(p["side"] == "above" for p in off["points"])
+    assert MPF.offscale(_itf(main, {0: -3.0}), "P_seg") is None  # 只处理 (d)
+    assert MPF.offscale({"blocks": _itf(main, {0: 0.5})["blocks"][:-1]}, "R_seg") is None  # 没有秩 128
+
+
+def test_fake_tree_without_w2_data_reports_missing(base_run):
+    """假的结果树里没有 W2 的分析 JSON：照常出全部文件，README 写明缺；干扰图没有离群读数时没有那一句、data 没有 offscale。"""
+    _root, out = base_run
+    for name in W2_FIGS:
+        assert (out / f"{name}.png").is_file()
+    for name in W2_TABS:
+        assert (out / f"{name}.md").is_file()
+    readme = (out / "README.md").read_text(encoding="utf-8")
+    miss = readme.split("## 缺的数据（missing）")[1].split("## 1.")[0]
+    assert f"W2 主表：{MPF.W2_TEST_JSON} 不在" in miss and f"语言代价：{MPF.LANG_COST_JSON} 不在" in miss
+    assert "marked by an arrow" not in (out / "fig_interference_size_caption.tex").read_text(encoding="utf-8")
+    assert "offscale" not in data(out, "fig_interference_size")
