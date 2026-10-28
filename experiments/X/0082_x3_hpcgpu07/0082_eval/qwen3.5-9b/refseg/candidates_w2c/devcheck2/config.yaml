@@ -1,0 +1,45 @@
+experiment: W2
+framework: src/w2（DEV-0059；docs/w2_plan.md）
+w2:
+  task: refseg
+  split: devcheck2
+  setting: candidates_w2c
+  splits_config: configs/w2_splits.json
+  splits_sha256: 9dd22dff2ad422ec5d51106bb6e40227ec51afa27130f2a968c945d69055c0f1
+  split_sha256: e0c090322dc324a27283aa78d3a5ce6ee5f910822646369cd6b2cac36307c546
+  split_n: 500
+  n_samples: 500
+  limit: null
+  sample_ids_sha256: d575b6c53b584ae812193a01093c0c882be68a9d1f68820e703e58f25a50af95
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  tiny: false
+propose:
+  mode: box
+  run:
+    leaf: <out>/qwen3.5-9b/refexp_box/propose_w2c/devcheck2
+    predictions_sha256: 4b0d633020198303f7e8c701c3dd2c69673fc9ac83027c7636084e236a984666
+    config_sha256: 99c36f454db2d4b50cd70327b61fcec9b2f6d5eb3bd687cc0dcb74ddd0ef0d41
+candidates:
+  module: src.w2.candidates
+  generators:
+  - type: grabcut_default
+  - type: grabcut
+    iterations: 5
+    box_pct: -10.0
+    init: mask
+  - type: grabcut_default
+    post:
+    - largest_cc
+    - fill_holes
+  - type: watershed
+    use_points: true
+    fg_shrink_pct: 30.0
+    bg_margin_pct: 0.0
+    seed_radius_pct: 4.0
+  k: 4
+  generators_sha256: c134cfab5d94adaebf57db2e94ff9a7ac7159d48f38425ed322673f31d1e46b2
+chunk_size: 64
