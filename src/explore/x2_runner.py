@@ -29,7 +29,8 @@ meta.json），scripts/gate_explore.py 能直接读。参数在 configs/x2_run.j
    的计算量配对（每句平均调用次数不超过它的单轮设置里最多的那个）。
 
 **划分与守卫**：--splits-file configs/explore_splits.json 的 explore_val 三层，或 W2 的 devtune800、devcheck2；devcheck3 只经
---unseal-devcheck3 G-EX（src/data/explore_splits.require_unsealed）；test 一律拒绝（scripts/run_x2.py）。
+--unseal-devcheck3 G-EX（src/data/explore_splits.require_unsealed）；test 只经 D147 的放行（scripts/run_x2.py 的
+--test-gate、--test-approval，DEV-0072），否则一律拒绝。
 检查点：<叶目录>/ckpt/final/model，叶目录的 config.yaml 必须有 x2 一节（n、m 取它的 params）、variant = w2c、训练用的 W2 配置与本次相同
 （src/w2/w2c.load_checkpoint_adapter 的核对与合并核对）。
 

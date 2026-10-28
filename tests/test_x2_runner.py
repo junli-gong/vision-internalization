@@ -345,6 +345,7 @@ def test_cli_end_to_end_outputs_resume_and_gate_reader(x2_ckpt, tmp_path):
         assert len(recs) == 3 and recs[0]["failure"] is not None and all(r["failure"] is None for r in recs[1:])
         cfg = yaml.safe_load((leaf / "config.yaml").read_text())
         assert cfg["w2"]["setting"] == name and cfg["w2"]["split"] == "devcheck2" and cfg["checkpoint"]["manifest_sha256"] == ck_sha
+        assert "test_unlock" not in cfg["w2"] and "unseal" not in cfg["w2"]  # DEV-0072：非 test 划分的身份不多键
         assert cfg["x2"]["setting"] == name and cfg["x2"]["definition"] == json.loads(json.dumps(d)) and cfg["x2"]["n"] == 16
         met = json.loads((leaf / "metrics.json").read_text())
         assert met["complete"] is True and met["n"] == 3 and [h["name"] for h in met["headline"]] == ["cIoU", "gIoU"]
@@ -356,6 +357,7 @@ def test_cli_end_to_end_outputs_resume_and_gate_reader(x2_ckpt, tmp_path):
     summ = json.loads((m / "refseg" / XR.SUMMARY_DIR / "devcheck2.json").read_text())
     assert set(summ["settings"]) == set(XR.setting_defs(3)) and "x2_select_cor3" in summ["compute_pairing"]
     assert "skipped" not in summ  # DEV-0070：有修正流的检查点不跳过任何设置，summary 不多键
+    assert not (m / "test_unlock.jsonl").exists() and not (m / "unseal_devcheck3.jsonl").exists()
     pair = summ["compute_pairing"]["x2_select_cor1"]["single_round_at_most_this_compute"]
     assert all(c <= summ["compute_pairing"]["x2_select_cor1"]["calls_per_sample"] for _, c in pair)
     tr = jsonl(m / "refseg" / XR.TRACE_SETTING / "devcheck2" / "trace.jsonl")

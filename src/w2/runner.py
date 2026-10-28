@@ -103,6 +103,7 @@ class W2RunSpec:
     limit: int | None
     image_policy: Mapping[str, Any]
     unseal: Mapping[str, Any] | None = None  # 密封划分（devcheck3）放行的记录（门名；DEV-0067，src/data/explore_splits.require_unsealed）
+    test_unlock: Mapping[str, Any] | None = None  # test 的放行记录（批准编号、gate_explore.json 的路径与 sha256；DEV-0072，scripts/run_x2.py）
 
 
 def w2_leaf(out: str | Path, model_key: str, task: str, setting: str, split: str) -> Path:
@@ -120,7 +121,8 @@ def w2_record(spec: W2RunSpec, splits_doc: Mapping[str, Any], samples: Sequence[
             "splits_config": "tiny（tests/fixtures 上现算）" if splits_doc.get("tiny") else B._rel(splits_path(splits_doc)),
             "splits_sha256": splits_sha256(splits_doc), "split_sha256": e["sha256"], "split_n": e["n"],
             "n_samples": len(samples), "limit": spec.limit, "sample_ids_sha256": ids_digest([s.id for s in samples]),
-            **({"unseal": dict(spec.unseal)} if spec.unseal is not None else {})}
+            **({"unseal": dict(spec.unseal)} if spec.unseal is not None else {}),
+            **({"test_unlock": json.loads(json.dumps(dict(spec.test_unlock)))} if spec.test_unlock is not None else {})}
 
 
 def base_model_record(spec: W2RunSpec) -> dict[str, Any]:

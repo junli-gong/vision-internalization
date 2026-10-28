@@ -3337,3 +3337,21 @@
      - X-2 已有健康检查与大题量读数（07，与 07 的基座配对）。
      - 还缺定位与计数的 T 文本读数，补跑在 06 上，与 RUN-0069 在 06 上的基座配对。
 5. **Lustre 用量**：按 D95 只记录、不删除；实验冻结之后统一清理不再需要的中间检查点。
+
+## D148（2026-10-28，管理员）：DEV-0072 合入（`run_x2` 在 test 上的放行）
+
+- `run_x2.py` 加 `--test-gate <gate_explore.json>` 与 `--test-approval D147`，两者合格才放行 test 划分。
+  - 合格的条件：
+    - 结论是"通过"，不是彩排；
+    - 判定点核对 8 项全真；
+    - 模型与候选检查点的 manifest 一致；
+    - 只认默认的 W2 清单；
+    - W2 配置冻结。
+  - 放行时，运行身份与 `test_unlock.jsonl` 都有记录。
+  - 不给参数时，拒绝 test 的报错逐字不变；其余划分的输出逐字节不变（tiny 前后对比，4 种跑法）。
+  - test 的取样调用 `run_w2` 的同一个函数，句子集合逐 id 一致。
+- `src/w2/runner.py` 的 `W2RunSpec` 加 `test_unlock` 字段，缺省 None，运行身份不变。
+- **管理员裁定**：
+  - test 上只允许导出判定过的主设置与 D147 批准的 `x2_ellipse_trimap`，`TEST_ABLATIONS` 常量。
+  - 预注册 X-6 里写的"诊断另导出 `x2_select`"不在负责人的批准范围内，取消，见 X-6a。
+- **测试**：开发 agent 报 130 passed 与 56 passed；合入后在 main 上跑 `tests/test_x2_test_gate.py tests/test_x2_runner.py tests/test_w2_cli.py`，32 passed。
