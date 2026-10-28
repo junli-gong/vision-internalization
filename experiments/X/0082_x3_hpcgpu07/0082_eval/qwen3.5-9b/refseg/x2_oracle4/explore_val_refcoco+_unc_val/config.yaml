@@ -1,0 +1,159 @@
+experiment: X-2
+framework: src/explore/x2_runner.py（DEV-0069；探索 X-2）
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  adapter_model_key: qwen3.5-9b
+  tiny: false
+image_policy:
+  tag: checkpoint
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+w2_config:
+  config: configs/w2.json
+  config_sha256: c4d083489783039d46718e19ede810370bd4b9272ef94e99f406104c2e0f9b29
+  frozen: true
+propose:
+  mode: box
+  run:
+    leaf: <out>/qwen3.5-9b/refexp_box/propose_w2c/explore_val_refcoco+_unc_val
+    predictions_sha256: 38e8124b3e41ffd944e58b028015bfe78eb59f2e9895b728916d3e0df91272d6
+    config_sha256: c93c9e69122a9c9cfca58a983e13927c5abb3e2cc455a31c70739076dedb2257
+candidates:
+  leaf: <out>/qwen3.5-9b/refseg/candidates_w2c/explore_val_refcoco+_unc_val
+  module: src.w2.candidates
+  generators:
+  - type: grabcut_default
+  - type: grabcut
+    iterations: 5
+    box_pct: -10.0
+    init: mask
+  - type: grabcut_default
+    post:
+    - largest_cc
+    - fill_holes
+  - type: watershed
+    use_points: true
+    fg_shrink_pct: 30.0
+    bg_margin_pct: 0.0
+    seed_radius_pct: 4.0
+  k: 4
+  content_sha256: f22fe78d8df09555f894a09c0565ddca17e72d593e9844dafb7c1662bd48a673
+render:
+  select_module: src.w2.render
+  layout: separate
+  style:
+    fill_rgb:
+    - 0
+    - 114
+    - 178
+    fill_alpha: 0.4
+    contour_rgb:
+    - 240
+    - 228
+    - 66
+    contour_px: 2
+    halo_rgb:
+    - 0
+    - 0
+    - 0
+    halo_px: 1
+    label_text_rgb:
+    - 255
+    - 255
+    - 255
+    label_bg_rgb:
+    - 0
+    - 0
+    - 0
+    grid_label_px: 22
+    separate_label_px: 32
+    label_pad_px: 4
+    reference: true
+    reference_label: ''
+    grid_long_side: 640
+    grid_cols: 0
+    gutter_px: 4
+    gutter_rgb:
+    - 255
+    - 255
+    - 255
+    separate_max_wh:
+    - 640
+    - 480
+  overlay: x2-overlay-v1
+checkpoint:
+  path: /home/mail/chenyuma/visint/repo/experiments/X/0082_x3_hpcgpu07/0082_train/w2c/qwen3.5-9b/seed0/ckpt/final/model
+  manifest_sha256: 837bb679cfc172ecfa4bce3af1ae21c4e1774d3d9fdf0e16fc4e5d2c34ed7f5c
+  label: w2c
+  build_spec:
+    family_kw: {}
+    image_policy: pixel_budget:300
+    key: qwen3.5-9b
+    tiny: false
+  image_policy: pixel_budget:300
+  dtype: bfloat16
+  lora:
+    lora_alpha: 64.0
+    lora_dropout: 0.05
+    n_parameters: 86556672
+    n_targets: 248
+    n_tensors: 496
+    r: 32
+    targets_sha256: a257b17856bd4838091495d454b3e87b3d09609149406f49d38b54528e47b51b
+  trainable_token_rows: null
+  n_grid_tokens: 0
+  merge_check:
+    criteria_version: v1
+    n: 200
+    checks:
+    - merge
+  training:
+    variant: w2c
+    seed: 0
+    identity_sha256: 629cb7526f890a2b122a27522e78eef5c787dc6c336249c2a2dfe217294abd96
+    w2_config_sha256: c4d083489783039d46718e19ede810370bd4b9272ef94e99f406104c2e0f9b29
+    config_sha256: bae8942ad281527a3907061d6577c1feef218df0c89a15c88b670d304a390f17
+    complete: true
+    steps: 2000
+x2:
+  n: 16
+  m: null
+  train_params:
+    spline:
+      n: 16
+      min_box_iou: 0.5
+  prompts: x2-prompts-v1
+  run_config:
+    path: configs/x2_run.json
+    sha256: c92ad838a9e698236e8a34d17f6ce187ee185ffaa7df96df5ee99a04f47dc061
+    version: x2-run-v1
+  rounds: 3
+  correction: 检查点没有修正流：轨迹不调修正，修正类设置跳过
+  setting: x2_oracle4
+  definition:
+    kind: oracle
+    stages:
+    - propose
+    multi_round: false
+    diagnostic: true
+    ablation: null
+    k: 4
+  trace:
+    leaf: <out>/qwen3.5-9b/refseg/x2_trace/explore_val_refcoco+_unc_val
+    config_sha256: a1e3bd0b917a51289a389866a6b32352d56765bbdea210c4026fcf9d9de5de64
+w2:
+  task: refseg
+  split: explore_val_refcoco+_unc_val
+  setting: x2_oracle4
+  splits_config: configs/explore_splits.json
+  splits_sha256: df9f6c19141cee8c012dd3b6606e5b12f00db92557d43f07c7ac2214a3ab7892
+  split_sha256: 0d6069826192b34592cb6d8161874b893f5a8257164b9ddd6d91e97213d22f9c
+  split_n: 400
+  n_samples: 400
+  limit: null
+  sample_ids_sha256: 46b73d0504f7025b58ccdcb3d209cd73c97bf1b4e4365e21481915c8ba6b8cf1
