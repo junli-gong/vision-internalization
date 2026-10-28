@@ -1600,3 +1600,47 @@ L 的逐项（点，种子 0 / 1 / 2）：定位 6.0 / 5.0 / 6.5；多边形 5.6
   - 正式运行第一组 150 句跑完先报吞吐与显存；外推超过 12 小时就停下来定。
   - 4B 先不跑（D135）。
 - **对照**：`scripts/compare_llmseg.py`，在同样的 300 × 5 句上与 RUN-0072 的 W2-c 配对。比 cIoU 与 gIoU，seg 与 rec 两组，每个划分及合并。同一节点 06（D93-1）。
+
+### X-5. 进入 G-EX 判定的候选（2026-10-28，**写于任何系统在 devcheck3 上运行之前**；运行要等项目负责人批准，N45）
+
+**选择的依据**：只用探索与开发数据（explore_val 三层、devtune800、devcheck2），全部在 `docs/exploration/log.md`。没有看任何 test 读数，包括 LLMSeg 的。
+
+| | X-2（RUN-0080） | X-3（RUN-0082） | X-3L（RUN-0083） |
+|---|---|---|---|
+| `x2_spline_trimap` − W2-c，同节点，2,300 句，97.5% | +0.095 [+0.084, +0.106] | +0.098 [+0.086, +0.109] | +0.095 [+0.084, +0.106] |
+| 健康检查（200 题）的标红 | 无（MMLU-Pro −2，IFEval −4，GSM8K 0） | IFEval −10 | IFEval −10 |
+| 大题量 MMLU-Pro / IFEval 严格（RUN-0084） | −0.2 / −3.5 | −0.7 / −2.6 | −1.4 / −4.1 |
+
+**C1 = X-2 的 `x2_spline_trimap`**
+- 检查点：`experiments/X/0080_x2_hpcgpu07/0080_train/w2c/qwen3.5-9b/seed0/ckpt/final/model`，manifest `a49cf4e5a81fd8f7…`。训练配置 `configs/x2_train.json`（`c80a4b0b…`）。
+- 推理：`scripts/run_x2.py`（`09355ea9…`）的设置 `x2_spline_trimap`，参数 `configs/x2_run.json`（`c92ad838…`）。W2 的部分用 D122 冻结的 `configs/w2.json`（`c4d08348…`）。
+  - 管线：提出框（1 次调用）→ 描 16 个控制点的 B 样条（1 次调用）→ 样条作 GrabCut 的 trimap 种子（`src/explore/guidance.py`，`40c52ebc…`，不含学习）。
+  - 样条解析失败时交 1 号候选。每句 2 次模型调用。
+- 健康检查：07 上的 `0080_eval/health/health_base.json` 与 `health_x2.json`。健康检查是确定性的固定协议，判定沿用这两份读数，不重跑。
+
+**C2 = X-3 的 `x2_spline_trimap`**
+- 检查点：`experiments/X/0082_x3_hpcgpu07/0082_train/w2c/qwen3.5-9b/seed0/ckpt/final/model`，manifest `837bb679cfc172ec…`。训练配置 `configs/x3_train.json`（`bae8942a…`）。
+- 推理同 C1。X-3 没有修正流，配方最简。
+- 健康检查：07 上的 `0080_eval/health/health_base.json` 与 `0082_eval/health/health_x3.json`。
+
+**不选**：
+- X-3L：分割与语言都不比 X-3 好。
+- 两个候选都不用 `x2_select5`：多 1 次调用，读数与 `x2_spline_trimap` 相差 ±0.01。
+
+**运行**（RUN-0090，`prompts/server_hpc/0090-hpc-gex/gate_gex.sh`，`ed687e85…`）：
+- 全部在 07 上，同节点。W2-c（RUN-0069 的检查点）与两个候选都在 devcheck3 三层（500 句）上，`--unseal-devcheck3 G-EX`。
+- 再对每个候选跑 `scripts/gate_explore.py`（`ca4c594a…`），即 X-4 的规则。
+- 不调任何参数；跑完不再改。
+
+**预测**：
+- C1：cIoU − W2-c 约 +0.095，范围 +0.07 到 +0.12。
+  - 规则 (i)，CI 下界 > 0，通过的概率约 97%。
+  - 规则 (ii)：健康检查不标红是已知的；CI 下界 > −0.02 的概率约 99%。
+  - 合计通过的概率约 99%。
+- C2：cIoU − W2-c 约 +0.095，范围 +0.07 到 +0.12。规则 (i) 通过的概率约 97%；规则 (ii) 因 IFEval 标红而不适用。合计约 97%。
+- 两者的 devcheck3 读数相差在 ±0.02 以内。
+
+**通过之后**（按 D126-4）：
+- 跑与 W2-c 相同的 test 子集，进入论文；W2-c 照样报告。test 的运行另请负责人批准，N45。
+- 两个都通过时，C1 作论文的主方法，因为它两条规则都满足；C2 作"去掉修正流的简化配方"并列。
+- 只有一个通过时，用通过的那个。都不通过时，只作附录与未来工作，标为探索性。
