@@ -158,13 +158,17 @@ def main(argv=None) -> int:
                  "main_minus_ablation": paired(main_p[sp], abl_p[sp]),
                  "g_main": single_g(main_p[sp]), "g_ablation": single_g(abl_p[sp]),
                  "g_main_minus_w2c": paired_g(main_p[sp], ref["w2c"][sp]),
+                 "g_main_minus_w1f": paired_g(main_p[sp], ref["w1f"][sp]),
                  "g_main_minus_ablation": paired_g(main_p[sp], abl_p[sp])}
             if llm[sp]:
                 rec, seg = llm[sp]
                 ids = sorted(rec)
                 r["llmseg"] = {"n": len(ids), "main_on_subset": single_ci({i: main_p[sp][i] for i in ids}),
                                "main_minus_llmseg_rec": paired(main_p[sp], rec, ids),
-                               "main_minus_llmseg_seg": paired(main_p[sp], seg, ids)}
+                               "main_minus_llmseg_seg": paired(main_p[sp], seg, ids),
+                               "g_main_on_subset": single_g({i: main_p[sp][i] for i in ids}),
+                               "g_main_minus_llmseg_rec": paired_g(main_p[sp], rec, ids),
+                               "g_main_minus_llmseg_seg": paired_g(main_p[sp], seg, ids)}
                 llm_ids += ids
                 llm_rec.update(rec); llm_seg.update(seg); main_llm.update({i: main_p[sp][i] for i in ids})
             e["per_split"][sp] = r
@@ -221,6 +225,7 @@ def main(argv=None) -> int:
                 ("gIoU 主设置", lambda r: g(r["g_main"]), g(e["pooled"]["g_main"])),
                 ("gIoU 椭圆消融", lambda r: g(r["g_ablation"]), g(e["pooled"]["g_ablation"])),
                 ("gIoU 主 − W2-c", lambda r: d(r["g_main_minus_w2c"]), d(e["pooled"]["g_main_minus_w2c"])),
+                ("gIoU 主 − W1-F", lambda r: d(r["g_main_minus_w1f"]), d(e["pooled"]["g_main_minus_w1f"])),
                 ("gIoU 主 − 椭圆消融", lambda r: d(r["g_main_minus_ablation"]), d(e["pooled"]["g_main_minus_ablation"]))]
         L += [hdr, "|---|" + "---|" * (len(SPLITS) + 1)]
         for lab, fn, pooled in rows:

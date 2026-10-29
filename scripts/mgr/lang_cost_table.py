@@ -106,7 +106,10 @@ def main(argv=None) -> int:
         if bt:
             for reading, metric in BATTERY_ROWS:
                 r = next((r for r in bt["rows"] if r["reading"] == reading and r["metric"] == metric), None)
-                e["battery"][f"{reading}.{metric}"] = None if r is None else {k: r.get(k) for k in ("base", "other", "delta_pp", "ci95_pp", "n")}
+                # lb_compare 的行用 base_pct / other_pct（DEV-0073 指出：原先取 "base"、"other"，基座读数一直是空的）
+                e["battery"][f"{reading}.{metric}"] = None if r is None else {
+                    "base": r.get("base_pct"), "other": r.get("other_pct"), "delta_pp": r.get("delta_pp"),
+                    "ci95_pp": r.get("ci95_pp"), "n": r.get("n")}
         for task, _ in TTEXT:
             e["ttext"][task] = ttext_pair(ROOT / src["ttext"] / task, ROOT / src["ttext_base"] / task)
         doc["systems"][name] = e
