@@ -2079,3 +2079,4 @@
 - 10-29 10:xxZ：[merge] DEV-0073 论文图表。新增 tab_main、tab_lang_cost（附录版 _full）、tab_compute；W2 主表加 C1、椭圆消融、C2 三行，合并列补齐；语言代价图与计数图缺省加 X-2。审查后改了三处：tab_main 不加粗、语言代价表的基座取分析 JSON、gIoU 附录表逐划分填满。28 个测试通过，E1、E2、E3、干扰图、fig_w2_size 的输出逐字节不变。
 - 10-29 10:xxZ：在 main 上重出论文图表，README 头部的 commit 已更新。重出要带 `--e3-prepend 2B=experiments/E3/0071_e3_reeval_e5v2_hpcgpu07 --e3-prepend 4B=experiments/E3/0071_e3_reeval_e5v2_hpcgpu07`，写在脚本 docstring 里；README 头部只写了不带参数的命令，不带参数重出会让 E3 表退回补评之前。DEV-0073 的 worktree 已删。
 - 10-29 13:2xZ：RUN-0093 完成。seed 1 的分割读数与 seed 0 几乎相同：合并差 +0.001 [−0.007, +0.007]，对 W2-c 都是 +0.095。健康检查 IFEval 50 条标红 −12，seed 0 是 −4。新增 `scripts/mgr/seed_variance.py`。发 RUN-0096（D153）：07 跑 seed 1 的大题量；06 在 RUN-0094 之后跑 seed 1、2 的 T 文本与 seed 2 的大题量。预测已写进探索日志。
+- 10-29 13:3xZ：RUN-0096 两个节点都已启动：07 跑 seed 1 的大题量，06 等 RUN-0094。写当日清单 `docs/daily_lists/2026-10-29.md`，含 10-28，D147–D153。
