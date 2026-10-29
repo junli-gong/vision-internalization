@@ -1,4 +1,4 @@
-"""9B 的语言代价并排表（D125-3：同一套健康检查与 T 文本读数，E3b+C3、W2-c、W2-c 加回放三列；另加 DEV-0064 的大题量读数）。
+"""9B 的语言代价并排表（D125-3、D147-4：同一套健康检查、大题量与 T 文本读数，E3b+C3、W2-c、W2-c 加回放、X-2 四列，另加 X-3 作消融）。
 管理员的分析脚本，只读结果目录，不跑模型。每一列都与同一节点上的基座配对（D93-1）：
 - 健康检查（简报 8.11，固定 200 题）：各系统的 health --compare 输出（标红照它的规则）；
 - 大题量（MMLU-Pro 2,000 题、IFEval 541 条）：lang_battery --compare 的输出；
@@ -27,6 +27,7 @@ from src import stats as S  # noqa: E402
 
 W2 = "experiments/W2"
 E3 = "experiments/E3/0056_hpc_9b_eval_hpcgpu06"
+X = "experiments/X"
 SYSTEMS = {
     "E3b+C3": {
         "health": f"{W2}/0074_lang_battery_hpcgpu06/health/health_compare_e3b_c3.json",
@@ -42,6 +43,17 @@ SYSTEMS = {
         "battery": f"{W2}/0076_w2c_replay_eval_hpcgpu06/lb_compare_w2c_replay.json",
         "ttext": f"{W2}/0076_w2c_replay_ttext_hpcgpu06/t_text/w2c_replay/seed0/qwen3.5-9b",
         "ttext_base": f"{W2}/0069_w2c_hpcgpu06/0069_ttext/qwen3.5-9b", "pending": "待 RUN-0076"},
+    # 探索的主方法 C1（G-EX 通过，D149）与消融 C2：健康检查、大题量配 07 的基座（RUN-0080、0084），T 文本配 06 的基座（RUN-0091 对 RUN-0069）
+    "X-2（C1）": {
+        "health": f"{X}/0080_x2_hpcgpu07/0080_eval/health/health_compare.json",
+        "battery": f"{X}/0084_lb_explore_hpcgpu07/lb_compare_x2.json",
+        "ttext": f"{X}/0091_x_ttext_hpcgpu06/t_text/x2/seed0/qwen3.5-9b",
+        "ttext_base": f"{W2}/0069_w2c_hpcgpu06/0069_ttext/qwen3.5-9b", "pending": "—"},
+    "X-3（C2，消融）": {
+        "health": f"{X}/0082_x3_hpcgpu07/0082_eval/health/health_compare.json",
+        "battery": f"{X}/0084_lb_explore_hpcgpu07/lb_compare_x3.json",
+        "ttext": f"{X}/0091_x_ttext_hpcgpu06/t_text/x3/seed0/qwen3.5-9b",
+        "ttext_base": f"{W2}/0069_w2c_hpcgpu06/0069_ttext/qwen3.5-9b", "pending": "—"},
 }
 HEALTH_ROWS = [("mmlu_pro_letter", "accuracy"), ("gsm8k", "flexible"), ("ifeval", "prompt_level_strict")]
 BATTERY_ROWS = [("mmlu_pro_letter", "accuracy"), ("ifeval", "prompt_level_strict"), ("ifeval", "instruction_level_strict")]

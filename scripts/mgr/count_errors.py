@@ -1,7 +1,7 @@
 """计数错误按物体个数分档（D125-2 (c)：确认 W2-c 的"数多"集中在哪些情况）。管理员的分析脚本，只读已有的 T 文本计数预测，不跑模型。
 
 输入：CountBench 评测 442 条的 E1 格式 predictions.jsonl（score.gt、parsed.count、failure）。每个系统与它同节点的基座配对：
-- W2-c、W2-c+回放（RUN-0076 补充 3）对 RUN-0069 的基座（0069_ttext）；
+- W2-c、W2-c+回放（RUN-0076 补充 3）、X-2、X-3（RUN-0091）对 RUN-0069 的基座（0069_ttext）；
 - E3b+C3、C3 对 RUN-0056 的基座（0056 的 qwen3.5-9b/count）。
 按真值个数分档（2–10 各一档，CountBench 的范围），每档报：条数、准确率、多数率（答的 > 真值）、少数率、解析失败率、
 带符号误差的均值；与配对基座的准确率差与配对 bootstrap 95% CI（按条重抽，10,000 次，种子 0），以及"基座对 → 系统错"
@@ -23,6 +23,8 @@ SYSTEMS = {
     "base@0069": ("experiments/W2/0069_w2c_hpcgpu06/0069_ttext/qwen3.5-9b/count/predictions.jsonl", None),
     "W2-c": ("experiments/W2/0069_w2c_hpcgpu06/0069_ttext/t_text/w2c/seed0/qwen3.5-9b/count/predictions.jsonl", "base@0069"),
     "W2-c+回放": ("experiments/W2/0076_w2c_replay_ttext_hpcgpu06/t_text/w2c_replay/seed0/qwen3.5-9b/count/predictions.jsonl", "base@0069"),
+    "X-2（C1）": ("experiments/X/0091_x_ttext_hpcgpu06/t_text/x2/seed0/qwen3.5-9b/count/predictions.jsonl", "base@0069"),
+    "X-3（C2）": ("experiments/X/0091_x_ttext_hpcgpu06/t_text/x3/seed0/qwen3.5-9b/count/predictions.jsonl", "base@0069"),
     "base@0056": ("experiments/E3/0056_hpc_9b_eval_hpcgpu06/qwen3.5-9b/count/predictions.jsonl", None),
     "E3b+C3": ("experiments/E3/0056_hpc_9b_eval_hpcgpu06/t_text/e3b_c3/seed0/qwen3.5-9b/count/predictions.jsonl", "base@0056"),
     "C3": ("experiments/E3/0056_hpc_9b_eval_hpcgpu06/t_text/c3/seed0/qwen3.5-9b/count/predictions.jsonl", "base@0056"),
