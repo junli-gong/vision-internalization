@@ -8,7 +8,7 @@ cIoU = Σinter / Σunion，gIoU = 逐句 IoU 的均值；95% CI，bootstrap 10,0
 | W1-F | 5,000 | 0.541 [0.530, 0.552] | 0.528 [0.519, 0.537] | `experiments/W2/0072_w2_test_hpcgpu06/qwen3.5-9b/refseg/w1f` |
 | 随机挑选 | 5,000 | 0.539 [0.529, 0.549] | 0.537 [0.529, 0.545] | `experiments/W2/0072_w2_test_hpcgpu06/qwen3.5-9b/refseg/random_pick` |
 | 最优候选 | 5,000 | 0.615 [0.605, 0.625] | 0.629 [0.622, 0.636] | `experiments/W2/0072_w2_test_hpcgpu06/qwen3.5-9b/refseg/oracle_pick` |
-| W2-a | — | 缺：test_refcoco_unc_testA, test_refcoco_unc_testB, test_refcoco+_unc_testA, test_refcoco+_unc_testB, test_refcocog_umd_test | | |
+| W2-a | 5,000 | 0.567 [0.557, 0.576] | 0.583 [0.576, 0.590] | `experiments/W2/0095_w2a_scores` |
 | W2-c | 5,000 | 0.631 [0.622, 0.640] | 0.646 [0.639, 0.653] | `experiments/W2/0072_w2_test_hpcgpu06/qwen3.5-9b/refseg/w2c` |
 | W2-c+回放 | 5,000 | 0.632 [0.623, 0.641] | 0.647 [0.640, 0.654] | `experiments/W2/0076_w2c_replay_test_hpcgpu06/qwen3.5-9b/refseg/w2c` |
 | E1 零样本多边形 | 5,000 | 0.000 [0.000, 0.000] | 0.000 [0.000, 0.000] | `experiments/W2/0072_w2_test_hpcgpu06/qwen3.5-9b/refseg/baseline_e1` |
