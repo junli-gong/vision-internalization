@@ -4,6 +4,8 @@
 - 划分：explore_val 三层（400 / 400 / 200）、devtune800、devcheck2，合并共 2,300 句。不含 test 与 devcheck3。
 - 读数：每个划分与合并的 cIoU（ratio-of-sums）；合并的 95% CI；与 seed 0 的配对差、与同节点 W2-c 参照（RUN-0082 的 0082_w2c_ref，
   06、07 逐位相同）的配对差，95%，10,000 次，种子 src/constants.BOOTSTRAP_SEED；3 个种子合并读数的样本标准差；健康检查的标红。
+- 语言读数（D153）：每个种子的大题量（lb_compare，与同节点 lb_base 配对）与 T 文本定位、计数（与 RUN-0069 在 06 上的 T 文本基座逐题配对，
+  口径同 scripts/mgr/lang_cost_table.py 的 ttext_pair：10,000 次，95%）。没跑完的写"缺"。
 - 只描述，不做检验。
 
 用法：python scripts/mgr/seed_variance.py [--out docs/analysis/seed_variance]  → <out>.json 与 <out>.md
@@ -35,6 +37,27 @@ SEEDS = {0: ("experiments/X/0080_x2_hpcgpu07/0080_eval", "experiments/X/0080_x2_
          1: ("experiments/X/0093_x2s1_hpcgpu07/0093_eval", "experiments/X/0093_x2s1_hpcgpu07/0093_eval/health/health_compare.json"),
          2: ("experiments/X/0094_x2s2_hpcgpu06/0094_eval", "experiments/X/0094_x2s2_hpcgpu06/0094_eval/health/health_compare.json")}
 W2C_REF = "experiments/X/0082_x3_hpcgpu07/0082_w2c_ref"
+TT_BASE = "experiments/W2/0069_w2c_hpcgpu06/0069_ttext/qwen3.5-9b"
+LANG = {0: ("experiments/X/0084_lb_explore_hpcgpu07/lb_compare_x2.json", "experiments/X/0091_x_ttext_hpcgpu06/t_text/x2/seed0/qwen3.5-9b"),
+        1: ("experiments/X/0096_lang_seeds_hpcgpu07/lb_compare_x2s1.json", "experiments/X/0096_lang_seeds_hpcgpu06/t_text/x2s1/seed1/qwen3.5-9b"),
+        2: ("experiments/X/0096_lang_seeds_hpcgpu06/lb_compare_x2s2.json", "experiments/X/0096_lang_seeds_hpcgpu06/t_text/x2s2/seed2/qwen3.5-9b")}
+_spec_l = importlib.util.spec_from_file_location("lct", ROOT / "scripts/mgr/lang_cost_table.py")
+LCT = importlib.util.module_from_spec(_spec_l)
+_spec_l.loader.exec_module(LCT)
+
+
+def lang_of(s: int) -> dict:
+    """一个种子的语言读数：大题量两行、T 文本两项；缺的为 None。"""
+    lb, tt = LANG[s]
+    out: dict = {"sources": {"battery": lb, "ttext": tt, "ttext_base": TT_BASE}, "battery": {}, "ttext": {}}
+    bj = LCT.jload(ROOT / lb)
+    for reading, metric in LCT.BATTERY_ROWS:
+        r = None if not bj else next((r for r in bj["rows"] if r["reading"] == reading and r["metric"] == metric), None)
+        out["battery"][f"{reading}.{metric}"] = None if r is None else {
+            "base": r.get("base_pct"), "other": r.get("other_pct"), "delta_pp": r.get("delta_pp"), "ci95_pp": r.get("ci95_pp"), "n": r.get("n")}
+    for task, _ in LCT.TTEXT:
+        out["ttext"][task] = LCT.ttext_pair(ROOT / tt / task, ROOT / TT_BASE / task)
+    return out
 
 
 def leaf(run: str, setting: str, sp: str) -> Path:
@@ -73,6 +96,7 @@ def main(argv=None) -> int:
             e["health"] = {"any_flag": hj.get("any_flag"),
                            "rows": {f"{r['reading']}.{r['metric']}": {"delta_pp": r.get("delta_pp"), "flag": r.get("flag")}
                                     for r in hj.get("rows", []) if r.get("headline")}}
+        e["language"] = lang_of(s)
         doc["seeds"][s] = e
     if 0 in preds:
         for s in preds:
@@ -119,6 +143,16 @@ def main(argv=None) -> int:
         if "health" in e:
             L.append(f"| {s} | {e['health']['any_flag']} | " +
                      "；".join(f"{k} {v['delta_pp']:+.1f}{' 标红' if v['flag'] else ''}" for k, v in e["health"]["rows"].items()) + " |")
+    L += ["", "## 语言读数（相对同节点基座，百分点 [95% CI]；D153）", "",
+          "| 种子 | " + " | ".join(f"{r}.{m}" for r, m in LCT.BATTERY_ROWS) + " | " + " | ".join(t for t, _ in LCT.TTEXT) + " |",
+          "|---|" + "---|" * (len(LCT.BATTERY_ROWS) + len(LCT.TTEXT))]
+    for s_, e in doc["seeds"].items():
+        if "language" not in e:
+            continue
+        lg = e["language"]
+        cells = [("缺" if v is None else f"{v['delta_pp']:+.1f} [{v['ci95_pp'][0]:+.1f}, {v['ci95_pp'][1]:+.1f}]")
+                 for v in list(lg["battery"].values()) + list(lg["ttext"].values())]
+        L.append(f"| {s_} | " + " | ".join(cells) + " |")
     out.with_suffix(".md").write_text("\n".join(L) + "\n", encoding="utf-8")
     print(out.with_suffix(".md").read_text(encoding="utf-8"))
     return 0

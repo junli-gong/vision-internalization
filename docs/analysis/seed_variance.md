@@ -49,3 +49,11 @@
 | 0 | False | mmlu_pro_letter.accuracy -2.0；gsm8k.flexible +0.0；ifeval.prompt_level_strict -4.0 |
 | 1 | True | mmlu_pro_letter.accuracy -3.0；gsm8k.flexible +2.0；ifeval.prompt_level_strict -12.0 标红 |
 | 2 | True | mmlu_pro_letter.accuracy -3.0；gsm8k.flexible +2.0；ifeval.prompt_level_strict -6.0 标红 |
+
+## 语言读数（相对同节点基座，百分点 [95% CI]；D153）
+
+| 种子 | mmlu_pro_letter.accuracy | ifeval.prompt_level_strict | ifeval.instruction_level_strict | refexp_box | count |
+|---|---|---|---|---|---|
+| 0 | -0.2 [-1.6, +1.3] | -3.5 [-6.1, -0.9] | -2.3 [-4.2, -0.4] | +3.4 [+3.2, +3.7] | -8.6 [-12.2, -5.0] |
+| 1 | -2.3 [-3.7, -0.8] | +0.0 [-2.8, +2.8] | +0.4 [-1.6, +2.5] | 缺 | 缺 |
+| 2 | 缺 | 缺 | 缺 | 缺 | 缺 |
