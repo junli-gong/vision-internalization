@@ -1,0 +1,444 @@
+experiment: W2-c
+framework: src/w2/w2c_train.py（DEV-0061；docs/w2_plan.md §5）；训练器 src/e3/train.Trainer
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  adapter_model_key: qwen3.5-9b
+  tiny: false
+  dtype: bf16
+image_policy: pixel_budget:300
+supervision: w2c
+variant: w2c
+seed: 2
+training:
+  supervision: w2c
+  variant: w2c
+  steps: 2000
+  micro_batch_size: 4
+  grad_accum_steps: 4
+  ckpt_every: 250
+  lora:
+    r: 32
+    alpha: 64
+    dropout: 0.05
+  optim:
+    optimizer: adamw
+    betas:
+    - 0.9
+    - 0.999
+    eps: 1.0e-08
+    lora:
+      lr: 0.0002
+      weight_decay: 0.0
+    max_grad_norm: 1.0
+    schedule: warmup_cosine
+    warmup_ratio: 0.03
+    min_lr_ratio: 0.0
+  loss_reduction: per_stream_token_mean
+  chunk_size: 1024
+  gradient_checkpointing: true
+  enable_thinking: false
+  data_workers: 4
+  streams:
+    per_step:
+      propose: 8
+      select: 8
+    order:
+    - propose
+    - select
+    loss_weights:
+      propose: 1.0
+      select: 1.0
+    micro_batches:
+      propose: 2
+      select: 2
+  replay:
+    streams:
+      replay_general:
+        kinds: &id001
+        - general
+        per_step: 3
+        loss_weight: 0.5
+        micro_batches: 1
+        index: 2
+      replay_count:
+        kinds: &id002
+        - count
+        per_step: 2
+        loss_weight: 0.5
+        micro_batches: 1
+        index: 3
+    order:
+    - replay_general
+    - replay_count
+    per_step_total: 5
+  x2:
+    streams:
+      spline:
+        per_step: 6
+        loss_weight: 1.0
+        order: image_first
+        micro_batches: 2
+        index: 4
+      correct:
+        per_step: 6
+        loss_weight: 1.0
+        order: image_first
+        micro_batches: 2
+        index: 5
+    order:
+    - spline
+    - correct
+    per_step_total: 12
+    data_params:
+      spline:
+        n: 16
+        min_box_iou: 0.5
+      correct:
+        m: 2
+        min_box_iou: null
+        start_salt: x2_correct_start_v1
+        round2_salt: x2_correct_round2_v1
+        round2_ratio: 0.5
+        round2_apply:
+          rule: grabcut
+          soft_lock: true
+  batch_size: 16
+  warmup_steps: 60
+stop_id: 248046
+config:
+  path: configs/x2_train.json
+  sha256: c80a4b0b39ac8275dafd6be7af83ec05dc0d5f4fbf21335d5e67e2ab829b5228
+  version: x2-train-v1
+w2_config:
+  config: configs/w2.json
+  config_sha256: c4d083489783039d46718e19ede810370bd4b9272ef94e99f406104c2e0f9b29
+  frozen: true
+  pinned_sha256: c4d083489783039d46718e19ede810370bd4b9272ef94e99f406104c2e0f9b29
+  override: false
+  k: 4
+  candidates_sha256: c134cfab5d94adaebf57db2e94ff9a7ac7159d48f38425ed322673f31d1e46b2
+  layout: separate
+  style:
+    fill_rgb:
+    - 0
+    - 114
+    - 178
+    fill_alpha: 0.4
+    contour_rgb:
+    - 240
+    - 228
+    - 66
+    contour_px: 2
+    halo_rgb:
+    - 0
+    - 0
+    - 0
+    halo_px: 1
+    label_text_rgb:
+    - 255
+    - 255
+    - 255
+    label_bg_rgb:
+    - 0
+    - 0
+    - 0
+    grid_label_px: 22
+    separate_label_px: 32
+    label_pad_px: 4
+    reference: true
+    reference_label: ''
+    grid_long_side: 640
+    grid_cols: 0
+    gutter_px: 4
+    gutter_rgb:
+    - 255
+    - 255
+    - 255
+    separate_max_wh:
+    - 640
+    - 480
+  select_prompt: You are given {k} numbered candidate masks for one object in this
+    image. Each candidate is drawn as a colored overlay with its number in the corner.
+    Which candidate best covers {expression}? Answer with the number of that candidate
+    only (an integer from 1 to {k}), or with none if no candidate covers it.
+  select_system: null
+impl:
+  candidates_module: src.w2.candidates
+  render_module: src.w2.render
+propose:
+  box_template: Locate {expression} in the image. Report bbox coordinates in JSON
+    format.
+  box_template_source:
+    config: configs/e1_prompts.json
+    task: refexp_box
+    sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+    provenance: predecessor_cookbook
+    native: true
+    source_url: https://github.com/QwenLM/Qwen3-VL/blob/0dcc180d854f4b132f8059b10bbf0b5fd5dae9ed/cookbooks/2d_grounding.ipynb
+  order: image_first
+  box_format: adapter.format_boxes（本家族原生格式，label = 指代句；与 C3 相同，src/e3/c3.box_target）
+  rows: 全部行
+select:
+  prompt: You are given {k} numbered candidate masks for one object in this image.
+    Each candidate is drawn as a colored overlay with its number in the corner. Which
+    candidate best covers {expression}? Answer with the number of that candidate only
+    (an integer from 1 to {k}), or with none if no candidate covers it.
+  order: image_first
+  target: str(label)（十进制）+ 回合结束 token
+  render: src/w2/loop.selection_candidates（1 号 ok = False 画空）→ render_selection(原图,
+    候选, layout, style)
+  rows: candidates 与 label 都不为 null 的行
+  number_token_ids:
+  - 16
+  - 17
+  - 18
+  - 19
+data:
+  format: docs/w2_plan.md §5（DEV-0060）
+  shards:
+  - file: 00000.jsonl
+    n: 1000
+    sha256: 1c02ee94f28f6976ccc3e54119141227e482a1f06ce37852db41de87b00872fb
+  - file: 00001.jsonl
+    n: 1000
+    sha256: 81ead110569b7b249572724c44af97873e222a7423a186673417b73c0da49c40
+  - file: 00002.jsonl
+    n: 1000
+    sha256: c22e4f79848c2e53df3a7b58666049c4b38ffa18c50b53147919713490df12ad
+  - file: 00003.jsonl
+    n: 1000
+    sha256: c6e171f6d1364a8329d046ba68c479dabfafe49daa1716fd1ca10a4b0de0ef25
+  - file: 00004.jsonl
+    n: 1000
+    sha256: 0818f566707066470389d69ae6b216dd716ae15c5f1b8b589225a7fbba81141d
+  - file: 00005.jsonl
+    n: 1000
+    sha256: 4a041c474d570d928fbbbe8a398cf9d68bca9343e19695951d3224a4dc177448
+  - file: 00006.jsonl
+    n: 1000
+    sha256: ba28f80f36d7614e57ed48c3500410f96b0f9393e23db8d26227195bc190ea7d
+  - file: 00007.jsonl
+    n: 1000
+    sha256: 3fcc8476af88ed2ec88f2d9cf5f2175adb61481e6f4eb02f6e93d2fe5a8e6a12
+  - file: 00008.jsonl
+    n: 1000
+    sha256: c0e7c23234b710914b738e5d92d8e432d29b117c57dd35aabeb8abb3264c7d1f
+  - file: 00009.jsonl
+    n: 1000
+    sha256: 714b0a9bc7070bb27122bc123a931a1de4f7c42bf6e724577a0229e4dbc3b415
+  - file: 00010.jsonl
+    n: 1000
+    sha256: 303ac6cf9690ad6ad89defa1176e93476859eb847298135c5ffb75be069190ac
+  - file: 00011.jsonl
+    n: 1000
+    sha256: c3efcadf57c3f4aa08628ff9d2c3ffaa90f4366de5610ec5898240a88de8a892
+  - file: 00012.jsonl
+    n: 1000
+    sha256: da3a573787a8180e2d27f6ccc489973b221928f2ff36115ad73221a1352cd8c6
+  - file: 00013.jsonl
+    n: 1000
+    sha256: 3470a504b68075fa4c740a0d457f1c92245b9761cdc7db77ccbeae5efdf39195
+  - file: 00014.jsonl
+    n: 1000
+    sha256: 2583e8d90a80034b9c2b3eb89e4a0838b0435a55bed8765950d534688a34d828
+  - file: 00015.jsonl
+    n: 1000
+    sha256: 19b895b9f5a1ec2b558778e1c58cd9a1d57e4c168430827e6d09cb5887a0a3a2
+  manifest_sha256: 22fd7767342d6f4f5cf6ccfb003329b9042e8087cbf3870f452d819f0f38bb83
+  n_rows: 16000
+  n_propose: 16000
+  n_select: 15691
+  n_proposal_failed: 309
+  n_label_null_with_candidates: 0
+  label_counts:
+    '1': 2791
+    '2': 3582
+    '3': 3915
+    '4': 5403
+  by_source:
+    refcoco: 5972
+    refcoco+: 5938
+    refcocog: 4090
+  k: 4
+  propose_ids_sha256: eb4ee124cf20e389adf0654cb64df136a4577c2e20ca574d553104612f179e98
+  select_ids_sha256: 0c9af44c7bf6d7ef6291ed43e27f84edaac419c05ccf2eee1aba784ff7e266b9
+replay:
+  format: src/w2/w2c_replay.py（DEV-0065；scripts/build_w2c_replay.py 的输出）
+  files:
+  - file: replay/general.jsonl
+    n: 2000
+    sha256: 5cebc8434d4c696103484c0a4325e22928f16b5c393377fdd218a5d1ff0ccfc5
+  - file: replay/count.jsonl
+    n: 2000
+    sha256: 4b7a63fdc403bfcdee34b16e2b55a109c1e66834df7e0e0e722fd5b17647e073
+  manifest_sha256: 1a68646e415d6ad4cb42b0e71c903d7b52ba407662203650863370c4e742ca8c
+  data_identity_sha256: e53b105820342f32d0082631069ddce26eb58de5254b6de24c0c85b9df360e2e
+  model:
+    key: qwen3.5-9b
+    family: qwen3.5
+    repo: Qwen/Qwen3.5-9B
+    revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+    tiny: false
+  image_policy: pixel_budget:300
+  generation:
+    general:
+      order: instruction_first
+      enable_thinking: false
+      max_new_tokens: 512
+      decoding:
+        do_sample: false
+        num_beams: 1
+        repetition_penalty: 1.0
+        no_repeat_ngram_size: 0
+      batch_size: 64
+      method: generate_batch
+      protocol: 健康检查的生成口径（src/health/run.generate_text_only：零张图、protocol.ORDER、关思考、protocol.GREEDY_KWARGS）；批量生成（左填充，同
+        E1 的批配置；健康检查是逐条 generate）
+    count:
+      order: image_first
+      enable_thinking: false
+      max_new_tokens: 16
+      decoding:
+        do_sample: false
+        num_beams: 1
+        repetition_penalty: 1.0
+        temperature: null
+        top_p: null
+        top_k: null
+      batch_size: 64
+      method: generate_batch
+      protocol: E1 计数的口径（configs/e1_prompts.json 的 image_order、eval 子集的思考开关与 decoding；原图）
+  target: base 贪心生成的 token 原样（含停止 token；截断的行不进池）
+  pools:
+    replay_general:
+      kinds:
+      - general
+      n: 1237
+      ids_sha256: a94f99b9c61e1816584a0caacc116fc7ba9c207a13683a4b4d89f79ad8499ba5
+    replay_count:
+      kinds:
+      - count
+      n: 2000
+      ids_sha256: 0e7f745d6d9f23c5d92cf59d3dca98f4021e6718a374f42879f6705122db5ac3
+  by_kind:
+    general:
+      n_rows: 2000
+      n_truncated: 763
+      n_usable: 1237
+      mean_target_tokens: 213.54486661277284
+    count:
+      n_rows: 2000
+      n_truncated: 0
+      n_usable: 2000
+      mean_target_tokens: 2.084
+  streams:
+    replay_general:
+      kinds: *id001
+      per_step: 3
+      loss_weight: 0.5
+      micro_batches: 1
+      index: 2
+    replay_count:
+      kinds: *id002
+      per_step: 2
+      loss_weight: 0.5
+      micro_batches: 1
+      index: 3
+  sample: 提示、图（计数：原图 load_pil）、order 取回放数据的行原样；目标 = base 生成的 token 原样（含停止 token）
+  loss: 每条回放流各自除以这一步里自己的监督 token 数，再乘 loss_weight，与提出、挑选两项相加
+x2:
+  format: src/explore/x2_data.py（DEV-0069；探索 X-2）
+  manifest_sha256: afd98f6b388c500a549a6c4f7a472d41cd18298e0b1aeb431dd936670832507d
+  params:
+    spline:
+      n: 16
+      min_box_iou: 0.5
+    correct:
+      m: 2
+      min_box_iou: null
+      start_salt: x2_correct_start_v1
+      round2_salt: x2_correct_round2_v1
+      round2_ratio: 0.5
+      round2_apply:
+        rule: grabcut
+        soft_lock: true
+  tools:
+    effect_min_px: 16
+    effect_min_frac: 0.02
+    lock_alpha: 1.0
+    context_pct: 50.0
+    grabcut_iterations: 5
+    prompt_version: x2-prompts-v1
+    text_format: x1-text-v1
+  source_manifest_sha256: 22fd7767342d6f4f5cf6ccfb003329b9042e8087cbf3870f452d819f0f38bb83
+  pools:
+    spline:
+      n: 13987
+      ids_sha256: 3d4f6606223ebee71d0a8c106f3ae00f9ee4c3f0ba139a520b93eb8922f6f0bd
+    correct:
+      n: 23470
+      ids_sha256: 10534a7bfe33f3cc577ea05c7d83f40810ffa67b49ced288c9fe6c7d1068d779
+  counts:
+    spline: 13987
+    correct:
+      round1: 15691
+      round2: 7779
+      total: 23470
+    spline_by_source:
+      refcoco: 5380
+      refcoco+: 5002
+      refcocog: 3605
+    correct_by_source:
+      refcoco: 8806
+      refcoco+: 8653
+      refcocog: 6011
+    correct_by_tier:
+      round1:
+        bad: 5201
+        good: 5209
+        mid: 5281
+      round2:
+        bad: 2585
+        good: 2579
+        mid: 2615
+  streams:
+    spline:
+      per_step: 6
+      loss_weight: 1.0
+      order: image_first
+      micro_batches: 2
+      index: 4
+    correct:
+      per_step: 6
+      loss_weight: 1.0
+      order: image_first
+      micro_batches: 2
+      index: 5
+  prompts:
+    version: x2-prompts-v1
+    spline: 'The object {expression} lies inside the box [{x1}, {y1}, {x2}, {y2}].
+      Trace its outer contour with a closed periodic uniform cubic B-spline of exactly
+      {n} control points. Coordinates are integers on a 0-1000 grid of the image,
+      x first. Output only JSON: [[x, y], ...] with exactly {n} points.'
+    correct: 'The image shows the current mask for {expression} as a blue overlay
+      with a yellow outline, and the box [{x1}, {y1}, {x2}, {y2}] that contains the
+      object as a red rectangle. Point out at most {m} local regions where the mask
+      needs fixing, each with a sign and a box: "+" for a missed part that should
+      be added, "-" for an extra part that should be removed. If nothing needs fixing,
+      output []. Coordinates are integers on a 0-1000 grid of the image, x first.
+      Output only JSON: [{{"sign": "+", "box": [x1, y1, x2, y2]}}, ...].'
+  render:
+    version: x2-overlay-v1
+    module: src/explore/x2_render.render_overlay
+    box_rgb:
+    - 213
+    - 94
+    - 0
+    box_px: 2
+    style: 冻结的 W2 配置的 render.style（w2_config 一节）
+  sample: 描样条：原图 + spline_prompt → 控制点 JSON；指修正框：叠加图（起点 mask + 提出的框，训练时现画）+ correct_prompt
+    → 修正框 JSON 或 []；目标加回合结束 token，全部监督
+  loss: 两条流各自除以这一步里自己的监督 token 数，再乘 loss_weight，与其余各项相加
