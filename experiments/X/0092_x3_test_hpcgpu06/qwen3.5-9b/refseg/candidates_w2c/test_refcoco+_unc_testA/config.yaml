@@ -1,0 +1,52 @@
+experiment: W2
+framework: src/w2（DEV-0059；docs/w2_plan.md）
+w2:
+  task: refseg
+  split: test_refcoco+_unc_testA
+  setting: candidates_w2c
+  splits_config: configs/w2_splits.json
+  splits_sha256: 9dd22dff2ad422ec5d51106bb6e40227ec51afa27130f2a968c945d69055c0f1
+  split_sha256: 18782733cda29f6f8b5fc2cbc7b4b573c1c29e322290f2017660473a8a632778
+  split_n: 1000
+  n_samples: 1000
+  limit: null
+  sample_ids_sha256: ff51b741ade35779a98a0e163fe2e281ef5c172ed428e35856dff7079d6c41f5
+  test_unlock:
+    approval: D147
+    gate_explore:
+      path: /home/mail/chenyuma/visint/repo/experiments/X/0090_gex_hpcgpu07/gate_x3/gate_explore.json
+      sha256: dd7f764940c6c966528b7d1636a0c577d2be5cb03c498a5a0c54b97fdfbe7dd9
+    candidate_name: x3
+    candidate_setting: x2_spline_trimap
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  tiny: false
+propose:
+  mode: box
+  run:
+    leaf: <out>/qwen3.5-9b/refexp_box/propose_w2c/test_refcoco+_unc_testA
+    predictions_sha256: 54e3d91b6fefb5d2e23381fbedceb4d8b80d317631aa4184473da44ea027e53f
+    config_sha256: af3fde162e49d9cc7e2927df5270f08b274abc600ec719cc21e65d5aa01862cc
+candidates:
+  module: src.w2.candidates
+  generators:
+  - type: grabcut_default
+  - type: grabcut
+    iterations: 5
+    box_pct: -10.0
+    init: mask
+  - type: grabcut_default
+    post:
+    - largest_cc
+    - fill_holes
+  - type: watershed
+    use_points: true
+    fg_shrink_pct: 30.0
+    bg_margin_pct: 0.0
+    seed_radius_pct: 4.0
+  k: 4
+  generators_sha256: c134cfab5d94adaebf57db2e94ff9a7ac7159d48f38425ed322673f31d1e46b2
+chunk_size: 64
