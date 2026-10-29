@@ -7,6 +7,9 @@
 - 秩 128 的 C3、E3b+C3 不回退到秩 32 的读数；被合并核对拒绝的种子在表注里列出、不进平均；
 - JSON 与重算不一致时 README 报"不一致"。
 - DEV-0063：--e3-prepend 把按 e5-v2 补评的目录放在最前，补评的种子（两臂）覆盖原目录，表注与干扰图注写明 e5-v2。
+- DEV-0073：通过 G-EX 的 C1 = X-2、椭圆消融、C2 = X-3 进 W2 表与正文主表 tab_main；合并列取 w2_test_pooled.json（W2-a 缺与不缺
+  两种情况用临时目录里的合成 JSON）；语言代价四方表 tab_lang_cost（与 _full）、计算表 tab_compute 与分析 JSON 逐项一致；
+  E1、E2、E3、干扰图与 fig_w2_size 逐字节不变。
 """
 
 from __future__ import annotations
@@ -537,10 +540,14 @@ def test_size_value_parses_labels():
 REAL_ARGS = ["--e3-prepend", "2B=experiments/E3/0071_e3_reeval_e5v2_hpcgpu07",
              "--e3-prepend", "4B=experiments/E3/0071_e3_reeval_e5v2_hpcgpu07"]
 W2_FIGS = ("fig_w2_size", "fig_lang_cost", "fig_count_bins")
-W2_TABS = ("tab_w2_test", "tab_w2_test_giou")
+W2_TABS = ("tab_w2_test", "tab_w2_test_giou", "tab_main", "tab_lang_cost", "tab_lang_cost_full", "tab_compute")  # 后四张：DEV-0073
+# DEV-0073：E1、E2、E3、干扰图与 fig_w2_size（任务书没有要改它）与 docs/figures/ 里 DEV-0071 的输出逐字节相同
 UNCHANGED = ["fig_e1_gap.pdf", "fig_e1_gap.png", "fig_e1_gap_caption.tex", "data/fig_e1_gap.json",
              "fig_e2_layers.pdf", "fig_e2_layers.png", "fig_e2_layers_caption.tex", "data/fig_e2_layers.json",
-             "tab_e3_comparison.tex", "tab_e3_comparison.md", "data/tab_e3_comparison.json"]
+             "tab_e3_comparison.tex", "tab_e3_comparison.md", "data/tab_e3_comparison.json",
+             "fig_interference_size.pdf", "fig_interference_size.png", "fig_interference_size_caption.tex",
+             "data/fig_interference_size.json",
+             "fig_w2_size.pdf", "fig_w2_size.png", "fig_w2_size_caption.tex", "data/fig_w2_size.json"]
 SPLITS = ["test_refcoco_unc_testA", "test_refcoco_unc_testB", "test_refcoco+_unc_testA", "test_refcoco+_unc_testB",
           "test_refcocog_umd_test"]
 
@@ -582,25 +589,35 @@ def test_real_new_outputs_written(real_run):
         tex = (out / f"{name}.tex").read_text(encoding="utf-8")
         assert "\\toprule" in tex and "\\bottomrule" in tex and tex.count("\\caption{") == 1
         assert (out / f"{name}.md").is_file()
-    assert (out / "data" / "tab_w2_test.json").is_file()
+    for name in ("tab_w2_test", "tab_main", "tab_lang_cost", "tab_compute"):
+        assert (out / "data" / f"{name}.json").is_file()
     readme = (out / "README.md").read_text(encoding="utf-8")
-    for sec in ("## 5. W2 test 主表", "## 6. W2-a 随尺寸", "## 7. 语言代价", "## 8. 计数分档"):
+    for sec in ("## 5. W2 test 主表", "## 6. W2-a 随尺寸", "## 7. 语言代价", "## 8. 计数分档", "## 9. 正文主表", "## 10. 语言代价四方对照表",
+                "## 11. 计算记账表"):
         assert sec in readme
-    assert readme.split("## 缺的数据（missing）")[1].split("## 1.")[0].strip() == "- 无"
+    assert readme.split("## 缺的数据（missing）")[1].split("\n## ")[0].strip() == "- 无"  # W2-a 的合并读数已在（RUN-0095）
     for name in W2_FIGS + W2_TABS:
         assert f"`{name}." in readme.split("## 文件")[1]
-    # 来源（文件与运行编号）写进图注与 README
-    for name, runs in (("fig_w2_size", ["RUN-0072", "RUN-0073", "RUN-0081"]), ("fig_lang_cost", ["RUN-0069", "RUN-0074", "RUN-0076"]),
-                       ("fig_count_bins", ["RUN-0056", "RUN-0069", "RUN-0076"])):
+    # 来源（文件与运行编号）写进图注、表注与 README
+    for name, runs in (("fig_w2_size", ["RUN-0072", "RUN-0073", "RUN-0081"]),
+                       ("fig_lang_cost", ["RUN-0069", "RUN-0074", "RUN-0076", "RUN-0080", "RUN-0084", "RUN-0091"]),
+                       ("fig_count_bins", ["RUN-0056", "RUN-0069", "RUN-0076", "RUN-0091"])):
         cap = (out / f"{name}_caption.tex").read_text(encoding="utf-8")
         assert all(r in cap for r in runs), name
-    assert "RUN-0078" in (out / "tab_w2_test.tex").read_text(encoding="utf-8")
-    for src in (MPF.W2_TEST_JSON, MPF.W2_REPLAY_RUN, MPF.W2_REPLAY_MD, MPF.LLMSEG_COMPARE, MPF.LANG_COST_JSON, MPF.COUNT_ERRORS_JSON):
+    for name, runs in (("tab_w2_test", ["RUN-0072", "RUN-0076", "RUN-0078", "RUN-0092", "RUN-0095"]),
+                       ("tab_main", ["RUN-0072", "RUN-0078", "RUN-0092", "RUN-0095"]), ("tab_compute", ["RUN-0072", "RUN-0078", "RUN-0092"]),
+                       ("tab_lang_cost", ["RUN-0056", "RUN-0069", "RUN-0074", "RUN-0076", "RUN-0080", "RUN-0084", "RUN-0091"])):
+        tex = (out / f"{name}.tex").read_text(encoding="utf-8")
+        assert all(r in tex for r in runs), name
+    for src in (MPF.W2_TEST_JSON, MPF.W2_REPLAY_RUN, MPF.W2_REPLAY_MD, MPF.LLMSEG_COMPARE, MPF.LANG_COST_JSON, MPF.COUNT_ERRORS_JSON,
+                MPF.X_TEST_JSON, MPF.W2_POOLED_JSON):
         assert src in readme
+    # 逐划分的 gIoU 配对差与 LLMSeg 同句已由 5b3bb70ee 补进 x_test_table.json："分析里没有算的格子"一节不出现
+    assert "## 分析里没有算的格子" not in readme
 
 
 def test_real_existing_outputs_byte_identical(real_run):
-    """原有的 E1、E2、E3 输出与仓库里 docs/figures/ 的逐字节相同（只有干扰图那一张按 DEV-0071 第 5 条改）。"""
+    """原有的 E1、E2、E3、干扰图与 fig_w2_size 的输出与仓库里 docs/figures/ 的逐字节相同（DEV-0073 不动它们）。"""
     for f in UNCHANGED:
         assert (real_run / f).read_bytes() == (REPO / "docs" / "figures" / f).read_bytes(), f
 
@@ -658,8 +675,213 @@ def test_real_w2_table_matches_analysis_json(real_run):
     tex = (out / "tab_w2_test.tex").read_text(encoding="utf-8")
     assert f"${100 * w2c['value']:.1f}$\\,{{\\scriptsize $[{100 * w2c['ci'][0]:.1f}, {100 * w2c['ci'][1]:.1f}]$}}" in tex
     giou = (out / "tab_w2_test_giou.md").read_text(encoding="utf-8")
-    assert "*Paired differences" not in giou and "| LLMSeg after − W2-c |" in giou
+    assert "| LLMSeg after − W2-c |" in giou
+    assert "| W2-c − W1-F |" not in giou and "| C1 − W2-c |" in giou  # gIoU 的配对差只有候选的四行（W2 的只算了 cIoU）
     assert "all 1,000 outputs per split fail to parse" in md
+    assert "Per-system pooled cIoU is not part of the analysis" not in md and "from w2_test_pooled.json (10,000 resamples)" in md
+
+
+def _fmt(v, signed=False):
+    return f"{100 * v:+.1f}" if signed else f"{100 * v:.1f}"
+
+
+def _cell(v, lo, hi, signed=False):
+    return f"{_fmt(v, signed)} [{_fmt(lo, signed)}, {_fmt(hi, signed)}]"
+
+
+def test_real_w2_table_candidates_and_pooled_column(real_run):
+    """DEV-0073：候选三行（逐划分取 RUN-0092 叶目录 metrics.json）、合并列（w2_test_pooled.json）、候选的配对差与 LLMSeg 同句（x_test_table.json）。"""
+    out = real_run
+    d = data(out, "tab_w2_test")
+    xj, pj = _repo_json(MPF.X_TEST_JSON), _repo_json(MPF.W2_POOLED_JSON)
+    for metric in ("cIoU", "gIoU"):
+        for key, cand, setting, jkey, _lab in MPF.X_ROWS:
+            for sp in SPLITS:
+                m = _repo_json(f"{MPF.XT.CANDS[cand]}/qwen3.5-9b/refseg/{setting}/{sp}/metrics.json")
+                h = next(h for h in m["headline"] if h["name"] == metric)
+                p = d["rows"][metric][key][sp]
+                assert (p["value"], p["low"], p["high"], p["n_resamples"]) == (h["value"], h["ci"]["low"], h["ci"]["high"], 1000)
+        # 合并列：每一行都取 w2_test_pooled.json（名字按运行目录与设置对上）
+        for key in d["rows"][metric]:
+            e = pj["systems"][MPF.pooled_name(key)]
+            p = d["rows"][metric][key]["pooled"]
+            c = e[metric]
+            assert (p["value"], p["low"], p["high"], p["n"], p["n_resamples"]) == (c[metric.lower()], c["ci"][0], c["ci"][1], 5000, 10000)
+        # 配对差：x_test_table.json 的 main_minus_*（gIoU 取 g_ 键）
+        pre = "" if metric == "cIoU" else "g_"
+        for pk, cand, jk, _lab in MPF.X_PAIRS:
+            c = xj["candidates"][cand]["pooled"][pre + jk]
+            p = d["x_pairs"][metric][pk]["pooled"]
+            assert (p["value"], p["low"], p["high"], p["n"]) == (c["diff"], c["ci"][0], c["ci"][1], 5000)
+    for sp in SPLITS:  # 逐划分：cIoU 与 gIoU（gIoU 的 C1 − W1-F、LLMSeg 同句与 C1 − LLMSeg 由 5b3bb70ee 补上）
+        blk = xj["candidates"][MPF.C1]["per_split"][sp]
+        assert d["x_pairs"]["cIoU"]["c1-w2c"][sp]["value"] == blk["main_minus_w2c"]["diff"]
+        p, c = d["x_pairs"]["gIoU"]["c1-w1f"][sp], blk["g_main_minus_w1f"]
+        assert (p["value"], p["low"], p["high"], p["n"]) == (c["diff"], c["ci"][0], c["ci"][1], 1000)
+        for k, jk in (("c1", "g_main_on_subset"), ("c1-rec", "g_main_minus_llmseg_rec"), ("c1-seg", "g_main_minus_llmseg_seg")):
+            part = "rows" if k == "c1" else "pairs"
+            p, c = d["llmseg"][part]["gIoU"][k][sp], blk["llmseg"][jk]
+            assert (p["value"], p["low"], p["high"], p["n"]) == (c.get("giou", c.get("diff")), c["ci"][0], c["ci"][1], 300)
+    assert d["gaps"] == []
+    assert all(c.startswith("一致") for c in d["checks"])
+    md = (out / "tab_w2_test.md").read_text(encoding="utf-8")
+    # 抽查：C1 合并、C1 − W2-c 合并、C1 − 椭圆消融合并（×100，一位小数）
+    c1 = pj["systems"]["C1 = X-2（主方法）"]["cIoU"]
+    assert f"| C1 = X-2 (ours) |" in md and f"{_cell(c1['ciou'], *c1['ci'])} |" in md
+    for lab, jk in (("C1 − W2-c", "main_minus_w2c"), ("C1 − in-box ellipse ablation", "main_minus_ablation")):
+        c = xj["candidates"][MPF.C1]["pooled"][jk]
+        row = next(r for r in md.splitlines() if r.startswith(f"| {lab} |"))
+        assert row.endswith(f"| {_cell(c['diff'], *c['ci'], signed=True)} |"), row
+    ll = xj["candidates"][MPF.C1]["pooled"]["llmseg"]
+    row = next(r for r in md.splitlines() if r.startswith("| C1 − LLMSeg after |"))
+    assert row.endswith(f"| {_cell(ll['main_minus_llmseg_rec']['diff'], *ll['main_minus_llmseg_rec']['ci'], signed=True)} |")
+    giou = (out / "tab_w2_test_giou.md").read_text(encoding="utf-8")
+    for lab, path in (("C1 − W1-F", ("g_main_minus_w1f",)), ("C1 − LLMSeg after", ("llmseg", "g_main_minus_llmseg_rec")),
+                      ("C1 = X-2, same expressions", ("llmseg", "g_main_on_subset"))):
+        row = next(r for r in giou.splitlines() if r.startswith(f"| {lab} |"))
+        want = []
+        for sp in SPLITS + ["pooled"]:
+            blk = xj["candidates"][MPF.C1]["pooled"] if sp == "pooled" else xj["candidates"][MPF.C1]["per_split"][sp]
+            for k in path:
+                blk = blk[k]
+            want.append(_cell(blk.get("giou", blk.get("diff")), *blk["ci"], signed="giou" not in blk))
+        assert row == f"| {lab} | " + " | ".join(want) + " |", lab
+    assert "—" not in giou.split("\n\n- ")[0] and "not computed in the analysis" not in giou
+
+
+def test_real_tab_main_matches_analysis_json(real_run):
+    """正文主表：逐划分只给读数、合并带 CI（w2_test_pooled.json）、末列每句调用 / 生成 token（x_test_table.json 的 compute），
+    外部基线一块取 x_test_table.json 的 pooled.llmseg；不加粗（DEV-0073 审查），表注写明 C1 是事先定的主方法与 C2 − C1 对照 X-6 的预测。"""
+    out = real_run
+    d = data(out, "tab_main")
+    xj, pj = _repo_json(MPF.X_TEST_JSON), _repo_json(MPF.W2_POOLED_JSON)
+    md = (out / "tab_main.md").read_text(encoding="utf-8")
+    tex = (out / "tab_main.tex").read_text(encoding="utf-8")
+    lines = md.splitlines()
+    keys = [k for g in MPF.MAIN_ROWS for k in g]
+    assert [r for r in lines if r.startswith("| ") and not r.startswith("| *") and not r.startswith("| System")][:len(keys)] == \
+           [next(r for r in lines if r.startswith(f"| {MPF.ROW_LABELS[k]} |")) for k in keys]
+    pooled = {k: pj["systems"][MPF.pooled_name(k)]["cIoU"] for k in keys}
+    comp ={"w1f": xj["compute_reference"]["W1-F"], "w2c": xj["compute_reference"]["W2-c"],
+            "c1": xj["candidates"][MPF.C1]["compute"]["main"], "c1_ellipse": xj["candidates"][MPF.C1]["compute"]["ablation"],
+            "c2": xj["candidates"][MPF.C2]["compute"]["main"]}
+    for k in keys:
+        row = next(r for r in lines if r.startswith(f"| {MPF.ROW_LABELS[k]} |"))
+        cells = [c.strip() for c in row.strip("|").split("|")]
+        assert len(cells) == 8
+        for sp, c in zip(SPLITS, cells[1:6]):
+            assert c == _fmt(d["rows"][k][sp]["value"]) and "[" not in c  # 逐划分只有读数
+        v = pooled[k]
+        assert cells[6] == _cell(v["ciou"], *v["ci"])  # 不加粗
+        if k in comp:
+            calls = f"{comp[k]['n_calls']:.1f}".removesuffix(".0")
+            assert cells[7] == f"{calls} / {comp[k]['generated_tokens']:,.0f}"
+        else:
+            assert cells[7] == "—"
+    assert "**" not in md and "\\best" not in tex and "\\textbf" not in tex and "Bold:" not in md
+    # C1 合并（w2_test_pooled.json）；表注：C1 事先定为主方法、C2 是简化版、合并的 C2 − C1 在 X-6 预测的 ±2 点以内
+    c1 = pj["systems"]["C1 = X-2（主方法）"]["cIoU"]
+    c2 = pj["systems"]["C2 = X-3（消融）"]["cIoU"]
+    assert d["rows"]["c1"]["pooled"]["value"] == c1["ciou"]
+    gap = 100 * (c2["ciou"] - c1["ciou"])
+    assert 0 < gap <= 100 * MPF.X6_C1_C2_MARGIN
+    assert ("- C1 was designated the main method before any test run (preregistration X-5a, the project lead's decision); C2 is C1's "
+            f"simplified version with the box-correction stream removed; pooled, C2 is {gap:.1f} points above C1, within the ±2 points "
+            "predicted in preregistration X-6.") in md
+    # 外部基线：同样 1,500 句
+    ll = xj["candidates"][MPF.C1]["pooled"]["llmseg"]
+    ext = d["external"]
+    for key, src in (("llmseg_rec", ll["llmseg_rec"]), ("c1", ll["main_on_subset"]), ("c1-rec", ll["main_minus_llmseg_rec"])):
+        assert (ext[key]["value"], ext[key]["low"], ext[key]["high"], ext[key]["n"]) == \
+               (src.get("ciou", src.get("diff")), src["ci"][0], src["ci"][1], 1500)
+    row = next(r for r in lines if r.startswith("| LLMSeg, after refinement (main) |"))
+    lr = xj["compute_reference"]["LLMSeg（1,500 句）"]
+    assert row == (f"| LLMSeg, after refinement (main) | | | | | | {_cell(ll['llmseg_rec']['ciou'], *ll['llmseg_rec']['ci'])} | "
+                   f"{lr['n_calls']:.1f} / {lr['generated_tokens']:,.0f} |")
+    row = next(r for r in lines if r.startswith("| C1 − LLMSeg, after refinement (points) |"))
+    assert _cell(ll["main_minus_llmseg_rec"]["diff"], *ll["main_minus_llmseg_rec"]["ci"], signed=True) in row
+    # 表注：C1 是什么、消融改了什么、配对 bootstrap 的口径、运行编号
+    for s in ("a single LoRA", "16 control points", "seeds GrabCut as a trimap", "no learned parameters", "inscribed in the proposed box",
+              "without the signed box-correction stream", "per-expression paired bootstrap of the ratio of sums, 95%, 10,000 resamples",
+              "RUN-0092 (C1, ellipse ablation, C2)", "no compute record"):
+        assert s in md, s
+
+
+def test_real_tab_compute_matches_analysis_json(real_run):
+    md = (real_run / "tab_compute.md").read_text(encoding="utf-8")
+    xj = _repo_json(MPF.X_TEST_JSON)
+    src = {"W1-F": xj["compute_reference"]["W1-F"], "W2-c": xj["compute_reference"]["W2-c"],
+           MPF.ROW_LABELS["c1"]: xj["candidates"][MPF.C1]["compute"]["main"],
+           MPF.ROW_LABELS["c1_ellipse"]: xj["candidates"][MPF.C1]["compute"]["ablation"],
+           MPF.ROW_LABELS["c2"]: xj["candidates"][MPF.C2]["compute"]["main"],
+           "LLMSeg (full pipeline)": xj["compute_reference"]["LLMSeg（1,500 句）"]}
+    rows = [r for r in md.splitlines() if r.startswith("| ") and not r.startswith("| System")]
+    assert [r.split("|")[1].strip() for r in rows] == list(src)
+    for r in rows:
+        lab = r.split("|")[1].strip()
+        c = src[lab]
+        want = [f"{c['n']:,}", f"{c['n_calls']:,.2f}", f"{c['generated_tokens']:,.1f}", f"{c['prompt_tokens']:,.0f}", f"{c['call_time_s']:,.2f}",
+                "—" if lab.startswith("LLMSeg") else f"{c['wall_time_s']:,.2f}"]
+        assert [x.strip() for x in r.strip("|").split("|")[1:]] == want, lab
+    assert "accumulated under concurrent requests" in md
+
+
+def test_real_tab_lang_cost_matches_analysis_json(real_run):
+    """四方表：E3b+C3、W2-c、W2-c+回放、X-2；附录版另加 X-3。每格与 lang_cost_9b.json 逐项一致；基座读数按节点分开写。"""
+    out = real_run
+    j = _repo_json(MPF.LANG_COST_JSON)["systems"]
+    md, full = (out / "tab_lang_cost.md").read_text(encoding="utf-8"), (out / "tab_lang_cost_full.md").read_text(encoding="utf-8")
+    head = md.splitlines()[2]
+    assert head == "| Check | Reading | Base | E3b+C3 | W2-c | W2-c + replay | C1 = X-2 (ours) |"
+    assert full.splitlines()[2] == head + " C2 = X-3 (ablation) |"
+    lt = data(out, "tab_lang_cost")
+    x2 = next(s for s in lt["systems"] if s["name"] == "X-2（C1）")
+    # 抽查：X-2 的大题量 MMLU-Pro 与计数
+    for sec, key in (("battery", "mmlu_pro_letter.accuracy"), ("ttext", "count")):
+        r, c = j["X-2（C1）"][sec][key], x2["cells"][f"{sec}/{key}"]
+        assert (c["delta"], c["low"], c["high"], c["n"]) == (r["delta_pp"], r["ci95_pp"][0], r["ci95_pp"][1], r["n"])
+    row = next(r for r in md.splitlines() if "MMLU-Pro, letter answers" in r)
+    r = j["X-2（C1）"]["battery"]["mmlu_pro_letter.accuracy"]
+    assert row.endswith(f"| {r['delta_pp']:+.1f} [{r['ci95_pp'][0]:+.1f}, {r['ci95_pp'][1]:+.1f}] |")
+    row = next(r for r in md.splitlines() if "CountBench counting accuracy" in r)
+    r = j["X-2（C1）"]["ttext"]["count"]
+    assert row.endswith(f"| {r['delta_pp']:+.1f} [{r['ci95_pp'][0]:+.1f}, {r['ci95_pp'][1]:+.1f}] |")
+    # 健康检查：差与标红（†）；X-2 没有标红
+    health = [r for r in md.splitlines() if r.startswith("|") and r.split("|")[2].strip().split(" (")[0] in ("MMLU-Pro", "GSM8K", "IFEval")]
+    assert len(health) == 3
+    for line in health:
+        bench = {"MMLU-Pro": "mmlu_pro_letter.accuracy", "GSM8K": "gsm8k.flexible", "IFEval": "ifeval.prompt_level_strict"}[
+            line.split("|")[2].strip().split(" (")[0]]
+        cells = [c.strip() for c in line.strip("|").split("|")][3:]
+        for name, c in zip(("E3b+C3", "W2-c", "W2-c+回放", "X-2（C1）"), cells):
+            h = j[name]["health"][bench]
+            assert c == f"{h['delta_pp']:+.1f}" + ("†" if h["flag"] else ""), (name, bench)
+    assert not any(c["flag"] for k, c in x2["cells"].items() if k.startswith("health/"))
+    # 基座读数只取 lang_cost_9b.json（battery.*.base，5b3bb70ee 补上）；表里每格的基座 = JSON
+    for s in lt["systems"]:
+        for key in ("mmlu_pro_letter.accuracy", "ifeval.prompt_level_strict"):
+            assert s["cells"][f"battery/{key}"]["base"] == j[s["name"]]["battery"][key]["base"] is not None
+    # 核对（审查第 2 条：留作测试）：lang_cost_9b.json 的大题量基座、系统读数、差与 CI = 来源 lb_compare 文件的同一行
+    n_chk = 0
+    for name, e in j.items():
+        rows = {(r["reading"], r["metric"]): r for r in _repo_json(e["sources"]["battery"])["rows"]}
+        for key, r in e["battery"].items():
+            lb = rows[tuple(key.split(".", 1))]
+            assert (r["base"], r["other"], r["delta_pp"], r["ci95_pp"], r["n"]) == \
+                   (lb["base_pct"], lb["other_pct"], lb["delta_pp"], lb["ci95_pp"], lb["n"]), (name, key)
+            n_chk += 1
+    assert n_chk == 3 * len(j)
+    # 基座：MMLU-Pro 两个节点相同 → 一个数；IFEval 两个节点不同 → 按节点分开写
+    b06, b07 = j["W2-c"]["battery"], j["X-2（C1）"]["battery"]
+    k = "ifeval.prompt_level_strict"
+    row = next(r for r in md.splitlines() if "IFEval, prompt-level strict" in r)
+    assert f"| {b06[k]['base']:.1f} (hpcgpu06) / {b07[k]['base']:.1f} (hpcgpu07) |" in row
+    k = "mmlu_pro_letter.accuracy"
+    assert b06[k]["base"] == b07[k]["base"]
+    assert f"| {b06[k]['base']:.1f} |" in next(r for r in md.splitlines() if "MMLU-Pro, letter answers" in r)
+    assert "C1 = X-2 (ours): health check and language battery against the base on hpcgpu07, T-text against the base on hpcgpu06" in md
+    assert not lt["missing"]
+    assert "C2 = X-3" not in md.split("\n- ")[0] and "X-3" in full
 
 
 def test_real_w2_size_matches_analysis_json(real_run):
@@ -688,35 +910,42 @@ def test_real_lang_cost_matches_analysis_json(real_run, tmp_path):
     out = real_run
     d = data(out, "fig_lang_cost")
     j = _repo_json(MPF.LANG_COST_JSON)["systems"]
-    assert d["with_explore"] is False and [s["name"] for s in d["systems"]] == ["E3b+C3", "W2-c", "W2-c+回放"]
+    # 缺省：四方对照的四个系统（DEV-0073 起含 X-2，T 文本由 RUN-0091 补齐）
+    assert d["with_explore"] is False and [s["name"] for s in d["systems"]] == ["E3b+C3", "W2-c", "W2-c+回放", "X-2（C1）"]
     for s in d["systems"]:
         for sec, key, _lab in MPF.LANG_READOUTS:
             r, p = j[s["name"]][sec][key], s["values"][key]
             assert (p["value"], p["low"], p["high"]) == (r["delta_pp"], r["ci95_pp"][0], r["ci95_pp"][1])
     cap = (out / "fig_lang_cost_caption.tex").read_text(encoding="utf-8")
     assert "W2-c + replay: IFEval $-$6.0 (n=50)" in cap and "W2-c: MMLU-Pro $-$6.0 (n=100), IFEval $-$6.0 (n=50)" in cap
-    assert "X-2" not in cap
-    # --with-explore：另画 X-2、X-3、X-3L（大题量取各自的 compare，T 文本没有）
+    assert "C1 = X-2 (ours): none" in cap  # 健康检查的标红只写在图注：X-2 没有
+    assert "C1 = X-2 (ours): health check and language battery against the base on hpcgpu07, T-text against the base on hpcgpu06" in cap
+    assert "X-3" not in cap
+    # --with-explore：再加 X-3（C2，同一份 JSON，含 T 文本）与 X-3L（读它自己的 compare，没有 T 文本）
     lc = MPF.collect_lang_cost(REPO, with_explore=True)
-    ex = {s["name"]: s for s in lc["systems"] if s["explore"]}
-    assert list(ex) == ["X-2", "X-3", "X-3L"] and not lc["missing"]
+    assert [s["name"] for s in lc["systems"]] == ["E3b+C3", "W2-c", "W2-c+回放", "X-2（C1）", "X-3（C2，消融）", "X-3L"] and not lc["missing"]
+    by = {s["name"]: s for s in lc["systems"]}
+    assert by["X-3（C2，消融）"]["values"]["count"]["value"] == j["X-3（C2，消融）"]["ttext"]["count"]["delta_pp"]
     for name, battery, _h, _node in MPF.EXPLORE_LANG:
-        rows = _repo_json(battery)["rows"]
-        r = next(r for r in rows if (r["reading"], r["metric"]) == ("mmlu_pro_letter", "accuracy"))
-        assert ex[name]["values"]["mmlu_pro_letter.accuracy"]["value"] == r["delta_pp"]
-        assert ex[name]["values"]["count"] is None
-    assert [f["reading"] for f in ex["X-3"]["health_flags"]] == ["ifeval"] and ex["X-2"]["health_flags"] == []
+        r = next(r for r in _repo_json(battery)["rows"] if (r["reading"], r["metric"]) == ("mmlu_pro_letter", "accuracy"))
+        assert by[name]["values"]["mmlu_pro_letter.accuracy"]["value"] == r["delta_pp"] and by[name]["values"]["count"] is None
+    assert [f["reading"] for f in by["X-3（C2，消融）"]["health_flags"]] == ["ifeval"] and by["X-2（C1）"]["health_flags"] == []
     assert MPF.main(["--out", str(tmp_path), "--with-explore"] + REAL_ARGS) == 0
     assert data(tmp_path, "fig_lang_cost")["with_explore"] is True
     cap = (tmp_path / "fig_lang_cost_caption.tex").read_text(encoding="utf-8")
-    assert "Exploration candidates (not yet judged)" in cap and "X-3: IFEval $-$10.0 (n=50)" in cap
+    assert "Also shown: C2 = X-3 (ablation)" in cap and "C2 = X-3 (ablation): IFEval $-$10.0 (n=50)" in cap and "X-3L" in cap
     assert "--with-explore 打开" in (tmp_path / "README.md").read_text(encoding="utf-8")
+    cb = data(tmp_path, "fig_count_bins")  # 计数分档：--with-explore 时 X-3（C2）排在 X-2 后面
+    assert [s["name"] for s in cb["systems"]] == ["base@0069", "W2-c", "W2-c+回放", "X-2（C1）", "X-3（C2）", "C3", "E3b+C3"]
+    # 配色：C1 在两张图里同一个颜色（分类槽 7）
+    assert MPF.W2_COLORS["X-2（C1）"] == MPF.SERIES_7 and MPF.W2_COLORS["X-3（C2，消融）"] == MPF.W2_COLORS["X-3（C2）"]
 
 
 def test_real_count_bins_match_analysis_json(real_run):
     d = data(real_run, "fig_count_bins")
     j = _repo_json(MPF.COUNT_ERRORS_JSON)["systems"]
-    assert [s["name"] for s in d["systems"]] == ["base@0069", "W2-c", "W2-c+回放", "C3", "E3b+C3"]
+    assert [s["name"] for s in d["systems"]] == ["base@0069", "W2-c", "W2-c+回放", "X-2（C1）", "C3", "E3b+C3"]
+    assert {s["name"]: s["paired_base"] for s in d["systems"]}["X-2（C1）"] == "base@0069"
     assert d["bases_identical"] is True
     for s in d["systems"]:
         for b in ("2–4", "5–7", "8–10"):
@@ -741,6 +970,66 @@ def test_real_rseg_outlier_drawn_off_axis(real_run):
     cap = (real_run / "fig_interference_size_caption.tex").read_text(encoding="utf-8")
     assert "In (d), a rank-128 reading lies far outside" in cap and "seed 2: R\\_seg = $-$3.28" in cap
     assert "箭头 + 数值" in (real_run / "README.md").read_text(encoding="utf-8")
+
+
+def test_pooled_names_and_conventions():
+    """合并列的系统名都能按（运行目录, 设置）对上 w2_test_pooled.SYSTEMS；候选与设置名取自 x_test_table.py；四方表的系统名 = lang_cost_table.SYSTEMS。"""
+    assert {MPF.pooled_name(k) for k in MPF.ROW_LABELS} == {n for n, _r, _s in MPF.WTP.SYSTEMS}
+    assert len({MPF.pooled_name(k) for k in MPF.ROW_LABELS}) == len(MPF.ROW_LABELS)
+    assert MPF.row_run_setting("c1") == (MPF.XT.CANDS[MPF.C1], MPF.XT.MAIN) and MPF.row_run_setting("c1_ellipse")[1] == MPF.XT.ABL
+    assert [n for n, _l in MPF.LANG_SYSTEMS + MPF.LANG_ABLATION] == list(MPF.LCT.SYSTEMS)
+    assert set(MPF.LANG_LABELS) == set(MPF.LCT.SYSTEMS)
+
+
+def _pooled_view(tmp_path: Path, w2a: dict | None, c1_ciou: float | None = None) -> Path:
+    """仓库的视图：experiments 与 docs/analysis 的其他文件用符号链接，只把 w2_test_pooled.json 换成合成的（W2-a 缺或不缺）。"""
+    root = tmp_path / "view"
+    (root / "docs" / "analysis").mkdir(parents=True)
+    (root / "experiments").symlink_to(REPO / "experiments")
+    for f in (REPO / "docs" / "analysis").iterdir():
+        if f.name != "w2_test_pooled.json":
+            (root / "docs" / "analysis" / f.name).symlink_to(f)
+    pj = _repo_json(MPF.W2_POOLED_JSON)
+    pj["systems"]["W2-a"] = w2a if w2a is not None else {"status": "缺", "missing": list(SPLITS)}
+    if c1_ciou is not None:
+        pj["systems"]["C1 = X-2（主方法）"]["cIoU"] = {"n": 5000, "ciou": c1_ciou, "ci": [c1_ciou - 0.01, c1_ciou + 0.01]}
+    _w(root / MPF.W2_POOLED_JSON, pj)
+    return root
+
+
+def test_w2a_pooled_missing_and_present(tmp_path):
+    """任务书：w2_test_pooled.json 里 W2-a 缺与不缺两种情况都能出表（合成 JSON 放在临时目录）。缺时合并列写"—"并进 missing；
+    不缺时读数取 JSON。另：把 C1 的合并读数改大，表注里 C2 − C1 的那句跟着变（低于、超出 ±2 点），与 x_test_table.json 的核对报不一致。"""
+    # 缺
+    root = _pooled_view(tmp_path / "a", None)
+    w2 = MPF.collect_w2(root)
+    assert w2["rows"]["cIoU"]["w2a"]["pooled"] is None and w2["rows"]["gIoU"]["w2a"]["pooled"] is None
+    assert [m for m in w2["missing"] if "W2-a" in m] == [f"W2 合并列 W2-a（{MPF.W2_POOLED_JSON}：status 是 缺，缺 {', '.join(SPLITS)}）"]
+    out = tmp_path / "a" / "out"
+    out.mkdir()
+    MPF.tab_main(w2, out)
+    MPF.tab_w2(w2, out, "cIoU", "tab_w2_test")
+    md = (out / "tab_main.md").read_text(encoding="utf-8")
+    row = next(r for r in md.splitlines() if r.startswith("| W2-a |"))
+    assert row.endswith("| — | — |") and "Missing: W2 合并列 W2-a" in md
+    row = next(r for r in (out / "tab_w2_test.md").read_text(encoding="utf-8").splitlines() if r.startswith("| W2-a |"))
+    assert row.endswith("| — |") and "[" in row.split("|")[2]  # 逐划分照常有读数与 CI
+    # 不缺（合成的读数，C1 改成最高）
+    root = _pooled_view(tmp_path / "b", {"status": "完成", "source": "experiments/W2/0095_w2a_scores",
+                                         "cIoU": {"n": 5000, "ciou": 0.4321, "ci": [0.4200, 0.4400]},
+                                         "gIoU": {"n": 5000, "giou": 0.4567, "ci": [0.4500, 0.4600]}}, c1_ciou=0.80)
+    w2 = MPF.collect_w2(root)
+    assert not [m for m in w2["missing"] if "W2-a" in m]
+    assert (w2["rows"]["cIoU"]["w2a"]["pooled"]["value"], w2["rows"]["gIoU"]["w2a"]["pooled"]["value"]) == (0.4321, 0.4567)
+    out = tmp_path / "b" / "out"
+    out.mkdir()
+    MPF.tab_main(w2, out)
+    md = (out / "tab_main.md").read_text(encoding="utf-8")
+    assert next(r for r in md.splitlines() if r.startswith("| W2-a |")).endswith("| 43.2 [42.0, 44.0] | — |")
+    assert "| 80.0 [79.0, 81.0] |" in next(r for r in md.splitlines() if r.startswith("| C1 = X-2 (ours) |")) and "**" not in md
+    c2 = _repo_json(MPF.W2_POOLED_JSON)["systems"]["C2 = X-3（消融）"]["cIoU"]["ciou"]
+    assert f"pooled, C2 is {100 * (0.80 - c2):.1f} points below C1, outside the ±2 points predicted in preregistration X-6." in md
+    assert any(c.startswith("不一致") and "c1 cIoU" in c for c in w2["checks"])
 
 
 def _itf(main_vals: dict, extra_vals: dict) -> dict:

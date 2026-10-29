@@ -3,28 +3,38 @@
 | System | RefCOCO testA | RefCOCO testB | RefCOCO+ testA | RefCOCO+ testB | RefCOCOg test | Pooled |
 |---|---:|---:|---:|---:|---:|---:|
 | *Qwen3.5-9B, 1,000 expressions per split (cIoU ×100, 95% CI)* | | | | | | |
-| Own box | 49.1 [47.6, 50.4] | 53.0 [51.3, 54.7] | 47.8 [46.3, 49.2] | 47.1 [45.0, 49.1] | 48.1 [46.4, 49.8] | — |
-| W1-F | 55.1 [52.9, 57.4] | 57.1 [54.7, 59.2] | 54.2 [52.0, 56.1] | 49.7 [47.1, 52.2] | 55.0 [52.6, 57.3] | — |
-| Random pick | 54.8 [52.8, 56.9] | 56.3 [54.0, 58.5] | 53.9 [51.9, 55.7] | 49.4 [46.9, 51.8] | 55.7 [53.4, 57.9] | — |
-| Oracle pick | 63.2 [61.2, 65.1] | 64.5 [62.3, 66.7] | 61.7 [59.6, 63.7] | 56.3 [53.6, 58.7] | 62.5 [60.2, 64.7] | — |
-| W2-a | 58.3 [56.2, 60.2] | 59.5 [57.3, 61.6] | 56.3 [54.2, 58.3] | 52.1 [49.6, 54.4] | 57.5 [55.3, 59.7] | — |
-| W2-c | 64.2 [62.5, 65.7] | 66.4 [64.2, 68.6] | 60.5 [58.6, 62.4] | 61.0 [58.7, 63.2] | 63.5 [61.5, 65.4] | — |
-| W2-c + replay | 64.1 [62.5, 65.6] | 65.7 [63.6, 68.0] | 61.7 [59.9, 63.6] | 60.5 [58.0, 62.7] | 64.1 [62.1, 66.1] | — |
-| E1 zero-shot polygon | 0.0 [0.0, 0.0] | 0.0 [0.0, 0.0] | 0.0 [0.0, 0.0] | 0.0 [0.0, 0.0] | 0.0 [0.0, 0.0] | — |
+| Own box | 49.1 [47.6, 50.4] | 53.0 [51.3, 54.7] | 47.8 [46.3, 49.2] | 47.1 [45.0, 49.1] | 48.1 [46.4, 49.8] | 49.0 [48.2, 49.7] |
+| W1-F | 55.1 [52.9, 57.4] | 57.1 [54.7, 59.2] | 54.2 [52.0, 56.1] | 49.7 [47.1, 52.2] | 55.0 [52.6, 57.3] | 54.1 [53.0, 55.2] |
+| Random pick | 54.8 [52.8, 56.9] | 56.3 [54.0, 58.5] | 53.9 [51.9, 55.7] | 49.4 [46.9, 51.8] | 55.7 [53.4, 57.9] | 53.9 [52.9, 54.9] |
+| Oracle pick | 63.2 [61.2, 65.1] | 64.5 [62.3, 66.7] | 61.7 [59.6, 63.7] | 56.3 [53.6, 58.7] | 62.5 [60.2, 64.7] | 61.5 [60.5, 62.5] |
+| W2-a | 58.3 [56.2, 60.2] | 59.5 [57.3, 61.6] | 56.3 [54.2, 58.3] | 52.1 [49.6, 54.4] | 57.5 [55.3, 59.7] | 56.7 [55.7, 57.6] |
+| W2-c | 64.2 [62.5, 65.7] | 66.4 [64.2, 68.6] | 60.5 [58.6, 62.4] | 61.0 [58.7, 63.2] | 63.5 [61.5, 65.4] | 63.1 [62.2, 64.0] |
+| W2-c + replay | 64.1 [62.5, 65.6] | 65.7 [63.6, 68.0] | 61.7 [59.9, 63.6] | 60.5 [58.0, 62.7] | 64.1 [62.1, 66.1] | 63.2 [62.3, 64.1] |
+| E1 zero-shot polygon | 0.0 [0.0, 0.0] | 0.0 [0.0, 0.0] | 0.0 [0.0, 0.0] | 0.0 [0.0, 0.0] | 0.0 [0.0, 0.0] | 0.0 [0.0, 0.0] |
+| C1 = X-2 (ours) | 75.6 [73.8, 77.2] | 71.2 [69.1, 73.4] | 73.3 [71.3, 75.5] | 65.9 [63.3, 68.3] | 69.4 [66.7, 71.7] | 70.9 [69.9, 71.9] |
+| C1, in-box ellipse instead of spline | 55.9 [54.6, 57.2] | 60.4 [58.7, 62.3] | 54.8 [53.3, 56.4] | 56.0 [54.0, 57.9] | 54.0 [52.2, 55.8] | 56.2 [55.4, 57.0] |
+| C2 = X-3 (no correction stream) | 76.0 [74.2, 77.6] | 71.5 [69.1, 73.8] | 73.3 [71.2, 75.4] | 66.6 [64.0, 68.8] | 71.1 [68.7, 73.3] | 71.5 [70.5, 72.5] |
 | *Paired differences (points ×100, 95% paired bootstrap CI)* | | | | | | |
 | W2-c − W1-F | +9.1 [+7.4, +10.9] | +9.4 [+7.3, +11.5] | +6.3 [+4.5, +8.2] | +11.4 [+8.9, +14.0] | +8.5 [+6.2, +10.9] | +9.0 [+8.0, +10.0] |
 | W2-a − W1-F | +3.2 [+2.0, +4.5] | +2.5 [+1.4, +3.5] | +2.1 [+0.8, +3.4] | +2.4 [+1.1, +4.1] | +2.5 [+0.7, +4.8] | +2.5 [+1.9, +3.2] |
 | W2-c + replay − W2-c | -0.1 [-1.2, +1.0] | -0.7 [-2.0, +0.6] | +1.3 [+0.2, +2.3] | -0.5 [-2.2, +1.0] | +0.6 [-0.9, +2.3] | +0.1 [-0.5, +0.7] |
+| C1 − W2-c | +11.4 [+9.8, +12.8] | +4.8 [+3.1, +6.5] | +12.9 [+11.3, +14.4] | +4.8 [+2.9, +6.7] | +5.9 [+4.1, +7.6] | +7.8 [+7.0, +8.6] |
+| C1 − W1-F | +20.4 [+18.4, +22.6] | +14.2 [+11.9, +16.4] | +19.2 [+16.9, +21.5] | +16.2 [+13.3, +19.1] | +14.3 [+11.6, +17.2] | +16.8 [+15.6, +17.9] |
+| C1 − in-box ellipse ablation | +19.7 [+18.6, +20.7] | +10.8 [+9.6, +12.0] | +18.6 [+17.4, +19.7] | +9.9 [+8.8, +11.0] | +15.3 [+14.0, +16.7] | +14.7 [+14.2, +15.2] |
+| C2 − W2-c | +11.7 [+10.3, +13.2] | +5.1 [+3.3, +6.8] | +12.9 [+11.3, +14.4] | +5.5 [+3.8, +7.2] | +7.6 [+5.7, +9.4] | +8.4 [+7.7, +9.2] |
 | *External baseline: LLMSeg with zero-shot Qwen3.5-9B, 300 expressions per split (pooled 1,500)* | | | | | | |
 | LLMSeg, before refinement | 38.7 [36.0, 41.5] | 45.3 [41.8, 48.7] | 36.6 [33.4, 40.1] | 39.3 [35.7, 42.8] | 39.5 [35.8, 43.0] | 39.8 |
 | LLMSeg, after refinement (main) | 24.6 [21.4, 27.7] | 32.0 [28.0, 36.2] | 23.4 [20.2, 27.1] | 29.4 [25.6, 33.2] | 27.4 [23.0, 31.5] | 27.5 |
 | W2-c, same expressions | 66.5 | 69.2 | 61.3 | 60.7 | 64.8 | 64.4 |
+| C1 = X-2, same expressions | 77.3 [74.6, 79.7] | 74.1 [70.4, 77.6] | 75.5 [72.7, 78.1] | 65.7 [61.1, 70.1] | 70.3 [66.1, 74.0] | 72.3 [70.6, 73.9] |
 | LLMSeg after − W2-c | -41.8 [-45.9, -37.8] | -37.2 [-41.7, -32.5] | -37.9 [-42.0, -33.4] | -31.3 [-36.3, -26.6] | -37.4 [-41.8, -33.0] | -36.9 [-39.0, -34.7] |
 | LLMSeg before − W2-c | -27.7 [-30.9, -24.5] | -23.9 [-27.5, -20.1] | -24.6 [-28.7, -20.3] | -21.5 [-25.9, -17.5] | -25.3 [-28.6, -21.8] | -24.5 [-26.3, -22.8] |
+| C1 − LLMSeg after | +52.7 [+48.5, +56.7] | +42.1 [+37.6, +46.5] | +52.1 [+48.0, +56.1] | +36.3 [+31.2, +41.4] | +42.8 [+37.9, +47.7] | +44.8 [+42.7, +46.9] |
+| C1 − LLMSeg before | +38.6 [+35.0, +42.1] | +28.8 [+25.3, +32.3] | +38.9 [+35.0, +42.6] | +26.5 [+21.9, +31.1] | +30.7 [+26.6, +34.7] | +32.5 [+30.6, +34.3] |
 
-- Qwen3.5-9B on the five W2 test splits (1,000 expressions each, the E1 polygon subset); cIoU ×100 with 95% bootstrap CI over expressions (1,000 resamples, as computed by each run). cIoU = summed intersection / summed union.
-- Own box: the model's own box (E1 protocol) as the mask; W1-F: that box plus the default GrabCut candidate (a fixed pipeline, no LLM decision); random / oracle pick: a random / the ground-truth-best of the four tool candidates; W2-a: the frozen model picks a candidate (zero-shot; candidate 1 = W1-F, also submitted when the pick fails to parse); W2-c: LoRA text supervision to propose the box and pick; W2-c + replay: W2-c trained with self-distillation replay (post hoc variant, descriptive).
+- Qwen3.5-9B on the five W2 test splits (1,000 expressions each, the E1 polygon subset); cIoU ×100 with 95% bootstrap CI over expressions: per split as computed by each run (1,000 resamples); pooled = the five splits together (5,000 expressions) from w2_test_pooled.json (10,000 resamples). cIoU = summed intersection / summed union.
+- Own box: the model's own box (E1 protocol) as the mask; W1-F: that box plus the default GrabCut candidate (a fixed pipeline, no LLM decision); random / oracle pick: a random / the ground-truth-best of the four tool candidates; W2-a: the frozen model picks a candidate (zero-shot; candidate 1 = W1-F, also submitted when the pick fails to parse); W2-c: LoRA text supervision to propose the box and pick; W2-c + replay: W2-c trained with self-distillation replay (post hoc variant, descriptive). C1 = X-2 (ours): a single LoRA on the same Qwen3.5-9B; the model proposes a box, then traces the object's outline as a closed B-spline with 16 control points; the rasterised spline seeds GrabCut as a trimap (definite bands inside and outside the spline, unknown in between). GrabCut (OpenCV graph cut) has no learned parameters, and no external learned vision model is used in training or inference. C1, in-box ellipse instead of spline: the same run with the spline replaced by the ellipse inscribed in the proposed box, everything else unchanged (capability attribution). C2 = X-3: C1's training recipe without the signed box-correction stream (trained for C1 but not used at its inference).
 - E1 zero-shot polygon: all 1,000 outputs per split fail to parse (strict scoring gives 0).
-- Paired differences (points ×100): per-expression paired bootstrap of the ratio of sums, 95%, 10,000 resamples; pooled = the five splits together (5,000 expressions). Per-system pooled cIoU is not part of the analysis, so the pooled column has differences only.
-- External baseline LLMSeg (official code, commit f2191e6) driven by the same Qwen3.5-9B, zero-shot, on 300 hash-selected expressions per split (pooled 1,500), with W2-c on the same expressions alongside. Before refinement = after its first two stages; after refinement = its main configuration. Model calls per image (split means): 13.5–14.0 after vs. 2.0 before refinement; W2-c 2. LLMSeg − W2-c: paired bootstrap, 95%, 1,000 resamples; the pooled LLMSeg and W2-c readings have no CI in the analysis.
-- Data: RUN-0072, RUN-0076, RUN-0078 (LLMSeg comparison computed on CPU, D139); W2-a paired differences completed in RUN-0081.
+- Paired differences (points ×100): per-expression paired bootstrap of the ratio of sums, 95%, 10,000 resamples (W2 rows: w2_test_table.json; C1/C2 rows: x_test_table.json); pooled = the five splits together.
+- External baseline LLMSeg (official code, commit f2191e6) driven by the same Qwen3.5-9B, zero-shot, on 300 hash-selected expressions per split (pooled 1,500), with W2-c and C1 on the same expressions alongside. Before refinement = after its first two stages; after refinement = its main configuration. Model calls per image (split means): 13.5–14.0 after vs. 2.0 before refinement; W2-c 2. LLMSeg − W2-c: paired bootstrap, 95%, 1,000 resamples; the pooled LLMSeg and W2-c readings have no CI in that comparison. C1 rows: x_test_table.json, 10,000 resamples.
+- Data: RUN-0072, RUN-0076, RUN-0078, RUN-0092, RUN-0095 (LLMSeg comparison computed on CPU, D139); W2-a paired differences completed in RUN-0081; W2-a per-expression scores for the pooled column extracted in RUN-0095 from RUN-0072.

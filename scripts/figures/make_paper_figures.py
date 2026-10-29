@@ -27,7 +27,10 @@
   W2-a − W1-F 随尺寸 fig_w2_size、语言代价 fig_lang_cost、计数分档 fig_count_bins。数字都取管理员的分析 JSON
   （docs/analysis/w2_test_table.json、lang_cost_9b.json、count_errors_9b.json、LLMSeg 的 compare.json）与结果目录的
   metrics.json，不重算任何 bootstrap；回放 − W2-c 的配对差只在 docs/analysis/w2c_replay.md 的 §1 表里，从那里读。
-  探索的方法（X-2、X-3、X-3L）还没判定，语言代价图默认不画，--with-explore 打开。
+- 通过 G-EX 的主方法（DEV-0073；D147、D149）：C1 = X-2 是论文的主方法，C2 = X-3 是"去掉修正流"的消融，另有能力归属的
+  椭圆消融（预注册 X-5a、X-6）。tab_w2_test 与 gIoU 表加这三行与配对差，合并列取 docs/analysis/w2_test_pooled.json（D152）；
+  新增正文主表 tab_main、语言代价四方表 tab_lang_cost（附录版 tab_lang_cost_full 加 X-3）、计算表 tab_compute。配对差、LLMSeg 同句与
+  计算记账取 docs/analysis/x_test_table.json。语言代价图与计数分档缺省画 X-2；--with-explore 再加 X-3（C2）与 X-3L。
 - 干扰图 (d) R_seg：秩 128 的读数离 r32 的范围太远时画在坐标轴之外，用箭头加数值标注（OFFSCALE_*）。
 """
 
@@ -61,6 +64,8 @@ E2S = _load_script("_paperfig_e2_summary", "scripts/mgr/e2_summary.py")  # E2 �
 W2T = _load_script("_paperfig_w2_test_table", "scripts/mgr/w2_test_table.py")  # W2 test 的划分、运行目录与叶目录（SPLITS、RUNS、leaf）
 LCT = _load_script("_paperfig_lang_cost_table", "scripts/mgr/lang_cost_table.py")  # 语言代价的读数键（BATTERY_ROWS、TTEXT）
 CE = _load_script("_paperfig_count_errors", "scripts/mgr/count_errors.py")  # 计数的三个大档（COARSE）
+XT = _load_script("_paperfig_x_test_table", "scripts/mgr/x_test_table.py")  # 候选的运行目录与设置名（CANDS、MAIN、ABL、M）
+WTP = _load_script("_paperfig_w2_test_pooled", "scripts/mgr/w2_test_pooled.py")  # 合并读数的系统名（SYSTEMS：名字、运行目录、设置；REF）
 
 import matplotlib  # noqa: E402
 
@@ -158,16 +163,12 @@ LLMSEG_RUN = "experiments/W2/0078_llmseg_hpcgpu06"  # RUN-0078：<run>/<模型>/
 LLMSEG_COMPARE = LLMSEG_RUN + "/compare_w2c/compare.json"  # LLMSeg − W2-c 的配对差（同样 300 句，D139）
 LANG_COST_JSON = "docs/analysis/lang_cost_9b.json"  # D125-3 的并排（scripts/mgr/lang_cost_table.py）
 COUNT_ERRORS_JSON = "docs/analysis/count_errors_9b.json"  # 计数分档（scripts/mgr/count_errors.py）
-# 探索的候选（还没判定，--with-explore 才画）：(名字, 大题量 compare, 健康检查 compare, 基座所在节点)。没有 T 文本读数。
+# --with-explore 另画的探索候选（没有进 G-EX，预注册 X-5"不选"）：(名字, 大题量 compare, 健康检查 compare, 基座所在节点)。没有 T 文本读数。
 EXPLORE_LANG = (
-    ("X-2", "experiments/X/0084_lb_explore_hpcgpu07/lb_compare_x2.json", "experiments/X/0080_x2_hpcgpu07/0080_eval/health/health_compare.json",
-     "hpcgpu07"),
-    ("X-3", "experiments/X/0084_lb_explore_hpcgpu07/lb_compare_x3.json", "experiments/X/0082_x3_hpcgpu07/0082_eval/health/health_compare.json",
-     "hpcgpu07"),
     ("X-3L", "experiments/X/0084_lb_explore_hpcgpu06/lb_compare_x3l.json",
      "experiments/X/0083_x3l_hpcgpu06/0083_eval/health/health_compare.json", "hpcgpu06"),
 )
-EXPLORE_RUNS = "RUN-0080, RUN-0082, RUN-0083 (health), RUN-0084 (battery)"
+EXPLORE_RUNS = "RUN-0083 (health), RUN-0084 (battery)"
 
 # tab_w2_test 的行：(键, 英文名)。键是 w2_test_table.json per_split 的设置名；"replay" 从回放的结果目录读。
 W2_ROWS = (("ownbox", "Own box"), ("w1f", "W1-F"), ("random_pick", "Random pick"), ("oracle_pick", "Oracle pick"),
@@ -178,6 +179,35 @@ LLMSEG_PAIRS = (("rec", "LLMSeg after − W2-c"), ("seg", "LLMSeg before − W2-
 W2_METRICS = (("cIoU", "tab_w2_test"), ("gIoU", "tab_w2_test_giou"))
 DATASET_LABELS = {"refcoco": "RefCOCO", "refcoco+": "RefCOCO+", "refcocog": "RefCOCOg"}
 
+# 通过 G-EX 的候选（DEV-0073；D147、D149；预注册 X-5a、X-6）：C1 = X-2 主方法，C2 = X-3 消融（去掉修正流），C1 的椭圆消融（能力归属）。
+# 运行目录、设置名取自 x_test_table.py（XT.CANDS、XT.MAIN、XT.ABL、XT.M），合并读数的系统名取自 w2_test_pooled.py（WTP.SYSTEMS）。
+X_TEST_JSON = "docs/analysis/x_test_table.json"  # 候选的配对差、LLMSeg 同句、计算记账（RUN-0092 对 RUN-0072、RUN-0078）
+W2_POOLED_JSON = "docs/analysis/w2_test_pooled.json"  # 9B 各系统合并 5,000 句的读数与 CI（D152；W2-a 由 RUN-0095 抽回逐句交并）
+C1, C2 = "C1 (X-2)", "C2 (X-3)"  # x_test_table.json 的候选名
+assert C1 in XT.CANDS and C2 in XT.CANDS, f"x_test_table.py 的候选名变了：{list(XT.CANDS)}"
+# (键, 候选, 设置, x_test_table.json 里的读数键与计算键, 英文名)
+X_ROWS = (("c1", C1, XT.MAIN, "main", "C1 = X-2 (ours)"),
+          ("c1_ellipse", C1, XT.ABL, "ablation", "C1, in-box ellipse instead of spline"),
+          ("c2", C2, XT.MAIN, "main", "C2 = X-3 (no correction stream)"))
+# 配对差（cIoU 的键；gIoU 加前缀 g_）：(键, 候选, x_test_table.json 的键, 英文名)
+X_PAIRS = (("c1-w2c", C1, "main_minus_w2c", "C1 − W2-c"), ("c1-w1f", C1, "main_minus_w1f", "C1 − W1-F"),
+           ("c1-ellipse", C1, "main_minus_ablation", "C1 − in-box ellipse ablation"), ("c2-w2c", C2, "main_minus_w2c", "C2 − W2-c"))
+# LLMSeg 一块（同样 1,500 句）：x_test_table.json 的 llmseg 子块
+X_LLMSEG_ROWS = (("c1", "main_on_subset", "C1 = X-2, same expressions"),)
+X_LLMSEG_PAIRS = (("c1-rec", "main_minus_llmseg_rec", "C1 − LLMSeg after"), ("c1-seg", "main_minus_llmseg_seg", "C1 − LLMSeg before"))
+ROW_LABELS = dict(W2_ROWS) | {k: lab for k, _c, _s, _j, lab in X_ROWS}
+SHORT_LABELS = {"ownbox": "own box", "w1f": "W1-F", "oracle_pick": "oracle pick", "w2a": "W2-a", "w2c": "W2-c", "c1": "C1",
+                "c1_ellipse": "ellipse ablation", "c2": "C2"}  # 表注 "Data:" 一句里用的短名
+# tab_main（正文主表）：两组行（工具与 LLM 挑选、我们的方法与消融）
+MAIN_ROWS = (("ownbox", "w1f", "oracle_pick", "w2a", "w2c"), ("c1", "c1_ellipse", "c2"))
+# tab_compute 的行；计算记账取 x_test_table.json：候选取 candidates.<候选>.compute.<键>，其余取 compute_reference.<名>
+COMPUTE_ROWS = (("w1f", "W1-F"), ("w2c", "W2-c"), ("c1", ROW_LABELS["c1"]), ("c1_ellipse", ROW_LABELS["c1_ellipse"]),
+                ("c2", ROW_LABELS["c2"]), ("llmseg", "LLMSeg (full pipeline)"))
+COMPUTE_REF = {"w1f": "W1-F", "w2c": "W2-c", "llmseg": "LLMSeg"}  # compute_reference 的名字（LLMSeg 按前缀找：名字里带句数）
+COMPUTE_WALL_NA = ("llmseg",)  # 墙钟与其他行不同口径，不列（x_test_table.md 的说明）
+COMPUTE_COLS = (("n_calls", "Model calls", 2), ("generated_tokens", "Generated tokens", 1), ("prompt_tokens", "Prompt tokens", 0),
+                ("call_time_s", "Model-call time (s)", 2), ("wall_time_s", "Wall clock (s)", 2))  # (键, 英文表头, 小数位；同 x_test_table.md)
+
 # fig_lang_cost：(lang_cost_9b.json 的节, 键, 英文标签)。键取自 lang_cost_table 的 BATTERY_ROWS、TTEXT（前两项、两项）。
 LANG_READOUTS = (
     ("battery", ".".join(LCT.BATTERY_ROWS[0]), "MMLU-Pro"),
@@ -185,10 +215,20 @@ LANG_READOUTS = (
     ("ttext", LCT.TTEXT[0][0], "Grounding\nAcc@0.5"),
     ("ttext", LCT.TTEXT[1][0], "Counting\naccuracy"),
 )
-LANG_SYSTEMS = (("E3b+C3", "E3b+C3"), ("W2-c", "W2-c"), ("W2-c+回放", "W2-c + replay"))  # (lang_cost_9b.json 的系统名, 英文名)
+# lang_cost_9b.json 的系统名（= lang_cost_table.SYSTEMS 的键）→ 英文名
+LANG_LABELS = {"E3b+C3": "E3b+C3", "W2-c": "W2-c", "W2-c+回放": "W2-c + replay", "X-2（C1）": "C1 = X-2 (ours)",
+               "X-3（C2，消融）": "C2 = X-3 (ablation)"}
+LANG_SYSTEMS = tuple((n, LANG_LABELS[n]) for n in ("E3b+C3", "W2-c", "W2-c+回放", "X-2（C1）"))  # 四方对照（D147-4、预注册 X-6）
+LANG_ABLATION = (("X-3（C2，消融）", LANG_LABELS["X-3（C2，消融）"]),)  # 附录版与 --with-explore 另加
 HEALTH_LABELS = {"mmlu_pro_letter": "MMLU-Pro", "gsm8k": "GSM8K", "ifeval": "IFEval"}
+# tab_lang_cost 的英文行名（键同 lang_cost_9b.json）
+LANG_TABLE_LABELS = {"battery": {".".join(LCT.BATTERY_ROWS[0]): "MMLU-Pro, letter answers", ".".join(LCT.BATTERY_ROWS[1]): "IFEval, prompt-level strict"},
+                     "ttext": {LCT.TTEXT[0][0]: "Grounding Acc@0.5", LCT.TTEXT[1][0]: "CountBench counting accuracy"}}
+LANG_SECTIONS = (("health", "Health check"), ("battery", "Language battery"), ("ttext", "T-text"))
 # fig_count_bins：(count_errors_9b.json 的系统名, 英文名)；基座两次读数逐条相同时只画一根（base@0069）
-COUNT_SYSTEMS = (("base@0069", "Base"), ("W2-c", "W2-c"), ("W2-c+回放", "W2-c + replay"), ("C3", "C3"), ("E3b+C3", "E3b+C3"))
+COUNT_SYSTEMS = (("base@0069", "Base"), ("W2-c", "W2-c"), ("W2-c+回放", "W2-c + replay"), ("X-2（C1）", "C1 = X-2 (ours)"),
+                 ("C3", "C3"), ("E3b+C3", "E3b+C3"))
+COUNT_EXPLORE = (("X-3（C2）", "C2 = X-3 (ablation)"),)  # --with-explore 时排在 X-2 之后
 COUNT_BASES = ("base@0069", "base@0056")
 
 # ---------------------------------------------------------------------------------------------
@@ -244,9 +284,11 @@ OFFSCALE_SPANS = 1.0
 
 # W2 图的配色：同一个系统在各张图里同一个颜色（分类槽 1–3 的三色两两过 validate_palette.js，全对 CVD ΔE ≥ 9.2）；
 # 基座与 C3（对照）用中性灰。W2-a 只出现在 fig_w2_size，用槽 2（与 E3b+C3 不在同一张图里）。
-SERIES_3, SERIES_4, SERIES_5, SERIES_6 = "#1baf7a", "#eda100", "#e87ba4", "#008300"  # 分类槽 3–6（--with-explore 的 X-2、X-3、X-3L）
+# DEV-0073：C1 = X-2（主方法）固定用槽 7（紫，对白底 ≥ 3:1，C1 出现的每张图都是它）；与槽 1–3 全对过 validate_palette.js
+# （CVD ΔE ≥ 9.2，常规 ≥ 16.3）；--with-explore 的 X-3（C2）用槽 5、X-3L 用槽 6，按画出的相邻顺序过检查。槽 4（黄）不再用。
+SERIES_3, SERIES_5, SERIES_6, SERIES_7 = "#1baf7a", "#e87ba4", "#008300", "#4a3aa7"  # 分类槽 3、5、6、7
 W2_COLORS = {"W2-c": SERIES_1, "W2-a": SERIES_2, "E3b+C3": SERIES_2, "W2-c+回放": SERIES_3, "base@0069": MUTED, "C3": INK_2,
-             "X-2": SERIES_4, "X-3": SERIES_5, "X-3L": SERIES_6}
+             "X-2（C1）": SERIES_7, "X-3（C2，消融）": SERIES_5, "X-3（C2）": SERIES_5, "X-3L": SERIES_6}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -630,10 +672,10 @@ def split_label(key: str, short: bool = False) -> str:
 
 
 def _ci_list_point(d: dict | None, level, source: str, n=None) -> dict | None:
-    """分析 JSON 里 {"value"/"diff", "ci": [low, high]} 的写法 → _point。"""
+    """分析 JSON 里 {"value"/"diff"/"ciou"/"giou", "ci": [low, high]} 的写法 → _point（后两种是 x_test_table、w2_test_pooled 的写法）。"""
     if not isinstance(d, dict):
         return None
-    v = d.get("value", d.get("diff"))
+    v = next((d[k] for k in ("value", "diff", "ciou", "giou") if k in d), None)
     ci = d.get("ci")
     if isinstance(ci, dict):
         ci = [ci.get("low"), ci.get("high")]
@@ -689,12 +731,67 @@ def replay_md_table(root: Path) -> dict:
     return out
 
 
+def row_run_setting(key: str) -> tuple[str, str]:
+    """tab_w2_test 一行的（运行目录, 设置）：9B 各设置在 RUN-0072，回放在 RUN-0076 补充 2，候选在 RUN-0092。"""
+    x = next((r for r in X_ROWS if r[0] == key), None)
+    if x is not None:
+        return XT.CANDS[x[1]], x[2]
+    if key == "replay":
+        return W2_REPLAY_RUN, W2_REPLAY_SETTING
+    return W2T.RUNS[W2_MODEL], key
+
+
+def pooled_name(key: str) -> str | None:
+    """w2_test_pooled.json 里这一行的系统名：按（运行目录, 设置）对上 w2_test_pooled.SYSTEMS（W2-a 的运行目录记 None，即 RUN-0072 的 w2a）。"""
+    run, setting = row_run_setting(key)
+    return next((n for n, r, s in WTP.SYSTEMS if (r or WTP.REF) == run and s == setting), None)
+
+
+def _x_leaf(root: Path, cand: str, setting: str, sp: str) -> Path:
+    """候选的叶目录：<RUN-0092 的运行目录>/<模型>/refseg/<设置>/<划分>/（同 x_test_table.leaf，根换成 --root）。"""
+    return root / XT.CANDS[cand] / XT.M / "refseg" / setting / sp
+
+
+def _x_cell(xj, cand: str, sp: str, key: str, out: dict, metric: str, row: str, sub: str | None = None) -> dict | None:
+    """x_test_table.json 的一格 → _point。候选整块缺（文件不在、没跑完）时返回 None、不另报（collect_w2 开头报过一行）；
+    候选在、这一格的键没有时记进 gaps（分析没有算这一格，表里是"—"，不是待补的数据）。"""
+    c = ((xj or {}).get("candidates") or {}).get(cand) or {}
+    if c.get("status") != "完成":
+        return None
+    where = "pooled" if sp == "pooled" else f"per_split.{sp}"
+    blk = c.get("pooled") if sp == "pooled" else (c.get("per_split") or {}).get(sp)
+    if sub is not None:
+        blk = (blk or {}).get(sub)
+        where += f".{sub}"
+    path = f"{X_TEST_JSON} :: candidates.{cand}.{where}.{key}"
+    if blk is None:
+        out["missing"].append(f"W2 {row} {sp} {metric}（{X_TEST_JSON} 没有 candidates.{cand}.{where}）")
+        return None
+    if blk.get(key) is None:
+        out["gaps"].append({"metric": metric, "row": row, "col": sp, "path": path})
+        return None
+    pt = _ci_list_point(blk[key], xj.get("level"), path)
+    pt["n_resamples"] = xj.get("n_resamples")
+    return pt
+
+
+def _xj_value(xj, path: tuple, metric: str):
+    """核对用：x_test_table.json 里的读数块（不记 gaps）。path = ("reference", 设置) 或 ("candidates", 候选, 划分或 pooled, 键)。"""
+    if path[0] == "reference":
+        return ((((xj or {}).get("reference") or {}).get(path[1] + ("" if metric == "cIoU" else "_giou"))) or {}).get(path[2])
+    c = (((xj or {}).get("candidates") or {}).get(path[1])) or {}
+    blk = c.get("pooled") if path[2] == "pooled" else (c.get("per_split") or {}).get(path[2])
+    return (blk or {}).get(("" if metric == "cIoU" else "g_") + path[3])
+
+
 def collect_w2(root: Path) -> dict:
-    """tab_w2_test（cIoU）与 tab_w2_test_giou 的全部格子。"""
-    out = {"splits": list(W2T.SPLITS), "model": W2_MODEL, "rows": {}, "pairs": {}, "llmseg": {"rows": {}, "pairs": {}},
-           "e1_parse": {}, "llmseg_calls": {}, "w2c_calls": {}, "missing": [], "checks": [], "per_system_resamples": [],
+    """tab_w2_test（cIoU）与 tab_w2_test_giou 的全部格子；DEV-0073 起也是 tab_main、tab_compute 的数据（候选三行、合并列、计算记账）。"""
+    out = {"splits": list(W2T.SPLITS), "model": W2_MODEL, "rows": {}, "pairs": {}, "x_pairs": {}, "llmseg": {"rows": {}, "pairs": {}},
+           "e1_parse": {}, "llmseg_calls": {}, "w2c_calls": {}, "compute": {}, "missing": [], "gaps": [], "checks": [],
+           "per_system_resamples": [], "x_status": {},
            "sources": {"table": W2_TEST_JSON, "replay": W2_REPLAY_RUN, "replay_pairs": W2_REPLAY_MD,
-                       "llmseg": LLMSEG_RUN, "llmseg_compare": LLMSEG_COMPARE}}
+                       "llmseg": LLMSEG_RUN, "llmseg_compare": LLMSEG_COMPARE, "x_test": X_TEST_JSON, "pooled": W2_POOLED_JSON,
+                       "candidates": dict(XT.CANDS)}}
     j = _load(root / W2_TEST_JSON)
     if j is None:
         out["missing"].append(f"W2 主表：{W2_TEST_JSON} 不在")
@@ -703,6 +800,24 @@ def collect_w2(root: Path) -> dict:
     have_replay = (root / W2_REPLAY_RUN).is_dir()
     if not have_replay:
         out["missing"].append(f"W2 主表：回放的结果目录 {W2_REPLAY_RUN} 不在")
+    # DEV-0073：候选（x_test_table.json 与 RUN-0092 的叶目录）、合并列（w2_test_pooled.json）
+    xj, pj = _load(root / X_TEST_JSON), _load(root / W2_POOLED_JSON)
+    if xj is None:
+        out["missing"].append(f"W2 探索候选：{X_TEST_JSON} 不在")
+    for cand in (C1, C2):
+        st = ((((xj or {}).get("candidates") or {}).get(cand)) or {}).get("status")
+        out["x_status"][cand] = st
+        if xj is not None and st != "完成":
+            out["missing"].append(f"W2 探索候选 {cand}：{X_TEST_JSON} 里 status 是 {st or '（没有这个候选）'}")
+    out["x_level"], out["x_resamples"], out["x_seed"] = (xj or {}).get("level"), (xj or {}).get("n_resamples"), (xj or {}).get("seed")
+    if pj is None:
+        out["missing"].append(f"W2 合并列：{W2_POOLED_JSON} 不在")
+    out["pooled_level"], out["pooled_resamples"], out["pooled_seed"] = (pj or {}).get("level"), (pj or {}).get("n_resamples"), (pj or {}).get("seed")
+    out["pooled_sources"] = {n: e.get("source") for n, e in ((pj or {}).get("systems") or {}).items() if e.get("status") == "完成"}
+    have_x = {cand: (root / XT.CANDS[cand]).is_dir() for cand in (C1, C2)}
+    for cand, ok in have_x.items():
+        if not ok:
+            out["missing"].append(f"W2 主表 {cand}：结果目录 {XT.CANDS[cand]} 不在")
     res = set()
     for metric, _name in W2_METRICS:
         rows = out["rows"].setdefault(metric, {})
@@ -734,6 +849,60 @@ def collect_w2(root: Path) -> dict:
         out["checks"].append(f"一致：{W2_TEST_JSON} 的 9B 各设置读数与 {W2T.RUNS[W2_MODEL]} 各叶目录的 metrics.json 逐格相同"
                              if not any(c.startswith("不一致：") for c in out["checks"]) else
                              f"见上：{W2_TEST_JSON} 与叶目录有不一致的格子")
+    # DEV-0073：候选三行，每个划分取 RUN-0092 叶目录 metrics.json 的 headline（与上面各行同一口径：运行时算的 CI）
+    xbad, n_x = [], 0
+    for metric, _name in W2_METRICS:
+        rows = out["rows"][metric]
+        for key, cand, setting, jkey, _label in X_ROWS:
+            rows[key] = {}
+            for sp in W2T.SPLITS:
+                pt = _leaf_headline(_x_leaf(root, cand, setting, sp) / "metrics.json", metric, root)
+                if pt is None or pt["value"] is None:
+                    if have_x[cand]:
+                        out["missing"].append(f"W2 主表 {key} {sp} {metric}")
+                    pt = None
+                else:
+                    if pt.get("n_resamples"):
+                        res.add(pt["n_resamples"])
+                    # 核对：叶目录的读数 = x_test_table.json 的读数（只比读数：分析的 CI 是 10,000 次重抽，叶目录是运行时的）
+                    xv = _xj_value(xj, ("candidates", cand, sp, jkey), metric)
+                    if xv is not None:
+                        n_x += 1
+                        if abs(xv.get(metric.lower()) - pt["value"]) > 1e-12:
+                            xbad.append(f"{key} {sp} {metric}")
+                rows[key][sp] = pt
+    out["per_system_resamples"] = sorted(res)
+    if n_x:
+        out["checks"].append(("一致" if not xbad else "不一致") + f"：{X_TEST_JSON} 的候选逐划分读数与 RUN-0092 各叶目录 metrics.json 的 headline"
+                             f"（{n_x} 格）" + (f"（不同：{xbad}）" if xbad else ""))
+    # 合并列：所有行都取 w2_test_pooled.json（D152，5 个划分逐 id 合并，10,000 次重抽）
+    for metric, _name in W2_METRICS:
+        for key in list(out["rows"][metric]):
+            name = pooled_name(key)
+            e = ((pj or {}).get("systems") or {}).get(name) if name else None
+            c = (e or {}).get(metric) if (e or {}).get("status") == "完成" else None
+            pt = _ci_list_point(c, (pj or {}).get("level"), f"{W2_POOLED_JSON} :: systems.{name}.{metric}")
+            if pt is not None:
+                pt["n_resamples"] = pj.get("n_resamples")
+            elif pj is not None and metric == W2_METRICS[0][0]:  # cIoU、gIoU 一起缺，只报一行
+                why = ("没有对应的系统" if e is None else f"status 是 {e.get('status')}" +
+                       (f"，缺 {', '.join(e['missing'])}" if e.get("missing") else ""))
+                out["missing"].append(f"W2 合并列 {name or key}（{W2_POOLED_JSON}：{why}）")
+            out["rows"][metric][key]["pooled"] = pt
+    # 核对：w2_test_pooled.json 与 x_test_table.json 的合并读数（W2-c、W1-F、候选三行；同一套重抽，读数与 CI 都比）
+    pbad, n_p = [], 0
+    for metric, _name in W2_METRICS:
+        for key, path in [("w2c", ("reference", "w2c", "pooled")), ("w1f", ("reference", "w1f", "pooled"))] + \
+                         [(k, ("candidates", cand, "pooled", jk)) for k, cand, _s, jk, _l in X_ROWS]:
+            p, xv = out["rows"][metric][key].get("pooled"), _xj_value(xj, path, metric)
+            if p is None or xv is None:
+                continue
+            n_p += 1
+            if any(abs(a - b) > 1e-12 for a, b in zip((xv[metric.lower()], *xv["ci"]), (p["value"], p["low"], p["high"]))):
+                pbad.append(f"{key} {metric}")
+    if n_p:
+        out["checks"].append(("一致" if not pbad else "不一致") + f"：{W2_POOLED_JSON} 的合并读数与 {X_TEST_JSON}（W2-c、W1-F 的 reference，"
+                             f"候选的 pooled）逐个相同，读数与 CI（{n_p} 格）" + (f"（不同：{pbad}）" if pbad else ""))
     # 配对差（只有 cIoU）：W2-c − W1-F、W2-a − W1-F 取分析 JSON；回放 − W2-c 取 w2c_replay.md §1
     rmd = replay_md_table(root)
     if not rmd:
@@ -759,6 +928,11 @@ def collect_w2(root: Path) -> dict:
             if rec["pooled"] is None and j is not None:
                 out["missing"].append(f"W2 配对差 {key} 合并（{W2_TEST_JSON}）")
         out["pairs"][key] = rec
+    # DEV-0073：候选的配对差取 x_test_table.json（逐句配对 bootstrap，ratio-of-sums；gIoU 取 g_ 键）
+    for metric, _name in W2_METRICS:
+        pre = "" if metric == "cIoU" else "g_"
+        out["x_pairs"][metric] = {pk: {sp: _x_cell(xj, cand, sp, pre + jk, out, metric, lab) for sp in W2T.SPLITS + ["pooled"]}
+                                  for pk, cand, jk, lab in X_PAIRS}
     # 核对：w2c_replay.md 里的 W2-c、回放读数（3 位小数）= 分析 JSON 与回放 metrics.json 四舍五入
     bad = []
     for sp in W2T.SPLITS:
@@ -821,6 +995,45 @@ def collect_w2(root: Path) -> dict:
                                        for rd in ("rec", "seg")}
         out["llmseg_commit"] = next(((_load(root / LLMSEG_RUN / W2_MODEL / "refseg" / "llmseg" / sp / "metrics.json") or {})
                                      .get("llmseg_commit") for sp in W2T.SPLITS), None)
+    # DEV-0073：LLMSeg 一块加 C1 的同句读数与 C1 − LLMSeg（x_test_table.json 的 llmseg 子块）；tab_main 的外部基线另取
+    # 同样 1,500 句上 LLMSeg 的合并读数（带 CI，x_test_table.json；compare.json 的合并读数没有 CI）
+    lxbad, n_lx = [], 0
+    for metric, _name in W2_METRICS:
+        pre = "" if metric == "cIoU" else "g_"
+        for k, jk, lab in X_LLMSEG_ROWS:
+            out["llmseg"]["rows"][metric][k] = {sp: _x_cell(xj, C1, sp, pre + jk, out, metric, lab, sub="llmseg") for sp in W2T.SPLITS + ["pooled"]}
+        for k, jk, lab in X_LLMSEG_PAIRS:
+            out["llmseg"]["pairs"][metric][k] = {sp: _x_cell(xj, C1, sp, pre + jk, out, metric, lab, sub="llmseg") for sp in W2T.SPLITS + ["pooled"]}
+        xp = {rd: _x_cell(xj, C1, "pooled", f"{pre}llmseg_{rd}", out, metric, f"LLMSeg {rd}, pooled with CI", sub="llmseg") for rd in ("rec", "seg")}
+        out["llmseg"].setdefault("x_pooled", {})[metric] = xp
+        for rd, p in xp.items():  # 核对：与 compare.json 的合并读数相同
+            q = out["llmseg"]["rows"][metric][rd].get("pooled")
+            if p is not None and q is not None:
+                n_lx += 1
+                if abs(p["value"] - q["value"]) > 1e-12:
+                    lxbad.append(f"{rd} {metric}")
+    if n_lx:
+        out["checks"].append(("一致" if not lxbad else "不一致") + f"：{X_TEST_JSON} 的 LLMSeg 合并读数（同样 1,500 句）与 {LLMSEG_COMPARE} 的"
+                             f"（{n_lx} 格）" + (f"（不同：{lxbad}）" if lxbad else ""))
+    # 计算记账（x_test_table.json：候选取 candidates.<候选>.compute，其余取 compute_reference；每句均值，5 个划分按句数加权）
+    cref = (xj or {}).get("compute_reference") or {}
+    for key, _lab in COMPUTE_ROWS:
+        x = next((r for r in X_ROWS if r[0] == key), None)
+        if x is not None:
+            c = ((((xj or {}).get("candidates") or {}).get(x[1]) or {}).get("compute") or {}).get(x[3])
+            src = f"{X_TEST_JSON} :: candidates.{x[1]}.compute.{x[3]}"
+            expected = out["x_status"].get(x[1]) == "完成"
+        else:
+            want = COMPUTE_REF[key]
+            name = want if want in cref else next((k for k in cref if k.startswith(want)), None)
+            c, src, expected = cref.get(name) if name else None, f"{X_TEST_JSON} :: compute_reference.{name or want}", xj is not None
+        out["compute"][key] = None if not c else {**c, "source": src}
+        if c is None and expected:
+            out["missing"].append(f"计算记账 {key}（{src} 没有）")
+    # 样条的控制点数：C1 运行的 config.yaml（x2.n，检查点训练时定的 n）
+    cfg = _x_leaf(root, C1, XT.MAIN, W2T.SPLITS[0]) / "config.yaml"
+    m = re.search(r"^x2:\s*\n\s+n:\s*(\d+)\s*$", cfg.read_text(encoding="utf-8"), re.M) if cfg.is_file() else None
+    out["spline_n"], out["spline_n_source"] = (int(m.group(1)) if m else None), f"{_rel(root, cfg)} :: x2.n"
     return out
 
 
@@ -866,16 +1079,29 @@ def _flags(h: dict | None) -> list[dict]:
             for r in (h or {}).get("rows") or [] if r.get("flag")]
 
 
+def _node(path: str | None) -> str | None:
+    """来源路径里的节点名（运行目录名的 _hpcgpuNN 后缀）。"""
+    m = re.search(r"_(hpcgpu\d+)", path or "")
+    return m.group(1) if m else None
+
+
+def _lang_nodes(src: dict) -> dict:
+    """lang_cost_9b.json 一个系统的各项检查配的基座在哪个节点：健康检查、大题量取 compare 文件的运行目录，T 文本取基座的目录。"""
+    return {"health": _node(src.get("health")), "battery": _node(src.get("battery")), "ttext": _node(src.get("ttext_base"))}
+
+
 def collect_lang_cost(root: Path, with_explore: bool = False) -> dict:
-    """fig_lang_cost：相对同节点基座的差（百分点）与 95% CI，全部取自 lang_cost_9b.json；--with-explore 时另读探索候选的 compare。"""
+    """fig_lang_cost：相对同节点基座的差（百分点）与 95% CI，取自 lang_cost_9b.json（缺省四方：E3b+C3、W2-c、回放、X-2）；
+    --with-explore 时再加 X-3（C2，同一份 JSON）与 X-3L（探索候选，读它自己的 compare，没有 T 文本）。"""
     out = {"readouts": [{"section": s, "key": k, "label": lab} for s, k, lab in LANG_READOUTS], "systems": [], "missing": [],
            "json": LANG_COST_JSON, "with_explore": with_explore}
     j = _load(root / LANG_COST_JSON)
     if j is None:
         out["missing"].append(f"语言代价：{LANG_COST_JSON} 不在")
-    for name, label in LANG_SYSTEMS:
+    for name, label in LANG_SYSTEMS + (LANG_ABLATION if with_explore else ()):
         e = ((j or {}).get("systems") or {}).get(name)
-        rec = {"name": name, "label": label, "explore": False, "values": {}, "health_flags": [], "sources": (e or {}).get("sources")}
+        rec = {"name": name, "label": label, "explore": False, "role": "ablation" if (name, label) in LANG_ABLATION else "main",
+               "values": {}, "health_flags": [], "sources": (e or {}).get("sources"), "nodes": _lang_nodes((e or {}).get("sources") or {})}
         if e is None and j is not None:
             out["missing"].append(f"语言代价 {name}（{LANG_COST_JSON} 里没有）")
         for sec, key, _lab in LANG_READOUTS:
@@ -893,7 +1119,8 @@ def collect_lang_cost(root: Path, with_explore: bool = False) -> dict:
     if with_explore:
         for name, battery, health, node in EXPLORE_LANG:
             bt, h = _load(root / battery), _load(root / health)
-            rec = {"name": name, "label": name, "explore": True, "node": node, "values": {}, "health_flags": _flags(h),
+            rec = {"name": name, "label": name, "explore": True, "role": "explore", "node": node, "nodes": {"health": node, "battery": node},
+                   "values": {}, "health_flags": _flags(h),
                    "sources": {"battery": battery, "health": health}}
             if bt is None:
                 out["missing"].append(f"语言代价（探索）{name}：{battery} 不在")
@@ -912,9 +1139,10 @@ def collect_lang_cost(root: Path, with_explore: bool = False) -> dict:
     return out
 
 
-def collect_count_bins(root: Path) -> dict:
-    """fig_count_bins：CountBench 三个大档的准确率（count_errors_9b.json），与配对基座的差及配对 bootstrap 95% CI。"""
-    out = {"bins": list(CE.COARSE), "systems": [], "missing": [], "json": COUNT_ERRORS_JSON}
+def collect_count_bins(root: Path, with_explore: bool = False) -> dict:
+    """fig_count_bins：CountBench 三个大档的准确率（count_errors_9b.json），与配对基座的差及配对 bootstrap 95% CI。
+    缺省画 X-2（C1）；--with-explore 时在它后面再加 X-3（C2）。"""
+    out = {"bins": list(CE.COARSE), "systems": [], "missing": [], "json": COUNT_ERRORS_JSON, "with_explore": with_explore}
     j = _load(root / COUNT_ERRORS_JSON)
     if j is None:
         out["missing"].append(f"计数分档：{COUNT_ERRORS_JSON} 不在")
@@ -922,7 +1150,11 @@ def collect_count_bins(root: Path) -> dict:
     out["same_answer_rate"] = (j or {}).get("base_0069_vs_0056_same_answer_rate")
     out["sources"] = (j or {}).get("source")
     systems = (j or {}).get("systems") or {}
-    for name, label in COUNT_SYSTEMS:
+    order = list(COUNT_SYSTEMS)
+    if with_explore:
+        i = [n for n, _l in order].index("X-2（C1）") + 1
+        order[i:i] = list(COUNT_EXPLORE)
+    for name, label in order:
         s = systems.get(name)
         rec = {"name": name, "label": label, "paired_base": (s or {}).get("paired_base"), "acc": {}, "n": {}, "delta": {}}
         if s is None and j is not None:
@@ -942,6 +1174,52 @@ def collect_count_bins(root: Path) -> dict:
                                   all((b1["bins"].get(b) or {}).get("acc") == (b2["bins"].get(b) or {}).get("acc") for b in CE.COARSE))
     if j is not None and not out["bases_identical"]:
         out["missing"].append(f"计数分档：两次基座读数（{', '.join(COUNT_BASES)}）不完全相同，图里只画了 {COUNT_BASES[0]}")
+    return out
+
+
+def collect_lang_table(root: Path) -> dict:
+    """tab_lang_cost（四方）与 tab_lang_cost_full（加 X-3）：lang_cost_9b.json 的健康检查三项（差与标红）、大题量两项与 T 文本两项
+    （差与 95% CI），都是相对同节点基座的百分点。读数（差、CI、基座）只取 lang_cost_9b.json 这一个来源：健康检查的基座取 base_pct，
+    大题量与 T 文本取 base（大题量的 base 由 origin/main 5b3bb70ee 补上）。与来源 lb_compare 文件的核对在测试里。表注里的重抽次数与
+    标红门槛不是读数，取 JSON 记的来源 compare 文件的 statistics 与 threshold_pp。"""
+    out = {"json": LANG_COST_JSON, "systems": [], "missing": [], "resamples": {}, "threshold_pp": None,
+           "rows": [{"section": "health", "key": ".".join(r)} for r in LCT.HEALTH_ROWS] +
+                   [{"section": s, "key": k} for s, k, _lab in LANG_READOUTS]}
+    j = _load(root / LANG_COST_JSON)
+    if j is None:
+        out["missing"].append(f"语言代价表：{LANG_COST_JSON} 不在")
+    res: dict = {"health": set(), "battery": set(), "ttext": {LCT.N_RES}}
+    for name, label in LANG_SYSTEMS + LANG_ABLATION:
+        e = ((j or {}).get("systems") or {}).get(name)
+        src = (e or {}).get("sources") or {}
+        rec = {"name": name, "label": label, "role": "ablation" if (name, label) in LANG_ABLATION else "main", "sources": src,
+               "nodes": _lang_nodes(src), "cells": {}}
+        if e is None and j is not None:
+            out["missing"].append(f"语言代价表 {name}（{LANG_COST_JSON} 里没有）")
+        hc, bc = (_load(root / src["health"]) if src.get("health") else None), (_load(root / src["battery"]) if src.get("battery") else None)
+        if hc:
+            res["health"].add((((hc.get("statistics") or {}).get("bootstrap")) or {}).get("n_resamples"))
+            out["threshold_pp"] = out["threshold_pp"] or hc.get("threshold_pp")
+        if bc:
+            res["battery"].add((((bc.get("statistics") or {}).get("bootstrap")) or {}).get("n_resamples"))
+        for row in out["rows"]:
+            sec, key = row["section"], row["key"]
+            r = ((e or {}).get(sec) or {}).get(key)
+            path = f"{LANG_COST_JSON} :: systems.{name}.{sec}.{key}"
+            if not r or r.get("delta_pp") is None:
+                rec["cells"][f"{sec}/{key}"] = None
+                if e is not None:
+                    out["missing"].append(f"语言代价表 {name} {sec} {key}")
+                continue
+            ci = r.get("ci95_pp") or [None, None]
+            base = r.get("base_pct") if sec == "health" else r.get("base")
+            if base is None:
+                out["missing"].append(f"语言代价表 {name} {sec} {key} 的基座读数（{path} 里是空的）")
+            rec["cells"][f"{sec}/{key}"] = {"delta": r["delta_pp"], "low": ci[0], "high": ci[1], "n": r.get("n"),
+                                            "flag": bool(r.get("flag")) if sec == "health" else None, "base": base,
+                                            "node": rec["nodes"][sec], "source": path}
+        out["systems"].append(rec)
+    out["resamples"] = {k: sorted(x for x in v if x) for k, v in res.items()}
     return out
 
 
@@ -1200,6 +1478,12 @@ def fig_w2_size(sz: dict, out: Path) -> list[Path]:
     return _save(fig, out, "fig_w2_size")
 
 
+def _legend_cols(n: int, per_row: int) -> int:
+    """图例的列数：每行至多 per_row 项，行数最少，各行尽量一样长（4 项 → 2 × 2，6 项 → 3 × 2）。"""
+    rows = max(1, math.ceil(n / per_row))
+    return max(1, math.ceil(n / rows))
+
+
 def fig_lang_cost(lc: dict, out: Path) -> list[Path]:
     """相对同节点基座的差（百分点）与 95% CI；读数自上而下，每个读数里各系统错开一行。"""
     systems = lc["systems"]
@@ -1238,7 +1522,7 @@ def fig_lang_cost(lc: dict, out: Path) -> list[Path]:
     ax.set_xlabel("Difference from the base (percentage points)")
     handles = [Line2D([], [], marker="o", ms=4.5, color=W2_COLORS.get(s["name"], INK_2), mec="white", ls="none", label=s["label"])
                for s in systems]
-    fig.legend(handles=handles, loc="outside upper center", ncol=min(n_s, 3), handletextpad=0.2, columnspacing=0.9)
+    fig.legend(handles=handles, loc="outside upper center", ncol=_legend_cols(n_s, 3), handletextpad=0.2, columnspacing=0.9)
     return _save(fig, out, "fig_lang_cost")
 
 
@@ -1274,7 +1558,8 @@ def fig_count_bins(cb: dict, out: Path) -> list[Path]:
     axb.tick_params(axis="x", length=0)
     axb.set_xlabel("Ground-truth count (CountBench)")
     handles = [Patch(color=W2_COLORS.get(s["name"], INK_2), lw=0, label=s["label"]) for s in systems]
-    fig.legend(handles=handles, loc="outside upper center", ncol=len(handles), handlelength=0.8, handletextpad=0.3, columnspacing=0.6)
+    fig.legend(handles=handles, loc="outside upper center", ncol=_legend_cols(len(handles), 5), handlelength=0.8, handletextpad=0.3,
+               columnspacing=0.6)
     return _save(fig, out, "fig_count_bins")
 
 
@@ -1420,46 +1705,114 @@ def _runs_of(paths) -> str:
     return ", ".join(f"RUN-{r}" for r in runs)
 
 
+def _x_def_note(w2: dict) -> str:
+    """C1、椭圆消融、C2 的定义（预注册 X-5、X-5a、X-6；G-EX §1）。样条的控制点数取 C1 运行的 config.yaml。"""
+    n = w2.get("spline_n")
+    spline = f"a closed B-spline with {n} control points" if n else "a closed B-spline"
+    return (f"C1 = X-2 (ours): a single LoRA on the same Qwen3.5-9B; the model proposes a box, then traces the object's outline as {spline}; "
+            "the rasterised spline seeds GrabCut as a trimap (definite bands inside and outside the spline, unknown in between). GrabCut "
+            "(OpenCV graph cut) has no learned parameters, and no external learned vision model is used in training or inference. "
+            "C1, in-box ellipse instead of spline: the same run with the spline replaced by the ellipse inscribed in the proposed box, "
+            "everything else unchanged (capability attribution). C2 = X-3: C1's training recipe without the signed box-correction "
+            "stream (trained for C1 but not used at its inference).")
+
+
+W2_DEF_NOTE = ("Own box: the model's own box (E1 protocol) as the mask; W1-F: that box plus the default GrabCut candidate (a fixed "
+               "pipeline, no LLM decision); random / oracle pick: a random / the ground-truth-best of the four tool candidates; W2-a: the "
+               "frozen model picks a candidate (zero-shot; candidate 1 = W1-F, also submitted when the pick fails to parse); W2-c: LoRA "
+               "text supervision to propose the box and pick; W2-c + replay: W2-c trained with self-distillation replay (post hoc "
+               "variant, descriptive).")
+
+
+def _pooled_n(w2: dict, metric: str = "cIoU") -> int | None:
+    return next((p["n"] for d in w2["rows"].get(metric, {}).values() for p in [d.get("pooled")] if p and p.get("n")), None)
+
+
+def _gap_text(w2: dict, metric: str) -> str:
+    """分析没有算的格子（gaps），按行归并：五个划分都缺写 "per split"，否则列出划分。"""
+    by: dict = {}
+    for g in w2.get("gaps") or []:
+        if g["metric"] == metric:
+            by.setdefault(g["row"], []).append(g["col"])
+    parts = []
+    for row, cols in by.items():
+        if set(cols) == set(w2["splits"]):
+            parts.append(f"{row} per split")
+        else:
+            parts.append(f"{row} ({', '.join('pooled' if c == 'pooled' else split_label(c) for c in cols)})")
+    return "; ".join(parts)
+
+
+def _nfmt(n) -> str:
+    return f"{n:,}" if isinstance(n, int) else MISSING
+
+
+def _res_text(rs) -> str:
+    rs = sorted({r for r in rs if r})
+    return "/".join(f"{r:,}" for r in rs) if rs else MISSING
+
+
 def w2_table_notes(w2: dict, metric: str) -> list[str]:
     res = "/".join(f"{r:,}" for r in w2["per_system_resamples"]) or MISSING
     e1 = [v for v in w2["e1_parse"].values() if v]
     all_fail = e1 and len(e1) == len(w2["splits"]) and all(v["n_failed"] == v["n"] for v in e1)
+    npool = _pooled_n(w2, metric)
     notes = [f"Qwen3.5-9B on the five W2 test splits ({_n_split(w2, metric)} expressions each, the E1 polygon subset); "
-             f"{metric} ×100 with 95% bootstrap CI over expressions ({res} resamples, as computed by each run). "
+             f"{metric} ×100 with 95% bootstrap CI over expressions: per split as computed by each run ({res} resamples); pooled = the "
+             f"five splits together ({f'{npool:,}' if npool else MISSING} expressions) from {W2_POOLED_JSON.split('/')[-1]} "
+             f"({_res_text([w2.get('pooled_resamples')])} resamples). "
              + ("cIoU = summed intersection / summed union." if metric == "cIoU" else "gIoU = mean per-expression IoU."),
-             "Own box: the model's own box (E1 protocol) as the mask; W1-F: that box plus the default GrabCut candidate (a fixed "
-             "pipeline, no LLM decision); random / oracle pick: a random / the ground-truth-best of the four tool candidates; W2-a: the "
-             "frozen model picks a candidate (zero-shot; candidate 1 = W1-F, also submitted when the pick fails to parse); W2-c: LoRA "
-             "text supervision to propose the box and pick; W2-c + replay: W2-c trained with self-distillation replay (post hoc "
-             "variant, descriptive)."]
+             W2_DEF_NOTE + " " + _x_def_note(w2)]
     if all_fail:
         notes.append(f"E1 zero-shot polygon: all {e1[0]['n']:,} outputs per split fail to parse (strict scoring gives 0).")
+    xres = _res_text([w2.get("x_resamples")])
     if metric == "cIoU":
-        pr = w2.get("pairs_resamples")
-        notes.append("Paired differences (points ×100): per-expression paired bootstrap of the ratio of sums, 95%"
-                     + (f", {pr:,} resamples" if pr else "") + "; pooled = the five splits together (5,000 expressions). "
-                     "Per-system pooled cIoU is not part of the analysis, so the pooled column has differences only.")
+        wres = _res_text([w2.get("pairs_resamples")])
+        srcs = f"W2 rows: {W2_TEST_JSON.split('/')[-1]}; C1/C2 rows: {X_TEST_JSON.split('/')[-1]}"
+        notes.append("Paired differences (points ×100): per-expression paired bootstrap of the ratio of sums, 95%, " +
+                     (f"{wres} resamples ({srcs})" if wres == xres else f"{wres} resamples for the W2 rows and {xres} for the C1/C2 rows ({srcs})")
+                     + "; pooled = the five splits together.")
     else:
-        notes.append("Paired gIoU differences for W2 were not computed in the analysis (see the cIoU table).")
+        notes.append(f"Paired gIoU differences (mean per-expression IoU; per-expression paired bootstrap, 95%, {xres} resamples) are in the "
+                     f"analysis only for C1 and C2 ({X_TEST_JSON.split('/')[-1]}); the W2 rows have paired differences in cIoU only "
+                     "(see the cIoU table).")
     calls = [c for v in w2["llmseg_calls"].values() for c in [v.get("rec")] if c]
     calls_seg = [c for v in w2["llmseg_calls"].values() for c in [v.get("seg")] if c]
     w2c_calls = sorted({c for c in w2["w2c_calls"].values() if c})
-    lres = sorted({p.get("n_resamples") for d in w2["llmseg"]["pairs"].get(metric, {}).values() for p in d.values() if p and p.get("n_resamples")})
+    lres = sorted({p.get("n_resamples") for k, d in w2["llmseg"]["pairs"].get(metric, {}).items() if k in dict(LLMSEG_PAIRS)
+                   for p in d.values() if p and p.get("n_resamples")})
     lls = ("External baseline LLMSeg" + (f" (official code, commit {w2['llmseg_commit'][:7]})" if w2.get("llmseg_commit") else "") +
-           " driven by the same Qwen3.5-9B, zero-shot, on 300 hash-selected expressions per split (pooled 1,500), with W2-c on the "
-           "same expressions alongside. Before refinement = after its first two stages; after refinement = its main configuration.")
+           " driven by the same Qwen3.5-9B, zero-shot, on 300 hash-selected expressions per split (pooled 1,500), with W2-c and C1 on "
+           "the same expressions alongside. Before refinement = after its first two stages; after refinement = its main configuration.")
     if calls and calls_seg:
         lls += (f" Model calls per image (split means): {_span(calls)} after vs. {_span(calls_seg)} before refinement" +
                 (f"; W2-c {'/'.join(f'{c:g}' for c in w2c_calls)}" if w2c_calls else "") + ".")
     lls += (" LLMSeg − W2-c: paired bootstrap, 95%" + (f", {'/'.join(f'{r:,}' for r in lres)} resamples" if lres else "") +
-            "; the pooled LLMSeg and W2-c readings have no CI in the analysis.")
+            f"; the pooled LLMSeg and W2-c readings have no CI in that comparison. C1 rows: {X_TEST_JSON.split('/')[-1]}, "
+            f"{xres} resamples.")
     notes.append(lls)
-    src = [W2T.RUNS[W2_MODEL], W2_REPLAY_RUN, LLMSEG_RUN]
+    gaps = _gap_text(w2, metric)
+    if gaps:
+        notes.append(f"—: not computed in the analysis ({X_TEST_JSON.split('/')[-1]}): {gaps}.")
+    src = [W2T.RUNS[W2_MODEL], W2_REPLAY_RUN, LLMSEG_RUN] + list(XT.CANDS.values()) + list(w2.get("pooled_sources", {}).values())
     notes.append(f"Data: {_runs_of(src)} (LLMSeg comparison computed on CPU, D139)"
-                 + ("; W2-a paired differences completed in RUN-0081" if metric == "cIoU" else "") + ".")
+                 + ("; W2-a paired differences completed in RUN-0081" if metric == "cIoU" else "") +
+                 "; " + _pooled_extra_text(w2) + ".")
     if w2["missing"]:
         notes.append("Missing: " + "; ".join(w2["missing"]) + ".")
     return notes
+
+
+def _pooled_extra_text(w2: dict) -> str:
+    """合并列里来源不是该行自己运行目录的系统（W2-a 的逐句交并由 RUN-0095 从 RUN-0072 抽回）。"""
+    extra = []
+    for key in ROW_LABELS:
+        name = pooled_name(key)
+        src = (w2.get("pooled_sources") or {}).get(name)
+        run = row_run_setting(key)[0]
+        if src and _runs_of([src]) and _runs_of([src]) != _runs_of([run]):
+            extra.append(f"{ROW_LABELS[key]} per-expression scores for the pooled column extracted in {_runs_of([src])} from {_runs_of([run])}")
+    return "; ".join(extra) if extra else "pooled column from the runs above"
 
 
 def _span(xs, nd: int = 1) -> str:
@@ -1468,45 +1821,307 @@ def _span(xs, nd: int = 1) -> str:
 
 
 def _n_split(w2: dict, metric: str) -> str:
-    ns = sorted({p["n"] for d in w2["rows"].get(metric, {}).values() for p in d.values() if p and p.get("n")})
+    ns = sorted({p["n"] for d in w2["rows"].get(metric, {}).values() for c, p in d.items() if c != "pooled" and p and p.get("n")})
     return "/".join(f"{n:,}" for n in ns) if ns else MISSING
 
 
-def tab_w2(w2: dict, out: Path, metric: str, name: str) -> list[Path]:
-    """系统为行、划分（加合并）为列；三块：9B 各系统、配对差（只有 cIoU）、外部基线 LLMSeg。"""
-    splits = w2["splits"]
-    cols = splits + ["pooled"]
-    heads = [split_label(sp) for sp in splits] + ["Pooled"]
-    blocks = [(f"Qwen3.5-9B, {_n_split(w2, metric)} expressions per split ({metric} ×100, 95% CI)",
-               [(lab, w2["rows"][metric].get(k, {}), False) for k, lab in W2_ROWS])]
-    if metric == "cIoU":
-        blocks.append(("Paired differences (points ×100, 95% paired bootstrap CI)",
-                       [(lab, w2["pairs"].get(k, {}), True) for k, lab in W2_PAIRS]))
-    blocks.append(("External baseline: LLMSeg with zero-shot Qwen3.5-9B, 300 expressions per split (pooled 1,500)",
-                   [(lab, w2["llmseg"]["rows"].get(metric, {}).get(k, {}), False) for k, lab in LLMSEG_ROWS] +
-                   [(lab, w2["llmseg"]["pairs"].get(metric, {}).get(k, {}), True) for k, lab in LLMSEG_PAIRS]))
-    notes = w2_table_notes(w2, metric)
-    title = "W2 test" + (" (gIoU, appendix)" if metric == "gIoU" else "")
-    caption = (f"\\caption{{{title} on Qwen3.5-9B: referring segmentation {metric} per split. " +
-               " ".join(_tex_escape(n) for n in notes) + "}")
-    L = ["% Generated by scripts/figures/make_paper_figures.py; do not edit. Needs \\usepackage{booktabs,graphicx}.",
-         "\\begin{table*}[t]", "\\centering", caption, f"\\label{{tab:{name.replace('tab_', '').replace('_', '-')}}}", "\\footnotesize",
-         "\\setlength{\\tabcolsep}{3pt}", "\\resizebox{\\textwidth}{!}{%", "\\begin{tabular}{l" + "c" * len(cols) + "}", "\\toprule",
-         "System & " + " & ".join(_tex_escape(h) for h in heads) + " \\\\"]
-    M = ["| System | " + " | ".join(heads) + " |", "|---|" + "---:|" * len(cols)]
-    for title_b, rows in blocks:
-        L += ["\\midrule", f"\\multicolumn{{{len(cols) + 1}}}{{l}}{{\\emph{{{_tex_escape(title_b)}}}}} \\\\"]
-        M.append(f"| *{title_b}* |" + " |" * len(cols))
-        for lab, cells, signed in rows:
-            L.append(_tex_escape(lab) + " & " + " & ".join(fmt_w2(cells.get(c), signed, True) for c in cols) + " \\\\")
-            M.append(f"| {lab} | " + " | ".join(fmt_w2(cells.get(c), signed, False) for c in cols) + " |")
-    L += ["\\bottomrule", "\\end{tabular}}", "\\end{table*}", ""]
-    md = [f"# Table: {title} (generated by scripts/figures/make_paper_figures.py; do not edit by hand)", ""] + M + [""] + \
+def _write_table(out: Path, name: str, caption: str, label: str, colspec: str, header_tex: list[str], body_tex: list[str],
+                 md_title: str, md_rows: list[str], notes: list[str]) -> list[Path]:
+    """同 tab_w2 的版式：table*、booktabs、resizebox；Markdown 同一份表加表注。"""
+    L = ["% Generated by scripts/figures/make_paper_figures.py; do not edit. Needs \\usepackage{booktabs,graphicx" +
+         (",multirow" if any("\\multirow" in x for x in body_tex) else "") + "}.",
+         "\\begin{table*}[t]", "\\centering", caption.replace("—", "--"), f"\\label{{tab:{label}}}", "\\footnotesize",
+         "\\setlength{\\tabcolsep}{3pt}", "\\resizebox{\\textwidth}{!}{%", f"\\begin{{tabular}}{{{colspec}}}", "\\toprule",
+         *header_tex, *body_tex, "\\bottomrule", "\\end{tabular}}", "\\end{table*}", ""]
+    md = [f"# Table: {md_title} (generated by scripts/figures/make_paper_figures.py; do not edit by hand)", ""] + md_rows + [""] + \
          [f"- {n}" for n in notes] + [""]
     p_tex, p_md = out / f"{name}.tex", out / f"{name}.md"
     p_tex.write_text("\n".join(L), encoding="utf-8")
     p_md.write_text("\n".join(md), encoding="utf-8")
     return [p_tex, p_md]
+
+
+def tab_w2(w2: dict, out: Path, metric: str, name: str) -> list[Path]:
+    """系统为行、划分（加合并）为列；三块：9B 各系统（含 C1、椭圆消融、C2）、配对差、外部基线 LLMSeg（含 C1 的同句读数与配对差）。"""
+    splits = w2["splits"]
+    cols = splits + ["pooled"]
+    heads = [split_label(sp) for sp in splits] + ["Pooled"]
+    blocks = [(f"Qwen3.5-9B, {_n_split(w2, metric)} expressions per split ({metric} ×100, 95% CI)",
+               [(ROW_LABELS[k], w2["rows"][metric].get(k, {}), False) for k in [k for k, _l in W2_ROWS] + [r[0] for r in X_ROWS]])]
+    pairs = [(lab, w2["pairs"].get(k, {}), True) for k, lab in W2_PAIRS] if metric == "cIoU" else []
+    pairs += [(lab, w2["x_pairs"].get(metric, {}).get(k, {}), True) for k, _c, _j, lab in X_PAIRS]
+    blocks.append(("Paired differences (points ×100, 95% paired bootstrap CI)", pairs))
+    blocks.append(("External baseline: LLMSeg with zero-shot Qwen3.5-9B, 300 expressions per split (pooled 1,500)",
+                   [(lab, w2["llmseg"]["rows"].get(metric, {}).get(k, {}), False) for k, lab in LLMSEG_ROWS] +
+                   [(lab, w2["llmseg"]["rows"].get(metric, {}).get(k, {}), False) for k, _j, lab in X_LLMSEG_ROWS] +
+                   [(lab, w2["llmseg"]["pairs"].get(metric, {}).get(k, {}), True) for k, lab in LLMSEG_PAIRS] +
+                   [(lab, w2["llmseg"]["pairs"].get(metric, {}).get(k, {}), True) for k, _j, lab in X_LLMSEG_PAIRS]))
+    notes = w2_table_notes(w2, metric)
+    title = "W2 test" + (" (gIoU, appendix)" if metric == "gIoU" else "")
+    caption = (f"\\caption{{{title} on Qwen3.5-9B: referring segmentation {metric} per split. " +
+               " ".join(_tex_escape(n) for n in notes) + "}")
+    body, M = [], ["| System | " + " | ".join(heads) + " |", "|---|" + "---:|" * len(cols)]
+    for title_b, rows in blocks:
+        body += ["\\midrule", f"\\multicolumn{{{len(cols) + 1}}}{{l}}{{\\emph{{{_tex_escape(title_b)}}}}} \\\\"]
+        M.append(f"| *{title_b}* |" + " |" * len(cols))
+        for lab, cells, signed in rows:
+            body.append(_tex_escape(lab) + " & " + " & ".join(fmt_w2(cells.get(c), signed, True) for c in cols) + " \\\\")
+            M.append(f"| {lab} | " + " | ".join(fmt_w2(cells.get(c), signed, False) for c in cols) + " |")
+    return _write_table(out, name, caption, name.replace("tab_", "").replace("_", "-"), "l" + "c" * len(cols),
+                        ["System & " + " & ".join(_tex_escape(h) for h in heads) + " \\\\"], body, title, M, notes)
+
+
+# ---- tab_main（DEV-0073：论文正文主表）------------------------------------------------------------
+
+
+def _calls_text(c: dict | None) -> str:
+    """每句的模型调用 / 生成 token（x_test_table.json 的计算记账）；没有记录写"—"。"""
+    if not c:
+        return "—"
+    calls = f"{c['n_calls']:.1f}"
+    return f"{calls[:-2] if calls.endswith('.0') else calls} / {c['generated_tokens']:,.0f}"
+
+
+# 预注册 X-6 的预测（写于任何候选的 test 运行之前）："C1 与 C2 在 test 上相差 ±0.02 以内"（cIoU）；表注拿合并读数之差对照它
+X6_C1_C2_MARGIN = 0.02
+
+
+def c1_c2_note(w2: dict) -> str:
+    """表注一句（DEV-0073 审查第 1 条，不加粗）：C1 在 test 之前就定为主方法（X-5a）、C2 是去掉修正流的简化版、合并读数之差对照 X-6 的预测。"""
+    rows = w2["rows"].get("cIoU", {})
+    p1, p2 = (rows.get("c1") or {}).get("pooled"), (rows.get("c2") or {}).get("pooled")
+    s = ("C1 was designated the main method before any test run (preregistration X-5a, the project lead's decision); C2 is C1's "
+         "simplified version with the box-correction stream removed")
+    if not p1 or not p2 or p1.get("value") is None or p2.get("value") is None:
+        return s + "."
+    d = p2["value"] - p1["value"]
+    return (s + f"; pooled, C2 is {100 * abs(d):.1f} points {'above' if d >= 0 else 'below'} C1, "
+            f"{'within' if abs(d) <= X6_C1_C2_MARGIN else 'outside'} the ±{100 * X6_C1_C2_MARGIN:g} points predicted in preregistration X-6.")
+
+
+def main_table_notes(w2: dict) -> list[str]:
+    npool = _pooled_n(w2)
+    xp = (w2["llmseg"].get("x_pooled") or {}).get("cIoU") or {}
+    n_ext = (xp.get("rec") or {}).get("n")
+    keys = [k for g in MAIN_ROWS for k in g]
+    by_run: dict = {}
+    for k in keys:
+        by_run.setdefault(_runs_of([row_run_setting(k)[0]]), []).append(SHORT_LABELS[k])
+    by_run.setdefault(_runs_of([LLMSEG_RUN]), []).append("LLMSeg")
+    nodes = sorted({n for k in keys for n in [_node(row_run_setting(k)[0])] if n} | ({_node(LLMSEG_RUN)} - {None}))
+    notes = [f"Referring segmentation on the W2 test with Qwen3.5-9B: RefCOCO testA/testB, RefCOCO+ testA/testB and RefCOCOg test, "
+             f"{_n_split(w2, 'cIoU')} expressions per split (the E1 polygon subset); cIoU ×100 (summed intersection / summed union). "
+             f"Pooled: the five splits together ({f'{npool:,}' if npool else MISSING} expressions) with a 95% bootstrap CI over expressions "
+             f"({_res_text([w2.get('pooled_resamples')])} resamples); per-split CIs and gIoU are in the appendix tables.",
+             _x_def_note(w2),
+             c1_c2_note(w2),
+             "Own box: the model's own box (E1 protocol) as the mask; W1-F: that box plus the default GrabCut candidate (a fixed pipeline, "
+             "no LLM decision); oracle pick: the ground-truth-best of the four tool candidates; W2-a: the frozen model picks a candidate "
+             "(zero-shot); W2-c: LoRA text supervision to propose the box and pick a candidate.",
+             "Calls / gen. tokens: model calls and generated tokens per expression (means over the test expressions; LLMSeg over its "
+             f"{f'{n_ext:,}' if n_ext else MISSING}), from the compute accounting of {X_TEST_JSON.split('/')[-1]} (see the compute table); "
+             "— = no compute record for that row in the analysis.",
+             "External baseline: LLMSeg" + (f" (official code, commit {w2['llmseg_commit'][:7]})" if w2.get("llmseg_commit") else "") +
+             f" driven by the same zero-shot Qwen3.5-9B, main configuration (after refinement), on "
+             f"{f'{n_ext:,}' if n_ext else MISSING} hash-selected expressions (300 per split), with C1 on the same expressions. "
+             f"C1 − LLMSeg: per-expression paired bootstrap of the ratio of sums, 95%, {_res_text([w2.get('x_resamples')])} resamples "
+             f"(seed {w2.get('x_seed') or MISSING}); the two readings' CIs from the same resampling.",
+             "Data: " + "; ".join(f"{r} ({', '.join(labs)})" for r, labs in by_run.items()) + "; " + _pooled_extra_text(w2) +
+             (f"; all on {', '.join(nodes)} (D93-1)" if len(nodes) == 1 else "") + "."]
+    if w2["missing"]:
+        notes.append("Missing: " + "; ".join(w2["missing"]) + ".")
+    return notes
+
+
+def tab_main(w2: dict, out: Path) -> list[Path]:
+    """正文主表：行 = 自己的框、W1-F、最优候选、W2-a、W2-c | C1、椭圆消融、C2；列 = 5 个划分（只读数）与合并（带 CI）、每句调用 / 生成 token；
+    下接外部基线一块（同样 1,500 句的合并读数与配对差）。不加粗（DEV-0073 审查：最高值落在消融 C2 上，加粗 C1 又会误导）。"""
+    splits = w2["splits"]
+    heads = [split_label(sp) for sp in splits] + ["Pooled", "Calls / gen. tokens"]
+    rows = w2["rows"].get("cIoU", {})
+    body, M = [], ["| System | " + " | ".join(heads) + " |", "|---|" + "---:|" * len(heads)]
+    for group in MAIN_ROWS:
+        body.append("\\midrule")
+        for k in group:
+            r = rows.get(k, {})
+            cells_t = [fmt_w2({"value": (r.get(sp) or {}).get("value")}, False, True) for sp in splits]
+            cells_m = [fmt_w2({"value": (r.get(sp) or {}).get("value")}, False, False) for sp in splits]
+            cells_t += [fmt_w2(r.get("pooled"), False, True), _tex_escape(_calls_text(w2["compute"].get(k))).replace("—", "--")]
+            cells_m += [fmt_w2(r.get("pooled"), False, False), _calls_text(w2["compute"].get(k))]
+            body.append(_tex_escape(ROW_LABELS[k]) + " & " + " & ".join(cells_t) + " \\\\")
+            M.append(f"| {ROW_LABELS[k]} | " + " | ".join(cells_m) + " |")
+    xp = (w2["llmseg"].get("x_pooled") or {}).get("cIoU") or {}
+    n_ext = (xp.get("rec") or {}).get("n")
+    ext_title = (f"External baseline on the same {f'{n_ext:,}' if n_ext else MISSING} expressions (300 per split), pooled")
+    ext = [("LLMSeg, after refinement (main)", xp.get("rec"), False, w2["compute"].get("llmseg")),
+           (ROW_LABELS["c1"] + ", same expressions", (w2["llmseg"]["rows"].get("cIoU", {}).get("c1") or {}).get("pooled"), False,
+            w2["compute"].get("c1")),
+           ("C1 − LLMSeg, after refinement (points)", (w2["llmseg"]["pairs"].get("cIoU", {}).get("c1-rec") or {}).get("pooled"), True, None)]
+    body += ["\\midrule", f"\\multicolumn{{{len(heads) + 1}}}{{l}}{{\\emph{{{_tex_escape(ext_title)}}}}} \\\\"]
+    M.append(f"| *{ext_title}* |" + " |" * len(heads))
+    for lab, p, signed, comp in ext:
+        calls = "" if signed else _calls_text(comp)
+        body.append(_tex_escape(lab) + " & " * (len(splits) + 1) + fmt_w2(p, signed, True) + " & " +
+                    _tex_escape(calls).replace("—", "--") + " \\\\")
+        M.append(f"| {lab} |" + " |" * len(splits) + f" {fmt_w2(p, signed, False)} | {calls} |")
+    notes = main_table_notes(w2)
+    caption = ("\\caption{Main result: referring segmentation on the W2 test (Qwen3.5-9B, cIoU). " +
+               " ".join(_tex_escape(n) for n in notes) + "}")
+    header = ["System & " + " & ".join(_tex_escape(h) for h in heads) + " \\\\"]
+    return _write_table(out, "tab_main", caption, "main", "l" + "c" * len(heads), header, body, "main result (W2 test, cIoU)", M,
+                        notes)
+
+
+# ---- tab_compute（DEV-0073：计算记账）------------------------------------------------------------
+
+
+def compute_table_notes(w2: dict) -> list[str]:
+    ns = {k: (c or {}).get("n") for k, c in w2["compute"].items()}
+    n_main = sorted({n for k, n in ns.items() if n and k != "llmseg"})
+    runs = [row_run_setting(k)[0] for k, _l in COMPUTE_ROWS if k != "llmseg"] + [LLMSEG_RUN]
+    nodes = sorted({n for r in runs for n in [_node(r)] if n})
+    return [f"Compute per expression on the W2 test, Qwen3.5-9B: means over {'/'.join(f'{n:,}' for n in n_main) or MISSING} expressions "
+            f"(split means weighted by expressions; LLMSeg over its {_nfmt(ns.get('llmseg'))}), from "
+            f"the compute accounting of {X_TEST_JSON.split('/')[-1]} (preregistration X-6).",
+            "Model-call time: time spent in model calls; wall clock: each run's own per-expression record, including the non-learned "
+            "tools (GrabCut).",
+            "LLMSeg's wall clock is not listed (—): its compute.json records wall time accumulated under concurrent requests, a different "
+            "measure from the per-expression wall clock of the other rows.",
+            f"Data: {_runs_of(runs)}" + (f", all on {nodes[0]}" if len(nodes) == 1 else "") + "."] + \
+           (["Missing: " + "; ".join(m for m in w2["missing"] if m.startswith("计算记账")) + "."]
+            if any(m.startswith("计算记账") for m in w2["missing"]) else [])
+
+
+def tab_compute(w2: dict, out: Path) -> list[Path]:
+    heads = ["Expressions"] + [h for _k, h, _nd in COMPUTE_COLS]
+    body, M = ["\\midrule"], ["| System | " + " | ".join(heads) + " |", "|---|" + "---:|" * len(heads)]
+    for key, lab in COMPUTE_ROWS:
+        c = w2["compute"].get(key)
+        cells = ["—" if not c else f"{c['n']:,}"]
+        for k, _h, nd in COMPUTE_COLS:
+            na = c is None or c.get(k) is None or (k == "wall_time_s" and key in COMPUTE_WALL_NA)
+            cells.append("—" if na else f"{c[k]:,.{nd}f}")
+        body.append(_tex_escape(lab) + " & " + " & ".join("--" if x == "—" else x for x in cells) + " \\\\")
+        M.append(f"| {lab} | " + " | ".join(cells) + " |")
+    notes = compute_table_notes(w2)
+    caption = ("\\caption{Compute accounting on the W2 test (per expression). " + " ".join(_tex_escape(n) for n in notes) + "}")
+    header = ["System & " + " & ".join(_tex_escape(h) for h in heads) + " \\\\"]
+    return _write_table(out, "tab_compute", caption, "compute", "l" + "r" * len(heads), header, body, "compute accounting (W2 test)",
+                        M, notes)
+
+
+# ---- tab_lang_cost（DEV-0073：语言代价四方对照；附录版加 X-3）-------------------------------------
+
+
+def _lang_cell(c: dict | None, sec: str, latex: bool) -> str:
+    if c is None:
+        return "--" if latex else "—"
+    d = f"{c['delta']:+.1f}"
+    if sec == "health":
+        return (f"${d}$" + ("\\textsuperscript{\\dag}" if c["flag"] else "")) if latex else d + ("†" if c["flag"] else "")
+    if c.get("low") is None or c.get("high") is None:
+        return f"${d}$" if latex else d
+    ci = f"[{c['low']:+.1f}, {c['high']:+.1f}]"
+    return f"${d}$\\,{{\\scriptsize ${ci}$}}" if latex else f"{d} {ci}"
+
+
+def _lang_base(systems: list[dict], row: dict) -> str:
+    """表头下的基座读数：各系统配对的基座读数相同就写一个；不同就按节点分别写（同一节点有两个读数时按系统写）。"""
+    vals = [(c["base"], c["node"], s["label"]) for s in systems for c in [s["cells"].get(f"{row['section']}/{row['key']}")]
+            if c and c.get("base") is not None]
+    distinct = list(dict.fromkeys(round(v, 1) for v, _n, _l in vals))
+    if not distinct:
+        return "—"
+    if len(distinct) == 1:
+        return f"{distinct[0]:.1f}"
+    groups = [(v, sorted({n for vv, n, _l in vals if round(vv, 1) == v}), [l for vv, _n, l in vals if round(vv, 1) == v]) for v in distinct]
+    by_node = all(len(set(ns)) == 1 for _v, ns, _l in groups) and len({ns[0] for _v, ns, _l in groups}) == len(groups)
+    return " / ".join(f"{v:.1f} ({ns[0] if by_node else ', '.join(ls)})" for v, ns, ls in groups)
+
+
+def _lang_row_label(systems: list[dict], row: dict) -> str:
+    sec, key = row["section"], row["key"]
+    n = next((c["n"] for s in systems for c in [s["cells"].get(f"{sec}/{key}")] if c and c.get("n")), None)
+    lab = HEALTH_LABELS.get(key.split(".")[0], key) if sec == "health" else LANG_TABLE_LABELS[sec].get(key, key)
+    return lab + (f" (n={n:,})" if n else "")
+
+
+SECTION_WORDS = {"health": "health check", "battery": "language battery", "ttext": "T-text"}
+
+
+def _pairing_text(systems: list[dict]) -> str:
+    """每个系统各项检查配的基座在哪个节点（来源路径的 _hpcgpuNN）；同样配法的系统合成一组。"""
+    groups: dict = {}
+    for s in systems:
+        nodes = {sec: n for sec, n in (s.get("nodes") or {}).items() if sec in SECTION_WORDS and n}
+        if not nodes:
+            continue
+        if len(set(nodes.values())) == 1:
+            desc = f"every check against the base on {next(iter(nodes.values()))}"
+        else:
+            by: dict = {}
+            for sec in SECTION_WORDS:
+                if sec in nodes:
+                    by.setdefault(nodes[sec], []).append(SECTION_WORDS[sec])
+            desc = ", ".join(f"{' and '.join(secs)} against the base on {n}" for n, secs in by.items())
+        groups.setdefault(desc, []).append(s["label"])
+    return "; ".join(f"{', '.join(labs)}: {desc}" for desc, labs in groups.items())
+
+
+def lang_table_notes(lt: dict, systems: list[dict]) -> list[str]:
+    def n_of(sec, key):
+        return next((c["n"] for s in systems for c in [s["cells"].get(f"{sec}/{key}")] if c and c.get("n")), None)
+    hn = [f"{HEALTH_LABELS.get(r['key'].split('.')[0])} {n_of('health', r['key']) or MISSING}" for r in lt["rows"] if r["section"] == "health"]
+    bk = [r["key"] for r in lt["rows"] if r["section"] == "battery"]
+    tk = [r["key"] for r in lt["rows"] if r["section"] == "ttext"]
+    srcs = [v for s in systems for v in (s.get("sources") or {}).values() if isinstance(v, str)]
+    thr = lt.get("threshold_pp")
+    notes = [f"Language cost on Qwen3.5-9B under one set of checks (D147-4, preregistration X-6): each cell is the difference from the base "
+             "model evaluated on the same node, in percentage points. Base: the base model's reading (%); where the bases on two nodes "
+             "differ, each is given with its node.",
+             f"Health check (brief §8.11; fixed items: {', '.join(hn)}): difference only; † = flagged by its rule (the headline metric "
+             f"drops by more than {thr if thr is not None else MISSING} points).",
+             f"Language battery (MMLU-Pro {_nfmt(n_of('battery', bk[0]))} questions, letter answers; IFEval "
+             f"{_nfmt(n_of('battery', bk[1]))} prompts, prompt-level strict) and T-text (grounding Acc@0.5 on "
+             f"{_nfmt(n_of('ttext', tk[0]))} expressions; counting accuracy on CountBench, {_nfmt(n_of('ttext', tk[1]))} items): "
+             f"difference [95% paired bootstrap CI over items; battery {_res_text(lt['resamples'].get('battery', []))} resamples, T-text "
+             f"{_res_text(lt['resamples'].get('ttext', []))} resamples].",
+             "Pairing (D93-1): " + _pairing_text(systems) + ".",
+             "Systems: E3b+C3 (E3, pixel-token channel mixed with text), W2-c, W2-c + replay (W2-c with post hoc self-distillation replay) "
+             "and C1 = X-2 (ours; its LoRA also trains on self-distillation replay of the base model's own answers, general instructions "
+             "and counting)" + ("; C2 = X-3 (ablation: C1's recipe without the box-correction stream)"
+                                if any(s["role"] == "ablation" for s in systems) else "") + ".",
+             f"Data: {LANG_COST_JSON.split('/')[-1]} ({_runs_of(srcs)})."]
+    shown = {s["name"] for s in systems}  # 只列这张表里的系统的缺项（四方表不列 X-3 的）
+    miss = [m for m in lt["missing"] if not any(n in m for n, _l in LANG_SYSTEMS + LANG_ABLATION if n not in shown)]
+    if miss:
+        notes.append("Missing: " + "; ".join(miss) + ".")
+    return notes
+
+
+def tab_lang_cost(lt: dict, out: Path, full: bool = False) -> list[Path]:
+    """行 = 健康检查三项、大题量两项、T 文本两项（按节分组）；列 = 基座读数与各系统（四方，附录版加 X-3）。"""
+    systems = [s for s in lt["systems"] if full or s["role"] == "main"]
+    heads = ["Check", "Reading", "Base"] + [s["label"] for s in systems]
+    body, M = [], ["| " + " | ".join(heads) + " |", "|---|---|---:|" + "---:|" * len(systems)]
+    for sec, sec_lab in LANG_SECTIONS:
+        rows = [r for r in lt["rows"] if r["section"] == sec]
+        body.append("\\midrule")
+        for i, row in enumerate(rows):
+            lab, base = _lang_row_label(systems, row), _lang_base(systems, row)
+            cells_t = [_lang_cell(s["cells"].get(f"{sec}/{row['key']}"), sec, True) for s in systems]
+            cells_m = [_lang_cell(s["cells"].get(f"{sec}/{row['key']}"), sec, False) for s in systems]
+            first = f"\\multirow{{{len(rows)}}}{{*}}{{{_tex_escape(sec_lab)}}}" if i == 0 else ""
+            body.append(f"{first} & {_tex_escape(lab)} & {_tex_escape(base).replace('—', '--')} & " + " & ".join(cells_t) + " \\\\")
+            M.append(f"| {sec_lab if i == 0 else ''} | {lab} | {base} | " + " | ".join(cells_m) + " |")
+    notes = lang_table_notes(lt, systems)
+    name = "tab_lang_cost_full" if full else "tab_lang_cost"
+    title = "Language cost" + (" (with the C2 ablation, appendix)" if full else "")
+    caption = (f"\\caption{{{title}: difference from the base on the same node (Qwen3.5-9B, percentage points). " +
+               " ".join(_tex_escape(n) for n in notes) + "}")
+    header = [" & ".join(_tex_escape(h) for h in heads) + " \\\\"]
+    return _write_table(out, name, caption, name.replace("tab_", "").replace("_", "-"), "lll" + "c" * len(systems), header, body,
+                        title[0].lower() + title[1:], M, notes)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1639,26 +2254,34 @@ def caption_w2_size(sz: dict) -> str:
     return s
 
 
+LANG_DESCRIPTIONS = {"E3b+C3": "E3b+C3 (E3)", "W2-c+回放": "W2-c + replay (post hoc self-distillation replay)"}  # 图注里的系统说明
+
+
+def _and(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1] if items else ""
+
+
 def caption_lang_cost(lc: dict) -> str:
-    main = [s for s in lc["systems"] if not s["explore"]]
-    expl = [s for s in lc["systems"] if s["explore"]]
+    main = [s for s in lc["systems"] if s["role"] == "main"]
+    extra = [s for s in lc["systems"] if s["role"] != "main"]
     base = next((s.get("base_pct") for s in main if s.get("base_pct")), None) or {}
     bt = " / ".join(f"{base[k]:.1f}%" for _sec, k, _lab in LANG_READOUTS if k in base)
     flags = []
     for s in lc["systems"]:
         fl = ", ".join(f"{HEALTH_LABELS.get(f['reading'], f['reading'])} {_signed(f['delta_pp'])} (n={f['n']})" for f in s["health_flags"])
         flags.append(f"{s['label']}: {fl or 'none'}")
-    srcs = [v for s in main for v in (s.get("sources") or {}).values() if isinstance(v, str)]
+    srcs = [v for s in lc["systems"] if not s["explore"] for v in (s.get("sources") or {}).values() if isinstance(v, str)]
+    expl = [s for s in lc["systems"] if s["explore"]]
     s = ("Language cost on Qwen3.5-9B: difference from the base model evaluated on the same node (percentage points; 95% paired "
          "bootstrap CI). MMLU-Pro (letter answers) and IFEval (prompt-level strict) from the large language battery; grounding "
          "Acc@0.5 and counting accuracy (CountBench) on the T-text channel (shaded"
-         + (f"; base {bt}" if bt else "") + "). Systems: E3b+C3 (E3), W2-c, and W2-c + replay (post hoc self-distillation replay). "
-         "Not drawn: the small health check (brief §8.11: MMLU-Pro 100, GSM8K 50, IFEval 50 items) flags "
-         + "; ".join(flags[:len(main)]) + ".")
-    if expl:
-        s += (" Exploration candidates (not yet judged): " + ", ".join(f"{x['label']} (base on {x['node']})" for x in expl) +
-              "; T-text readouts were not measured for them; health-check flags " + "; ".join(flags[len(main):]) + ".")
-    s += f" Data: {LANG_COST_JSON.split('/')[-1]} ({_runs_of(srcs)})" + (f"; {EXPLORE_RUNS}" if expl else "") + "."
+         + (f"; base {bt}" if bt else "") + "). Systems: " + _and([LANG_DESCRIPTIONS.get(x["name"], x["label"]) for x in main]) + ".")
+    if extra:
+        s += (" Also shown: " + _and([f"{x['label']} (C1's recipe without the box-correction stream)" if x["role"] == "ablation" else
+                                      f"{x['label']} (an exploration candidate not taken to G-EX; T-text not measured)" for x in extra]) + ".")
+    s += (" Pairing (D93-1): " + _pairing_text(lc["systems"]) + ". Not drawn: the small health check (brief §8.11: MMLU-Pro 100, GSM8K 50, "
+          "IFEval 50 items) flags " + "; ".join(flags) + ".")
+    s += f" Data: {LANG_COST_JSON.split('/')[-1]} ({_runs_of(srcs)})" + (f"; X-3L: {EXPLORE_RUNS}" if expl else "") + "."
     if lc["missing"]:
         s += " Missing: " + "; ".join(lc["missing"]) + "."
     return s
@@ -1670,7 +2293,8 @@ def caption_count_bins(cb: dict) -> str:
     for x in cb["systems"]:
         if x["paired_base"]:
             pairs.setdefault(x["paired_base"], []).append(x["label"])
-    srcs = (cb.get("sources") or {})
+    drawn = {x["name"] for x in cb["systems"]} | {x["paired_base"] for x in cb["systems"] if x["paired_base"]}
+    srcs = {k: v for k, v in (cb.get("sources") or {}).items() if k in drawn}  # 只算画出来的系统与它们的基座
     run_of = {k: _runs_of([v]) for k, v in srcs.items()}
     nb = cb.get("n_boot")
     s = (f"Counting accuracy by ground-truth count on CountBench ({sum(n for n in ns if n) or MISSING} items; bins "
@@ -1694,29 +2318,44 @@ def _git_commit(root: Path) -> str:
         return "unknown"
 
 
-def readme_w2(w2: dict, sz: dict, lc: dict, cb: dict, captions: dict) -> list[str]:
-    """README 的 W2 各节（DEV-0071）。"""
+def readme_w2(w2: dict, sz: dict, lc: dict, cb: dict, lt: dict, captions: dict) -> list[str]:
+    """README 的 W2 各节（DEV-0071；DEV-0073 加候选、合并列与三张新表）。"""
     leaf = f"{W2T.RUNS[W2_MODEL]}/{W2_MODEL}/refseg/<设置>/<划分>/metrics.json"
     res = "/".join(f"{r:,}" for r in w2["per_system_resamples"]) or MISSING
+    pres, xres = _res_text([w2.get("pooled_resamples")]), _res_text([w2.get("x_resamples")])
+    xleaf = f"`{XT.CANDS[C1]}/{XT.M}/refseg/<{XT.MAIN}|{XT.ABL}>/<划分>/metrics.json`（C2 在 `{XT.CANDS[C2]}`，设置 {XT.MAIN}）"
     L = ["## 5. W2 test 主表：`tab_w2_test.tex` / `tab_w2_test.md`（gIoU 附录表 `tab_w2_test_giou.*`）", "",
          "- 数据（都是已有的读数，不重算 bootstrap）：",
          f"  - 9B 各设置（自己的框、W1-F、随机挑选、最优候选、W2-a、W2-c、E1 零样本多边形）的读数与 95% CI：`{W2_TEST_JSON}` 的 "
          f"models.{W2_MODEL}.per_split（RUN-0072；CI 是各运行 metrics.json 里运行时算的，{res} 次重抽）。核对：与 `{leaf}` 逐格相同。",
          f"  - W2-c + 回放：`{W2_REPLAY_RUN}/{W2_MODEL}/refseg/{W2_REPLAY_SETTING}/<划分>/metrics.json` 的 headline（RUN-0076 补充 2）。",
-         f"  - 配对差 W2-c − W1-F、W2-a − W1-F：同一份 JSON 的 pairs 与 pairs_pooled（配对 bootstrap，ratio-of-sums，"
+         f"  - C1 = X-2（主方法）、C1 的椭圆消融、C2 = X-3（DEV-0073）：每个划分取 {xleaf} 的 headline（RUN-0092；与上面各行同一口径，"
+         f"运行时的 CI）。核对：读数与 `{X_TEST_JSON}` 的 per_split 相同（CI 不比：分析是 {xres} 次重抽）。",
+         f"  - 合并列（所有行）：`{W2_POOLED_JSON}`（`scripts/mgr/w2_test_pooled.py`，D152）：5 个划分逐 id 合并，cIoU = Σinter / Σunion、"
+         f"gIoU = 逐句 IoU 的均值，95% CI {pres} 次重抽，种子 {w2.get('pooled_seed') or MISSING}；各系统的名字按（运行目录, 设置）对上 "
+         "w2_test_pooled.SYSTEMS。W2-a 的逐句交并由 RUN-0095 从 HPC 抽回（"
+         + (f"`{(w2.get('pooled_sources') or {}).get(pooled_name('w2a'))}`" if (w2.get("pooled_sources") or {}).get(pooled_name("w2a")) else "还没有")
+         + "）。缺的系统写\"—\"并进上面的 missing。核对：W2-c、W1-F 与候选三行的合并读数与 CI 和 x_test_table.json 相同。",
+         f"  - 配对差 W2-c − W1-F、W2-a − W1-F：`{W2_TEST_JSON}` 的 pairs 与 pairs_pooled（配对 bootstrap，ratio-of-sums，"
          f"{w2.get('pairs_resamples') or 0:,} 次，种子 {w2.get('pairs_seed') or MISSING}；W2-a 由 RUN-0081 在 HPC 上补齐）。",
+         f"  - 配对差 C1 − W2-c、C1 − W1-F、C1 − 椭圆消融、C2 − W2-c：`{X_TEST_JSON}`（`scripts/mgr/x_test_table.py`）的 candidates.<候选>."
+         f"per_split.<划分> 与 pooled 的 main_minus_w2c、main_minus_w1f、main_minus_ablation（逐句配对 bootstrap，{xres} 次，种子 "
+         f"{w2.get('x_seed') or MISSING}）；gIoU 表取对应的 g_ 键。",
          f"  - 回放 − W2-c：**没有 JSON**，只在 `{W2_REPLAY_MD}` §1 的表里（3 位小数；重抽次数文档里没写），从那张表解析；核对：表里的 W2-c、"
          "回放读数与上两项的值四舍五入相同。",
          f"  - E1 零样本多边形的解析失败：`{W2T.RUNS[W2_MODEL]}/{W2_MODEL}/refseg/baseline_e1/<划分>/metrics.json` 的 parse。",
          f"  - 外部基线 LLMSeg（RUN-0078）：修正前（seg）、修正后（rec，主配置）的读数与 CI 取 `{LLMSEG_RUN}/{W2_MODEL}/refseg/llmseg/<划分>/metrics.json` "
          f"的 readouts.<seg|rec>.headline；合并读数、同样 300 句上的 W2-c 读数（RUN-0072）与 LLMSeg − W2-c 的配对差取 `{LLMSEG_COMPARE}`（D139，CPU 补跑）；"
-         "每图调用次数取 readouts.<seg|rec>.compute_per_image.n_model_calls。",
-         "- 版式：系统为行、划分（加合并）为列——论文里指代分割表的惯例；任务书\"列：自己的框、W1-F…\"按\"列出这些系统\"理解。"
-         "三块：9B 各系统；配对差（W2-c − W1-F、W2-a − W1-F、回放 − W2-c）；外部基线 LLMSeg（修正前、修正后两行，同句 W2-c 并列，下接两行配对差）。"
-         "数值 ×100、一位小数，CI 用 [low, high]。",
-         "- 合并列：分析里没有逐系统的合并读数（w2_test_table.json 只有合并的配对差；W2-a 的逐句数据超过同步上限，不在仓库），"
-         "所以 9B 各系统一块的合并列是\"—\"，合并只出现在配对差与 LLMSeg 两块（LLMSeg 的合并读数没有 CI）。",
-         "- gIoU 附录表：同一版式；W2 的配对差一块没有（分析只算了 cIoU 的配对差），LLMSeg − W2-c 的 gIoU 差取 compare.json。",
+         "每图调用次数取 readouts.<seg|rec>.compute_per_image.n_model_calls。C1 的同句读数与 C1 − LLMSeg（修正后、修正前）取 "
+         f"`{X_TEST_JSON}` 的 per_split.<划分>.llmseg 与 pooled.llmseg（main_on_subset、main_minus_llmseg_rec、main_minus_llmseg_seg）。",
+         "- 版式：系统为行、划分（加合并）为列——论文里指代分割表的惯例。三块：9B 各系统（DEV-0073 起末尾加 C1、C1 的椭圆消融、C2 三行）；"
+         "配对差（W2-c − W1-F、W2-a − W1-F、回放 − W2-c，加 C1 − W2-c、C1 − W1-F、C1 − 椭圆消融、C2 − W2-c）；外部基线 LLMSeg（修正前、"
+         "修正后两行，同句 W2-c 与 C1 并列，下接 LLMSeg − W2-c 两行与 C1 − LLMSeg 两行）。数值 ×100、一位小数，CI 用 [low, high]。",
+         "- 合并列：DEV-0073 起各系统一块的合并列都取 w2_test_pooled.json（D152；表注写明来源与重抽次数，删掉了 DEV-0071 的"
+         "\"Per-system pooled cIoU is not part of the analysis\"）。配对差的合并取各自的分析 JSON；LLMSeg 的合并读数照旧取 compare.json（没有 CI）。",
+         "- gIoU 附录表：同一版式；配对差一块只有 C1、C2 的四行（W2 的配对差分析只算了 cIoU）；C1 − W1-F 与 LLMSeg 一块 C1 两行的逐划分 gIoU "
+         "取 x_test_table.json 的 per_split.<划分>.g_main_minus_w1f 与 per_split.<划分>.llmseg.g_*（origin/main 5b3bb70ee 补上）。"
+         + ("分析里仍没有的格子写\"—\"，见上面\"分析里没有算的格子\"。" if w2.get("gaps") else "") + "LLMSeg − W2-c 的 gIoU 差取 compare.json。",
          "", "**表注（英文，cIoU）**", ""] + [f"- {n}" for n in w2_table_notes(w2, "cIoU")] + [""]
     if w2["checks"]:
         L += ["核对：", ""] + [f"- {c}" for c in w2["checks"]] + [""]
@@ -1727,28 +2366,62 @@ def readme_w2(w2: dict, sz: dict, lc: dict, cb: dict, captions: dict) -> list[st
           "9B 的数在 RUN-0072 的结果目录里有（w2_test.md 第 2 节写的\"见 RUN-0072 报告\"），直接取。",
           "- 口径：纵轴 = 配对差 ×100；误差棒 = 95% 配对 bootstrap CI；横轴 = 名义参数量（对数轴）。W2-c 只在 9B 跑过（菱形）。",
           "", "**图注（英文）**", "", captions["fig_w2_size"], ""]
-    explore = "（本次生成时 --with-explore 打开，画了探索的候选）" if lc["with_explore"] else "（本次生成时 --with-explore 关着，缺省）"
+    explore = "（本次生成时 --with-explore 打开）" if lc["with_explore"] else "（本次生成时 --with-explore 关着，缺省）"
     L += ["## 7. 语言代价：`fig_lang_cost.pdf` / `fig_lang_cost.png`", "",
-          f"- 数据：`{LANG_COST_JSON}`（`scripts/mgr/lang_cost_table.py`，D125-3）的 battery（大题量 MMLU-Pro 2,000 题、IFEval 541 条）与 ttext（定位、计数）"
-          "四个读数，每格是相对同节点基座的差（百分点）与 95% CI；健康检查的标红（health.*.flag）只写进图注，不进图。各系统的来源路径（JSON 原文）：",
+          f"- 数据：`{LANG_COST_JSON}`（`scripts/mgr/lang_cost_table.py`，D125-3、D147-4）的 battery（大题量 MMLU-Pro 2,000 题、IFEval 541 条）与 ttext（定位、计数）"
+          "四个读数，每格是相对同节点基座的差（百分点）与 95% CI；健康检查的标红（health.*.flag）只写进图注，不进图。"
+          "缺省画四方对照的四个系统（E3b+C3、W2-c、W2-c+回放、X-2（C1）；DEV-0073 起 X-2 的 T 文本由 RUN-0091 补齐）。本次画出的系统的来源路径（JSON 原文）：",
           ] + [f"  - {s['name']}：" + "；".join(f"{k} `{v}`" for k, v in (s.get("sources") or {}).items() if isinstance(v, str) and "/" in v)
                for s in lc["systems"] if not s["explore"]] + [
-          f"- 探索的候选（X-2、X-3、X-3L）：判定还没做，缺省不画；`--with-explore` 打开后，大题量取 "
+          f"- `--with-explore`：再加 X-3（C2，消融；同一份 JSON 的 \"{LANG_ABLATION[0][0]}\"）与 X-3L（探索候选，没有进 G-EX；大题量取 "
           + "、".join(f"`{b}`" for _n, b, _h, _nd in EXPLORE_LANG) + "，健康检查的标红取 " + "、".join(f"`{h}`" for _n, _b, h, _nd in EXPLORE_LANG)
-          + f"（{EXPLORE_RUNS}）；它们没有 T 文本读数，图注写明。{explore}",
-          "- 版式：读数自上而下（底色 = T 文本通道），每个读数里三个系统各一行，点 = 差，横线 = 95% CI，右侧写数值。",
+          + f"，{EXPLORE_RUNS}；没有 T 文本读数，图注写明）。{explore}",
+          "- 版式：读数自上而下（底色 = T 文本通道），每个读数里各系统各一行，点 = 差，横线 = 95% CI，右侧写数值。"
+          "健康检查的标红只写在图注（本次：" + "；".join(f"{s['name']} " + ("、".join(f"{f['reading']} {f['delta_pp']:+.1f}" for f in s["health_flags"]) or "没有标红")
+                                           for s in lc["systems"]) + "）。配对的基座节点从来源路径的 _hpcgpuNN 读：" + _pairing_text(lc["systems"]) + "。",
           "", "**图注（英文）**", "", captions["fig_lang_cost"], "",
           "## 8. 计数分档：`fig_count_bins.pdf` / `fig_count_bins.png`", "",
           f"- 数据：`{COUNT_ERRORS_JSON}`（`scripts/mgr/count_errors.py`）的三个大档 {', '.join(cb['bins'])}："
-          "(a) 各系统的准确率（bins.<档>.acc）；(b) 与配对基座的差及配对 bootstrap 95% CI（bins.<档>.vs_base）。预测文件（JSON 原文）：",
+          "(a) 各系统的准确率（bins.<档>.acc）；(b) 与配对基座的差及配对 bootstrap 95% CI（bins.<档>.vs_base）。缺省画基座、W2-c、W2-c+回放、"
+          "X-2（C1）、C3、E3b+C3；--with-explore 时在 X-2 后面再加 X-3（C2）" + ("（本次打开）" if cb.get("with_explore") else "（本次关着）") +
+          "。预测文件（JSON 原文）：",
           ] + [f"  - {k}：`{v}`" for k, v in (cb.get("sources") or {}).items()] + [
           "- 为什么分两个面板：分析 JSON 里只有\"与基座之差\"的 CI，没有各档准确率本身的 CI（不重算），所以 CI 画在 (b) 上，(a) 只画准确率。",
-          f"- 基座：W2-c、W2-c + 回放配 base@0069，C3、E3b+C3 配 base@0056；两次基座读数逐条相同（{cb.get('same_answer_rate')}）时只画一根（base@0069）。",
+          f"- 基座：W2-c、W2-c + 回放、X-2（C1）配 base@0069，C3、E3b+C3 配 base@0056；两次基座读数逐条相同（{cb.get('same_answer_rate')}）时只画一根（base@0069）。",
           "", "**图注（英文）**", "", captions["fig_count_bins"], ""]
+    L += ["## 9. 正文主表：`tab_main.tex` / `tab_main.md`（DEV-0073）", "",
+          "- 行：自己的框、W1-F、最优候选（4 个工具候选里的真值最优）、W2-a、W2-c | C1 = X-2（ours）、C1 的椭圆消融、C2 = X-3。"
+          "列：5 个划分（只有读数）、合并（读数与 95% CI）、每句调用 / 生成 token。cIoU ×100，一位小数。",
+          f"- 数据：每个划分同 `tab_w2_test`（RUN-0072 的 w2_test_table.json 与 RUN-0092 的叶目录）；合并列取 `{W2_POOLED_JSON}`（{pres} 次重抽）；"
+          f"末列取 `{X_TEST_JSON}` 的 compute（候选）与 compute_reference（W1-F、W2-c、LLMSeg），自己的框、最优候选、W2-a 在分析里没有计算记录，写\"—\"并在表注说明。",
+          f"- 外部基线一块：同样 1,500 句上 LLMSeg 修正后（主配置）的合并读数与 CI、C1 的同句合并读数与 CI、C1 − LLMSeg 修正后的配对差与 CI，都取 "
+          f"`{X_TEST_JSON}` 的 candidates.{C1}.pooled.llmseg（llmseg_rec、main_on_subset、main_minus_llmseg_rec；{xres} 次重抽）。核对：LLMSeg 的合并读数与 "
+          "compare.json 相同。",
+          "- 不加粗（DEV-0073 审查第 1 条：合并列的最高值落在消融 C2 上，加粗 C1 又会误导）。表注另加一句：C1 在任何 test 运行之前就定为主方法"
+          f"（预注册 X-5a，负责人裁定），C2 是去掉修正流的简化版，合并读数 C2 与 C1 之差对照预注册 X-6 的预测（±{100 * X6_C1_C2_MARGIN:g} 点）。",
+          "", "**表注（英文）**", ""] + [f"- {n}" for n in main_table_notes(w2)] + [""]
+    full_extra = [s["label"] for s in lt["systems"] if s["role"] != "main"]
+    main_lt = [s for s in lt["systems"] if s["role"] == "main"]
+    L += ["## 10. 语言代价四方对照表：`tab_lang_cost.tex` / `tab_lang_cost.md`（附录版 `tab_lang_cost_full.*`；DEV-0073）", "",
+          f"- 数据：`{LANG_COST_JSON}`：健康检查三项（health.<读数>：差与 flag）、大题量 MMLU-Pro 与 IFEval 严格（battery：差与 95% CI）、T 文本的定位与计数"
+          "（ttext：差与 95% CI）。列：E3b+C3、W2-c、W2-c+回放、X-2（C1）；附录版再加 " + ("、".join(full_extra) or MISSING) + "。",
+          "- 基座读数（Base 列，表头下）：都取 lang_cost_9b.json 这一个来源——健康检查取 health.*.base_pct、大题量取 battery.*.base"
+          "（origin/main 5b3bb70ee 修了 lang_cost_table.py 的键名之后才有数）、T 文本取 ttext.*.base。与来源 lb_compare 文件的核对（基座读数、差与 CI）"
+          "写在测试里（tests/test_paper_figures.py）。同一读数各系统配的基座若不同，就按节点分别写；本次：" +
+          ("；".join(f"{_lang_row_label(main_lt, r)} = {_lang_base(main_lt, r)}" for r in lt["rows"] if " / " in _lang_base(main_lt, r))
+           or "各读数的基座都相同") + "。",
+          "- 健康检查只给差与是否标红（† = 照简报 8.11 的规则标红）；大题量与 T 文本给差 [95% CI]。",
+          "", "**表注（英文，四方表）**", ""] + [f"- {n}" for n in lang_table_notes(lt, main_lt)] + [""]
+    L += ["## 11. 计算记账表：`tab_compute.tex` / `tab_compute.md`（DEV-0073）", "",
+          f"- 数据：`{X_TEST_JSON}` 的 candidates.<候选>.compute（C1 主设置与椭圆消融、C2 主设置）与 compute_reference（W1-F、W2-c、LLMSeg）：每句的模型调用、"
+          "生成 token、输入 token、模型调用时间、墙钟（5 个划分按句数加权的均值）。小数位同 x_test_table.md。",
+          "- LLMSeg 的墙钟写\"—\"：x_test_table.md 的说明——LLMSeg 的 compute.json 记的墙钟是并发下的累计，与其他行的每句墙钟不同口径。",
+          "", "**表注（英文）**", ""] + [f"- {n}" for n in compute_table_notes(w2)] + [""]
     return L
 
 
-def write_readme(root: Path, out: Path, e1, e2, e3, itf, captions: dict, files: dict, w2=None, sz=None, lc=None, cb=None) -> Path:
+def write_readme(root: Path, out: Path, e1, e2, e3, itf, captions: dict, files: dict, w2=None, sz=None, lc=None, cb=None,
+                 lt=None) -> Path:
     now = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     L = ["# 论文用图表（docs/figures/）", "",
          "<!-- 由 scripts/figures/make_paper_figures.py 生成；不要手改。数据补齐后重跑：python scripts/figures/make_paper_figures.py -->", "",
@@ -1760,16 +2433,31 @@ def write_readme(root: Path, out: Path, e1, e2, e3, itf, captions: dict, files: 
          "两类对比用分类槽 1（蓝）与槽 2（橙）。都在白底上过了 validate_palette.js（有序：单色相、亮度单调、相邻 ΔL ≥ 0.06；分类两色全对 CVD ΔE 24.7）。",
          "- W2 的图（DEV-0071）：同一个系统在各张图里同一个颜色——W2-c 槽 1（蓝）、E3b+C3 槽 2（橙）、W2-c + 回放 槽 3（青）；基座与 C3 "
          "（对照）用中性灰（浅、深）；W2-a 只在 fig_w2_size 出现，用槽 2（与 E3b+C3 不同图）。槽 1–3 三色全对过 validate_palette.js（CVD ΔE ≥ 9.2）；"
-         "--with-explore 的 X-2、X-3、X-3L 用槽 4–6，按画出的相邻顺序过了检查。青色对白底不足 3:1，图上带数值标签或有表可查（lang_cost_9b.md、count_errors_9b.md）。",
+         "青色对白底不足 3:1，图上带数值标签或有表可查（lang_cost_9b.md、count_errors_9b.md）。",
+         "- C1 = X-2（主方法，DEV-0073）固定用分类槽 7（紫 #4a3aa7，对白底 ≥ 3:1），出现 C1 的每张图（fig_lang_cost、fig_count_bins）都是它；"
+         "--with-explore 的 X-3（C2）用槽 5（粉）、X-3L 用槽 6（绿）；槽 4（黄，DEV-0071 给 X-2 的）不再用。validate_palette.js（白底 #ffffff）："
+         "fig_lang_cost 缺省四色（橙、蓝、青、紫）全对 PASS（CVD ΔE 最小 9.2，常规最小 16.3）；--with-explore 六色按画出的相邻顺序 PASS（相邻 CVD ΔE 最小 17.6、"
+         "常规 24.0）；fig_count_bins 缺省（灰、蓝、青、紫、深灰、橙）与 --with-explore（再加粉）按画出的相邻顺序 PASS（CVD ΔE 最小 15.9、常规最小 17.2；"
+         "两个灰色是有意的中性色，色度检查照例不适用）。粉与橙全对的常规 ΔE 12.9 不到 15，但两者在两张图里都不相邻，图例与数值标签可查。",
          "- 每个数字都从结果文件读；逐点来源见 `data/*.json`（每个点带 source 路径）。", ""]
     # 缺的数据
-    w2s = [x for x in (w2, sz, lc, cb) if x is not None]
+    w2s = [x for x in (w2, sz, lc, cb, lt) if x is not None]
     miss = e1["missing"] + e2["missing"] + e3["missing"] + itf["missing"] + [m for x in w2s for m in x["missing"]]
     L += ["## 缺的数据（missing）", ""]
     L += [f"- {m}" for m in miss] if miss else ["- 无"]
     if e3["gaps"]:
         L += ["", "E3 表里缺的格子（按种子）：", ""] + [f"- {g}" for g in e3["gaps"]]
     L.append("")
+    if w2 is not None and w2.get("gaps"):  # DEV-0073：分析 JSON 在、候选在，但这一格的键没有（分析没有算），表里写"—"
+        L += ["## 分析里没有算的格子（表里是\"—\"，不是待补的数据）", ""]
+        grouped: dict = {}
+        for g in w2["gaps"]:
+            col = "pooled" if g["col"] == "pooled" else "<划分>"
+            grouped.setdefault((g["metric"], g["row"], g["path"].replace(g["col"], col) if col != "pooled" else g["path"]), []).append(g["col"])
+        for (metric, row, path), cols in grouped.items():
+            where = "合并" if cols == ["pooled"] else ("5 个划分" if set(cols) == set(w2["splits"]) else "、".join(cols))
+            L.append(f"- {metric} {row}（{where}）：`{path}` 没有")
+        L.append("")
     # 各图
     L += ["## 1. E1 差距图：`fig_e1_gap.pdf` / `fig_e1_gap.png`", "",
           "- 数据：", f"  - 定位 Acc@0.5、多边形 cIoU、grid16 gIoU：`{E1_MAIN}/<模型>/{{refexp_box,refexp_poly,grid16}}/metrics.json` 的 headline（严格读数，scope = all，bootstrap 95% CI）。",
@@ -1829,7 +2517,7 @@ def write_readme(root: Path, out: Path, e1, e2, e3, itf, captions: dict, files: 
                   f"（窗口 [{o['window'][0]:.3f}, {o['window'][1]:.3f}]，纵轴 [{o['ylim'][0]:.3f}, {o['ylim'][1]:.3f}]）"
                   for o in offs for p in o["points"]) or "没有落在窗口之外的点，面板与改动前相同") + "。"]
     if w2 is not None:
-        L += readme_w2(w2, sz, lc, cb, captions)
+        L += readme_w2(w2, sz, lc, cb, lt, captions)
     L += ["## 文件", ""] + [f"- `{_rel(out, p)}`" for ps in files.values() for p in ps] + [""]
     p = out / "README.md"
     p.write_text("\n".join(L), encoding="utf-8")
@@ -1854,7 +2542,7 @@ def main(argv=None) -> int:
                     help="DEV-0063：把补评目录（相对 --root）放在该尺寸 E3 目录列表的最前面（先找到的为准；可重复）。"
                          "干扰的 JSON 要用 interference.py 按同样的目录顺序重出，否则核对报不一致")
     ap.add_argument("--with-explore", action="store_true",
-                    help="DEV-0071：语言代价图另画探索的候选 X-2、X-3、X-3L（判定还没做，缺省不画）")
+                    help="DEV-0073：语言代价图与计数分档在缺省（含 X-2 = C1）之外再画 X-3（C2，消融）；语言代价图另加探索候选 X-3L")
     a = ap.parse_args(argv)
     root = Path(a.root).resolve()
     known = [s["size"] for s in E3_SIZES]
@@ -1887,9 +2575,14 @@ def main(argv=None) -> int:
         p.write_text(json.dumps(_jsonable(data), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         files[name].append(p)
     # W2（DEV-0071）：在原有四项之后出，原有输出不受影响
-    w2, sz, lc, cb = collect_w2(root), collect_w2_size(root), collect_lang_cost(root, a.with_explore), collect_count_bins(root)
+    w2, sz, lc, cb = collect_w2(root), collect_w2_size(root), collect_lang_cost(root, a.with_explore), collect_count_bins(root, a.with_explore)
+    lt = collect_lang_table(root)  # DEV-0073
     for metric, name in W2_METRICS:
         files[name] = tab_w2(w2, out, metric, name)
+    files["tab_main"] = tab_main(w2, out)
+    files["tab_lang_cost"] = tab_lang_cost(lt, out)
+    files["tab_lang_cost_full"] = tab_lang_cost(lt, out, full=True)
+    files["tab_compute"] = tab_compute(w2, out)
     files["fig_w2_size"] = fig_w2_size(sz, out)
     files["fig_lang_cost"] = fig_lang_cost(lc, out)
     files["fig_count_bins"] = fig_count_bins(cb, out)
@@ -1899,13 +2592,22 @@ def main(argv=None) -> int:
         p.write_text(f"% Generated by scripts/figures/make_paper_figures.py; do not edit.\n\\caption{{{_tex_escape(cap)}}}\n", encoding="utf-8")
         files[name].append(p)
     captions.update(w2caps)
-    for name, data in (("tab_w2_test", w2), ("fig_w2_size", sz), ("fig_lang_cost", lc), ("fig_count_bins", cb)):
+    main_data = {"rows": {k: {"label": ROW_LABELS[k], **w2["rows"].get("cIoU", {}).get(k, {})} for g in MAIN_ROWS for k in g},
+                 "compute": w2["compute"],
+                 "external": {"llmseg_rec": (w2["llmseg"].get("x_pooled") or {}).get("cIoU", {}).get("rec"),
+                              "c1": (w2["llmseg"]["rows"].get("cIoU", {}).get("c1") or {}).get("pooled"),
+                              "c1-rec": (w2["llmseg"]["pairs"].get("cIoU", {}).get("c1-rec") or {}).get("pooled")},
+                 "missing": w2["missing"]}
+    compute_data = {"rows": {k: w2["compute"].get(k) for k, _l in COMPUTE_ROWS}, "wall_not_listed": list(COMPUTE_WALL_NA)}
+    for name, data in (("tab_w2_test", w2), ("fig_w2_size", sz), ("fig_lang_cost", lc), ("fig_count_bins", cb), ("tab_main", main_data),
+                       ("tab_lang_cost", lt), ("tab_compute", compute_data)):
         p = out / "data" / f"{name}.json"
         p.write_text(json.dumps(_jsonable(data), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         files[name].append(p)
-    readme = write_readme(root, out, e1, e2, e3, itf, captions, files, w2, sz, lc, cb)
+    readme = write_readme(root, out, e1, e2, e3, itf, captions, files, w2, sz, lc, cb, lt)
     print(f"wrote {sum(len(v) for v in files.values()) + 1} files to {out} (README: {readme})")
-    miss = e1["missing"] + e2["missing"] + e3["missing"] + itf["missing"] + w2["missing"] + sz["missing"] + lc["missing"] + cb["missing"]
+    miss = e1["missing"] + e2["missing"] + e3["missing"] + itf["missing"] + w2["missing"] + sz["missing"] + lc["missing"] + cb["missing"] + \
+        lt["missing"]
     if miss:
         print("missing:\n  " + "\n  ".join(miss))
     return 0
