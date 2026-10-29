@@ -2077,3 +2077,4 @@
 - 10-29 09:3xZ：RUN-0093 seed 1 训完（manifest 333f446b…）。末 500 步各流损失与 seed 0 相差 ≤ 0.013。种子波动的预测写进探索日志，早于任何评测读数。
 - 10-29 10:xxZ：审 DEV-0073 时据其指出修了两处管理员脚本，已有读数都没变：(1) `lang_cost_table.py` 取大题量基座读数的键名错了（应为 base_pct / other_pct），重跑后只有基座与系统读数从空值变成实数；(2) `x_test_table.py` 补逐划分的 gIoU 配对差（− W1-F、− LLMSeg、同句读数），只新增 40 个键。
 - 10-29 10:xxZ：[merge] DEV-0073 论文图表。新增 tab_main、tab_lang_cost（附录版 _full）、tab_compute；W2 主表加 C1、椭圆消融、C2 三行，合并列补齐；语言代价图与计数图缺省加 X-2。审查后改了三处：tab_main 不加粗、语言代价表的基座取分析 JSON、gIoU 附录表逐划分填满。28 个测试通过，E1、E2、E3、干扰图、fig_w2_size 的输出逐字节不变。
+- 10-29 10:xxZ：在 main 上重出论文图表，README 头部的 commit 已更新。重出要带 `--e3-prepend 2B=experiments/E3/0071_e3_reeval_e5v2_hpcgpu07 --e3-prepend 4B=experiments/E3/0071_e3_reeval_e5v2_hpcgpu07`，写在脚本 docstring 里；README 头部只写了不带参数的命令，不带参数重出会让 E3 表退回补评之前。DEV-0073 的 worktree 已删。
