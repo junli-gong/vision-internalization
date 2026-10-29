@@ -1,0 +1,170 @@
+experiment: X-2
+framework: src/explore/x2_runner.py（DEV-0069；探索 X-2）
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  adapter_model_key: qwen3.5-9b
+  tiny: false
+image_policy:
+  tag: checkpoint
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+w2_config:
+  config: configs/w2.json
+  config_sha256: c4d083489783039d46718e19ede810370bd4b9272ef94e99f406104c2e0f9b29
+  frozen: true
+propose:
+  mode: box
+  run:
+    leaf: <out>/qwen3.5-9b/refexp_box/propose_w2c/explore_val_refcoco_unc_val
+    predictions_sha256: cd46755260f081b8dbbebd63140e9c8f8418256657adb406854cef8d3940e31f
+    config_sha256: a4fd7670790c6222be0f7388c8eedb307b2dda9a5fc841ec52e9101693215352
+candidates:
+  leaf: <out>/qwen3.5-9b/refseg/candidates_w2c/explore_val_refcoco_unc_val
+  module: src.w2.candidates
+  generators:
+  - type: grabcut_default
+  - type: grabcut
+    iterations: 5
+    box_pct: -10.0
+    init: mask
+  - type: grabcut_default
+    post:
+    - largest_cc
+    - fill_holes
+  - type: watershed
+    use_points: true
+    fg_shrink_pct: 30.0
+    bg_margin_pct: 0.0
+    seed_radius_pct: 4.0
+  k: 4
+  content_sha256: bac5684e17056e43cacc7511719a4da0c5bee062f54ff9796f9efce1ffa2e68e
+render:
+  select_module: src.w2.render
+  layout: separate
+  style:
+    fill_rgb:
+    - 0
+    - 114
+    - 178
+    fill_alpha: 0.4
+    contour_rgb:
+    - 240
+    - 228
+    - 66
+    contour_px: 2
+    halo_rgb:
+    - 0
+    - 0
+    - 0
+    halo_px: 1
+    label_text_rgb:
+    - 255
+    - 255
+    - 255
+    label_bg_rgb:
+    - 0
+    - 0
+    - 0
+    grid_label_px: 22
+    separate_label_px: 32
+    label_pad_px: 4
+    reference: true
+    reference_label: ''
+    grid_long_side: 640
+    grid_cols: 0
+    gutter_px: 4
+    gutter_rgb:
+    - 255
+    - 255
+    - 255
+    separate_max_wh:
+    - 640
+    - 480
+  overlay: x2-overlay-v1
+checkpoint:
+  path: /home/mail/chenyuma/visint/repo/experiments/X/0094_x2s2_hpcgpu06/0094_train/w2c/qwen3.5-9b/seed2/ckpt/final/model
+  manifest_sha256: 836e69235e33b1c97809d76d8d475eab38e53a4a4b0a12b3e0860611a683f1c8
+  label: w2c
+  build_spec:
+    family_kw: {}
+    image_policy: pixel_budget:300
+    key: qwen3.5-9b
+    tiny: false
+  image_policy: pixel_budget:300
+  dtype: bfloat16
+  lora:
+    lora_alpha: 64.0
+    lora_dropout: 0.05
+    n_parameters: 86556672
+    n_targets: 248
+    n_tensors: 496
+    r: 32
+    targets_sha256: a257b17856bd4838091495d454b3e87b3d09609149406f49d38b54528e47b51b
+  trainable_token_rows: null
+  n_grid_tokens: 0
+  merge_check:
+    criteria_version: v1
+    n: 200
+    checks:
+    - merge
+  training:
+    variant: w2c
+    seed: 2
+    identity_sha256: 4efb4f686952a3b642d67f59a4225460e97726ad925dd5200d2694bf9f1b7c08
+    w2_config_sha256: c4d083489783039d46718e19ede810370bd4b9272ef94e99f406104c2e0f9b29
+    config_sha256: c80a4b0b39ac8275dafd6be7af83ec05dc0d5f4fbf21335d5e67e2ab829b5228
+    complete: true
+    steps: 2000
+x2:
+  n: 16
+  m: 2
+  train_params:
+    spline:
+      n: 16
+      min_box_iou: 0.5
+    correct:
+      m: 2
+      min_box_iou: null
+      start_salt: x2_correct_start_v1
+      round2_salt: x2_correct_round2_v1
+      round2_ratio: 0.5
+      round2_apply:
+        rule: grabcut
+        soft_lock: true
+  prompts: x2-prompts-v1
+  run_config:
+    path: configs/x2_run.json
+    sha256: c92ad838a9e698236e8a34d17f6ce187ee185ffaa7df96df5ee99a04f47dc061
+    version: x2-run-v1
+  rounds: 3
+  setting: x2_select_cor2_randbox
+  definition:
+    kind: randbox
+    stages:
+    - propose
+    - select4
+    - cor_select
+    multi_round: true
+    diagnostic: false
+    ablation: randbox
+    base: select
+    rounds: 2
+  trace:
+    leaf: <out>/qwen3.5-9b/refseg/x2_trace/explore_val_refcoco_unc_val
+    config_sha256: e00538204fb4adc6aaf21da6fc7b381e8ca5704ae7083aa02cbb62819959546b
+w2:
+  task: refseg
+  split: explore_val_refcoco_unc_val
+  setting: x2_select_cor2_randbox
+  splits_config: configs/explore_splits.json
+  splits_sha256: df9f6c19141cee8c012dd3b6606e5b12f00db92557d43f07c7ac2214a3ab7892
+  split_sha256: 389a9e02482f2f85712d2d25ca25ea71f2bcc802f1f554e8f8f00add8291436e
+  split_n: 400
+  n_samples: 400
+  limit: null
+  sample_ids_sha256: 9a51fb4851a483aaff85c811bced88638e96448f344b028cc4671353b5971999
