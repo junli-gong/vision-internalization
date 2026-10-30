@@ -2099,3 +2099,4 @@
 - 10-30 03:4xZ：预注册 X-7：4B 上的 X-2，补充实验（D154-2(6)）。同一配方，四份数据用 4B 重做，只在开发数据 2,300 句上评，不碰 test 与 devcheck3。预测样条 − 椭圆为 +0.09 到 +0.16。
 - 10-30 03:4xZ：发 RUN-0098（07，补充实验 4B 上的 X-2，D157）。RUN-0097 的 LISA 环境已建好，权重在下载。
 - 10-30 04:0xZ：[merge] DEV-0076（D158）：`scripts/analysis/test_metadata.py`、`scripts/figures/make_qualitative.py`，26 条新测试。抽样清单在开发机上算好、先提交。定性图只留在 HPC（D28-9）。
+- 10-30 04:1xZ：写 RUN-0099（CPU，登录节点）：test 逐句元数据与定性图（D158）。定性图只留在 HPC 的 `$VI/private/`。
