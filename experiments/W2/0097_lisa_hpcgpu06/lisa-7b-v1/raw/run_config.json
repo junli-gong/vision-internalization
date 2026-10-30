@@ -1,0 +1,185 @@
+{
+ "experiment": "W2-ext-LISA",
+ "system": "lisa-7b-v1",
+ "script": "scripts/run_lisa.py",
+ "dev_task": "DEV-0075",
+ "approval": "D154",
+ "note": "LISA-7B 外部对照（D154；简报 §8.8）：单独运行，输出只经 scripts/lisa_w2.py score 计分与出表，绝不进入我们的训练数据、标签、奖励或任何挑选（硬约束第 1 条）。",
+ "protocol": {
+  "name": "refer_seg_validate",
+  "what": "官方 refer_seg 评测（论文表格的口径）：train_ds.py --eval_only 的 validate()，数据走 utils/dataset.py 的 ValDataset（refer_seg 分支）与 collate_fn；回答由评测直接给出 \"[SEG].\"（teacher forcing），LLM 一次前向，取 [SEG] 的隐藏状态经 SAM 解码",
+  "conv_type": "llava_v1",
+  "use_mm_start_end": true,
+  "question": "<image>\\n What is {sent} in this image? Please output segmentation mask.",
+  "answer": "[SEG].",
+  "sentence": "REFER 的 sent 字段（我们 W2 样本的 fields.expression）.strip().lower()",
+  "clip_preprocess": "CLIPImageProcessor.from_pretrained(vision_tower).preprocess(RGB uint8)：短边缩到 224（bicubic）、中心裁 224、归一化",
+  "sam_preprocess": "ResizeLongestSide(1024).apply_image（长边 1024，PIL 双线性）→ (x − mean)/std（mean 123.675/116.28/103.53，std 58.395/57.12/57.375）→ 右下补零到 1024×1024",
+  "image_read": "cv2.imread → BGR 转 RGB",
+  "mask": "SAM 低分辨率 logits → 双线性放大到 1024 → 裁掉补零 → 双线性缩放到原图尺寸（标注的 height、width）→ logit > 0",
+  "precision": "bf16",
+  "image_size": 1024,
+  "model_max_length": 512,
+  "vision_tower": "openai/clip-vit-large-patch14（config.vision_tower）",
+  "batch": "一句一次前向（官方 val_batch_size = 1 张图，同一张图的全部句子在一次前向里；这里每批一句，见 PROVENANCE.md 的偏离 2）"
+ },
+ "citations": [
+  "utils/dataset.py:372",
+  "utils/dataset.py:389",
+  "train_ds.py:172",
+  "train_ds.py:102",
+  "model/llava/conversation.py:355",
+  "utils/dataset.py:405",
+  "utils/dataset.py:409",
+  "utils/dataset.py:74",
+  "train_ds.py:98",
+  "utils/dataset.py:80",
+  "train_ds.py:124",
+  "train_ds.py:126",
+  "utils/dataset.py:137",
+  "utils/dataset.py:377",
+  "utils/dataset.py:378",
+  "utils/dataset.py:414",
+  "utils/dataset.py:333",
+  "utils/dataset.py:332",
+  "train_ds.py:38",
+  "utils/dataset.py:419",
+  "utils/dataset.py:421",
+  "utils/dataset.py:273",
+  "utils/dataset.py:274",
+  "utils/dataset.py:350",
+  "utils/dataset.py:428",
+  "utils/dataset.py:452",
+  "model/LISA.py:292",
+  "model/segment_anything/modeling/sam.py:161",
+  "model/segment_anything/modeling/sam.py:168",
+  "model/segment_anything/modeling/sam.py:169",
+  "train_ds.py:549",
+  "model/LISA.py:201",
+  "model/LISA.py:187",
+  "model/LISA.py:269",
+  "train_ds.py:33",
+  "train_ds.py:146",
+  "train_ds.py:148",
+  "train_ds.py:538",
+  "train_ds.py:539",
+  "train_ds.py:340",
+  "train_ds.py:533",
+  "train_ds.py:545",
+  "train_ds.py:39",
+  "train_ds.py:42",
+  "chat.py:127",
+  "model/LISA.py:138"
+ ],
+ "code": {
+  "upstream": "https://github.com/dvlab-research/LISA",
+  "commit": "3cb2d4301f1af4691bd4f3938335ef06e76f155a",
+  "license": "Apache-2.0",
+  "dir": "third_party/lisa",
+  "provenance_sha256": "2ab8d4ec28e252504d5a15c882d28922ef1645c0f9d4a9594e3781c937ba6ad4",
+  "n_files": 49,
+  "files_sha256_digest": "ef7e75a7d1c360caf295ffd0c45bdfd55ddd775e2e790409ddca68072f776657",
+  "modified_files": []
+ },
+ "paper": "Lai et al., LISA: Reasoning Segmentation via Large Language Model（CVPR 2024；arXiv 2308.00692）",
+ "weights": {
+  "manifest": {
+   "path": "/home/mail/chenyuma/visint/wt/wt0097/configs/lisa_weights.json",
+   "sha256": "8076a51629d63e17b5f99e91f268ac6821eb691d62ed66f5d476055947fd3e64",
+   "default": true
+  },
+  "lisa": {
+   "repo": "xinlai/LISA-7B-v1",
+   "revision": "43c754eef75871fcc11c84d3930a402f7b0a754f",
+   "n_files": 9,
+   "total_bytes": 16121904615,
+   "sha256_verified": true
+  },
+  "clip": {
+   "repo": "openai/clip-vit-large-patch14",
+   "revision": "32bd64288804d66eefd0ccbe215aa642df71cc41",
+   "n_files": 3,
+   "total_bytes": 1710545415,
+   "sha256_verified": true
+  }
+ },
+ "manifest": {
+  "files_sha256": {
+   "manifest.json": "d524dc435437f4d636f3a4e39454922245adf275a77798c019a350d3048377bb",
+   "manifest.jsonl": "e4023ef03777a250d918c4ca88467dfde613fb537bbd7adfe453f33bd3e9cc4c"
+  },
+  "splits": {
+   "test_refcoco_unc_testA": {
+    "n": 300,
+    "ids_sha256": "c15288436336b082093516879075d93f67ef4b88e049a59032bd1697a2b9d6c3"
+   },
+   "test_refcoco_unc_testB": {
+    "n": 300,
+    "ids_sha256": "722be12c3239f248aebb0234cd6c0d944174aaa28eeaa685495b95f69231c12e"
+   },
+   "test_refcoco+_unc_testA": {
+    "n": 300,
+    "ids_sha256": "b35235e25e575b052a9650218cdeccf215625281be39d14ce34bce512ed45f53"
+   },
+   "test_refcoco+_unc_testB": {
+    "n": 300,
+    "ids_sha256": "2a1d6c5d1ce1d9b21317c57e175fd1e49043b55519c0478ad002d6436a5649e3"
+   },
+   "test_refcocog_umd_test": {
+    "n": 300,
+    "ids_sha256": "8ee188621a312e4db19388b38ed1cbe2b29b745397ab156649fccbb4b37c93b3"
+   }
+  },
+  "tiny": false,
+  "limit": null
+ },
+ "runner": {
+  "kind": "lisa",
+  "factory": null,
+  "fixes_applied": [
+   "addedtoken_str_patch",
+   "tokenizers_hidden",
+   "vision_tower_local_snapshot"
+  ],
+  "fix_descriptions": {
+   "addedtoken_str_patch": "没有 tokenizers 时，加载分词器之前给 transformers 4.31 的 AddedToken 替身补上 __str__ = content（RUN-0015 §4）",
+   "tokenizers_hidden": "import transformers 之前屏蔽继承来的新版 tokenizers（src/lisa/common.hide_tokenizers）",
+   "vision_tower_local_snapshot": "config 的 vision_tower / mm_vision_tower 改成 --clip-weights 的本地目录（同一份权重）再 from_pretrained"
+  }
+ },
+ "env": {
+  "versions": {
+   "python": "3.12.13",
+   "torch": "2.13.0+cu130",
+   "transformers": "4.31.0",
+   "numpy": "1.26.4",
+   "cv2": "4.8.0",
+   "cuda": "13.0",
+   "gpu": "NVIDIA A100-PCIE-40GB",
+   "capability": [
+    8,
+    0
+   ]
+  },
+  "tokenizers": {
+   "hidden": true,
+   "found_in_environment": true,
+   "found_version": "0.23.2"
+  },
+  "seg_token_idx": 32003,
+  "tokenizer": {
+   "len": 32004,
+   "bos_token": 1,
+   "eos_token": 2,
+   "unk_token": 0,
+   "pad_token": 0
+  },
+  "n_params": 7704747312,
+  "audit": {
+   "param_dtype_device": {
+    "torch.bfloat16|cuda": 7704747312
+   }
+  }
+ },
+ "max_consecutive_exceptions": 3
+}

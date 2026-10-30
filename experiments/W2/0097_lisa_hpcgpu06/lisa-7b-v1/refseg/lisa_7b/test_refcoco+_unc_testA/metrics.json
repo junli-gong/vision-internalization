@@ -1,0 +1,186 @@
+{
+ "experiment": "W2-ext-LISA",
+ "w2": {
+  "task": "refseg",
+  "split": "test_refcoco+_unc_testA",
+  "setting": "lisa_7b",
+  "splits_config": "configs/w2_splits.json",
+  "splits_sha256": "9dd22dff2ad422ec5d51106bb6e40227ec51afa27130f2a968c945d69055c0f1",
+  "split_sha256": "18782733cda29f6f8b5fc2cbc7b4b573c1c29e322290f2017660473a8a632778",
+  "split_n": 1000,
+  "subset": {
+   "config": "configs/w2_llmseg_subsets.json",
+   "rule": "每个 W2 test 划分（configs/w2_splits.json，各 1,000 句）按 sha256(w2_llmseg_v1|<划分名>|sent_id) 升序（src/data/subsets.hash_rank，purpose = 划分名）取前 300 句，按 id 自然顺序列出；sha256 = population_digest（自然顺序、换行连接后的 sha256）",
+   "salt": "w2_llmseg_v1",
+   "n": 300,
+   "sha256": "6447673051b83fc0d557cd774c51f0405e1a2531c9366036b51191fd4a71e01c"
+  },
+  "n_samples": 300,
+  "limit": null,
+  "sample_ids_sha256": "b35235e25e575b052a9650218cdeccf215625281be39d14ce34bce512ed45f53",
+  "test_unlock": {
+   "approval": "D154",
+   "log": "lisa-7b-v1/test_unlock.jsonl"
+  }
+ },
+ "model": "lisa-7b-v1",
+ "revision": "43c754eef75871fcc11c84d3930a402f7b0a754f",
+ "setting": "lisa_7b",
+ "lisa_commit": "3cb2d4301f1af4691bd4f3938335ef06e76f155a",
+ "protocol": "refer_seg_validate",
+ "stand_in": false,
+ "n": 300,
+ "headline": [
+  {
+   "name": "cIoU",
+   "scope": "all",
+   "value": 0.5931819662390548,
+   "ci": {
+    "low": 0.5438860261669518,
+    "high": 0.6452167336949075,
+    "level": 0.95,
+    "n_resamples": 1000
+   },
+   "n": 300
+  },
+  {
+   "name": "gIoU",
+   "scope": "all",
+   "value": 0.621833985801937,
+   "ci": {
+    "low": 0.5845217811077624,
+    "high": 0.6627039598569667,
+    "level": 0.95,
+    "n_resamples": 1000
+   },
+   "n": 300
+  }
+ ],
+ "failures": {
+  "ok": 300
+ },
+ "n_failed": 0,
+ "n_empty_mask": 2,
+ "n_image_hw_mismatch": 0,
+ "n_exif_rotated": 0,
+ "n_seg": {
+  "n": 300,
+  "min": 1,
+  "p05": 1.0,
+  "p50": 1.0,
+  "p95": 1.0,
+  "max": 1,
+  "mean": 1.0,
+  "n_distinct": 1,
+  "top": [
+   [
+    1,
+    300
+   ]
+  ]
+ },
+ "forwards_per_item": {
+  "llm": 1.0,
+  "sam_image_encoder": 1.0,
+  "sam_mask_decoder": 1.0
+ },
+ "forwards_total": {
+  "llm": 300,
+  "sam_image_encoder": 300,
+  "sam_mask_decoder": 300
+ },
+ "tokens": {
+  "prompt": {
+   "n": 300,
+   "min": 57,
+   "p05": 57.0,
+   "p50": 60.0,
+   "p95": 65.0,
+   "max": 71,
+   "mean": 60.16,
+   "n_distinct": 15,
+   "top": [
+    [
+     59,
+     64
+    ],
+    [
+     57,
+     48
+    ],
+    [
+     60,
+     47
+    ],
+    [
+     61,
+     39
+    ],
+    [
+     58,
+     28
+    ],
+    [
+     63,
+     24
+    ],
+    [
+     62,
+     22
+    ],
+    [
+     65,
+     11
+    ],
+    [
+     64,
+     9
+    ],
+    [
+     66,
+     2
+    ]
+   ]
+  },
+  "generated": {
+   "n": 300,
+   "min": 0,
+   "p05": 0.0,
+   "p50": 0.0,
+   "p95": 0.0,
+   "max": 0,
+   "mean": 0.0,
+   "n_distinct": 1,
+   "top": [
+    [
+     0,
+     300
+    ]
+   ]
+  },
+  "visual": {
+   "n": 300,
+   "min": 256,
+   "p05": 256.0,
+   "p50": 256.0,
+   "p95": 256.0,
+   "max": 256,
+   "mean": 256.0,
+   "n_distinct": 1,
+   "top": [
+    [
+     256,
+     300
+    ]
+   ]
+  }
+ },
+ "rule": {
+  "failures": "没有 [SEG]、没有 mask、推理异常：按空 mask 计（mask_inter_union(None, GT) = (0, |GT|)），failure 记原因",
+  "n_empty_mask": "有输出、mask 全空（不算失败）",
+  "n_exif_rotated": "图像带 EXIF 方向（≠ 1）：官方 cv2.imread 按它旋转，我们的 GT 是原始像素方向；照官方口径不处理，只计数",
+  "forwards": "每句：LLM 一次前向（teacher forcing，不生成）、SAM 图像编码一次、SAM 解码 = [SEG] 个数"
+ },
+ "complete": true,
+ "n_expected": 300
+}

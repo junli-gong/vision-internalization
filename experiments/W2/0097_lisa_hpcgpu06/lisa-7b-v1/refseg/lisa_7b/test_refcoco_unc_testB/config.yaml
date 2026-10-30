@@ -1,0 +1,138 @@
+experiment: W2-ext-LISA
+framework: src/lisa（DEV-0075；D154）
+isolation: 硬约束第 1 条：LISA 把 SAM 接在 LLM 旁边（外接）。它只作对照单独运行，输出只用来计分与出表，绝不进入我们的训练数据、标签、奖励或任何挑选（D154；简报
+  §8.8；预注册 U-2）。
+w2:
+  task: refseg
+  split: test_refcoco_unc_testB
+  setting: lisa_7b
+  splits_config: configs/w2_splits.json
+  splits_sha256: 9dd22dff2ad422ec5d51106bb6e40227ec51afa27130f2a968c945d69055c0f1
+  split_sha256: f4fdc21a69a99dff84af2b861b7de0f5589896db17eace8a36e884ebe98fc273
+  split_n: 1000
+  subset:
+    config: configs/w2_llmseg_subsets.json
+    rule: 每个 W2 test 划分（configs/w2_splits.json，各 1,000 句）按 sha256(w2_llmseg_v1|<划分名>|sent_id)
+      升序（src/data/subsets.hash_rank，purpose = 划分名）取前 300 句，按 id 自然顺序列出；sha256 = population_digest（自然顺序、换行连接后的
+      sha256）
+    salt: w2_llmseg_v1
+    n: 300
+    sha256: 9b35912cbe696756af22a676337aeb4b4c1b2ef4d6aa7682893bb627bb8689d1
+  n_samples: 300
+  limit: null
+  sample_ids_sha256: 722be12c3239f248aebb0234cd6c0d944174aaa28eeaa685495b95f69231c12e
+  test_unlock:
+    approval: D154
+    log: lisa-7b-v1/test_unlock.jsonl
+model:
+  key: lisa-7b-v1
+  family: external（LISA，外接 SAM）
+  repo: xinlai/LISA-7B-v1
+  revision: 43c754eef75871fcc11c84d3930a402f7b0a754f
+  clip: openai/clip-vit-large-patch14@32bd64288804d66eefd0ccbe215aa642df71cc41
+  tiny: false
+  stand_in: false
+  weights_verified:
+    lisa:
+      repo: xinlai/LISA-7B-v1
+      revision: 43c754eef75871fcc11c84d3930a402f7b0a754f
+      n_files: 9
+      total_bytes: 16121904615
+      sha256_verified: true
+    clip:
+      repo: openai/clip-vit-large-patch14
+      revision: 32bd64288804d66eefd0ccbe215aa642df71cc41
+      n_files: 3
+      total_bytes: 1710545415
+      sha256_verified: true
+lisa:
+  code:
+    upstream: https://github.com/dvlab-research/LISA
+    commit: 3cb2d4301f1af4691bd4f3938335ef06e76f155a
+    license: Apache-2.0
+    dir: third_party/lisa
+    provenance_sha256: 2ab8d4ec28e252504d5a15c882d28922ef1645c0f9d4a9594e3781c937ba6ad4
+    n_files: 49
+    files_sha256_digest: ef7e75a7d1c360caf295ffd0c45bdfd55ddd775e2e790409ddca68072f776657
+    modified_files: []
+  paper: 'Lai et al., LISA: Reasoning Segmentation via Large Language Model（CVPR 2024；arXiv
+    2308.00692）'
+  protocol:
+    name: refer_seg_validate
+    what: 官方 refer_seg 评测（论文表格的口径）：train_ds.py --eval_only 的 validate()，数据走 utils/dataset.py
+      的 ValDataset（refer_seg 分支）与 collate_fn；回答由评测直接给出 "[SEG]."（teacher forcing），LLM
+      一次前向，取 [SEG] 的隐藏状态经 SAM 解码
+    conv_type: llava_v1
+    use_mm_start_end: true
+    question: <image>\n What is {sent} in this image? Please output segmentation mask.
+    answer: '[SEG].'
+    sentence: REFER 的 sent 字段（我们 W2 样本的 fields.expression）.strip().lower()
+    clip_preprocess: CLIPImageProcessor.from_pretrained(vision_tower).preprocess(RGB
+      uint8)：短边缩到 224（bicubic）、中心裁 224、归一化
+    sam_preprocess: ResizeLongestSide(1024).apply_image（长边 1024，PIL 双线性）→ (x − mean)/std（mean
+      123.675/116.28/103.53，std 58.395/57.12/57.375）→ 右下补零到 1024×1024
+    image_read: cv2.imread → BGR 转 RGB
+    mask: SAM 低分辨率 logits → 双线性放大到 1024 → 裁掉补零 → 双线性缩放到原图尺寸（标注的 height、width）→ logit
+      > 0
+    precision: bf16
+    image_size: 1024
+    model_max_length: 512
+    vision_tower: openai/clip-vit-large-patch14（config.vision_tower）
+    batch: 一句一次前向（官方 val_batch_size = 1 张图，同一张图的全部句子在一次前向里；这里每批一句，见 PROVENANCE.md
+      的偏离 2）
+  citations: third_party/lisa/PROVENANCE.md
+  runner:
+    kind: lisa
+    factory: null
+    fixes_applied:
+    - addedtoken_str_patch
+    - tokenizers_hidden
+    - vision_tower_local_snapshot
+    fix_descriptions:
+      addedtoken_str_patch: 没有 tokenizers 时，加载分词器之前给 transformers 4.31 的 AddedToken
+        替身补上 __str__ = content（RUN-0015 §4）
+      tokenizers_hidden: import transformers 之前屏蔽继承来的新版 tokenizers（src/lisa/common.hide_tokenizers）
+      vision_tower_local_snapshot: config 的 vision_tower / mm_vision_tower 改成 --clip-weights
+        的本地目录（同一份权重）再 from_pretrained
+  env:
+    versions:
+      python: 3.12.13
+      torch: 2.13.0+cu130
+      transformers: 4.31.0
+      numpy: 1.26.4
+      cv2: 4.8.0
+      cuda: '13.0'
+      gpu: NVIDIA A100-PCIE-40GB
+      capability:
+      - 8
+      - 0
+    tokenizers:
+      hidden: true
+      found_in_environment: true
+      found_version: 0.23.2
+    seg_token_idx: 32003
+    tokenizer:
+      len: 32004
+      bos_token: 1
+      eos_token: 2
+      unk_token: 0
+      pad_token: 0
+    n_params: 7704747312
+    audit:
+      param_dtype_device:
+        torch.bfloat16|cuda: 7704747312
+  raw:
+    run_config_sha256: be1a2fdc3f708575edf0c08c3146b0edceb2f0feead5df2b52f409f905dca096
+    rows: lisa-7b-v1/raw/test_refcoco_unc_testB.jsonl
+    n_rows: 300
+    rows_sha256: 444dd8a3ab02f8058692653d9e036269bbbfbf95ae19eeeb4c36a9c4ccc789f3
+  manifest_files_sha256:
+    manifest.json: d524dc435437f4d636f3a4e39454922245adf275a77798c019a350d3048377bb
+    manifest.jsonl: e4023ef03777a250d918c4ca88467dfde613fb537bbd7adfe453f33bd3e9cc4c
+scoring:
+  gt: src/e1/scoring.gt_mask（W2 的 GT）
+  iou: src/metrics/seg.mask_inter_union + sample_iou（同 RUN-0078 的 src/llmseg/runner._score）
+  headline: src/w1/scoring.headline（cIoU = Σinter / Σunion，gIoU = 逐句 IoU 均值，bootstrap
+    95% CI）
+  failure: 没有 [SEG]、没有 mask、推理异常：按空 mask 计（mask_inter_union(None, GT) = (0, |GT|)），failure
+    记原因
