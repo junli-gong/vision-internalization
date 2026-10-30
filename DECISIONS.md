@@ -3428,3 +3428,22 @@
   - 合入时只跑了相关的测试子集，没发现。DEV-0075 审查时发现。
 - guidance.py 已随 X-2 冻结，进了 test 的运行身份，不改。只在测试里放行这一处，写明理由。
 - 以后合入时，除任务书的验收命令外，另跑 `tests/test_constants.py`。
+
+## D156（2026-10-30，管理员）：DEV-0075 合入（LISA-7B 外部对照，D154）
+
+- 官方代码 `dvlab-research/LISA@3cb2d430`（Apache 2.0），原样引入 49 个文件，逐文件 sha256 记在 `third_party/lisa/PROVENANCE.md`。与 RUN-0015 用的是同一份。
+- **协议照官方 refer_seg 评测，即论文表格的口径**：
+  - 回答直接给 `[SEG].`，teacher forcing，不生成；
+  - 提示 "What is {sent} in this image? Please output segmentation mask."；
+  - CLIP 与 SAM 两侧的预处理、mask 还原、阈值 > 0、bf16，都照官方，逐条出处见 PROVENANCE。
+  - 按 chat.py 让模型自己生成是另一种协议，不做。
+- **隔离**：
+  - 单独的 venv（`--system-site-packages` 继承 `$VI/env` 的 torch，只装钉住的 24 个包）；
+  - 单独的结果目录 `NNNN_lisa…`；
+  - GT 不进 LISA 环境，计分在我们的环境里用 W2 的计分；
+  - 静态扫描测试保证生成训练数据、标签、奖励的代码不碰 LISA。
+- 权重 `xinlai/LISA-7B-v1@43c754ee` 与 `openai/clip-vit-large-patch14@32bd6428`，共 17.83 GB，下到 `$VI/hf/hub`（Lustre，D95 只记录）。
+- **表注要写**：
+  - v1 权重不是论文的微调版；
+  - 它的训练数据含 COCO 图像，与 RefCOCO 的 test 图像有图像层面的重叠（只是图，不是指代表达式）。
+- 批准编号 D154 的常量此刻在 `src/lisa/common.py` 一处。DEV-0074 合入后合成一处。
