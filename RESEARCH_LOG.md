@@ -2100,3 +2100,4 @@
 - 10-30 03:4xZ：发 RUN-0098（07，补充实验 4B 上的 X-2，D157）。RUN-0097 的 LISA 环境已建好，权重在下载。
 - 10-30 04:0xZ：[merge] DEV-0076（D158）：`scripts/analysis/test_metadata.py`、`scripts/figures/make_qualitative.py`，26 条新测试。抽样清单在开发机上算好、先提交。定性图只留在 HPC（D28-9）。
 - 10-30 04:1xZ：写 RUN-0099（CPU，登录节点）：test 逐句元数据与定性图（D158）。定性图只留在 HPC 的 `$VI/private/`。
+- 10-30 04:2xZ：写好 `scripts/mgr/x_bins.py`（U-6 分档），用合成元数据试跑通过。等 RUN-0099 的元数据。
