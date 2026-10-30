@@ -3420,3 +3420,11 @@
    - (4) 按划分、COCO 类别、形状复杂度（周长² / 面积）分档：只用已有输出，分档规则先写。
    - (5) §13 的干扰曲线补 9B，作第 4 个尺寸。
    - (6) 可选：4B 上的 X-2。只在 07 空着、且不影响 (1)–(5) 时做；跑之前写预注册，标为补充实验。
+
+## D155（2026-10-30，管理员）：`test_constants` 的一处误报，在测试里放行，不改冻结的代码
+
+- `tests/test_constants.py::test_conventions_not_restated_elsewhere` 自 DEV-0068 合入（10-25）起失败。
+  - 原因：`src/explore/guidance.py` 的 `EFFECT_MIN_FRAC = 0.02` 照抄 LLMSeg 论文附录 B.2，与 `constants.BOUNDARY_IOU_DILATION_RATIO`（0.02）不是同一个约定，只是数值相同。
+  - 合入时只跑了相关的测试子集，没发现。DEV-0075 审查时发现。
+- guidance.py 已随 X-2 冻结，进了 test 的运行身份，不改。只在测试里放行这一处，写明理由。
+- 以后合入时，除任务书的验收命令外，另跑 `tests/test_constants.py`。

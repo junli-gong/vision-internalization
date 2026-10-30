@@ -2091,3 +2091,4 @@
 - 10-30 03:5xZ：专家 SOTA 文献核对完成：`docs/references/refseg_sota_notes.md`。预注册补 U-3a，灰线 4 条：LISA-7B (ft)、GLaMM (FT)、UNINEXT-H、DeRIS-L；每个模型取一整行，不跨论文挑最高值。
 - 10-30 04:0xZ：新增 `scripts/mgr/unified_table.py`（预注册 U），已有系统在 1,500 句上的读数：X-2 0.723、X-3 0.726、W2-c 0.644、W2-a 0.566、自己的框 0.491、W1-F 0.544、LLMSeg 0.275 / 0.398、椭圆消融 0.575。与全 5,000 句相差都在 0.02 以内，与 U-4 的预测一致。三项新基线待跑。
 - 10-30 04:1xZ：写好 DEV-0076 的任务书（定性图 U-5 与 test 逐句元数据 U-6，两个只读脚本，在 HPC 上用 CPU 跑）。开发机磁盘只剩约 5 GB，等 DEV-0074 或 0075 合入、删掉 worktree 后再派。
+- 10-30 04:4xZ：D155：`test_constants` 自 DEV-0068 起的一处误报（guidance.py 的 0.02 与 Boundary IoU 的 0.02 是两个约定，数值碰巧相同），在测试里放行，不改冻结代码。

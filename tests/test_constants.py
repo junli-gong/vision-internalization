@@ -32,12 +32,15 @@ def test_eigen_crop_inside_image():
 def test_conventions_not_restated_elsewhere():
     # 这些字面量只该出现在 constants.py
     forbidden = [r"\b471\b", r"\b601\b", r"\b0\.02\b", str(C.BOOTSTRAP_SEED), r"\b150\b", r"\b1e-3\b"]
+    # D155：src/explore/guidance.py 的 EFFECT_MIN_FRAC = 0.02 照抄 LLMSeg 论文附录 B.2，与 constants.BOUNDARY_IOU_DILATION_RATIO
+    # （0.02）不是同一个约定，只是数值相同；guidance.py 已随 X-2 冻结，不改它，只在这里放行这一处。
+    allowed = {("guidance.py", r"\b0\.02\b")}
     offenders = []
     for p in SRC.rglob("*.py"):
         if p.name == "constants.py":
             continue
         text = p.read_text()
         for pat in forbidden:
-            if re.search(pat, text):
+            if re.search(pat, text) and (p.name, pat) not in allowed:
                 offenders.append((p.name, pat))
     assert offenders == []
