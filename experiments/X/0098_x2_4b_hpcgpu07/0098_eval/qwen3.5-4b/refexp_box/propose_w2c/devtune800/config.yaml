@@ -1,0 +1,107 @@
+experiment: E1
+framework: src/e1（DEV-0014；协议 v2：DEV-0017）
+model:
+  key: qwen3.5-4b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-4B
+  revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+  adapter_model_key: qwen3.5-4b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+task: refexp_box
+subset: eval
+generation:
+  enable_thinking: false
+  max_new_tokens: 256
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  readout:
+    kind: text
+    parse: one_box
+prompt:
+  config: configs/e1_prompts.json
+  config_sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+  entry:
+    template: Locate {expression} in the image. Report bbox coordinates in JSON format.
+    native: true
+    provenance: predecessor_cookbook
+    source_url: https://github.com/QwenLM/Qwen3-VL/blob/0dcc180d854f4b132f8059b10bbf0b5fd5dae9ed/cookbooks/2d_grounding.ipynb
+    parse: one_box
+    max_new_tokens: 256
+data:
+  n_samples: 800
+  sample_ids_sha256: 3450c5b9f53bbb21cc26e931df982660adb453b688997012801a9d34da90a07d
+  has_gt: true
+  selection_stats:
+    w2:
+      task: refexp_box
+      split: devtune800
+      setting: propose_w2c
+      splits_config: configs/w2_splits.json
+      splits_sha256: 9dd22dff2ad422ec5d51106bb6e40227ec51afa27130f2a968c945d69055c0f1
+      split_sha256: c8c1f298eedd88f402c0dce6de0816493bc0a01640ffebbe5ca42f62c6d25efd
+      split_n: 800
+      n_samples: 800
+      limit: null
+      sample_ids_sha256: 3450c5b9f53bbb21cc26e931df982660adb453b688997012801a9d34da90a07d
+    n: 800
+  config_sha256:
+    e1_dev_subsets.json: 7f47b8fe666b54fe2d227a958fb42d05d42fa0266a4e0043a7ee19ce5cd7e5ad
+    e1_eval_subsets.json: 29415ea0d131336af52c950c053f95534a526261870a38ff66de2285c2545139
+    e1_nyu_pairs.json: a4da0f3c51d547458998d7ddc874d56044789abc0da692e67cf541a802e24187
+limit: null
+map_ci_resamples: 0
+batch_size: 64
+batch_protocol:
+  protocol_version: 1
+  batch_size: 64
+  padding_side: left
+  order: selection
+  letter_batches: same_letters
+  frozen: true
+  frozen_batch_size: 64
+checkpoint:
+  path: /home/mail/chenyuma/visint/repo/experiments/X/0098_x2_4b_hpcgpu07/0098_train/w2c/qwen3.5-4b/seed0/ckpt/final/model
+  manifest_sha256: 1ce5dc51c6fdc04f39264a84eb3d8bda4829e5cb3bc7783035c5958546c57ee9
+  label: w2c
+  build_spec:
+    family_kw: {}
+    image_policy: pixel_budget:300
+    key: qwen3.5-4b
+    tiny: false
+  image_policy: pixel_budget:300
+  dtype: bfloat16
+  lora:
+    lora_alpha: 64.0
+    lora_dropout: 0.05
+    n_parameters: 64929792
+    n_targets: 248
+    n_tensors: 496
+    r: 32
+    targets_sha256: a257b17856bd4838091495d454b3e87b3d09609149406f49d38b54528e47b51b
+  trainable_token_rows: null
+  n_grid_tokens: 0
+  merge_check:
+    criteria_version: v1
+    n: 200
+    checks:
+    - merge
+  training:
+    variant: w2c
+    seed: 0
+    identity_sha256: c303cbb26ef60dd089febe24c3213085e568c1a8ab266f5946f7f09479035c0e
+    w2_config_sha256: c4d083489783039d46718e19ede810370bd4b9272ef94e99f406104c2e0f9b29
+    config_sha256: c80a4b0b39ac8275dafd6be7af83ec05dc0d5f4fbf21335d5e67e2ab829b5228
+    complete: true
+    steps: 2000
