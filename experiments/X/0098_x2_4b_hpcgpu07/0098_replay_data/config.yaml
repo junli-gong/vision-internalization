@@ -1,0 +1,77 @@
+experiment: W2
+kind: w2c_replay_data
+framework: src/w2/w2c_replay（DEV-0065；D125-2 (b)）
+model:
+  key: qwen3.5-4b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-4B
+  revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+  tiny: false
+tiny: false
+image_policy: pixel_budget:300
+dtype: bf16
+manifest: replay/manifest.json
+manifest_sha256: 72da1130a63a6f0823d09dd243df657c15e157f71bf928083217a8687b5657e4
+generation:
+  general:
+    order: instruction_first
+    enable_thinking: false
+    max_new_tokens: 512
+    decoding:
+      do_sample: false
+      num_beams: 1
+      repetition_penalty: 1.0
+      no_repeat_ngram_size: 0
+    batch_size: 64
+    method: generate_batch
+    protocol: 健康检查的生成口径（src/health/run.generate_text_only：零张图、protocol.ORDER、关思考、protocol.GREEDY_KWARGS）；批量生成（左填充，同
+      E1 的批配置；健康检查是逐条 generate）
+  count:
+    order: image_first
+    enable_thinking: false
+    max_new_tokens: 16
+    decoding:
+      do_sample: false
+      num_beams: 1
+      repetition_penalty: 1.0
+      temperature: null
+      top_p: null
+      top_k: null
+    batch_size: 64
+    method: generate_batch
+    protocol: E1 计数的口径（configs/e1_prompts.json 的 image_order、eval 子集的思考开关与 decoding；原图）
+prompts:
+  e1_prompts:
+    path: configs/e1_prompts.json
+    sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+  health_protocol:
+    version: 3
+    order: instruction_first
+    greedy:
+      do_sample: false
+      num_beams: 1
+      repetition_penalty: 1.0
+      no_repeat_ngram_size: 0
+files:
+  general: replay/general.jsonl
+  count: replay/count.jsonl
+row_keys:
+- id
+- kind
+- source
+- prompt
+- images
+- image_size
+- order
+- enable_thinking
+- max_new_tokens
+- answer
+- raw_text
+- token_ids
+- n_generated_tokens
+- n_prompt_tokens
+- n_visual_tokens
+- n_image_pixels
+- stopped
+- truncated
+truncation: truncated = 没有生成停止 token（写满 max_new_tokens）；照实记，训练时不用
