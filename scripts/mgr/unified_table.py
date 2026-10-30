@@ -80,7 +80,7 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default="docs/analysis/unified_table")
     ap.add_argument("--e1-poly")
     ap.add_argument("--e3b-grid")
-    ap.add_argument("--lisa")
+    ap.add_argument("--lisa", default="experiments/W2/0097_lisa_hpcgpu06")  # RUN-0097
     a = ap.parse_args(argv)
     ids = subset_ids()
     sub = {}
