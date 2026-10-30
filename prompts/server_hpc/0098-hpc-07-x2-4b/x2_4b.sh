@@ -113,8 +113,11 @@ if has eval; then
 fi
 if has health; then
   HC=(--model $M ${HT[@]+"${HT[@]}"})
-  step health_base_4b "$PY" scripts/health_check.py "${HC[@]}" ${D[@]+"${D[@]}"} --out "$EVAL/health/health_base_4b.json" || NOK=$((NOK + 1))
-  step health_x2_4b "$PY" scripts/health_check.py "${HC[@]}" --checkpoint "$CK" ${D[@]+"${D[@]}"} --out "$EVAL/health/health_x2_4b.json" || NOK=$((NOK + 1))
+  # 补充 1（D161）：基座不带 --data-root（health_check.py 只许它配 --checkpoint；同 RUN-0080 的 health_base）；已有的读数不重跑
+  [ -f "$EVAL/health/health_base_4b.json" ] || \
+    step health_base_4b "$PY" scripts/health_check.py "${HC[@]}" --out "$EVAL/health/health_base_4b.json" || NOK=$((NOK + 1))
+  [ -f "$EVAL/health/health_x2_4b.json" ] || \
+    step health_x2_4b "$PY" scripts/health_check.py "${HC[@]}" --checkpoint "$CK" ${D[@]+"${D[@]}"} --out "$EVAL/health/health_x2_4b.json" || NOK=$((NOK + 1))
   step health_compare "$PY" scripts/health_check.py --compare "$EVAL/health/health_base_4b.json" "$EVAL/health/health_x2_4b.json" \
     --out "$EVAL/health/health_compare.json" || NOK=$((NOK + 1))
 fi
