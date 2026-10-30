@@ -78,8 +78,8 @@ def systems(a) -> list[tuple[str, str, object, str]]:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", default="docs/analysis/unified_table")
-    ap.add_argument("--e1-poly")
-    ap.add_argument("--e3b-grid")
+    ap.add_argument("--e1-poly", default="experiments/W2/0100_u_hands_hpcgpu06/0100_u_e1poly")  # RUN-0100
+    ap.add_argument("--e3b-grid", default="experiments/W2/0100_u_hands_hpcgpu06/0100_u_e3bgrid")  # RUN-0100
     ap.add_argument("--lisa", default="experiments/W2/0097_lisa_hpcgpu06")  # RUN-0097
     a = ap.parse_args(argv)
     ids = subset_ids()
