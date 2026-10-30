@@ -32,6 +32,10 @@
   新增正文主表 tab_main、语言代价四方表 tab_lang_cost（附录版 tab_lang_cost_full 加 X-3）、计算表 tab_compute。配对差、LLMSeg 同句与
   计算记账取 docs/analysis/x_test_table.json。语言代价图与计数分档缺省画 X-2；--with-explore 再加 X-3（C2）与 X-3L。
 - 干扰图 (d) R_seg：秩 128 的读数离 r32 的范围太远时画在坐标轴之外，用箭头加数值标注（OFFSCALE_*）。
+- 统一主表（DEV-0077；D154，预注册 U）：论文正文主表 tab_unified（12 个系统在同样的 5 个划分 × 300 句上，灰色的文献 SOTA 块放在最后）与
+  它的图 fig_unified（5 个划分面板加合并面板，文献线只画在划分面板）；分档图 fig_bins（人与非人、形状复杂度四分位）；附录的种子波动表
+  tab_seeds。数字取 docs/analysis/unified_table.json、x_bins.json、seed_variance.json 与 docs/references/refseg_sota.json。tab_main 改作附录的
+  全 5,000 句版，只改 caption。
 """
 
 from __future__ import annotations
@@ -231,6 +235,59 @@ COUNT_SYSTEMS = (("base@0069", "Base"), ("W2-c", "W2-c"), ("W2-c+回放", "W2-c 
 COUNT_EXPLORE = (("X-3（C2）", "C2 = X-3 (ablation)"),)  # --with-explore 时排在 X-2 之后
 COUNT_BASES = ("base@0069", "base@0056")
 
+# DEV-0077（D154；预注册 U）：统一主表 tab_unified 与图 fig_unified、分档图 fig_bins、种子波动附录表 tab_seeds。
+# 数字都取管理员的分析 JSON（unified_table.py、x_bins.py、seed_variance.py 的输出）与文献读数 refseg_sota.json，不重算 bootstrap。
+UNIFIED_JSON = "docs/analysis/unified_table.json"  # 12 个系统 × 5 个划分 × 300 句（RUN-0072、0078、0092、0095、0097、0100）
+SOTA_JSON = "docs/references/refseg_sota.json"  # 专家 SOTA 的文献数字（预注册 U-3a）：完整 test 划分，×100，只作灰色参考
+X_BINS_JSON = "docs/analysis/x_bins.json"  # 按人与非人、形状复杂度分档（预注册 U-6；元数据 RUN-0099）
+SEED_JSON = "docs/analysis/seed_variance.json"  # C1 配方三个种子（开发数据与语言检查，不是 test）
+SUBSET_CONFIG = "configs/w2_llmseg_subsets.json"  # 统一主表的句子（hash_rank，与 LLMSeg 相同）；只读它的 salt 与规则写表注
+UT = _load_script("_paperfig_unified_table", "scripts/mgr/unified_table.py")  # 统一主表的系统清单（主方法名 MAIN、运行目录）
+XB = _load_script("_paperfig_x_bins", "scripts/mgr/x_bins.py")  # 分档的约定（PERSON = COCO 类别 1、MIN_SUPER）
+SV = _load_script("_paperfig_seed_variance", "scripts/mgr/seed_variance.py")  # 种子的运行目录与健康检查路径（SEEDS）
+# unified_table.json 的系统名 → (表里的英文名, 图里的短名)。已有的英文名取 ROW_LABELS、LLMSEG_ROWS（同一个系统在各表同名）。
+UNIFIED_LABELS = {
+    UT.MAIN: (ROW_LABELS["c1"], "C1 = X-2 (ours)"),
+    "X-3（C2，消融）": (ROW_LABELS["c2"], "C2 = X-3"),
+    "W2-c": (ROW_LABELS["w2c"], "W2-c"),
+    "W2-a": (ROW_LABELS["w2a"], "W2-a"),
+    "模型自己的框": (ROW_LABELS["ownbox"], "Own box"),
+    "W1-F": (ROW_LABELS["w1f"], "W1-F"),
+    "E1 结构强制多边形（9B 零样本）": ("E1 structure-forced polygon (zero-shot)", "E1 structured polygon"),
+    "9B E3b 像素 token 网格": ("E3b pixel-token grid (structure-forced decoding)", "E3b pixel-token grid"),
+    "LLMSeg 修正后（主配置）": (dict(LLMSEG_ROWS)["rec"], "LLMSeg after refinement"),
+    "LLMSeg 修正前": (dict(LLMSEG_ROWS)["seg"], "LLMSeg before refinement"),
+    "LISA-7B（xinlai/LISA-7B-v1）": ("LISA-7B, released v1 weights (run by us)", "LISA-7B v1 (run by us)"),
+    "C1 的椭圆消融": (ROW_LABELS["c1_ellipse"], "C1 with ellipse for spline"),
+}
+# unified_table.json 的组（预注册 U-2 的四组）→ (表里的组标题, 图例), 颜色。C1 另用槽 7（W2_COLORS 的 X-2）；W2-c 所在的组用 W2-c 的槽 1；
+# 外部方法槽 2、"各种手"槽 3、附带的椭圆消融用"对照"的中性深灰（同 C3）。按画出的相邻顺序（紫、蓝、青、橙、深灰）过 validate_palette.js。
+UNIFIED_GROUPS = {"本文的方法": ("Our methods (Qwen3.5-9B)", "Our other methods"),
+                  "各种手": ("Other hands: the same Qwen3.5-9B outputs the mask another way", "Other hands (same Qwen3.5-9B)"),
+                  "外部方法": ("External methods", "External methods"),
+                  "附带": ("Capability attribution (ablation of C1)", "Attribution ablation")}
+UNIFIED_SOTA_LABEL = "Expert models from the literature (full test splits; reference only, not paired)"
+# 文献模型用的视觉模型与训练数据：JSON 的 note 已写了骨干与训练数据的（UNINEXT-H、DeRIS-L）直接用 note；note 写的是别的事的两行在这里补上
+# （照 refseg_sota_notes.md 的"选作灰线的 4 行"），note 照录在它后面。
+SOTA_TRAINING = {"LISA-7B (ft)": "LLaVA-7B + SAM, fine-tuned on RefCOCO/+/g",
+                 "GLaMM (FT)": "Vicuna-7B + SAM-H, GranD pre-training, then fine-tuned on RefCOCO/+/g"}
+# 新跑三项（叶目录只有这 300 句）：核对 unified_table.json 的逐划分读数 = 叶目录 metrics.json 的 headline。(系统名, 模型目录, 设置)
+UNIFIED_SUBSET_LEAVES = (("E1 结构强制多边形（9B 零样本）", W2_MODEL, "u_e1_poly_structured"),
+                         ("9B E3b 像素 token 网格", W2_MODEL, "u_e3b_grid"),
+                         ("LISA-7B（xinlai/LISA-7B-v1）", "lisa-7b-v1", "lisa_7b"))
+UNIFIED_LLMSEG = {"LLMSeg 修正后（主配置）": "rec", "LLMSeg 修正前": "seg"}  # LLMSeg 叶目录的 readouts
+UNIFIED_LISA = "LISA-7B（xinlai/LISA-7B-v1）"
+# fig_bins：x_bins.json 的两种分档（按前缀找）与两个配对差；配对差的颜色取被减的那个系统在 fig_unified 里的颜色
+BINS_SCHEMES = (("(i)", "(a) Person vs. non-person"), ("(iii)", "(b) Shape complexity c = P²/A, quartiles"))
+BINS_PERSON_LABELS = {"人": "Person", "非人": "Non-person"}
+# (x_bins.json 的键, 图例, 被减系统的组（定颜色）, 图注里的说法)
+BINS_DIFFS = (("x2_minus_w2c", "C1 − W2-c", "本文的方法", "against W2-c"),
+              ("x2_minus_ellipse", "C1 − in-box ellipse ablation", "附带", "against the in-box ellipse ablation"))
+# tab_seeds：种子波动的两个设置（seed_variance.json 的 settings 键）
+SEED_SETTINGS = ((XT.MAIN, "C1 recipe (spline)"), (XT.ABL, "In-box ellipse ablation"))
+DEV_SPLIT_LABELS = {"explore_val_refcoco_unc_val": "explore_val RefCOCO val", "explore_val_refcoco+_unc_val": "explore_val RefCOCO+ val",
+                    "explore_val_refcocog_umd_val": "explore_val RefCOCOg val"}
+
 # ---------------------------------------------------------------------------------------------
 # 怎么画：尺寸、字体、配色（dataviz 参考调色板；validate_palette.js 在白底上校验通过）
 # ---------------------------------------------------------------------------------------------
@@ -289,6 +346,10 @@ OFFSCALE_SPANS = 1.0
 SERIES_3, SERIES_5, SERIES_6, SERIES_7 = "#1baf7a", "#e87ba4", "#008300", "#4a3aa7"  # 分类槽 3、5、6、7
 W2_COLORS = {"W2-c": SERIES_1, "W2-a": SERIES_2, "E3b+C3": SERIES_2, "W2-c+回放": SERIES_3, "base@0069": MUTED, "C3": INK_2,
              "X-2（C1）": SERIES_7, "X-3（C2，消融）": SERIES_5, "X-3（C2）": SERIES_5, "X-3L": SERIES_6}
+# DEV-0077：fig_unified 按组分色（见 UNIFIED_GROUPS），C1 固定槽 7；文献的灰色竖虚线用 MUTED（只是参考，不是系统）
+UNIFIED_GROUP_COLORS = {"本文的方法": W2_COLORS["W2-c"], "各种手": SERIES_3, "外部方法": SERIES_2, "附带": W2_COLORS["C3"]}
+UNIFIED_MAIN_COLOR = W2_COLORS["X-2（C1）"]
+SOTA_COLOR = MUTED
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1030,10 +1091,7 @@ def collect_w2(root: Path) -> dict:
         out["compute"][key] = None if not c else {**c, "source": src}
         if c is None and expected:
             out["missing"].append(f"计算记账 {key}（{src} 没有）")
-    # 样条的控制点数：C1 运行的 config.yaml（x2.n，检查点训练时定的 n）
-    cfg = _x_leaf(root, C1, XT.MAIN, W2T.SPLITS[0]) / "config.yaml"
-    m = re.search(r"^x2:\s*\n\s+n:\s*(\d+)\s*$", cfg.read_text(encoding="utf-8"), re.M) if cfg.is_file() else None
-    out["spline_n"], out["spline_n_source"] = (int(m.group(1)) if m else None), f"{_rel(root, cfg)} :: x2.n"
+    out["spline_n"], out["spline_n_source"] = _spline_n(root)  # 样条的控制点数（C1 运行的 config.yaml）
     return out
 
 
@@ -1220,6 +1278,315 @@ def collect_lang_table(root: Path) -> dict:
                                             "node": rec["nodes"][sec], "source": path}
         out["systems"].append(rec)
     out["resamples"] = {k: sorted(x for x in v if x) for k, v in res.items()}
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# 读取：统一主表、分档、种子波动（DEV-0077；只读分析 JSON 与文献读数，不重算 bootstrap）
+# ---------------------------------------------------------------------------------------------
+
+
+def _ut_point(c: dict | None, level, n_res, source: str) -> dict | None:
+    """分析 JSON 的 {"ciou"/"giou"/"diff", "ci": [low, high], "n"} → _point，记上重抽次数（JSON 顶层的 n_resamples）。"""
+    pt = _ci_list_point(c, level, source)
+    if pt is not None:
+        pt["n_resamples"] = n_res
+    return pt
+
+
+def _value_only(p: dict | None) -> dict | None:
+    return None if p is None else {"value": p.get("value")}
+
+
+def run_ids(texts) -> list[str]:
+    """来源字符串里的运行编号，按出现的顺序："RUN-0072（逐句交并取 RUN-0095）" → ["0072", "0095"]；
+    "experiments/W2/0097_lisa_hpcgpu06" → ["0097"]（同 _runs_of 的目录写法）。"""
+    out: list[str] = []
+    for t in texts:
+        for m in re.finditer(r"RUN-(\d{4})|experiments/[^/\s]+/(\d{4})_", t or ""):
+            r = m.group(1) or m.group(2)
+            if r not in out:
+                out.append(r)
+    return out
+
+
+def _spline_n(root: Path) -> tuple[int | None, str]:
+    """样条的控制点数：C1 运行的 config.yaml（x2.n，检查点训练时定的 n）。"""
+    cfg = _x_leaf(root, C1, XT.MAIN, W2T.SPLITS[0]) / "config.yaml"
+    m = re.search(r"^x2:\s*\n\s+n:\s*(\d+)\s*$", cfg.read_text(encoding="utf-8"), re.M) if cfg.is_file() else None
+    return (int(m.group(1)) if m else None), f"{_rel(root, cfg)} :: x2.n"
+
+
+def _close(a, b) -> bool:
+    return a is not None and b is not None and abs(a - b) <= 1e-12
+
+
+def collect_unified(root: Path) -> dict:
+    """tab_unified 与 fig_unified：unified_table.json 的 12 个系统（照 JSON 的顺序与组，一个不少）与 refseg_sota.json 的文献读数。
+    读数与 CI 都取 JSON（逐划分与合并都是 unified_table.py 在这 300 / 1,500 句上算的 10,000 次重抽）；另与叶目录、x_test_table.json、
+    LLMSeg 的 compare.json 逐格核对。"""
+    out = {"json": UNIFIED_JSON, "sota_json": SOTA_JSON, "splits": list(W2T.SPLITS), "systems": [], "sota": [], "missing": [],
+           "checks": [], "lisa": {}}
+    uj, sj = _load(root / UNIFIED_JSON), _load(root / SOTA_JSON)
+    if uj is None:
+        out["missing"].append(f"统一主表：{UNIFIED_JSON} 不在")
+    if sj is None:
+        out["missing"].append(f"统一主表的文献读数：{SOTA_JSON} 不在")
+    uj = uj or {}
+    for k in ("subset", "n_per_split", "n_resamples", "level", "seed", "main"):
+        out[k] = uj.get(k)
+    sub = _load(root / (uj.get("subset") or SUBSET_CONFIG)) or {}
+    out["subset_salt"] = sub.get("salt")
+    res, lev = uj.get("n_resamples"), uj.get("level")
+    for e in uj.get("systems") or []:
+        name, group = e.get("name"), e.get("group")
+        lab = UNIFIED_LABELS.get(name)
+        if lab is None:
+            out["missing"].append(f"统一主表：系统 {name} 没有英文名（UNIFIED_LABELS），表里用原名")
+        if group not in UNIFIED_GROUPS:
+            out["missing"].append(f"统一主表：组 {group} 没有英文名（UNIFIED_GROUPS），表里用原名")
+        done = e.get("status") == "完成"
+        rec = {"name": name, "label": (lab or (name, name))[0], "short": (lab or (name, name))[1], "group": group,
+               "main": name == uj.get("main"), "source": e.get("source"), "status": e.get("status"), "runs": run_ids([e.get("source")]),
+               "per_split": {}, "pooled": {}, "minus": {}, "minus_per_split": {}}
+        if not done:  # 跑坏的、没跑完的照样列出（预注册 U-1：照实报告），格子写"—"
+            out["missing"].append(f"统一主表 {name}：status 是 {e.get('status')}（{e.get('source')}）")
+        src = f"{UNIFIED_JSON} :: systems[{name}]"
+        for metric in ("cIoU", "gIoU"):
+            for sp in W2T.SPLITS:
+                c = ((((e.get("per_split") or {}).get(sp)) or {}).get(metric)) if done else None
+                rec["per_split"].setdefault(sp, {})[metric] = _ut_point(c, lev, res, f"{src}.per_split.{sp}.{metric}")
+                if done and c is None:
+                    out["missing"].append(f"统一主表 {name} {sp} {metric}（{UNIFIED_JSON} 里没有）")
+            c = ((e.get("pooled") or {}).get(metric)) if done else None
+            rec["pooled"][metric] = _ut_point(c, lev, res, f"{src}.pooled.{metric}")
+            if done and c is None:
+                out["missing"].append(f"统一主表 {name} 合并 {metric}（{UNIFIED_JSON} 里没有）")
+            mm = ((((e.get("main_minus") or {}).get("pooled")) or {}).get(metric)) if done and not rec["main"] else None
+            rec["minus"][metric] = _ut_point(mm, lev, res, f"{src}.main_minus.pooled.{metric}")
+            if done and not rec["main"] and mm is None:
+                out["missing"].append(f"统一主表 主方法 − {name} {metric}（{UNIFIED_JSON} 里没有）")
+        for sp in W2T.SPLITS:  # 逐划分的配对差（只有 cIoU）：只进 data JSON
+            mm = (((e.get("main_minus") or {}).get("per_split")) or {}).get(sp) if done and not rec["main"] else None
+            rec["minus_per_split"][sp] = _ut_point(mm, lev, res, f"{src}.main_minus.per_split.{sp}")
+        out["systems"].append(rec)
+    if uj and sum(s["main"] for s in out["systems"]) != 1:
+        out["missing"].append(f"统一主表：{UNIFIED_JSON} 的 main（{uj.get('main')}）不是恰好一个系统")
+    if uj.get("main") and uj.get("main") != UT.MAIN:
+        out["missing"].append(f"统一主表：{UNIFIED_JSON} 的 main 是 {uj.get('main')}，unified_table.py 的 MAIN 是 {UT.MAIN}")
+    # 文献读数（×100，完整 test 划分）：按划分名对上 W2 的划分
+    if sj:
+        if list(sj.get("splits") or []) != list(W2T.SPLITS):
+            out["missing"].append(f"统一主表的文献读数：{SOTA_JSON} 的划分（{sj.get('splits')}）与 W2 test 的不同，按划分名对齐")
+        for r in sj.get("rows") or []:
+            vals = dict(zip(sj.get("splits") or [], r.get("values") or []))
+            out["sota"].append({"name": r.get("name"), "kind": r.get("kind"), "metric": r.get("metric"),
+                                "values": {sp: vals.get(sp) for sp in W2T.SPLITS}, "source": r.get("source"), "note": r.get("note"),
+                                "training": SOTA_TRAINING.get(r.get("name")), "ref": f"{SOTA_JSON} :: rows[{r.get('name')}]"})
+            if r.get("name") not in SOTA_TRAINING and not r.get("note"):
+                out["missing"].append(f"统一主表的文献读数 {r.get('name')}：没有视觉模型与训练数据的说明（SOTA_TRAINING 或 JSON 的 note）")
+            if any(vals.get(sp) is None for sp in W2T.SPLITS):
+                out["missing"].append(f"统一主表的文献读数 {r.get('name')}：缺划分")
+        out["sota_unit"], out["sota_caveat"] = sj.get("unit"), sj.get("caveat")
+    by = {s["name"]: s for s in out["systems"] if s["status"] == "完成"}
+    # 核对 1：新跑三项的叶目录只有这 300 句，逐划分读数 = 叶目录 metrics.json 的 headline（CI 不比：叶目录是 1,000 次重抽）
+    bad, n = [], 0
+    for name, mdir, setting in UNIFIED_SUBSET_LEAVES:
+        s = by.get(name)
+        run = next((m.group(0) for m in [re.search(r"experiments/\S+", (s or {}).get("source") or "")] if m), None)
+        if s is None or run is None:
+            continue
+        for sp in W2T.SPLITS:
+            f = root / run / mdir / "refseg" / setting / sp / "metrics.json"
+            d = _load(f) or {}
+            if name == UNIFIED_LISA and d and not out["lisa"]:
+                out["lisa"] = {"revision": d.get("revision"), "lisa_commit": d.get("lisa_commit"), "protocol": d.get("protocol"),
+                               "model": d.get("model"), "source": _rel(root, f)}
+            for metric in ("cIoU", "gIoU"):
+                lp, p = _leaf_headline(f, metric, root), s["per_split"][sp][metric]
+                n += 1
+                if lp is None or p is None or not _close(lp["value"], p["value"]) or lp.get("n") != p.get("n"):
+                    bad.append(f"{name} {sp} {metric}")
+    if n:
+        out["checks"].append(("一致" if not bad else "不一致") + f"：{UNIFIED_JSON} 的新跑三项（E1 多边形、E3b 网格、LISA）逐划分读数与句数 = "
+                             f"叶目录 metrics.json 的 headline（{n} 格）" + (f"（不同或缺：{bad}）" if bad else ""))
+    # 核对 2：LLMSeg 修正前后 = RUN-0078 叶目录 readouts.<seg|rec>.headline（同样 300 句）
+    bad, n = [], 0
+    for name, rd in UNIFIED_LLMSEG.items():
+        s = by.get(name)
+        if s is None:
+            continue
+        for sp in W2T.SPLITS:
+            f = root / LLMSEG_RUN / W2_MODEL / "refseg" / "llmseg" / sp / "metrics.json"
+            if not out.get("llmseg_commit"):
+                out["llmseg_commit"] = (_load(f) or {}).get("llmseg_commit")
+            for metric in ("cIoU", "gIoU"):
+                lp, p = _leaf_headline(f, metric, root, readout=rd), s["per_split"][sp][metric]
+                n += 1
+                if lp is None or p is None or not _close(lp["value"], p["value"]):
+                    bad.append(f"{name} {sp} {metric}")
+    if n:
+        out["checks"].append(("一致" if not bad else "不一致") + f"：{UNIFIED_JSON} 的 LLMSeg 修正前后逐划分读数 = {LLMSEG_RUN} 叶目录的 "
+                             f"readouts.<seg|rec>.headline（{n} 格）" + (f"（不同或缺：{bad}）" if bad else ""))
+    # 核对 3：C1 的同句读数（逐划分与合并，读数与 CI）与 C1 − LLMSeg = x_test_table.json 的 llmseg 子块（同一套句子、同样的重抽）
+    xj = _load(root / X_TEST_JSON)
+    c1 = (((xj or {}).get("candidates") or {}).get(C1)) or {}
+    m = by.get(uj.get("main"))
+    bad, n = [], 0
+    if m and c1:
+        for sp in W2T.SPLITS + ["pooled"]:
+            blk = ((c1.get("pooled") if sp == "pooled" else (c1.get("per_split") or {}).get(sp)) or {}).get("llmseg") or {}
+            for metric, jk in (("cIoU", "main_on_subset"), ("gIoU", "g_main_on_subset")):
+                p = m["pooled"][metric] if sp == "pooled" else m["per_split"][sp][metric]
+                c = blk.get(jk) or {}
+                n += 1
+                if p is None or not all(_close(a, b) for a, b in zip((c.get(metric.lower()), *(c.get("ci") or [None, None])),
+                                                                       (p["value"], p["low"], p["high"]))):
+                    bad.append(f"C1 {sp} {metric}")
+        for name, rd in UNIFIED_LLMSEG.items():
+            s, c = by.get(name), (((c1.get("pooled") or {}).get("llmseg")) or {}).get(f"main_minus_llmseg_{rd}") or {}
+            if s is None:
+                continue
+            p = s["minus"]["cIoU"]
+            n += 1
+            if p is None or not all(_close(a, b) for a, b in zip((c.get("diff"), *(c.get("ci") or [None, None])), (p["value"], p["low"], p["high"]))):
+                bad.append(f"C1 − {name}")
+    if n:
+        out["checks"].append(("一致" if not bad else "不一致") + f"：{UNIFIED_JSON} 的 C1 同句读数（逐划分与合并，读数与 CI）与 C1 − LLMSeg = "
+                             f"{X_TEST_JSON} 的 llmseg 子块（{n} 格）" + (f"（不同：{bad}）" if bad else ""))
+    # 核对 4：W2-c 的同句读数 = LLMSeg 对照的 compare.json 里的 W2-c（b）
+    cmp_ = _load(root / LLMSEG_COMPARE)
+    s = by.get("W2-c")
+    bad, n = [], 0
+    if s and cmp_:
+        for sp in W2T.SPLITS + ["pooled"]:
+            blk = (cmp_.get("pooled") if sp == "pooled" else (cmp_.get("splits") or {}).get(sp)) or {}
+            for metric in ("cIoU", "gIoU"):
+                p = s["pooled"][metric] if sp == "pooled" else s["per_split"][sp][metric]
+                n += 1
+                if p is None or not _close(((blk.get("rec") or {}).get(metric) or {}).get("b"), p["value"]):
+                    bad.append(f"W2-c {sp} {metric}")
+    if n:
+        out["checks"].append(("一致" if not bad else "不一致") + f"：{UNIFIED_JSON} 的 W2-c 同句读数 = {LLMSEG_COMPARE} 的 W2-c（{n} 格）"
+                             + (f"（不同：{bad}）" if bad else ""))
+    out["spline_n"], out["spline_n_source"] = _spline_n(root)
+    # 运行编号与节点（表注 "Data:"）：系统来源里的编号；只写编号的（RUN-0072、0078）按已知的运行目录找节点
+    known = {r: d for d in (W2T.RUNS[W2_MODEL], LLMSEG_RUN, *XT.CANDS.values()) for r in run_ids([d])}
+    dirs = {r: (re.search(r"experiments/\S+", s["source"] or "") or [None])[0] for s in out["systems"] for r in s["runs"][:1]}
+    out["runs"] = sorted({r for s in out["systems"] for r in s["runs"]})
+    out["nodes"] = sorted({n_ for r in out["runs"] for n_ in [_node(dirs.get(r) or known.get(r))] if n_})
+    return out
+
+
+def _bin_label(key: str, prefix: str, cuts: list) -> str | None:
+    """x_bins.json 的档名 → 英文：人 / 非人；"c Q1 (≤22)" → "Q1: c ≤ 22.0"（切点取 JSON 的 cuts.complexity，一位小数）。"""
+    if prefix == "(i)":
+        return BINS_PERSON_LABELS.get(key)
+    if "A = 0" in key:
+        return "A = 0 (not in the quartiles)"
+    m = re.match(r"c Q([1-4])\b", key)
+    if not m or len(cuts) != 3:
+        return None
+    k, q = int(m.group(1)), [f"{x:.1f}" for x in cuts]
+    return {1: f"Q1: c ≤ {q[0]}", 2: f"Q2: {q[0]} < c ≤ {q[1]}", 3: f"Q3: {q[1]} < c ≤ {q[2]}", 4: f"Q4: c > {q[2]}"}[k]
+
+
+def collect_bins(root: Path) -> dict:
+    """fig_bins：x_bins.json 的 (i) 人与非人、(iii) 形状复杂度四分位；每档的句数与 X-2 − W2-c、X-2 − 椭圆的配对差与 95% CI；每个划分里人的占比。"""
+    out = {"json": X_BINS_JSON, "schemes": [], "missing": [], "person_share": {}}
+    j = _load(root / X_BINS_JSON)
+    if j is None:
+        out["missing"].append(f"分档：{X_BINS_JSON} 不在")
+    j = j or {}
+    for k in ("n", "n_resamples", "level", "seed", "meta"):
+        out[k] = j.get(k)
+    out["cuts"] = j.get("cuts") or {}
+    out["person_share"] = {sp: (j.get("person_share_by_split") or {}).get(sp) for sp in W2T.SPLITS}
+    if j and not all(out["person_share"].values()):
+        out["missing"].append(f"分档：{X_BINS_JSON} 的 person_share_by_split 缺划分")
+    out["runs"] = run_ids([XT.REF, XB.X2_RUN, j.get("meta")])
+    schemes = j.get("schemes") or {}
+    for prefix, title in BINS_SCHEMES:
+        key = next((k for k in schemes if k.startswith(prefix + " ")), None)
+        if key is None and j:
+            out["missing"].append(f"分档：{X_BINS_JSON} 没有 {prefix} 的分档")
+        bins = []
+        for b, r in (schemes.get(key) or {}).items():
+            lab = _bin_label(b, prefix, out["cuts"].get("complexity") or [])
+            if lab is None:
+                out["missing"].append(f"分档 {key} 的档 {b}：没有英文名，图里用原名")
+            rec = {"key": b, "label": lab or b, "n": r.get("n"), "x2": r.get("x2"), "w2c": r.get("w2c"), "ellipse": r.get("ellipse"), "diffs": {}}
+            for dk, _lab, _g, _p in BINS_DIFFS:
+                rec["diffs"][dk] = _ut_point(r.get(dk), j.get("level"), j.get("n_resamples"), f"{X_BINS_JSON} :: schemes.{key}.{b}.{dk}")
+                if rec["diffs"][dk] is None:
+                    out["missing"].append(f"分档 {key} {b} {dk}（{X_BINS_JSON} 里没有）")
+            bins.append(rec)
+        out["schemes"].append({"prefix": prefix, "key": key, "title": title, "bins": bins})
+    return out
+
+
+def collect_seeds(root: Path) -> dict:
+    """tab_seeds：seed_variance.json 的三个种子——X-2 主设置与椭圆消融的合并 cIoU 与 CI、− W2-c 参照、− seed 0、跨种子均值与样本标准差；
+    语言读数（大题量 MMLU-Pro、IFEval 严格，T 文本定位、计数，相对同节点基座的差与 CI）；健康检查的差与标红（题数与门槛取健康检查的 compare 文件）。"""
+    out = {"json": SEED_JSON, "seeds": [], "missing": [], "across": {}, "resamples": {}}
+    j = _load(root / SEED_JSON)
+    if j is None:
+        out["missing"].append(f"种子波动：{SEED_JSON} 不在")
+    j = j or {}
+    n_res, lev = j.get("n_resamples"), j.get("level")
+    out.update({"n_resamples": n_res, "level": lev, "seed_bootstrap": j.get("seed"), "splits": j.get("splits") or []})
+    ref = j.get("w2c_ref") or {}
+    out["w2c_ref"] = {"source": ref.get("source"), "pooled": _ut_point(ref.get("pooled"), lev, n_res, f"{SEED_JSON} :: w2c_ref.pooled"),
+                      "split_n": {sp: ((ref.get("per_split") or {}).get(sp) or {}).get("n") for sp in out["splits"]}}
+    res: dict = {"battery": set(), "ttext": {LCT.N_RES}}
+    for s, e in (j.get("seeds") or {}).items():
+        rec = {"seed": int(s), "status": e.get("status"), "source": e.get("source"), "node": _node(e.get("source")), "settings": {},
+               "language": {}, "health": {}, "lang_sources": {}, "lang_nodes": {}}
+        out["seeds"].append(rec)
+        if e.get("status") != "完成":
+            out["missing"].append(f"种子波动 seed {s}：status 是 {e.get('status')}（{e.get('source')}）")
+            continue
+        src = f"{SEED_JSON} :: seeds.{s}"
+        for st, _lab in SEED_SETTINGS:
+            x = (e.get("settings") or {}).get(st) or {}
+            rec["settings"][st] = {k: _ut_point(x.get(jk), lev, n_res, f"{src}.settings.{st}.{jk}")
+                                   for k, jk in (("pooled", "pooled"), ("minus_w2c", "minus_w2c_pooled"), ("minus_seed0", "minus_seed0_pooled"))}
+            for k in ("pooled", "minus_w2c") + (("minus_seed0",) if int(s) != 0 else ()):
+                if rec["settings"][st][k] is None:
+                    out["missing"].append(f"种子波动 seed {s} {st} {k}（{SEED_JSON} 里没有）")
+        lang = e.get("language") or {}
+        rec["lang_sources"] = lang.get("sources") or {}
+        rec["lang_nodes"] = {"battery": _node(rec["lang_sources"].get("battery")), "ttext": _node(rec["lang_sources"].get("ttext_base"))}
+        for sec, key, _lab in LANG_READOUTS:
+            r = (lang.get(sec) or {}).get(key)
+            ci = (r or {}).get("ci95_pp") or [None, None]
+            rec["language"][key] = None if not r or r.get("delta_pp") is None else {
+                "delta": r["delta_pp"], "low": ci[0], "high": ci[1], "n": r.get("n"), "base": r.get("base"), "section": sec,
+                "source": f"{src}.language.{sec}.{key}"}
+            if rec["language"][key] is None:
+                out["missing"].append(f"种子波动 seed {s} 语言读数 {sec} {key}（{SEED_JSON} 里没有）")
+        bc = _load(root / rec["lang_sources"]["battery"]) if rec["lang_sources"].get("battery") else None
+        if bc:
+            res["battery"].add((((bc.get("statistics") or {}).get("bootstrap")) or {}).get("n_resamples"))
+        # 健康检查：差与标红取 seed_variance.json；题数与标红门槛取该种子的 health_compare.json（seed_variance.py 的 SEEDS）
+        h = e.get("health") or {}
+        hpath = (SV.SEEDS.get(int(s)) or (None, None))[1]
+        hc = _load(root / hpath) if hpath else None
+        rec["health_source"], rec["health_node"] = hpath, _node(hpath)
+        rec["health_threshold"] = (hc or {}).get("threshold_pp")
+        for reading, metric in LCT.HEALTH_ROWS:
+            k = f"{reading}.{metric}"
+            r = (h.get("rows") or {}).get(k)
+            n = next((x.get("n") for x in (hc or {}).get("rows") or [] if x.get("reading") == reading and x.get("metric") == metric), None)
+            rec["health"][k] = None if r is None or r.get("delta_pp") is None else {
+                "delta": r["delta_pp"], "flag": bool(r.get("flag")), "n": n, "source": f"{src}.health.rows.{k}"}
+            if rec["health"][k] is None:
+                out["missing"].append(f"种子波动 seed {s} 健康检查 {k}（{SEED_JSON} 里没有）")
+    for st, _lab in SEED_SETTINGS:
+        a = (j.get("across_seeds") or {}).get(st) or {}
+        out["across"][st] = {"seeds": a.get("seeds"), "mean": a.get("mean"), "sd": a.get("sd"), "source": f"{SEED_JSON} :: across_seeds.{st}"}
+    out["resamples"] = {k: sorted(x for x in v if x) for k, v in res.items()}
+    out["runs"] = {"seeds": {r["seed"]: run_ids([r["source"]]) for r in out["seeds"]}, "w2c_ref": run_ids([out["w2c_ref"]["source"]])}
     return out
 
 
@@ -1563,6 +1930,144 @@ def fig_count_bins(cb: dict, out: Path) -> list[Path]:
     return _save(fig, out, "fig_count_bins")
 
 
+# ---- fig_unified、fig_bins（DEV-0077）------------------------------------------------------------
+
+UNIFIED_GROUP_GAP = 0.5  # 组与组之间多空的行高
+UNIFIED_XMAX = 90.0  # 横轴 0–90（cIoU ×100）：最高的文献读数 86.5 也在轴内
+SOTA_LABEL_STEP = 0.85  # 文献线的名字一行一个，放在第一根横条之上
+
+
+def unified_color(s: dict) -> str:
+    """fig_unified 的颜色：C1 固定槽 7，其余按组（UNIFIED_GROUP_COLORS）。"""
+    return UNIFIED_MAIN_COLOR if s["main"] else UNIFIED_GROUP_COLORS.get(s["group"], INK_2)
+
+
+def unified_rows(systems: list[dict]) -> list[float]:
+    """每个系统的纵坐标（自上而下，JSON 的顺序）；组与组之间空 UNIFIED_GROUP_GAP。"""
+    ys, y, prev = [], 0.0, None
+    for s in systems:
+        if prev is not None and s["group"] != prev:
+            y += UNIFIED_GROUP_GAP
+        ys.append(y)
+        y += 1.0
+        prev = s["group"]
+    return ys
+
+
+def sota_layout(u: dict, sp: str) -> list[dict]:
+    """一个划分面板里的文献线：按读数从小到大，名字自下而上一行一个（名字写在线的左边，线只画到自己那一行，名字不会压到别的线）。"""
+    rows = sorted((r for r in u["sota"] if r["values"].get(sp) is not None), key=lambda r: r["values"][sp])
+    return [{"name": r["name"], "value": r["values"][sp], "label_y": -0.95 - k * SOTA_LABEL_STEP} for k, r in enumerate(rows)]
+
+
+def fig_unified(u: dict, out: Path) -> list[Path]:
+    """5 个划分各一个面板加"合并"面板：横条 = 各系统的 cIoU（×100），误差棒 = unified_table.json 的 95% CI；划分面板里画文献的灰色竖虚线
+    （完整 test 划分，只作参考），合并面板不画（文献没有合并读数）。"""
+    systems = u["systems"]
+    ys = unified_rows(systems)
+    panels = u["splits"] + ["pooled"]
+    fig, axes = plt.subplots(2, 3, figsize=(DOUBLE_COL_IN, 4.6), sharey=True, layout="constrained")
+    n_sota = max((len(sota_layout(u, sp)) for sp in u["splits"]), default=0)
+    y_bottom = (ys[-1] if ys else 0.0) + 0.7
+    y_top = -0.95 - max(n_sota - 1, 0) * SOTA_LABEL_STEP - 0.6
+    for ax, col in zip(axes.flat, panels):
+        pts = [(s["pooled"] if col == "pooled" else s["per_split"][col])["cIoU"] for s in systems]
+        pp = [None if p is None else {**p, "value": 100 * p["value"], "low": None if p["low"] is None else 100 * p["low"],
+                                      "high": None if p["high"] is None else 100 * p["high"]} for p in pts]
+        ax.barh(ys, [p["value"] if p else 0.0 for p in pp], height=0.72, color=[unified_color(s) for s in systems], linewidth=0, zorder=2)
+        have = [(y, p) for y, p in zip(ys, pp) if p]
+        if have:
+            ax.errorbar([p["value"] for _y, p in have], [y for y, _p in have], xerr=_yerr([p for _y, p in have]), fmt="none", ecolor=INK,
+                        elinewidth=0.6, capsize=1.0, capthick=0.6, zorder=3)
+        for y, p in zip(ys, pp):
+            if p is None:  # 没跑完或跑坏的系统：照样占一行，写 n/a
+                ax.text(1.0, y, "n/a", ha="left", va="center", fontsize=5.5, color=MUTED, zorder=3)
+            elif col == "pooled":  # 合并面板写数值（划分面板的数值见 tab_unified）
+                ax.text((p["high"] if p["high"] is not None else p["value"]) + 1.0, y, f"{p['value']:.1f}", ha="left", va="center",
+                        fontsize=5.5, color=INK_2, zorder=4)
+        if col == "pooled":
+            ax.text(1.0, (-0.95 + y_top + 0.6) / 2, "No literature lines: the literature\nreports no pooled reading.", ha="left",
+                    va="center", fontsize=5.5, color=INK_2, style="italic")
+            n = next((p["n"] for p in pts if p and p.get("n")), None)
+            ax.set_title(f"Pooled (n={_nfmt(n)})", loc="left")
+        else:
+            for r in sota_layout(u, col):
+                ax.plot([r["value"], r["value"]], [y_bottom, r["label_y"]], color=SOTA_COLOR, lw=0.7, ls=(0, (3.0, 1.6)), zorder=4)
+                ax.text(r["value"] - 0.8, r["label_y"], r["name"], ha="right", va="center", fontsize=5.3, color=INK_2, zorder=5)
+            n = next((p["n"] for p in pts if p and p.get("n")), None)
+            ax.set_title(f"{split_label(col)} (n={_nfmt(n)})", loc="left")
+        ax.set_xlim(0, UNIFIED_XMAX)
+        ax.set_xticks([0, 20, 40, 60, 80])
+        ax.grid(False)
+        ax.grid(True, axis="x")
+        ax.tick_params(axis="y", length=0)
+    axes[0, 0].set_yticks(ys)
+    axes[0, 0].set_yticklabels([s["short"] for s in systems])
+    axes[0, 0].set_ylim(y_bottom, y_top)  # 自上而下
+    fig.supxlabel("cIoU (×100); error bars: 95% bootstrap CI", fontsize=7)
+    handles = [Patch(color=UNIFIED_MAIN_COLOR, lw=0, label=next((s["short"] for s in systems if s["main"]), "main method"))]
+    for g in dict.fromkeys(s["group"] for s in systems):
+        handles.append(Patch(color=UNIFIED_GROUP_COLORS.get(g, INK_2), lw=0, label=UNIFIED_GROUPS.get(g, (g, g))[1]))
+    if u["sota"]:
+        handles.append(Line2D([], [], color=SOTA_COLOR, lw=0.7, ls=(0, (3.0, 1.6)), label="Literature, full test split (reference)"))
+    fig.legend(handles=handles, loc="outside upper center", ncol=_legend_cols(len(handles), 3), handlelength=1.2, handletextpad=0.4,
+               columnspacing=1.0)
+    return _save(fig, out, "fig_unified")
+
+
+def fig_unified_data(u: dict) -> dict:
+    """data/fig_unified.json：每个面板画出的每根横条（读数、CI、来源、颜色）与文献线（读数、名字所在的行）。"""
+    panels = {}
+    for col in u["splits"] + ["pooled"]:
+        panels[col] = {"bars": [{"system": s["name"], "label": s["short"], "group": s["group"], "color": unified_color(s),
+                                 **((s["pooled"] if col == "pooled" else s["per_split"][col]).get("cIoU") or {"value": None})}
+                                for s in u["systems"]],
+                       "sota": [] if col == "pooled" else sota_layout(u, col)}
+    return {"panels": panels, "json": u["json"], "sota_json": u["sota_json"], "n_resamples": u.get("n_resamples"), "missing": u["missing"]}
+
+
+def fig_bins(bn: dict, out: Path) -> list[Path]:
+    """(a) 人与非人、(b) 形状复杂度四分位：每档两根横条——C1 − W2-c 与 C1 − 椭圆消融（×100，95% 配对 CI），颜色取被减系统在 fig_unified 里的颜色；
+    每档的句数写在刻度名下。"""
+    schemes = bn["schemes"]
+    heights = [max(len(s["bins"]), 1) for s in schemes]
+    fig, axes = plt.subplots(len(schemes), 1, figsize=(SINGLE_COL_IN, 1.05 + 0.5 * sum(heights)), sharex=True, layout="constrained",
+                             gridspec_kw={"height_ratios": heights}, squeeze=False)
+    nd = len(BINS_DIFFS)
+    h = 0.8 / nd
+    offs = [(k - (nd - 1) / 2) * h for k in range(nd)]
+    allv = [0.0]
+    for ax, sch in zip(axes[:, 0], schemes):
+        for k, (dk, _lab, g, _p) in enumerate(BINS_DIFFS):
+            c = UNIFIED_GROUP_COLORS[g]
+            for i, b in enumerate(sch["bins"]):
+                p = b["diffs"].get(dk)
+                if p is None:
+                    continue
+                v = 100 * p["value"]
+                lo, hi = (100 * p["low"] if p["low"] is not None else v), (100 * p["high"] if p["high"] is not None else v)
+                y = i + offs[k]
+                ax.barh([y], [v], height=h * 0.9, color=c, linewidth=0, zorder=2)
+                ax.errorbar([v], [y], xerr=[[max(v - lo, 0)], [max(hi - v, 0)]], fmt="none", ecolor=INK, elinewidth=0.6, capsize=1.0,
+                            capthick=0.6, zorder=3)
+                ax.text(max(hi, v, 0) + 0.6, y, _signed(v), ha="left", va="center", fontsize=5.5, color=INK_2, zorder=4)
+                allv += [lo, hi]
+        ax.set_yticks(range(len(sch["bins"])))
+        ax.set_yticklabels([f"{b['label']}\n(n={_nfmt(b['n'])})" for b in sch["bins"]])
+        ax.set_ylim(max(len(sch["bins"]), 1) - 0.5, -0.5)  # 分档 JSON 不在时面板留空（README 报缺）
+        ax.tick_params(axis="y", length=0)
+        ax.axvline(0, color=INK_2, lw=0.6, zorder=1)
+        ax.grid(False)
+        ax.grid(True, axis="x")
+        ax.set_title(sch["title"], loc="left")
+    lo, hi = min(allv), max(allv)
+    axes[-1, 0].set_xlim(min(lo - 1.0, 0.0), hi + 0.22 * (hi - min(lo, 0.0)) + 1.0)
+    axes[-1, 0].set_xlabel("Paired ΔcIoU (×100), 95% CI")
+    handles = [Patch(color=UNIFIED_GROUP_COLORS[g], lw=0, label=lab) for _dk, lab, g, _p in BINS_DIFFS]
+    fig.legend(handles=handles, loc="outside upper center", ncol=len(handles), handlelength=1.0, handletextpad=0.4, columnspacing=1.0)
+    return _save(fig, out, "fig_bins")
+
+
 # ---------------------------------------------------------------------------------------------
 # 表
 # ---------------------------------------------------------------------------------------------
@@ -1587,7 +2092,7 @@ def _tex_escape(s: str) -> str:
     rep = {"\\": r"\textbackslash{}", "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_", "{": r"\{", "}": r"\}",
            "~": r"\textasciitilde{}", "^": r"\textasciicircum{}", "≥": r"$\geq$", "≤": r"$\leq$", "×": r"$\times$",
            "−": r"$-$", "±": r"$\pm$", "↑": r"$\uparrow$", "↓": r"$\downarrow$", "°": r"$^\circ$", "Δ": r"$\Delta$", "≈": r"$\approx$",
-           "<": r"$<$", ">": r"$>$"}
+           "<": r"$<$", ">": r"$>$", "²": r"$^2$"}
     return "".join(rep.get(ch, ch) for ch in s)
 
 
@@ -1826,13 +2331,15 @@ def _n_split(w2: dict, metric: str) -> str:
 
 
 def _write_table(out: Path, name: str, caption: str, label: str, colspec: str, header_tex: list[str], body_tex: list[str],
-                 md_title: str, md_rows: list[str], notes: list[str]) -> list[Path]:
-    """同 tab_w2 的版式：table*、booktabs、resizebox；Markdown 同一份表加表注。"""
+                 md_title: str, md_rows: list[str], notes: list[str], after_tex: list[str] | None = None) -> list[Path]:
+    """同 tab_w2 的版式：table*、booktabs、resizebox；Markdown 同一份表加表注。after_tex（DEV-0077）：表下面、table* 之内的几行
+    （放 caption 装不下的表注；caption 太长时 LaTeX 量单行宽度会超出最大尺寸而报错）。"""
     L = ["% Generated by scripts/figures/make_paper_figures.py; do not edit. Needs \\usepackage{booktabs,graphicx" +
-         (",multirow" if any("\\multirow" in x for x in body_tex) else "") + "}.",
+         (",multirow" if any("\\multirow" in x for x in body_tex) else "") +
+         (",xcolor" if any("\\textcolor" in x for x in body_tex) else "") + "}.",
          "\\begin{table*}[t]", "\\centering", caption.replace("—", "--"), f"\\label{{tab:{label}}}", "\\footnotesize",
          "\\setlength{\\tabcolsep}{3pt}", "\\resizebox{\\textwidth}{!}{%", f"\\begin{{tabular}}{{{colspec}}}", "\\toprule",
-         *header_tex, *body_tex, "\\bottomrule", "\\end{tabular}}", "\\end{table*}", ""]
+         *header_tex, *body_tex, "\\bottomrule", "\\end{tabular}}", *(after_tex or []), "\\end{table*}", ""]
     md = [f"# Table: {md_title} (generated by scripts/figures/make_paper_figures.py; do not edit by hand)", ""] + md_rows + [""] + \
          [f"- {n}" for n in notes] + [""]
     p_tex, p_md = out / f"{name}.tex", out / f"{name}.md"
@@ -1933,8 +2440,9 @@ def main_table_notes(w2: dict) -> list[str]:
     return notes
 
 
-def tab_main(w2: dict, out: Path) -> list[Path]:
-    """正文主表：行 = 自己的框、W1-F、最优候选、W2-a、W2-c | C1、椭圆消融、C2；列 = 5 个划分（只读数）与合并（带 CI）、每句调用 / 生成 token；
+def tab_main(w2: dict, out: Path, unified: dict | None = None) -> list[Path]:
+    """全 5,000 句表（DEV-0073 时是正文主表；DEV-0077 起改作附录，正文主表是 tab_unified，只改了 caption）：
+    行 = 自己的框、W1-F、最优候选、W2-a、W2-c | C1、椭圆消融、C2；列 = 5 个划分（只读数）与合并（带 CI）、每句调用 / 生成 token；
     下接外部基线一块（同样 1,500 句的合并读数与配对差）。不加粗（DEV-0073 审查：最高值落在消融 C2 上，加粗 C1 又会误导）。"""
     splits = w2["splits"]
     heads = [split_label(sp) for sp in splits] + ["Pooled", "Calls / gen. tokens"]
@@ -1965,11 +2473,25 @@ def tab_main(w2: dict, out: Path) -> list[Path]:
                     _tex_escape(calls).replace("—", "--") + " \\\\")
         M.append(f"| {lab} |" + " |" * len(splits) + f" {fmt_w2(p, signed, False)} | {calls} |")
     notes = main_table_notes(w2)
-    caption = ("\\caption{Main result: referring segmentation on the W2 test (Qwen3.5-9B, cIoU). " +
-               " ".join(_tex_escape(n) for n in notes) + "}")
+    npool = _pooled_n(w2)
+    # DEV-0077：正文主表换成 tab_unified（统一主表），这张改作附录的全 5,000 句版；只改 caption（标题与表注第一句），数值不变
+    caption = (f"\\caption{{Full W2 test, all {f'{npool:,}' if npool else MISSING} expressions (appendix; Qwen3.5-9B, cIoU). " +
+               main_appendix_note(w2, unified, latex=True) + " " + " ".join(_tex_escape(n) for n in notes) + "}")
     header = ["System & " + " & ".join(_tex_escape(h) for h in heads) + " \\\\"]
-    return _write_table(out, "tab_main", caption, "main", "l" + "c" * len(heads), header, body, "main result (W2 test, cIoU)", M,
-                        notes)
+    return _write_table(out, "tab_main", caption, "main", "l" + "c" * len(heads), header, body,
+                        f"full W2 test, all {f'{npool:,}' if npool else MISSING} expressions (appendix; cIoU)", M,
+                        [main_appendix_note(w2, unified, latex=False)] + notes)
+
+
+def main_appendix_note(w2: dict, unified: dict | None, latex: bool) -> str:
+    """tab_main 表注的第一句（DEV-0077）：这是附录的全 5,000 句版，正文主表是 tab_unified（所有系统同样的句子）。"""
+    npool, n_u = _pooled_n(w2), (unified or {}).get("n_per_split")
+    ref = "Table~\\ref{tab:unified}" if latex else "tab_unified"
+    esc = _tex_escape if latex else (lambda x: x)
+    return (esc(f"Appendix version on all {f'{npool:,}' if npool else MISSING} W2 test expressions ({_n_split(w2, 'cIoU')} per split); "
+                "the main-text results table is ") + ref +
+            esc(f", where every system, including the external methods, is evaluated on the same "
+                f"{_nfmt(n_u)} expressions per split."))
 
 
 # ---- tab_compute（DEV-0073：计算记账）------------------------------------------------------------
@@ -2122,6 +2644,222 @@ def tab_lang_cost(lt: dict, out: Path, full: bool = False) -> list[Path]:
     header = [" & ".join(_tex_escape(h) for h in heads) + " \\\\"]
     return _write_table(out, name, caption, name.replace("tab_", "").replace("_", "-"), "lll" + "c" * len(systems), header, body,
                         title[0].lower() + title[1:], M, notes)
+
+
+# ---- tab_unified（DEV-0077：论文正文主表）、tab_seeds（附录）--------------------------------------
+
+U_DEF_NOTE = ("Own box: the model's own box (E1 protocol) as the mask; W1-F: that box plus the default GrabCut candidate (a fixed "
+              "pipeline, no LLM decision); W2-a: the frozen model picks one of four tool candidates (zero-shot); W2-c: LoRA text "
+              "supervision to propose the box and pick a candidate. E1 structure-forced polygon: the zero-shot Qwen3.5-9B writes the "
+              "outline as a polygon, decoding forced to a valid polygon of at least 3 vertices, thinking off. E3b pixel-token grid: the "
+              "E3b LoRA on Qwen3.5-9B (seed-0 checkpoint of the E3 runs) emits the mask as a grid of pixel tokens; structure-forced "
+              "decoding, single turn, guided upsampling.")
+
+
+def _sota_cell(v, latex: bool) -> str:
+    """文献读数（JSON 里已是 ×100）：一位小数；表里灰色。"""
+    if v is None:
+        return "\\textcolor{gray}{--}" if latex else "—"
+    return f"\\textcolor{{gray}}{{${v:.1f}$}}" if latex else f"{v:.1f}"
+
+
+def lisa_hf_id(name: str) -> str | None:
+    """unified_table.json 里 LISA 的系统名带着发布权重的 HF 仓库名："LISA-7B（xinlai/LISA-7B-v1）" → "xinlai/LISA-7B-v1"。"""
+    m = re.search(r"（([^（）]+/[^（）]+)）", name or "")
+    return m.group(1) if m else None
+
+
+def unified_table_notes(u: dict) -> list[str]:
+    """tab_unified 的全部表注（.md 与 README 照这个顺序列出）。"""
+    return [t for _where, t in unified_notes_tagged(u)]
+
+
+def unified_notes_tagged(u: dict) -> list[tuple[str, str]]:
+    """(位置, 表注)：位置 "cap" 进 .tex 的 caption，"below" 放在表下面的注里（系统定义与文献出处太长，全放进 caption 时 LaTeX 量单行宽度
+    超出最大尺寸而报错）。.md 不分位置，按这个顺序全部列出。"""
+    systems = u["systems"]
+    main = next((s for s in systems if s["main"]), None)
+    npool = next((s["pooled"]["cIoU"]["n"] for s in systems if s["pooled"].get("cIoU") and s["pooled"]["cIoU"].get("n")), None)
+    res = _res_text([u.get("n_resamples")])
+    lisa = u.get("lisa") or {}
+    lisa_row = next((s for s in systems if s["name"] == UNIFIED_LISA), None)
+    notes = [f"Every system on the same {_nfmt(npool)} expressions: the five W2 test splits (RefCOCO testA/testB, RefCOCO+ testA/testB, "
+             f"RefCOCOg test), {_nfmt(u.get('n_per_split'))} per split, chosen by hash rank (the first {_nfmt(u.get('n_per_split'))} of "
+             f"each 1,000-expression split by sha256 rank with salt {u.get('subset_salt') or MISSING}; {u.get('subset') or SUBSET_CONFIG}), "
+             "the same expressions as LLMSeg's run (preregistration U-1). cIoU ×100 = summed intersection / summed union; gIoU ×100 = "
+             f"mean per-expression IoU. Pooled: the five splits together with a 95% bootstrap CI over expressions ({res} resamples, seed "
+             f"{u.get('seed') or MISSING}); per-split CIs are in the figure of this table and in unified_table.json. "
+             f"C1 − system: per-expression paired bootstrap of the ratio of sums, 95%, {res} resamples. Failed pipelines and unparsable "
+             "outputs score as empty masks.",
+             "Reported as run, nothing selected: every system on the list preregistered before the three new baselines were run "
+             "(preregistration U-2) is in the table whatever its result, and the list was not changed after their readings were seen. "
+             "No entry is set in bold. " + (f"{main['label']} was designated the main method before any test run (preregistration "
+                                             "X-5a); C2 = X-3 is its simplified version without the box-correction stream."
+                                             if main else ""),
+             _x_def_note(u) + " " + U_DEF_NOTE + " LLMSeg" + (f" (official code, commit {u['llmseg_commit'][:7]})" if u.get("llmseg_commit")
+                                                               else "") +
+             ": driven by the same zero-shot Qwen3.5-9B; before refinement = after its first two stages; after refinement = its main "
+             "configuration."]
+    notes = [("cap", notes[0]), ("cap", notes[1]), ("below", notes[2])]
+    if lisa_row is not None:
+        notes.append(("cap", "LISA-7B appears twice, and the two are not the same weights. The solid row is the released "
+                     f"{lisa_hf_id(lisa_row['name']) or lisa.get('model') or MISSING}"
+                     + (f" (revision {lisa['revision'][:7]})" if lisa.get("revision") else "") +
+                     ", run by us with the official code" + (f" (commit {lisa['lisa_commit'][:7]})" if lisa.get("lisa_commit") else "") +
+                     " and its refer_seg evaluation protocol (the protocol of the paper's tables), in a separate environment; its outputs "
+                     "are used only for scoring, never in our data, labels or rewards. The released v1 weights have no published readings. "
+                     "The gray row LISA-7B (ft) is the paper's model fine-tuned on RefCOCO/+/g, on the full test splits. LISA's training "
+                     "data include COCO images, which overlap with RefCOCO test images at the image level (images, not referring "
+                     "expressions)."))
+    if u["sota"]:
+        notes.append(("cap", "Gray rows: expert models as reported in the literature on the full test splits, not on our "
+                      f"{_nfmt(u.get('n_per_split'))}-expression subsets; cIoU (oIoU, the same quantity) ×100, rounded to one decimal; "
+                      "reference only, never paired, no pooled reading. Each uses learned vision models and is not bound by our "
+                      "constraint that no learned vision model is used; their vision models, training data and sources are listed "
+                      "under the table."))
+        notes.append(("below", "Literature rows: " +
+                      " ".join(f"{r['name']} ({r['kind']}; {r['training'] or r.get('note') or MISSING}): {r['source']}" +
+                               (f"; {r['note']}" if r["training"] and r.get("note") else "") + "." for r in u["sota"])))
+    by_run: dict = {}
+    for s in systems:
+        for k, r in enumerate(s["runs"]):
+            by_run.setdefault(r, []).append(re.sub(r" \(.*\)$", "", s["short"]) + ("" if k == 0 else " per-expression scores"))
+    nodes = u.get("nodes") or []
+    notes.append(("cap", "Data: " + "; ".join(f"RUN-{r} ({', '.join(by_run[r])})" for r in sorted(by_run)) +
+                  (f"; all on {nodes[0]} (D93-1)" if len(nodes) == 1 else f"; nodes {', '.join(nodes)}" if nodes else "") +
+                  f"; readings from {UNIFIED_JSON.split('/')[-1]}, literature from {SOTA_JSON.split('/')[-1]}."))
+    if u["missing"]:
+        notes.append(("cap", "Missing: " + "; ".join(u["missing"]) + "."))
+    return notes
+
+
+def tab_unified(u: dict, out: Path) -> list[Path]:
+    """正文主表（D154；预注册 U）：行 = unified_table.json 的系统（照它的顺序，按组分块，一个不少），最后是灰色的文献块；
+    列 = 5 个划分的 cIoU、合并 cIoU [95% CI]、合并 gIoU、C1 − 该系统的 cIoU 配对差 [CI]。×100，一位小数；不加粗。"""
+    splits = u["splits"]
+    heads = [split_label(sp) for sp in splits] + ["Pooled cIoU [95% CI]", "Pooled gIoU", "C1 − system, cIoU [95% CI]"]
+    ncol = len(heads) + 1
+    body, M = [], ["| System | " + " | ".join(heads) + " |", "|---|" + "---:|" * len(heads)]
+    prev = object()
+    for s in u["systems"]:
+        if s["group"] != prev:
+            gt = UNIFIED_GROUPS.get(s["group"], (s["group"],))[0]
+            body += ["\\midrule", f"\\multicolumn{{{ncol}}}{{l}}{{\\emph{{{_tex_escape(gt)}}}}} \\\\"]
+            M.append(f"| *{gt}* |" + " |" * len(heads))
+            prev = s["group"]
+        per = [_value_only(s["per_split"][sp]["cIoU"]) for sp in splits]
+        pooled, g, mm = s["pooled"].get("cIoU"), _value_only(s["pooled"].get("gIoU")), s["minus"].get("cIoU")
+        cells_t = [fmt_w2(p, False, True) for p in per] + [fmt_w2(pooled, False, True), fmt_w2(g, False, True), fmt_w2(mm, True, True)]
+        cells_m = [fmt_w2(p, False, False) for p in per] + [fmt_w2(pooled, False, False), fmt_w2(g, False, False), fmt_w2(mm, True, False)]
+        body.append(_tex_escape(s["label"]) + " & " + " & ".join(cells_t) + " \\\\")
+        M.append(f"| {s['label']} | " + " | ".join(cells_m) + " |")
+    if u["sota"]:
+        body += ["\\midrule", f"\\multicolumn{{{ncol}}}{{l}}{{\\textcolor{{gray}}{{\\emph{{{_tex_escape(UNIFIED_SOTA_LABEL)}}}}}}} \\\\"]
+        M.append(f"| *{UNIFIED_SOTA_LABEL}; gray in the paper* |" + " |" * len(heads))
+        for r in u["sota"]:
+            lab = f"{r['name']}, {r['kind']}"
+            body.append(f"\\textcolor{{gray}}{{{_tex_escape(lab)}}} & " + " & ".join(_sota_cell(r["values"].get(sp), True) for sp in splits) +
+                        " & " + " & ".join(["\\textcolor{gray}{--}"] * 3) + " \\\\")
+            M.append(f"| {lab} | " + " | ".join(_sota_cell(r["values"].get(sp), False) for sp in splits) + " | — | — | — |")
+    tagged = unified_notes_tagged(u)
+    caption = ("\\caption{Unified main table: referring segmentation with every system on the same W2 test expressions (cIoU $\\times$100). " +
+               " ".join(_tex_escape(n) for w, n in tagged if w == "cap") + " Definitions of the systems are under the table.}")
+    below = ["\\par\\smallskip", "\\begin{minipage}{\\textwidth}\\footnotesize",
+             " ".join(_tex_escape(n) for w, n in tagged if w == "below"), "\\end{minipage}"]
+    header = ["System & " + " & ".join(_tex_escape(h) for h in heads) + " \\\\"]
+    return _write_table(out, "tab_unified", caption, "unified", "l" + "c" * len(heads), header, body,
+                        "unified main table (same 1,500 W2 test expressions for every system, cIoU)", M, [n for _w, n in tagged],
+                        after_tex=below)
+
+
+def seeds_table_notes(sd: dict) -> list[str]:
+    ref = sd.get("w2c_ref") or {}
+    ns = ref.get("split_n") or {}
+    parts = [f"{DEV_SPLIT_LABELS.get(sp, sp)} {_nfmt(n)}" for sp, n in ns.items()]
+    npool = (ref.get("pooled") or {}).get("n")
+    res = _res_text([sd.get("n_resamples")])
+    seeds = [s for s in sd["seeds"] if s["status"] == "完成"]
+    thr = next((s["health_threshold"] for s in seeds if s.get("health_threshold") is not None), None)
+    hn = [f"{HEALTH_LABELS.get(k.split('.')[0], k)} {_nfmt(next((s['health'][k]['n'] for s in seeds if s['health'].get(k) and s['health'][k].get('n')), None))}"
+          for k in (f"{r}.{m}" for r, m in LCT.HEALTH_ROWS)]
+    tbase = sorted({r for s in seeds for r in run_ids([s["lang_sources"].get("ttext_base")])})
+    tnode = sorted({s["lang_nodes"].get("ttext") for s in seeds if s["lang_nodes"].get("ttext")})
+    notes = [f"Seed variation of C1's training recipe (X-2) on Qwen3.5-9B, three training seeds. Everything here is on development data "
+             "and language checks, not on the test splits. Segmentation: the development splits pooled (" + ", ".join(parts) +
+             f"; {_nfmt(npool)} expressions), cIoU ×100 with a 95% bootstrap CI; − W2-c reference: paired difference against a W2-c run "
+             "on the same expressions; − seed 0: paired difference against seed 0; per-expression paired bootstrap of the ratio of sums, "
+             f"95%, {res} resamples (seed {sd.get('seed_bootstrap') or MISSING}). Across seeds: mean ± sample standard deviation of the "
+             "pooled cIoU over the three seeds (×100, two decimals). The in-box ellipse ablation replaces the spline with the ellipse "
+             "inscribed in the proposed box, everything else unchanged.",
+             "Language: difference from the base model in percentage points [95% paired bootstrap CI over items]. Language battery "
+             "(MMLU-Pro letter answers, IFEval prompt-level strict; "
+             f"{_res_text(sd['resamples'].get('battery', []))} resamples) against the base on the seed's node; T-text (grounding Acc@0.5, "
+             f"CountBench counting accuracy; {_res_text(sd['resamples'].get('ttext', []))} resamples) against the base T-text run of "
+             f"{', '.join(f'RUN-{r}' for r in tbase) or MISSING}" + (f" on {', '.join(tnode)}" if tnode else "") + ".",
+             f"Health check (brief §8.11; fixed items: {', '.join(hn)}): difference only, against the base on the seed's node; † = flagged "
+             f"by its rule (the headline metric drops by more than {thr if thr is not None else MISSING} points).",
+             "Runs: " + "; ".join(
+                 f"seed {s['seed']}: training and development evaluation {', '.join(f'RUN-{r}' for r in run_ids([s['source']]))} "
+                 f"({s['node'] or MISSING}), language battery {', '.join(f'RUN-{r}' for r in run_ids([s['lang_sources'].get('battery')]))} "
+                 f"({s['lang_nodes'].get('battery') or MISSING}), T-text {', '.join(f'RUN-{r}' for r in run_ids([s['lang_sources'].get('ttext')]))} "
+                 f"({_node(s['lang_sources'].get('ttext')) or MISSING})"
+                 for s in seeds) +
+             f"; W2-c reference {', '.join(f'RUN-{r}' for r in run_ids([ref.get('source')])) or MISSING}. Data: {SEED_JSON.split('/')[-1]}."]
+    if sd["missing"]:
+        notes.append("Missing: " + "; ".join(sd["missing"]) + ".")
+    return notes
+
+
+def tab_seeds(sd: dict, out: Path) -> list[Path]:
+    """附录：C1 配方三个种子的波动。行 = 分割（主设置、椭圆消融各三行：合并、− W2-c 参照、− seed 0）、大题量两项、T 文本两项、健康检查三项；
+    列 = 各种子与跨种子的均值 ± 样本标准差（只有合并读数有）。"""
+    seeds = sd["seeds"]
+    heads = ["Reading"] + [f"Seed {s['seed']}" for s in seeds] + ["Across seeds"]
+    body, M = [], ["| " + " | ".join(heads) + " |", "|---|" + "---:|" * (len(seeds) + 1)]
+    npool = ((sd.get("w2c_ref") or {}).get("pooled") or {}).get("n")
+    sections: list[tuple[str, list]] = []
+    seg = []
+    for st, lab in SEED_SETTINGS:
+        a = sd["across"].get(st) or {}
+        across = (f"{100 * a['mean']:.2f} ± {100 * a['sd']:.2f}" if a.get("mean") is not None and a.get("sd") is not None else "—")
+        seg.append((f"{lab}, pooled (n={_nfmt(npool)})", [((s["settings"].get(st) or {}).get("pooled"), False) for s in seeds], across))
+        seg.append((f"{lab} − W2-c reference", [((s["settings"].get(st) or {}).get("minus_w2c"), True) for s in seeds], "—"))
+        seg.append((f"{lab} − seed 0", [((s["settings"].get(st) or {}).get("minus_seed0"), True) for s in seeds], "—"))
+    sections.append(("Segmentation, development data (cIoU ×100)", seg))
+    for sec_name, sec in (("Language battery (points)", "battery"), ("T-text (points)", "ttext")):
+        rows = []
+        for s_, key, _lab in LANG_READOUTS:
+            if s_ != sec:
+                continue
+            n = next((s["language"][key]["n"] for s in seeds if s["language"].get(key) and s["language"][key].get("n")), None)
+            rows.append((f"{LANG_TABLE_LABELS[sec].get(key, key)} (n={_nfmt(n)})", [(s["language"].get(key), "lang") for s in seeds], "—"))
+        sections.append((sec_name, rows))
+    hrows = []
+    for r, m in LCT.HEALTH_ROWS:
+        k = f"{r}.{m}"
+        n = next((s["health"][k]["n"] for s in seeds if s["health"].get(k) and s["health"][k].get("n")), None)
+        hrows.append((f"{HEALTH_LABELS.get(r, r)} (n={_nfmt(n)})", [(s["health"].get(k), "health") for s in seeds], "—"))
+    sections.append(("Health check (points; † flagged)", hrows))
+
+    def cell(c, kind, latex):
+        if kind == "lang":
+            return _lang_cell(c, "battery", latex)
+        if kind == "health":
+            return _lang_cell(c, "health", latex)
+        return fmt_w2(c, kind, latex)
+    for sec_lab, rows in sections:
+        body += ["\\midrule", f"\\multicolumn{{{len(heads)}}}{{l}}{{\\emph{{{_tex_escape(sec_lab)}}}}} \\\\"]
+        M.append(f"| *{sec_lab}* |" + " |" * (len(heads) - 1))
+        for lab, cells, across in rows:
+            body.append(f"{_tex_escape(lab)} & " + " & ".join(cell(c, k, True) for c, k in cells) + " & " +
+                        _tex_escape(across).replace("—", "--") + " \\\\")
+            M.append(f"| {lab} | " + " | ".join(cell(c, k, False) for c, k in cells) + f" | {across} |")
+    notes = seeds_table_notes(sd)
+    caption = ("\\caption{Seed variation of C1's training recipe (appendix; development data and language checks, not test). " +
+               " ".join(_tex_escape(n) for n in notes) + "}")
+    header = [" & ".join(_tex_escape(h) for h in heads) + " \\\\"]
+    return _write_table(out, "tab_seeds", caption, "seeds", "l" + "c" * (len(seeds) + 1), header, body,
+                        "seed variation of C1's recipe (appendix; development data, not test)", M, notes)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2309,6 +3047,122 @@ def caption_count_bins(cb: dict) -> str:
     return s
 
 
+COLOR_NAMES = {SERIES_1: "blue", SERIES_2: "orange", SERIES_3: "aqua", SERIES_7: "violet", INK_2: "dark gray", MUTED: "gray"}
+REF_UNIFIED = "⟦tab:unified⟧"  # 图注里指向 tab_unified 的占位：.tex 换成 Table~\ref{tab:unified}，README 换成 `tab_unified`
+
+
+def caption_tex(cap: str) -> str:
+    return _tex_escape(cap).replace(REF_UNIFIED, "Table~\\ref{tab:unified}")
+
+
+def caption_md(cap: str) -> str:
+    return cap.replace(REF_UNIFIED, "`tab_unified`")
+
+
+def caption_unified(u: dict) -> str:
+    systems = u["systems"]
+    main = next((s for s in systems if s["main"]), None)
+    npool = next((s["pooled"]["cIoU"]["n"] for s in systems if s["pooled"].get("cIoU") and s["pooled"]["cIoU"].get("n")), None)
+    parts = [f"{main['short']} {COLOR_NAMES.get(UNIFIED_MAIN_COLOR, '')}"] if main else []
+    for g in dict.fromkeys(s["group"] for s in systems):
+        members = [s["short"] for s in systems if s["group"] == g and not s["main"]]
+        gl = re.sub(r" \(.*\)$", "", UNIFIED_GROUPS.get(g, (g, g))[1])
+        parts.append(f"{gl[0].lower() + gl[1:]} {COLOR_NAMES.get(UNIFIED_GROUP_COLORS.get(g), '')} ({', '.join(members)})")
+    lisa = next((s for s in systems if s["name"] == UNIFIED_LISA), None)
+    runs = ", ".join(f"RUN-{r}" for r in u.get("runs") or [])
+    s = (f"Every system on the same {_nfmt(npool)} W2 test expressions ({_nfmt(u.get('n_per_split'))} per split, the expressions of "
+         f"{REF_UNIFIED}), Qwen3.5-9B unless named otherwise. Bars: cIoU ×100 in each split (first five panels) and pooled (last panel, "
+         f"with values); error bars: 95% bootstrap CI over the expressions of the panel ({_res_text([u.get('n_resamples')])} resamples). "
+         "Colors by group: " + "; ".join(parts) + ".")
+    if u["sota"]:
+        s += (" Gray dashed lines: expert models as reported in the literature on the full test splits (" +
+              _and([r["name"] for r in u["sota"]]) + f"; sources in {REF_UNIFIED}), not on these subsets; reference only, never paired. "
+              "The pooled panel has none: the literature reports no pooled reading.")
+        if lisa is not None and any(r["name"].startswith("LISA") for r in u["sota"]):
+            s += (" LISA-7B (ft) is the paper's model fine-tuned on RefCOCO/+/g, not the released v1 weights run by us "
+                  f"({COLOR_NAMES.get(UNIFIED_GROUP_COLORS.get(lisa['group']), '')} bar).")
+    s += f" Data: {UNIFIED_JSON.split('/')[-1]} ({runs}); {SOTA_JSON.split('/')[-1]}."
+    if u["missing"]:
+        s += " Missing: " + "; ".join(u["missing"]) + "."
+    return s
+
+
+def caption_bins(bn: dict) -> str:
+    cuts = (bn.get("cuts") or {}).get("complexity") or []
+    share = []
+    for sp in W2T.SPLITS:
+        v = bn["person_share"].get(sp)
+        share.append(f"{split_label(sp)} " + (MISSING if not v else f"{100 * v['person']:.0f}%"))
+    diffs = _and([f"{phrase} ({COLOR_NAMES.get(UNIFIED_GROUP_COLORS[g], '')})" for _dk, _lab, g, phrase in BINS_DIFFS])
+    titles = {s["prefix"]: s["title"].split(" ", 1)[0] for s in bn["schemes"]}
+    a0 = any("A = 0" in b["key"] for s in bn["schemes"] for b in s["bins"])
+    s = (f"Where {UNIFIED_LABELS[UT.MAIN][1]} gains, on all {_nfmt(bn.get('n'))} W2 test expressions (Qwen3.5-9B): paired cIoU "
+         f"difference ×100 {diffs}; 95% paired bootstrap CI over expressions ({_res_text([bn.get('n_resamples')])} resamples, seed "
+         f"{bn.get('seed') or MISSING}); n per bin below each label. {titles.get('(i)', '(a)')} Person (COCO category {XB.PERSON}) vs. "
+         f"non-person. {titles.get('(iii)', '(b)')} Quartiles of the shape complexity c = P²/A of the ground-truth mask (P: length of "
+         "the outer contour in pixels; A: area in pixels); cut points " + (_and([f"{x:.1f}" for x in cuts]) if cuts else MISSING) +
+         f", computed from the {_nfmt(bn.get('n'))} ground-truth masks alone and fixed before any system's bin readings were computed "
+         "(preregistration U-6)" + ("; masks with A = 0 form their own bin" if a0 else "") +
+         ". Share of expressions that refer to a person: " + "; ".join(share) + ". Descriptive only. Data: "
+         f"{X_BINS_JSON.split('/')[-1]} ({', '.join(f'RUN-{r}' for r in bn.get('runs') or [])}; the last is the per-expression "
+         "metadata).")
+    if bn["missing"]:
+        s += " Missing: " + "; ".join(bn["missing"]) + "."
+    return s
+
+
+def readme_unified(u: dict, bn: dict, sd: dict, captions: dict) -> list[str]:
+    """README 的 DEV-0077 各节：统一主表、它的图、分档、种子波动。"""
+    L = ["## 12. 统一主表（正文主表）：`tab_unified.tex` / `tab_unified.md`（DEV-0077）", "",
+         f"- 数据：`{UNIFIED_JSON}`（`scripts/mgr/unified_table.py`；预注册 U；D154）：{len(u['systems'])} 个系统 × 5 个划分 × "
+         f"{_nfmt(u.get('n_per_split'))} 句（`{u.get('subset') or SUBSET_CONFIG}`，hash_rank，salt {u.get('subset_salt') or MISSING}，与 LLMSeg 同一份）。"
+         f"逐划分与合并的 cIoU、gIoU 与 95% CI、主方法 − 各系统的配对差都是 JSON 里的（{_res_text([u.get('n_resamples')])} 次重抽，种子 "
+         f"{u.get('seed') or MISSING}），不重算。",
+         "- 行：照 JSON 的 systems 顺序，按 group 分块（本文的方法、各种手、外部方法、附带），一个不少；跑坏或没跑完的照样占一行，格子写\"—\"并进 missing。"
+         "英文名：已有的系统用 tab_main / tab_w2_test 的同一个名字（ROW_LABELS、LLMSEG_ROWS），新的三项见 UNIFIED_LABELS。",
+         "- 列：5 个划分的 cIoU（只读数）、合并 cIoU [95% CI]、合并 gIoU（只读数）、C1 − 该系统的 cIoU 配对差 [95% CI]（主方法一行写\"—\"）。×100，一位小数；不加粗。",
+         f"- 灰色文献块（表的最后）：`{SOTA_JSON}`（预注册 U-3a；说明在 `docs/references/refseg_sota_notes.md`）的 {len(u['sota'])} 行，只填 5 个划分"
+         "（JSON 里已是 ×100，表里取一位小数），合并与配对差写\"—\"；.tex 里用 xcolor 的 gray。表注里每行的视觉模型与训练数据：JSON 的 note 已写了的"
+         "（UNINEXT-H、DeRIS-L）直接用 note，note 写的是别的事的（LISA-7B (ft)、GLaMM (FT)）取 SOTA_TRAINING（照 refseg_sota_notes.md 的表）并照录 note；"
+         "出处照录 JSON 的 source。",
+         "- 表注：子集的取法与句数、照实报告不挑、各系统的定义、LISA 两处不是同一个权重（发布的 v1 与论文的微调版；COCO 图像层面的重叠，D156）、"
+         "文献数字在完整 test 划分上算且不参与配对、运行编号与节点。",
+         "- .tex 的表注分两处：各系统的定义与文献各行的视觉模型、训练数据与出处放在表下面（table* 之内的 minipage），其余在 caption。"
+         "全放进 caption 时约 5,000 字符，pdflatex 量 caption 单行宽度时报 Dimension too large（article 类与 caption 宏包都一样）。.md 不分，全部列为表注。",
+         "", "**表注（英文）**", ""] + [f"- {n}" for n in unified_table_notes(u)] + [""]
+    if u["checks"]:
+        L += ["核对：", ""] + [f"- {c}" for c in u["checks"]] + [""]
+    L += ["## 13. 统一主表的图：`fig_unified.pdf` / `fig_unified.png`（DEV-0077）", "",
+          f"- 数据：同 tab_unified（`{UNIFIED_JSON}` 与 `{SOTA_JSON}`）。5 个划分各一个面板，最后一个面板是合并的 "
+          f"{_nfmt(next((s['pooled']['cIoU']['n'] for s in u['systems'] if s['pooled'].get('cIoU')), None))} 句。",
+          "- 误差棒：每个划分取 JSON 的 per_split CI（unified_table.py 在这 300 句上算的，10,000 次重抽）；合并面板取 pooled CI（10,000 次）。"
+          "任务书写的是\"取各叶目录 metrics.json 的 CI\"：RUN-0072、0092 的叶目录是每个划分 1,000 句（不是这 300 句），新跑三项与 LLMSeg 的叶目录是"
+          "这 300 句但只有 1,000 次重抽，所以统一取 JSON 的（同一口径、同一套重抽）；叶目录的读数另做核对（见上）。",
+          "- 文献线：只在划分面板画，每条一根灰色竖虚线（MUTED），名字写在线的左边，按读数从小到大自下而上一行一个，线只画到自己那一行（名字不压别的线）。"
+          "合并面板不画（文献没有合并读数），写一句说明。",
+          "- 配色（按组分色；同一个系统在各图同色的约定只对 C1 与 W2-c 成立，其余系统按组上色）：C1 = X-2 槽 7（紫）；本文的方法其余（C2、W2-c、W2-a）"
+          "槽 1（蓝，W2-c 的颜色）；各种手 槽 3（青）；外部方法 槽 2（橙）；附带的椭圆消融 中性深灰（同 C3 的\"对照\"）。"
+          "validate_palette.js（白底 #ffffff）：按画出的相邻顺序（紫、蓝、青、橙、深灰）CVD ΔE 最小 9.2、常规最小 16.3，全对也是这两个数；"
+          "深灰是有意的中性色，色度检查照例不适用；青色对白底不足 3:1，合并面板写了数值、划分面板的数值见 tab_unified（表格视图）。",
+          "", "**图注（英文）**", "", caption_md(captions["fig_unified"]), ""]
+    L += ["## 14. 分档：`fig_bins.pdf` / `fig_bins.png`（DEV-0077）", "",
+          f"- 数据：`{X_BINS_JSON}`（`scripts/mgr/x_bins.py`；预注册 U-6）的 (i) 人与非人、(iii) 形状复杂度 c = P²/A 的四分位档：每档的句数、"
+          "x2_minus_w2c 与 x2_minus_ellipse（逐句配对 bootstrap，ratio-of-sums，95%，10,000 次）。(ii) COCO 大类与 (iv) 相对面积不画（任务书只要 (a)(b)）。",
+          "- 每个划分里人的占比取 person_share_by_split，写进图注。切点取 JSON 的 cuts.complexity（一位小数）。",
+          "- 版式：单栏，两个面板上下排；每档两根横条（C1 − W2-c、C1 − 椭圆消融），横线 = 95% CI，右侧写数值，句数写在刻度名下。颜色取被减系统在 "
+          "fig_unified 里的颜色：W2-c 蓝（槽 1）、椭圆消融深灰（validate_palette.js：两色 CVD ΔE 21.3、常规 21.8）。",
+          "", "**图注（英文）**", "", caption_md(captions["fig_bins"]), ""]
+    L += ["## 15. 种子波动（附录）：`tab_seeds.tex` / `tab_seeds.md`（DEV-0077）", "",
+          f"- 数据：`{SEED_JSON}`（`scripts/mgr/seed_variance.py`；D150、D151、D153）：三个种子的 {XT.MAIN}（C1 的配方）与 {XT.ABL}（椭圆消融）"
+          "的合并 cIoU 与 95% CI、− W2-c 参照、− seed 0（逐句配对 bootstrap，10,000 次）、跨种子的均值与样本标准差（across_seeds）；"
+          "语言读数（大题量 MMLU-Pro、IFEval 严格，T 文本定位、计数；相对基座的差与 95% CI）；健康检查的差与标红（†）。"
+          "x2_select、x2_select5 两个设置与 IFEval instruction-level 不进表（任务书没有要）。",
+          "- 健康检查的题数与标红门槛取各种子的 health_compare.json（路径取 seed_variance.py 的 SEEDS）；大题量的重抽次数取各自 lb_compare 的 statistics。",
+          "- 这些都只在开发数据（explore_val 三层、devtune800、devcheck2）与语言检查上，不是 test；表注写明，并列出各自的运行编号与节点。",
+          "", "**表注（英文）**", ""] + [f"- {n}" for n in seeds_table_notes(sd)] + [""]
+    return L
+
+
 def _git_commit(root: Path) -> str:
     try:
         sha = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=20).stdout.strip()
@@ -2318,7 +3172,7 @@ def _git_commit(root: Path) -> str:
         return "unknown"
 
 
-def readme_w2(w2: dict, sz: dict, lc: dict, cb: dict, lt: dict, captions: dict) -> list[str]:
+def readme_w2(w2: dict, sz: dict, lc: dict, cb: dict, lt: dict, captions: dict, u: dict | None = None) -> list[str]:
     """README 的 W2 各节（DEV-0071；DEV-0073 加候选、合并列与三张新表）。"""
     leaf = f"{W2T.RUNS[W2_MODEL]}/{W2_MODEL}/refseg/<设置>/<划分>/metrics.json"
     res = "/".join(f"{r:,}" for r in w2["per_system_resamples"]) or MISSING
@@ -2389,7 +3243,8 @@ def readme_w2(w2: dict, sz: dict, lc: dict, cb: dict, lt: dict, captions: dict) 
           "- 为什么分两个面板：分析 JSON 里只有\"与基座之差\"的 CI，没有各档准确率本身的 CI（不重算），所以 CI 画在 (b) 上，(a) 只画准确率。",
           f"- 基座：W2-c、W2-c + 回放、X-2（C1）配 base@0069，C3、E3b+C3 配 base@0056；两次基座读数逐条相同（{cb.get('same_answer_rate')}）时只画一根（base@0069）。",
           "", "**图注（英文）**", "", captions["fig_count_bins"], ""]
-    L += ["## 9. 正文主表：`tab_main.tex` / `tab_main.md`（DEV-0073）", "",
+    L += ["## 9. 附录的全 5,000 句表：`tab_main.tex` / `tab_main.md`（DEV-0073；DEV-0077 起正文主表换成 `tab_unified`，见第 12 节）", "",
+          "- DEV-0077：只改了 caption（标题与表注第一句：附录的全 5,000 句版，正文主表是 tab_unified），数值、版式与 label（tab:main）不变。",
           "- 行：自己的框、W1-F、最优候选（4 个工具候选里的真值最优）、W2-a、W2-c | C1 = X-2（ours）、C1 的椭圆消融、C2 = X-3。"
           "列：5 个划分（只有读数）、合并（读数与 95% CI）、每句调用 / 生成 token。cIoU ×100，一位小数。",
           f"- 数据：每个划分同 `tab_w2_test`（RUN-0072 的 w2_test_table.json 与 RUN-0092 的叶目录）；合并列取 `{W2_POOLED_JSON}`（{pres} 次重抽）；"
@@ -2399,7 +3254,7 @@ def readme_w2(w2: dict, sz: dict, lc: dict, cb: dict, lt: dict, captions: dict) 
           "compare.json 相同。",
           "- 不加粗（DEV-0073 审查第 1 条：合并列的最高值落在消融 C2 上，加粗 C1 又会误导）。表注另加一句：C1 在任何 test 运行之前就定为主方法"
           f"（预注册 X-5a，负责人裁定），C2 是去掉修正流的简化版，合并读数 C2 与 C1 之差对照预注册 X-6 的预测（±{100 * X6_C1_C2_MARGIN:g} 点）。",
-          "", "**表注（英文）**", ""] + [f"- {n}" for n in main_table_notes(w2)] + [""]
+          "", "**表注（英文）**", ""] + [f"- {n}" for n in [main_appendix_note(w2, u, latex=False)] + main_table_notes(w2)] + [""]
     full_extra = [s["label"] for s in lt["systems"] if s["role"] != "main"]
     main_lt = [s for s in lt["systems"] if s["role"] == "main"]
     L += ["## 10. 语言代价四方对照表：`tab_lang_cost.tex` / `tab_lang_cost.md`（附录版 `tab_lang_cost_full.*`；DEV-0073）", "",
@@ -2421,7 +3276,7 @@ def readme_w2(w2: dict, sz: dict, lc: dict, cb: dict, lt: dict, captions: dict) 
 
 
 def write_readme(root: Path, out: Path, e1, e2, e3, itf, captions: dict, files: dict, w2=None, sz=None, lc=None, cb=None,
-                 lt=None) -> Path:
+                 lt=None, u=None, bn=None, sd=None) -> Path:
     now = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     L = ["# 论文用图表（docs/figures/）", "",
          "<!-- 由 scripts/figures/make_paper_figures.py 生成；不要手改。数据补齐后重跑：python scripts/figures/make_paper_figures.py -->", "",
@@ -2439,9 +3294,13 @@ def write_readme(root: Path, out: Path, e1, e2, e3, itf, captions: dict, files: 
          "fig_lang_cost 缺省四色（橙、蓝、青、紫）全对 PASS（CVD ΔE 最小 9.2，常规最小 16.3）；--with-explore 六色按画出的相邻顺序 PASS（相邻 CVD ΔE 最小 17.6、"
          "常规 24.0）；fig_count_bins 缺省（灰、蓝、青、紫、深灰、橙）与 --with-explore（再加粉）按画出的相邻顺序 PASS（CVD ΔE 最小 15.9、常规最小 17.2；"
          "两个灰色是有意的中性色，色度检查照例不适用）。粉与橙全对的常规 ΔE 12.9 不到 15，但两者在两张图里都不相邻，图例与数值标签可查。",
+         "- 统一主表的图与分档（DEV-0077）：fig_unified 按组分色，C1 = X-2 仍是槽 7（紫），本文的方法其余槽 1（蓝，W2-c 的颜色）、各种手槽 3（青）、"
+         "外部方法槽 2（橙）、附带的椭圆消融中性深灰（同 C3 的\"对照\"）；文献的竖虚线用中性灰（MUTED）。validate_palette.js（白底 #ffffff）："
+         "按画出的相邻顺序（紫、蓝、青、橙、深灰）与全对都是 CVD ΔE 最小 9.2、常规最小 16.3（深灰是中性色，色度检查照例不适用）。"
+         "fig_bins 的两色（蓝、深灰）CVD ΔE 21.3、常规 21.8（深灰的色度检查同上不适用）。按组上色时 C2、W2-a、E3b、LISA 等与它们在别的图里的颜色不同（那些图里没有组）。",
          "- 每个数字都从结果文件读；逐点来源见 `data/*.json`（每个点带 source 路径）。", ""]
     # 缺的数据
-    w2s = [x for x in (w2, sz, lc, cb, lt) if x is not None]
+    w2s = [x for x in (w2, sz, lc, cb, lt, u, bn, sd) if x is not None]
     miss = e1["missing"] + e2["missing"] + e3["missing"] + itf["missing"] + [m for x in w2s for m in x["missing"]]
     L += ["## 缺的数据（missing）", ""]
     L += [f"- {m}" for m in miss] if miss else ["- 无"]
@@ -2517,7 +3376,9 @@ def write_readme(root: Path, out: Path, e1, e2, e3, itf, captions: dict, files: 
                   f"（窗口 [{o['window'][0]:.3f}, {o['window'][1]:.3f}]，纵轴 [{o['ylim'][0]:.3f}, {o['ylim'][1]:.3f}]）"
                   for o in offs for p in o["points"]) or "没有落在窗口之外的点，面板与改动前相同") + "。"]
     if w2 is not None:
-        L += readme_w2(w2, sz, lc, cb, lt, captions)
+        L += readme_w2(w2, sz, lc, cb, lt, captions, u)
+    if u is not None and bn is not None and sd is not None:
+        L += readme_unified(u, bn, sd, captions)
     L += ["## 文件", ""] + [f"- `{_rel(out, p)}`" for ps in files.values() for p in ps] + [""]
     p = out / "README.md"
     p.write_text("\n".join(L), encoding="utf-8")
@@ -2577,21 +3438,33 @@ def main(argv=None) -> int:
     # W2（DEV-0071）：在原有四项之后出，原有输出不受影响
     w2, sz, lc, cb = collect_w2(root), collect_w2_size(root), collect_lang_cost(root, a.with_explore), collect_count_bins(root, a.with_explore)
     lt = collect_lang_table(root)  # DEV-0073
+    u, bn, sd = collect_unified(root), collect_bins(root), collect_seeds(root)  # DEV-0077
     for metric, name in W2_METRICS:
         files[name] = tab_w2(w2, out, metric, name)
-    files["tab_main"] = tab_main(w2, out)
+    files["tab_main"] = tab_main(w2, out, u)
     files["tab_lang_cost"] = tab_lang_cost(lt, out)
     files["tab_lang_cost_full"] = tab_lang_cost(lt, out, full=True)
     files["tab_compute"] = tab_compute(w2, out)
     files["fig_w2_size"] = fig_w2_size(sz, out)
     files["fig_lang_cost"] = fig_lang_cost(lc, out)
     files["fig_count_bins"] = fig_count_bins(cb, out)
+    # DEV-0077：在原有各项之后出，原有输出（除 tab_main 的 caption）不受影响
+    files["tab_unified"] = tab_unified(u, out)
+    files["fig_unified"] = fig_unified(u, out)
+    files["fig_bins"] = fig_bins(bn, out)
+    files["tab_seeds"] = tab_seeds(sd, out)
     w2caps = {"fig_w2_size": caption_w2_size(sz), "fig_lang_cost": caption_lang_cost(lc), "fig_count_bins": caption_count_bins(cb)}
     for name, cap in w2caps.items():
         p = out / f"{name}_caption.tex"
         p.write_text(f"% Generated by scripts/figures/make_paper_figures.py; do not edit.\n\\caption{{{_tex_escape(cap)}}}\n", encoding="utf-8")
         files[name].append(p)
     captions.update(w2caps)
+    ucaps = {"fig_unified": caption_unified(u), "fig_bins": caption_bins(bn)}
+    for name, cap in ucaps.items():
+        p = out / f"{name}_caption.tex"
+        p.write_text(f"% Generated by scripts/figures/make_paper_figures.py; do not edit.\n\\caption{{{caption_tex(cap)}}}\n", encoding="utf-8")
+        files[name].append(p)
+    captions.update(ucaps)
     main_data = {"rows": {k: {"label": ROW_LABELS[k], **w2["rows"].get("cIoU", {}).get(k, {})} for g in MAIN_ROWS for k in g},
                  "compute": w2["compute"],
                  "external": {"llmseg_rec": (w2["llmseg"].get("x_pooled") or {}).get("cIoU", {}).get("rec"),
@@ -2604,10 +3477,14 @@ def main(argv=None) -> int:
         p = out / "data" / f"{name}.json"
         p.write_text(json.dumps(_jsonable(data), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         files[name].append(p)
-    readme = write_readme(root, out, e1, e2, e3, itf, captions, files, w2, sz, lc, cb, lt)
+    for name, data in (("tab_unified", u), ("fig_unified", fig_unified_data(u)), ("fig_bins", bn), ("tab_seeds", sd)):
+        p = out / "data" / f"{name}.json"
+        p.write_text(json.dumps(_jsonable(data), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        files[name].append(p)
+    readme = write_readme(root, out, e1, e2, e3, itf, captions, files, w2, sz, lc, cb, lt, u, bn, sd)
     print(f"wrote {sum(len(v) for v in files.values()) + 1} files to {out} (README: {readme})")
     miss = e1["missing"] + e2["missing"] + e3["missing"] + itf["missing"] + w2["missing"] + sz["missing"] + lc["missing"] + cb["missing"] + \
-        lt["missing"]
+        lt["missing"] + u["missing"] + bn["missing"] + sd["missing"]
     if miss:
         print("missing:\n  " + "\n  ".join(miss))
     return 0

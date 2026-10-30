@@ -2108,3 +2108,4 @@
 - 10-30 05:2xZ：RUN-0100 完成，统一主表齐了（`docs/analysis/unified_table.md`，对照在 `unified_table_notes.md`）。1,500 句：X-2 0.723；E3b 网格 0.585（X-2 − E3b +0.138）；E1 结构强制多边形 0.350；LISA 0.612。三项新基线的读数都在预测范围内，或与之相差不到 0.01；排序只有 LISA 一处不对。
 - 10-30 05:3xZ：写 `docs/references/refseg_sota.json`（机读的 SOTA 灰线，与笔记逐行一致）与 DEV-0077 的任务书（论文的 tab_unified、fig_unified、fig_bins、tab_seeds），并派发。
 - 10-30 05:3xZ：GPU 台账（主线，D126-2 的 +40）：RUN-0097 LISA 约 0.2 小时，RUN-0100 约 1.2 小时，主线新增累计约 38.4 / 40。探索：RUN-0098 在跑，累计约 97 / 120（预计）。主线余量不足 2 小时，再有主线运行要先请负责人加额度。
+- 10-30 05:5xZ：[merge] DEV-0077（D160）：tab_unified、fig_unified、fig_bins、tab_seeds；tab_main 改为附录版。36 条测试通过，已有图表除 tab_main 的 caption 外逐字节不变。

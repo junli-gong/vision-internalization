@@ -10,6 +10,8 @@
 - DEV-0073：通过 G-EX 的 C1 = X-2、椭圆消融、C2 = X-3 进 W2 表与正文主表 tab_main；合并列取 w2_test_pooled.json（W2-a 缺与不缺
   两种情况用临时目录里的合成 JSON）；语言代价四方表 tab_lang_cost（与 _full）、计算表 tab_compute 与分析 JSON 逐项一致；
   E1、E2、E3、干扰图与 fig_w2_size 逐字节不变。
+- DEV-0077：统一主表 tab_unified 与图 fig_unified、分档图 fig_bins、种子波动表 tab_seeds 与分析 JSON 逐项一致；跑坏的系统照样占一行；
+  已有图表与 DEV-0077 动手前（a29e96c81）的逐字节相同，tab_main 只改了 caption。
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import importlib.util
 import json
 import shutil
 import statistics
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -592,7 +595,7 @@ def test_real_new_outputs_written(real_run):
     for name in ("tab_w2_test", "tab_main", "tab_lang_cost", "tab_compute"):
         assert (out / "data" / f"{name}.json").is_file()
     readme = (out / "README.md").read_text(encoding="utf-8")
-    for sec in ("## 5. W2 test 主表", "## 6. W2-a 随尺寸", "## 7. 语言代价", "## 8. 计数分档", "## 9. 正文主表", "## 10. 语言代价四方对照表",
+    for sec in ("## 5. W2 test 主表", "## 6. W2-a 随尺寸", "## 7. 语言代价", "## 8. 计数分档", "## 9. 附录的全 5,000 句表", "## 10. 语言代价四方对照表",
                 "## 11. 计算记账表"):
         assert sec in readme
     assert readme.split("## 缺的数据（missing）")[1].split("\n## ")[0].strip() == "- 无"  # W2-a 的合并读数已在（RUN-0095）
@@ -617,9 +620,48 @@ def test_real_new_outputs_written(real_run):
 
 
 def test_real_existing_outputs_byte_identical(real_run):
-    """原有的 E1、E2、E3、干扰图与 fig_w2_size 的输出与仓库里 docs/figures/ 的逐字节相同（DEV-0073 不动它们）。"""
-    for f in UNCHANGED:
-        assert (real_run / f).read_bytes() == (REPO / "docs" / "figures" / f).read_bytes(), f
+    """仓库里 docs/figures/ 的每个文件（README 除外：生成时间与 commit）与用同一组参数重出的逐字节相同——提交的图表就是这份代码的输出。"""
+    files = sorted(str(f.relative_to(REPO / "docs" / "figures")) for f in (REPO / "docs" / "figures").rglob("*") if f.is_file())
+    assert set(UNCHANGED) <= set(files) and "tab_unified.tex" in files and "fig_bins.png" in files
+    for f in files:
+        if f != "README.md":
+            assert (real_run / f).read_bytes() == (REPO / "docs" / "figures" / f).read_bytes(), f
+
+
+PRE_DEV0077 = "a29e96c81"  # DEV-0077 动手前的 origin/main：那时 docs/figures/ 里的图表除 tab_main 的 caption 外都不该变
+
+
+def _git_show(spec: str) -> bytes | None:
+    r = subprocess.run(["git", "-C", str(REPO), "show", spec], capture_output=True, timeout=60)
+    return r.stdout if r.returncode == 0 else None
+
+
+def test_real_outputs_unchanged_since_dev0077_base(real_run):
+    """DEV-0077 任务书：已有图表除 tab_main 的 caption 外逐字节不变。对照 a29e96c81 里的 docs/figures/：其余文件逐字节相同；
+    tab_main.tex 只有 caption 一行不同（新标题加一句"附录的全 5,000 句版，正文用 tab_unified"，原来的表注原样接在后面）；
+    tab_main.md 只有标题一行不同、表注多了第一条。"""
+    ls = subprocess.run(["git", "-C", str(REPO), "ls-tree", "-r", "--name-only", PRE_DEV0077, "docs/figures"], capture_output=True,
+                        text=True, timeout=60)
+    if ls.returncode != 0 or not ls.stdout.strip():
+        pytest.skip(f"没有 {PRE_DEV0077} 的 git 历史")
+    files = [f.removeprefix("docs/figures/") for f in ls.stdout.split()]
+    assert "tab_main.tex" in files and "fig_count_bins.png" in files and "tab_unified.tex" not in files
+    for f in files:
+        if f not in ("README.md", "tab_main.tex", "tab_main.md"):
+            assert (real_run / f).read_bytes() == _git_show(f"{PRE_DEV0077}:docs/figures/{f}"), f
+    old = _git_show(f"{PRE_DEV0077}:docs/figures/tab_main.tex").decode("utf-8").splitlines()
+    new = (real_run / "tab_main.tex").read_text(encoding="utf-8").splitlines()
+    diff = [(a, b) for a, b in zip(old, new) if a != b]
+    assert len(old) == len(new) and len(diff) == 1
+    a, b = diff[0]
+    assert a.startswith("\\caption{Main result") and b.startswith("\\caption{Full W2 test, all 5,000 expressions (appendix")
+    assert "Table~\\ref{tab:unified}" in b and b.endswith(a.split(". ", 1)[1])  # 原来的表注一字不改，接在新的第一句后面
+    old = _git_show(f"{PRE_DEV0077}:docs/figures/tab_main.md").decode("utf-8").splitlines()
+    new = (real_run / "tab_main.md").read_text(encoding="utf-8").splitlines()
+    assert new[0] != old[0] and "appendix" in new[0]
+    added = [x for x in new[1:] if x not in old]
+    assert len(added) == 1 and added[0].startswith("- Appendix version on all 5,000 W2 test expressions") and "tab_unified" in added[0]
+    assert [x for x in new[1:] if x != added[0]] == old[1:]
 
 
 def test_real_w2_table_matches_analysis_json(real_run):
@@ -1065,3 +1107,273 @@ def test_fake_tree_without_w2_data_reports_missing(base_run):
     assert f"W2 主表：{MPF.W2_TEST_JSON} 不在" in miss and f"语言代价：{MPF.LANG_COST_JSON} 不在" in miss
     assert "marked by an arrow" not in (out / "fig_interference_size_caption.tex").read_text(encoding="utf-8")
     assert "offscale" not in data(out, "fig_interference_size")
+    # DEV-0077：统一主表、分档、种子波动的 JSON 都不在，照常出文件，README 写明缺
+    for name in ("fig_unified", "fig_bins"):
+        assert (out / f"{name}.png").is_file() and (out / f"{name}_caption.tex").is_file()
+    for name in ("tab_unified", "tab_seeds"):
+        assert (out / f"{name}.md").is_file() and (out / f"{name}.tex").is_file()
+    for m in (f"统一主表：{MPF.UNIFIED_JSON} 不在", f"统一主表的文献读数：{MPF.SOTA_JSON} 不在", f"分档：{MPF.X_BINS_JSON} 不在",
+              f"种子波动：{MPF.SEED_JSON} 不在"):
+        assert m in miss, m
+
+
+# ---------------------------------------------------------------------------------------------
+# DEV-0077：统一主表（正文主表）、它的图、分档图、种子波动附录表。用仓库里的真数据出一遍，与分析 JSON 逐项对。
+# ---------------------------------------------------------------------------------------------
+
+U_FIGS = (("fig_unified", MPF.DOUBLE_COL_IN), ("fig_bins", MPF.SINGLE_COL_IN))
+U_TABS = ("tab_unified", "tab_seeds")
+LISA = "LISA-7B（xinlai/LISA-7B-v1）"
+E3B = "9B E3b 像素 token 网格"
+
+
+def _rows(md: str) -> list[str]:
+    """Markdown 表的数据行（去掉表头、分隔行与块标题行）。"""
+    return [r for r in md.split("\n\n- ")[0].splitlines() if r.startswith("| ") and not r.startswith("| *")][1:]
+
+
+def _cells(row: str) -> list[str]:
+    return [c.strip() for c in row.strip().strip("|").split("|")]
+
+
+def test_real_unified_outputs_written(real_run):
+    from PIL import Image
+
+    out = real_run
+    for name, width_in in U_FIGS:
+        pdf, png = out / f"{name}.pdf", out / f"{name}.png"
+        assert pdf.read_bytes()[:5] == b"%PDF-" and b"/Type3" not in pdf.read_bytes()
+        with Image.open(png) as im:
+            assert abs(im.info["dpi"][0] - MPF.DPI) < 1 and im.size[0] == round(width_in * MPF.DPI)
+        assert (out / f"{name}_caption.tex").read_text(encoding="utf-8").count("\\caption{") == 1
+        assert (out / "data" / f"{name}.json").is_file()
+    for name in U_TABS:
+        tex = (out / f"{name}.tex").read_text(encoding="utf-8")
+        assert "\\toprule" in tex and "\\bottomrule" in tex and tex.count("\\caption{") == 1 and f"\\label{{tab:{name[4:]}}}" in tex
+        assert (out / f"{name}.md").is_file() and (out / "data" / f"{name}.json").is_file()
+    assert "Needs \\usepackage{booktabs,graphicx,xcolor}." in (out / "tab_unified.tex").read_text(encoding="utf-8").splitlines()[0]
+    readme = (out / "README.md").read_text(encoding="utf-8")
+    for sec in ("## 12. 统一主表（正文主表）", "## 13. 统一主表的图", "## 14. 分档", "## 15. 种子波动（附录）"):
+        assert sec in readme
+    for name in [n for n, _w in U_FIGS] + list(U_TABS):
+        assert f"`{name}." in readme.split("## 文件")[1]
+    for src in (MPF.UNIFIED_JSON, MPF.SOTA_JSON, MPF.X_BINS_JSON, MPF.SEED_JSON):
+        assert src in readme
+    assert readme.split("## 缺的数据（missing）")[1].split("\n## ")[0].strip() == "- 无"
+    # 运行编号写进表注与图注（任务书：RUN-0072、0078、0092、0095、0097、0100）
+    runs = ["RUN-0072", "RUN-0078", "RUN-0092", "RUN-0095", "RUN-0097", "RUN-0100"]
+    for f in ("tab_unified.tex", "tab_unified.md", "fig_unified_caption.tex"):
+        txt = (out / f).read_text(encoding="utf-8")
+        assert all(r in txt for r in runs), f
+    assert all(r in (out / "fig_bins_caption.tex").read_text(encoding="utf-8") for r in ("RUN-0072", "RUN-0092", "RUN-0099"))
+
+
+def test_real_tab_unified_matches_json(real_run):
+    """正文主表：系统一个不少、顺序与组同 unified_table.json；抽查 X-2、LISA、E3b 的格子与一个文献格；不加粗；表注写明子集、照实报告、
+    LISA 两处不是同一个权重、文献数字在完整 test 划分上且不参与配对。"""
+    out = real_run
+    uj, sj = _repo_json(MPF.UNIFIED_JSON), _repo_json(MPF.SOTA_JSON)
+    md, tex = (out / "tab_unified.md").read_text(encoding="utf-8"), (out / "tab_unified.tex").read_text(encoding="utf-8")
+    rows = _rows(md)
+    n_sys = len(uj["systems"])
+    assert n_sys == 12 and len(rows) == n_sys + len(sj["rows"])
+    sys_rows, sota_rows = rows[:n_sys], rows[n_sys:]
+    assert [_cells(r)[0] for r in sys_rows] == [MPF.UNIFIED_LABELS[e["name"]][0] for e in uj["systems"]]
+    d = data(out, "tab_unified")
+    assert [s["name"] for s in d["systems"]] == [e["name"] for e in uj["systems"]] and not d["missing"]
+    # 组的标题按 JSON 里出现的顺序，各一块
+    titles = [r.strip("| *") for r in md.splitlines() if r.startswith("| *")]
+    groups = list(dict.fromkeys(e["group"] for e in uj["systems"]))
+    assert titles[:len(groups)] == [MPF.UNIFIED_GROUPS[g][0] for g in groups] and titles[-1].startswith(MPF.UNIFIED_SOTA_LABEL)
+    by = {e["name"]: e for e in uj["systems"]}
+    for name in (uj["main"], LISA, E3B):
+        e = by[name]
+        cells = _cells(next(r for r in sys_rows if r.startswith(f"| {MPF.UNIFIED_LABELS[name][0]} |")))
+        assert cells[1:6] == [_fmt(e["per_split"][sp]["cIoU"]["ciou"]) for sp in SPLITS]
+        assert cells[6] == _cell(e["pooled"]["cIoU"]["ciou"], *e["pooled"]["cIoU"]["ci"])
+        assert cells[7] == _fmt(e["pooled"]["gIoU"]["giou"])
+        if name == uj["main"]:
+            assert cells[8] == "—"
+        else:
+            mm = e["main_minus"]["pooled"]["cIoU"]
+            assert cells[8] == _cell(mm["diff"], *mm["ci"], signed=True)
+    # 文献格：DeRIS-L 在 RefCOCO+ testB（JSON 里已是 ×100），合并与配对差写"—"；.tex 里灰色
+    der = next(r for r in sj["rows"] if r["name"] == "DeRIS-L")
+    v = der["values"][sj["splits"].index("test_refcoco+_unc_testB")]
+    cells = _cells(next(r for r in sota_rows if r.startswith("| DeRIS-L,")))
+    assert cells[1 + SPLITS.index("test_refcoco+_unc_testB")] == f"{v:.1f}" and cells[6:] == ["—", "—", "—"]
+    trow = next(r for r in tex.splitlines() if r.startswith("\\textcolor{gray}{DeRIS-L"))
+    assert f"\\textcolor{{gray}}{{${v:.1f}$}}" in trow and trow.count("\\textcolor{gray}{--}") == 3
+    assert sum(r.startswith("\\textcolor{gray}{") for r in tex.splitlines()) == len(sj["rows"])
+    # 不加粗
+    assert "**" not in md and "\\textbf" not in tex and "\\best" not in tex
+    for s in ("hash rank", f"salt {_repo_json(uj['subset'])['salt']}", "300 per split", "the same expressions as LLMSeg's run",
+              "Reported as run, nothing selected", "No entry is set in bold", "LISA-7B appears twice, and the two are not the same weights",
+              "xinlai/LISA-7B-v1", "fine-tuned on RefCOCO/+/g", "image level", "on the full test splits, not on our 300-expression subsets",
+              "never paired", "learned vision models", "all on hpcgpu06"):
+        assert s in md, s
+    for r in sj["rows"]:  # 各自的出处照录
+        assert r["source"] in md, r["name"]
+    # .tex：子集、照实报告、LISA、文献、运行编号在 caption；系统定义与文献出处在表下面（caption 太长 pdflatex 报错）
+    cap = next(ln for ln in tex.splitlines() if ln.startswith("\\caption"))
+    below = tex.split("\\begin{minipage}{\\textwidth}\\footnotesize")[1].split("\\end{minipage}")[0]
+    for s in ("hash rank", "Reported as run, nothing selected", "not the same weights", "never paired", "RUN-0100", "under the table"):
+        assert s in cap, s
+    assert "seeds GrabCut as a trimap" in below and "Lai et al., LISA" in below and "seeds GrabCut" not in cap
+    assert tex.index("\\end{tabular}") < tex.index("\\begin{minipage}") < tex.index("\\end{table*}")
+    assert all(c.startswith("一致") for c in d["checks"]) and len(d["checks"]) == 4
+
+
+def test_real_fig_unified_matches_json(real_run):
+    """图：每个划分面板的横条 = JSON 的逐划分读数与 CI（10,000 次）；文献线只在划分面板；合并面板 = 合并读数与 CI；颜色按组、C1 槽 7。"""
+    d = data(real_run, "fig_unified")
+    uj, sj = _repo_json(MPF.UNIFIED_JSON), _repo_json(MPF.SOTA_JSON)
+    assert list(d["panels"]) == SPLITS + ["pooled"]
+    for col in SPLITS + ["pooled"]:
+        bars = d["panels"][col]["bars"]
+        assert [b["system"] for b in bars] == [e["name"] for e in uj["systems"]]
+        for b, e in zip(bars, uj["systems"]):
+            c = (e["pooled"] if col == "pooled" else e["per_split"][col])["cIoU"]
+            assert (b["value"], b["low"], b["high"], b["n"], b["n_resamples"]) == \
+                   (c["ciou"], c["ci"][0], c["ci"][1], 1500 if col == "pooled" else 300, 10000)
+            assert b["color"] == (MPF.SERIES_7 if e["name"] == uj["main"] else MPF.UNIFIED_GROUP_COLORS[e["group"]])
+        sota = d["panels"][col]["sota"]
+        if col == "pooled":
+            assert sota == []
+        else:
+            want = sorted((r["values"][sj["splits"].index(col)], r["name"]) for r in sj["rows"])
+            assert [(x["value"], x["name"]) for x in sota] == want
+            assert all(a["label_y"] > b["label_y"] for a, b in zip(sota, sota[1:]))  # 名字一行一个，自下而上
+    # 配色：过 validate_palette.js 的那一组（紫、蓝、青、橙、深灰）；文献线中性灰
+    assert {b["color"] for b in d["panels"]["pooled"]["bars"]} == {MPF.SERIES_7, MPF.SERIES_1, MPF.SERIES_3, MPF.SERIES_2, MPF.INK_2}
+    assert MPF.UNIFIED_MAIN_COLOR == MPF.W2_COLORS["X-2（C1）"] and MPF.UNIFIED_GROUP_COLORS["本文的方法"] == MPF.W2_COLORS["W2-c"]
+    assert MPF.SOTA_COLOR == MPF.MUTED
+    cap = (real_run / "fig_unified_caption.tex").read_text(encoding="utf-8")
+    assert "Table~\\ref{tab:unified}" in cap and "The pooled panel has none" in cap and "not the released v1 weights" in cap
+    assert "10,000 resamples" in cap and "C1 = X-2 (ours) violet" in cap
+
+
+def test_real_fig_bins_matches_json(real_run):
+    """分档图：(a) 人与非人、(b) 形状复杂度四分位；每档的句数与两个配对差 = x_bins.json；图注写分档规则（切点）与每个划分里人的占比。"""
+    d = data(real_run, "fig_bins")
+    xj = _repo_json(MPF.X_BINS_JSON)
+    assert [s["key"] for s in d["schemes"]] == ["(i) 人与非人", "(iii) 形状复杂度 c = P²/A"]
+    a, b = d["schemes"]
+    assert [x["label"] for x in a["bins"]] == ["Person", "Non-person"]
+    q = [f"{x:.1f}" for x in xj["cuts"]["complexity"]]
+    assert [x["label"] for x in b["bins"]] == [f"Q1: c ≤ {q[0]}", f"Q2: {q[0]} < c ≤ {q[1]}", f"Q3: {q[1]} < c ≤ {q[2]}", f"Q4: c > {q[2]}"]
+    for sch in d["schemes"]:
+        for x in sch["bins"]:
+            r = xj["schemes"][sch["key"]][x["key"]]
+            assert x["n"] == r["n"]
+            for dk in ("x2_minus_w2c", "x2_minus_ellipse"):
+                p = x["diffs"][dk]
+                assert (p["value"], p["low"], p["high"], p["n"], p["n_resamples"]) == (r[dk]["diff"], *r[dk]["ci"], r[dk]["n"], 10000)
+    person = xj["schemes"]["(i) 人与非人"]["人"]
+    assert a["bins"][0]["diffs"]["x2_minus_w2c"]["value"] == person["x2_minus_w2c"]["diff"]
+    assert sum(x["n"] for x in a["bins"]) == sum(x["n"] for x in b["bins"]) == xj["n"]
+    cap = (real_run / "fig_bins_caption.tex").read_text(encoding="utf-8")
+    assert f"cut points {q[0]}, {q[1]} and {q[2]}" in cap and "fixed before any system's bin readings were computed" in cap
+    assert "preregistration U-6" in cap and "COCO category 1" in cap and "c = P$^2$/A" in cap
+    for sp in SPLITS:
+        assert f"{MPF.split_label(sp)} {100 * xj['person_share_by_split'][sp]['person']:.0f}\\%" in cap, sp
+
+
+def test_real_tab_seeds_matches_json(real_run):
+    """种子波动：主设置与椭圆消融的合并 cIoU、− W2-c 参照、− seed 0、跨种子均值 ± 标准差；语言读数（含计数）；健康检查的标红 †；
+    表注写明只在开发数据与语言检查上、不是 test，以及运行编号。"""
+    out = real_run
+    sj = _repo_json(MPF.SEED_JSON)
+    md, tex = (out / "tab_seeds.md").read_text(encoding="utf-8"), (out / "tab_seeds.tex").read_text(encoding="utf-8")
+    rows = {(_cells(r)[0]): _cells(r)[1:] for r in _rows(md)}
+    seeds = [sj["seeds"][k] for k in sorted(sj["seeds"], key=int)]
+    for st, lab in MPF.SEED_SETTINGS:
+        cells = rows[f"{lab}, pooled (n=2,300)"]
+        assert cells[:3] == [_cell(e["settings"][st]["pooled"]["ciou"], *e["settings"][st]["pooled"]["ci"]) for e in seeds]
+        a = sj["across_seeds"][st]
+        assert cells[3] == f"{100 * a['mean']:.2f} ± {100 * a['sd']:.2f}"
+        x = [e["settings"][st]["minus_w2c_pooled"] for e in seeds]
+        assert rows[f"{lab} − W2-c reference"][:3] == [_cell(c["diff"], *c["ci"], signed=True) for c in x]
+        x = [e["settings"][st].get("minus_seed0_pooled") for e in seeds]
+        assert rows[f"{lab} − seed 0"][:3] == ["—"] + [_cell(c["diff"], *c["ci"], signed=True) for c in x[1:]]
+    # 计数（T 文本）：三个种子的差与 CI
+    cnt = [e["language"]["ttext"]["count"] for e in seeds]
+    assert rows["CountBench counting accuracy (n=442)"][:3] == [f"{c['delta_pp']:+.1f} [{c['ci95_pp'][0]:+.1f}, {c['ci95_pp'][1]:+.1f}]"
+                                                              for c in cnt]
+    mm = [e["language"]["battery"]["mmlu_pro_letter.accuracy"] for e in seeds]
+    assert rows["MMLU-Pro, letter answers (n=2,000)"][:3] == [f"{c['delta_pp']:+.1f} [{c['ci95_pp'][0]:+.1f}, {c['ci95_pp'][1]:+.1f}]"
+                                                            for c in mm]
+    # 健康检查：差与标红 †
+    h = [e["health"]["rows"]["ifeval.prompt_level_strict"] for e in seeds]
+    assert rows["IFEval (n=50)"][:3] == [f"{c['delta_pp']:+.1f}" + ("†" if c["flag"] else "") for c in h]
+    assert any(c["flag"] for c in h) and "\\textsuperscript{\\dag}" in tex
+    for s in ("not on the test splits", "development data", "RUN-0080", "RUN-0093", "RUN-0094", "RUN-0082", "RUN-0084", "RUN-0091",
+              "RUN-0096", "RUN-0069", "hpcgpu07", "hpcgpu06", "10,000 resamples"):
+        assert s in md, s
+    assert not data(out, "tab_seeds")["missing"]
+
+
+def test_real_latex_compiles(real_run, tmp_path):
+    """生成的每张表与每个图注都能用 pdflatex 编译（DEV-0077：tab_unified 的表注全放进 caption 时约 5,000 字符，pdflatex 量 caption 的单行宽度
+    报 Dimension too large；系统定义与文献出处移到表下面之后通过）。没有 pdflatex 就跳过。"""
+    exe = shutil.which("pdflatex")
+    if exe is None:
+        pytest.skip("没有 pdflatex")
+    for f in real_run.iterdir():
+        if f.suffix in (".tex", ".pdf"):
+            shutil.copy(f, tmp_path / f.name)
+    body = []
+    for t in sorted(f.stem for f in real_run.glob("tab_*.tex")):
+        body += [f"\\input{{{t}.tex}}", "\\clearpage"]
+    for fg in sorted(f.name.removesuffix("_caption.tex") for f in real_run.glob("fig_*_caption.tex")):
+        body += [f"\\begin{{figure*}}\\centering\\includegraphics[width=\\textwidth]{{{fg}.pdf}}\\input{{{fg}_caption.tex}}\\end{{figure*}}",
+                 "\\clearpage"]
+    assert any("tab_unified" in b for b in body) and any("fig_unified" in b for b in body)
+    doc = ["\\documentclass{article}", "\\usepackage[utf8]{inputenc}", "\\usepackage[T1]{fontenc}",
+           "\\usepackage{booktabs,graphicx,multirow,xcolor}", "\\usepackage[margin=1in]{geometry}", "\\begin{document}", *body,
+           "\\end{document}"]
+    (tmp_path / "all.tex").write_text("\n".join(doc), encoding="utf-8")
+    r = subprocess.run([exe, "-interaction=nonstopmode", "-halt-on-error", "all.tex"], cwd=tmp_path, capture_output=True, text=True,
+                       timeout=300)
+    log = (tmp_path / "all.log").read_text(encoding="utf-8", errors="replace") if (tmp_path / "all.log").is_file() else r.stdout
+    assert r.returncode == 0, [ln for ln in log.splitlines() if ln.startswith("!") or ln.startswith("l.")][:6]
+    assert len(next(ln for ln in (real_run / "tab_unified.tex").read_text(encoding="utf-8").splitlines() if ln.startswith("\\caption"))) < 3500
+
+
+def _analysis_view(tmp_path: Path, replace: dict) -> Path:
+    """仓库的视图：experiments、configs、docs/references 与 docs/analysis 的其他文件用符号链接，只把 replace 里的分析 JSON 换成合成的。"""
+    root = tmp_path / "view"
+    (root / "docs" / "analysis").mkdir(parents=True)
+    for d in ("experiments", "configs"):
+        (root / d).symlink_to(REPO / d)
+    (root / "docs" / "references").symlink_to(REPO / "docs" / "references")
+    for f in (REPO / "docs" / "analysis").iterdir():
+        if f"docs/analysis/{f.name}" not in replace:
+            (root / "docs" / "analysis" / f.name).symlink_to(f)
+    for rel, obj in replace.items():
+        _w(root / rel, obj)
+    return root
+
+
+def test_unified_failed_system_still_listed(tmp_path):
+    """照实报告（预注册 U-1）：JSON 里某个系统没跑完（status 缺）也照样占一行、格子写"—"、进 missing 与表注；没有英文名的新系统用原名，
+    系统数仍与 JSON 相同。"""
+    uj = _repo_json(MPF.UNIFIED_JSON)
+    i = next(k for k, e in enumerate(uj["systems"]) if e["name"] == E3B)
+    uj["systems"][i] = {"group": uj["systems"][i]["group"], "name": E3B, "source": uj["systems"][i]["source"], "status": "缺"}
+    uj["systems"].append({"group": "外部方法", "name": "NewSys", "source": "experiments/W2/0999_new_hpcgpu06", "status": "缺"})
+    root = _analysis_view(tmp_path, {MPF.UNIFIED_JSON: uj})
+    u = MPF.collect_unified(root)
+    out = tmp_path / "out"
+    out.mkdir()
+    MPF.tab_unified(u, out)
+    MPF.fig_unified(u, out)
+    md = (out / "tab_unified.md").read_text(encoding="utf-8")
+    rows = _rows(md)
+    assert len(rows) == len(uj["systems"]) + len(_repo_json(MPF.SOTA_JSON)["rows"])
+    assert _cells(next(r for r in rows if r.startswith(f"| {MPF.UNIFIED_LABELS[E3B][0]} |")))[1:] == ["—"] * 8
+    assert _cells(next(r for r in rows if r.startswith("| NewSys |")))[1:] == ["—"] * 8
+    assert any("E3b" in m and "status 是 缺" in m for m in u["missing"]) and any("NewSys 没有英文名" in m for m in u["missing"])
+    assert "- Missing: " in md
+    # 只有完成的系统进核对：E3b 不在新跑三项的核对里（20 格 = E1 与 LISA）
+    assert next(c for c in u["checks"] if "新跑三项" in c).endswith("（20 格）")

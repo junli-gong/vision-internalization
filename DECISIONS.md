@@ -3485,3 +3485,16 @@
 - **批准编号常量有两份**：`src/lisa/common.TEST_APPROVAL` 与 `src/unified/hands.TEST_APPROVAL`，都是 "D154"。
   - 不合成一处：LISA 一侧只许 import 标准库、numpy 与 `src.lisa.common`（隔离），不能 import `src.unified`。
   - 两边各有测试钉住。D156 里"合成一处"的说法作废。
+
+## D160（2026-10-30，管理员）：DEV-0077 合入（论文的统一主表 tab_unified、fig_unified、fig_bins、附录 tab_seeds）
+
+- tab_unified 是论文正文的主表：12 个系统按组列出，一个不少；4 行文献灰线；不加粗。tab_main 改为附录的全 5,000 句版，label 不变。
+- 它提出的待裁，全部接受：
+  - 误差棒统一取 `unified_table.json` 的 CI（这 300 句、10,000 次），不取叶目录的；
+  - 表注太长，pdflatex 编不过，系统定义与文献出处放到表下；
+  - fig_unified 按组上色，C1 紫、W2-c 蓝不变；
+  - 英文措辞照它定的，集中在 `UNIFIED_GROUPS`、`UNIFIED_LABELS` 两个常量里；
+  - 文献数字取一位小数，tab_main 的 label 保留 `tab:main`。
+- 两处由管理员补：
+  - 预注册 U-1 要求失败率单列，由 `scripts/mgr/unified_table.py` 补算；
+  - `refseg_sota.json` 补上各行的骨干与训练数据字段，之后出图脚本可以改为只从 JSON 取。

@@ -2,13 +2,14 @@
 
 <!-- 由 scripts/figures/make_paper_figures.py 生成；不要手改。数据补齐后重跑：python scripts/figures/make_paper_figures.py -->
 
-- 生成时间：2026-10-30 02:20 UTC
-- 代码 commit：e86559daabf5d91e1dfde09b90b3d675189aeca2 (working tree has uncommitted changes)
+- 生成时间：2026-10-30 05:46 UTC
+- 代码 commit：a29e96c813d16a3d31adb6815ad5d15bfe2dbdbb (working tree has uncommitted changes)
 - 结果树：`仓库根`
 - matplotlib 3.11.2；PDF 是矢量（TrueType 字体，无 Type 3），PNG 300 dpi；宽度：单栏 3.3 in，双栏 6.9 in。
 - 配色：dataviz 参考调色板。Qwen3.5 四个尺寸用一个有序的蓝色阶（浅→深 = 0.8B→9B），InternVL3.5 用第二个有序色阶（橙）；两类对比用分类槽 1（蓝）与槽 2（橙）。都在白底上过了 validate_palette.js（有序：单色相、亮度单调、相邻 ΔL ≥ 0.06；分类两色全对 CVD ΔE 24.7）。
 - W2 的图（DEV-0071）：同一个系统在各张图里同一个颜色——W2-c 槽 1（蓝）、E3b+C3 槽 2（橙）、W2-c + 回放 槽 3（青）；基座与 C3 （对照）用中性灰（浅、深）；W2-a 只在 fig_w2_size 出现，用槽 2（与 E3b+C3 不同图）。槽 1–3 三色全对过 validate_palette.js（CVD ΔE ≥ 9.2）；青色对白底不足 3:1，图上带数值标签或有表可查（lang_cost_9b.md、count_errors_9b.md）。
 - C1 = X-2（主方法，DEV-0073）固定用分类槽 7（紫 #4a3aa7，对白底 ≥ 3:1），出现 C1 的每张图（fig_lang_cost、fig_count_bins）都是它；--with-explore 的 X-3（C2）用槽 5（粉）、X-3L 用槽 6（绿）；槽 4（黄，DEV-0071 给 X-2 的）不再用。validate_palette.js（白底 #ffffff）：fig_lang_cost 缺省四色（橙、蓝、青、紫）全对 PASS（CVD ΔE 最小 9.2，常规最小 16.3）；--with-explore 六色按画出的相邻顺序 PASS（相邻 CVD ΔE 最小 17.6、常规 24.0）；fig_count_bins 缺省（灰、蓝、青、紫、深灰、橙）与 --with-explore（再加粉）按画出的相邻顺序 PASS（CVD ΔE 最小 15.9、常规最小 17.2；两个灰色是有意的中性色，色度检查照例不适用）。粉与橙全对的常规 ΔE 12.9 不到 15，但两者在两张图里都不相邻，图例与数值标签可查。
+- 统一主表的图与分档（DEV-0077）：fig_unified 按组分色，C1 = X-2 仍是槽 7（紫），本文的方法其余槽 1（蓝，W2-c 的颜色）、各种手槽 3（青）、外部方法槽 2（橙）、附带的椭圆消融中性深灰（同 C3 的"对照"）；文献的竖虚线用中性灰（MUTED）。validate_palette.js（白底 #ffffff）：按画出的相邻顺序（紫、蓝、青、橙、深灰）与全对都是 CVD ΔE 最小 9.2、常规最小 16.3（深灰是中性色，色度检查照例不适用）。fig_bins 的两色（蓝、深灰）CVD ΔE 21.3、常规 21.8（深灰的色度检查同上不适用）。按组上色时 C2、W2-a、E3b、LISA 等与它们在别的图里的颜色不同（那些图里没有组）。
 - 每个数字都从结果文件读；逐点来源见 `data/*.json`（每个点带 source 路径）。
 
 ## 缺的数据（missing）
@@ -187,8 +188,9 @@ Language cost on Qwen3.5-9B: difference from the base model evaluated on the sam
 
 Counting accuracy by ground-truth count on CountBench (442 items; bins 2–4 (n=149), 5–7 (n=140), 8–10 (n=153)), Qwen3.5-9B, T-text channel. (a) Accuracy. (b) Difference from the base, 95% paired bootstrap CI (10,000 resamples). W2-c, W2-c + replay, C1 = X-2 (ours) paired with the base run of RUN-0069; C3, E3b+C3 paired with the base run of RUN-0056. The two base runs give identical answers (agreement 1.000), so one base bar is drawn. Data: count_errors_9b.json (RUN-0056, RUN-0069, RUN-0076, RUN-0091).
 
-## 9. 正文主表：`tab_main.tex` / `tab_main.md`（DEV-0073）
+## 9. 附录的全 5,000 句表：`tab_main.tex` / `tab_main.md`（DEV-0073；DEV-0077 起正文主表换成 `tab_unified`，见第 12 节）
 
+- DEV-0077：只改了 caption（标题与表注第一句：附录的全 5,000 句版，正文主表是 tab_unified），数值、版式与 label（tab:main）不变。
 - 行：自己的框、W1-F、最优候选（4 个工具候选里的真值最优）、W2-a、W2-c | C1 = X-2（ours）、C1 的椭圆消融、C2 = X-3。列：5 个划分（只有读数）、合并（读数与 95% CI）、每句调用 / 生成 token。cIoU ×100，一位小数。
 - 数据：每个划分同 `tab_w2_test`（RUN-0072 的 w2_test_table.json 与 RUN-0092 的叶目录）；合并列取 `docs/analysis/w2_test_pooled.json`（10,000 次重抽）；末列取 `docs/analysis/x_test_table.json` 的 compute（候选）与 compute_reference（W1-F、W2-c、LLMSeg），自己的框、最优候选、W2-a 在分析里没有计算记录，写"—"并在表注说明。
 - 外部基线一块：同样 1,500 句上 LLMSeg 修正后（主配置）的合并读数与 CI、C1 的同句合并读数与 CI、C1 − LLMSeg 修正后的配对差与 CI，都取 `docs/analysis/x_test_table.json` 的 candidates.C1 (X-2).pooled.llmseg（llmseg_rec、main_on_subset、main_minus_llmseg_rec；10,000 次重抽）。核对：LLMSeg 的合并读数与 compare.json 相同。
@@ -196,6 +198,7 @@ Counting accuracy by ground-truth count on CountBench (442 items; bins 2–4 (n=
 
 **表注（英文）**
 
+- Appendix version on all 5,000 W2 test expressions (1,000 per split); the main-text results table is tab_unified, where every system, including the external methods, is evaluated on the same 300 expressions per split.
 - Referring segmentation on the W2 test with Qwen3.5-9B: RefCOCO testA/testB, RefCOCO+ testA/testB and RefCOCOg test, 1,000 expressions per split (the E1 polygon subset); cIoU ×100 (summed intersection / summed union). Pooled: the five splits together (5,000 expressions) with a 95% bootstrap CI over expressions (10,000 resamples); per-split CIs and gIoU are in the appendix tables.
 - C1 = X-2 (ours): a single LoRA on the same Qwen3.5-9B; the model proposes a box, then traces the object's outline as a closed B-spline with 16 control points; the rasterised spline seeds GrabCut as a trimap (definite bands inside and outside the spline, unknown in between). GrabCut (OpenCV graph cut) has no learned parameters, and no external learned vision model is used in training or inference. C1, in-box ellipse instead of spline: the same run with the spline replaced by the ellipse inscribed in the proposed box, everything else unchanged (capability attribution). C2 = X-3: C1's training recipe without the signed box-correction stream (trained for C1 but not used at its inference).
 - C1 was designated the main method before any test run (preregistration X-5a, the project lead's decision); C2 is C1's simplified version with the box-correction stream removed; pooled, C2 is 0.6 points above C1, within the ±2 points predicted in preregistration X-6.
@@ -230,6 +233,66 @@ Counting accuracy by ground-truth count on CountBench (442 items; bins 2–4 (n=
 - Model-call time: time spent in model calls; wall clock: each run's own per-expression record, including the non-learned tools (GrabCut).
 - LLMSeg's wall clock is not listed (—): its compute.json records wall time accumulated under concurrent requests, a different measure from the per-expression wall clock of the other rows.
 - Data: RUN-0072, RUN-0078, RUN-0092, all on hpcgpu06.
+
+## 12. 统一主表（正文主表）：`tab_unified.tex` / `tab_unified.md`（DEV-0077）
+
+- 数据：`docs/analysis/unified_table.json`（`scripts/mgr/unified_table.py`；预注册 U；D154）：12 个系统 × 5 个划分 × 300 句（`configs/w2_llmseg_subsets.json`，hash_rank，salt w2_llmseg_v1，与 LLMSeg 同一份）。逐划分与合并的 cIoU、gIoU 与 95% CI、主方法 − 各系统的配对差都是 JSON 里的（10,000 次重抽，种子 20260929），不重算。
+- 行：照 JSON 的 systems 顺序，按 group 分块（本文的方法、各种手、外部方法、附带），一个不少；跑坏或没跑完的照样占一行，格子写"—"并进 missing。英文名：已有的系统用 tab_main / tab_w2_test 的同一个名字（ROW_LABELS、LLMSEG_ROWS），新的三项见 UNIFIED_LABELS。
+- 列：5 个划分的 cIoU（只读数）、合并 cIoU [95% CI]、合并 gIoU（只读数）、C1 − 该系统的 cIoU 配对差 [95% CI]（主方法一行写"—"）。×100，一位小数；不加粗。
+- 灰色文献块（表的最后）：`docs/references/refseg_sota.json`（预注册 U-3a；说明在 `docs/references/refseg_sota_notes.md`）的 4 行，只填 5 个划分（JSON 里已是 ×100，表里取一位小数），合并与配对差写"—"；.tex 里用 xcolor 的 gray。表注里每行的视觉模型与训练数据：JSON 的 note 已写了的（UNINEXT-H、DeRIS-L）直接用 note，note 写的是别的事的（LISA-7B (ft)、GLaMM (FT)）取 SOTA_TRAINING（照 refseg_sota_notes.md 的表）并照录 note；出处照录 JSON 的 source。
+- 表注：子集的取法与句数、照实报告不挑、各系统的定义、LISA 两处不是同一个权重（发布的 v1 与论文的微调版；COCO 图像层面的重叠，D156）、文献数字在完整 test 划分上算且不参与配对、运行编号与节点。
+- .tex 的表注分两处：各系统的定义与文献各行的视觉模型、训练数据与出处放在表下面（table* 之内的 minipage），其余在 caption。全放进 caption 时约 5,000 字符，pdflatex 量 caption 单行宽度时报 Dimension too large（article 类与 caption 宏包都一样）。.md 不分，全部列为表注。
+
+**表注（英文）**
+
+- Every system on the same 1,500 expressions: the five W2 test splits (RefCOCO testA/testB, RefCOCO+ testA/testB, RefCOCOg test), 300 per split, chosen by hash rank (the first 300 of each 1,000-expression split by sha256 rank with salt w2_llmseg_v1; configs/w2_llmseg_subsets.json), the same expressions as LLMSeg's run (preregistration U-1). cIoU ×100 = summed intersection / summed union; gIoU ×100 = mean per-expression IoU. Pooled: the five splits together with a 95% bootstrap CI over expressions (10,000 resamples, seed 20260929); per-split CIs are in the figure of this table and in unified_table.json. C1 − system: per-expression paired bootstrap of the ratio of sums, 95%, 10,000 resamples. Failed pipelines and unparsable outputs score as empty masks.
+- Reported as run, nothing selected: every system on the list preregistered before the three new baselines were run (preregistration U-2) is in the table whatever its result, and the list was not changed after their readings were seen. No entry is set in bold. C1 = X-2 (ours) was designated the main method before any test run (preregistration X-5a); C2 = X-3 is its simplified version without the box-correction stream.
+- C1 = X-2 (ours): a single LoRA on the same Qwen3.5-9B; the model proposes a box, then traces the object's outline as a closed B-spline with 16 control points; the rasterised spline seeds GrabCut as a trimap (definite bands inside and outside the spline, unknown in between). GrabCut (OpenCV graph cut) has no learned parameters, and no external learned vision model is used in training or inference. C1, in-box ellipse instead of spline: the same run with the spline replaced by the ellipse inscribed in the proposed box, everything else unchanged (capability attribution). C2 = X-3: C1's training recipe without the signed box-correction stream (trained for C1 but not used at its inference). Own box: the model's own box (E1 protocol) as the mask; W1-F: that box plus the default GrabCut candidate (a fixed pipeline, no LLM decision); W2-a: the frozen model picks one of four tool candidates (zero-shot); W2-c: LoRA text supervision to propose the box and pick a candidate. E1 structure-forced polygon: the zero-shot Qwen3.5-9B writes the outline as a polygon, decoding forced to a valid polygon of at least 3 vertices, thinking off. E3b pixel-token grid: the E3b LoRA on Qwen3.5-9B (seed-0 checkpoint of the E3 runs) emits the mask as a grid of pixel tokens; structure-forced decoding, single turn, guided upsampling. LLMSeg (official code, commit f2191e6): driven by the same zero-shot Qwen3.5-9B; before refinement = after its first two stages; after refinement = its main configuration.
+- LISA-7B appears twice, and the two are not the same weights. The solid row is the released xinlai/LISA-7B-v1 (revision 43c754e), run by us with the official code (commit 3cb2d43) and its refer_seg evaluation protocol (the protocol of the paper's tables), in a separate environment; its outputs are used only for scoring, never in our data, labels or rewards. The released v1 weights have no published readings. The gray row LISA-7B (ft) is the paper's model fine-tuned on RefCOCO/+/g, on the full test splits. LISA's training data include COCO images, which overlap with RefCOCO test images at the image level (images, not referring expressions).
+- Gray rows: expert models as reported in the literature on the full test splits, not on our 300-expression subsets; cIoU (oIoU, the same quantity) ×100, rounded to one decimal; reference only, never paired, no pooled reading. Each uses learned vision models and is not bound by our constraint that no learned vision model is used; their vision models, training data and sources are listed under the table.
+- Literature rows: LISA-7B (ft) (LLM + SAM; LLaVA-7B + SAM, fine-tuned on RefCOCO/+/g): Lai et al., LISA, arXiv 2308.00692 (CVPR 2024), Table 2, row 'LISA-7B (ft)' (fine-tuned on refCOCO(+/g)); identical in v1–v3; not the released xinlai/LISA-7B-v1 weights that we run. GLaMM (FT) (LLM + SAM; Vicuna-7B + SAM-H, GranD pre-training, then fine-tuned on RefCOCO/+/g): Rasheed et al., GLaMM, arXiv 2311.03356 v2/v3 (CVPR 2024), Table 4; metric unnamed in the paper; treated as cIoU (official eval script returns class_iou; DeRIS Table 1 marks it cIoU). UNINEXT-H (specialist; ViT-H; Objects365 → COCO + RefCOCO/+/g → video): Yan et al., UNINEXT, arXiv 2303.06674 (CVPR 2023), Table 4. DeRIS-L (specialist; Swin-B (Mask2Former init) + BEiT-3-L; mixed RefCOCO/+/g): DeRIS, arXiv 2507.01738 (ICCV 2025); oIoU from the official repository README (the paper reports mIoU).
+- Data: RUN-0072 (W2-c, W2-a, Own box, W1-F); RUN-0078 (LLMSeg after refinement, LLMSeg before refinement); RUN-0092 (C1 = X-2, C2 = X-3, C1 with ellipse for spline); RUN-0095 (W2-a per-expression scores); RUN-0097 (LISA-7B v1); RUN-0100 (E1 structured polygon, E3b pixel-token grid); all on hpcgpu06 (D93-1); readings from unified_table.json, literature from refseg_sota.json.
+
+核对：
+
+- 一致：docs/analysis/unified_table.json 的新跑三项（E1 多边形、E3b 网格、LISA）逐划分读数与句数 = 叶目录 metrics.json 的 headline（30 格）
+- 一致：docs/analysis/unified_table.json 的 LLMSeg 修正前后逐划分读数 = experiments/W2/0078_llmseg_hpcgpu06 叶目录的 readouts.<seg|rec>.headline（20 格）
+- 一致：docs/analysis/unified_table.json 的 C1 同句读数（逐划分与合并，读数与 CI）与 C1 − LLMSeg = docs/analysis/x_test_table.json 的 llmseg 子块（14 格）
+- 一致：docs/analysis/unified_table.json 的 W2-c 同句读数 = experiments/W2/0078_llmseg_hpcgpu06/compare_w2c/compare.json 的 W2-c（12 格）
+
+## 13. 统一主表的图：`fig_unified.pdf` / `fig_unified.png`（DEV-0077）
+
+- 数据：同 tab_unified（`docs/analysis/unified_table.json` 与 `docs/references/refseg_sota.json`）。5 个划分各一个面板，最后一个面板是合并的 1,500 句。
+- 误差棒：每个划分取 JSON 的 per_split CI（unified_table.py 在这 300 句上算的，10,000 次重抽）；合并面板取 pooled CI（10,000 次）。任务书写的是"取各叶目录 metrics.json 的 CI"：RUN-0072、0092 的叶目录是每个划分 1,000 句（不是这 300 句），新跑三项与 LLMSeg 的叶目录是这 300 句但只有 1,000 次重抽，所以统一取 JSON 的（同一口径、同一套重抽）；叶目录的读数另做核对（见上）。
+- 文献线：只在划分面板画，每条一根灰色竖虚线（MUTED），名字写在线的左边，按读数从小到大自下而上一行一个，线只画到自己那一行（名字不压别的线）。合并面板不画（文献没有合并读数），写一句说明。
+- 配色（按组分色；同一个系统在各图同色的约定只对 C1 与 W2-c 成立，其余系统按组上色）：C1 = X-2 槽 7（紫）；本文的方法其余（C2、W2-c、W2-a）槽 1（蓝，W2-c 的颜色）；各种手 槽 3（青）；外部方法 槽 2（橙）；附带的椭圆消融 中性深灰（同 C3 的"对照"）。validate_palette.js（白底 #ffffff）：按画出的相邻顺序（紫、蓝、青、橙、深灰）CVD ΔE 最小 9.2、常规最小 16.3，全对也是这两个数；深灰是有意的中性色，色度检查照例不适用；青色对白底不足 3:1，合并面板写了数值、划分面板的数值见 tab_unified（表格视图）。
+
+**图注（英文）**
+
+Every system on the same 1,500 W2 test expressions (300 per split, the expressions of `tab_unified`), Qwen3.5-9B unless named otherwise. Bars: cIoU ×100 in each split (first five panels) and pooled (last panel, with values); error bars: 95% bootstrap CI over the expressions of the panel (10,000 resamples). Colors by group: C1 = X-2 (ours) violet; our other methods blue (C2 = X-3, W2-c, W2-a); other hands aqua (Own box, W1-F, E1 structured polygon, E3b pixel-token grid); external methods orange (LLMSeg after refinement, LLMSeg before refinement, LISA-7B v1 (run by us)); attribution ablation dark gray (C1 with ellipse for spline). Gray dashed lines: expert models as reported in the literature on the full test splits (LISA-7B (ft), GLaMM (FT), UNINEXT-H and DeRIS-L; sources in `tab_unified`), not on these subsets; reference only, never paired. The pooled panel has none: the literature reports no pooled reading. LISA-7B (ft) is the paper's model fine-tuned on RefCOCO/+/g, not the released v1 weights run by us (orange bar). Data: unified_table.json (RUN-0072, RUN-0078, RUN-0092, RUN-0095, RUN-0097, RUN-0100); refseg_sota.json.
+
+## 14. 分档：`fig_bins.pdf` / `fig_bins.png`（DEV-0077）
+
+- 数据：`docs/analysis/x_bins.json`（`scripts/mgr/x_bins.py`；预注册 U-6）的 (i) 人与非人、(iii) 形状复杂度 c = P²/A 的四分位档：每档的句数、x2_minus_w2c 与 x2_minus_ellipse（逐句配对 bootstrap，ratio-of-sums，95%，10,000 次）。(ii) COCO 大类与 (iv) 相对面积不画（任务书只要 (a)(b)）。
+- 每个划分里人的占比取 person_share_by_split，写进图注。切点取 JSON 的 cuts.complexity（一位小数）。
+- 版式：单栏，两个面板上下排；每档两根横条（C1 − W2-c、C1 − 椭圆消融），横线 = 95% CI，右侧写数值，句数写在刻度名下。颜色取被减系统在 fig_unified 里的颜色：W2-c 蓝（槽 1）、椭圆消融深灰（validate_palette.js：两色 CVD ΔE 21.3、常规 21.8）。
+
+**图注（英文）**
+
+Where C1 = X-2 (ours) gains, on all 5,000 W2 test expressions (Qwen3.5-9B): paired cIoU difference ×100 against W2-c (blue) and against the in-box ellipse ablation (dark gray); 95% paired bootstrap CI over expressions (10,000 resamples, seed 20260929); n per bin below each label. (a) Person (COCO category 1) vs. non-person. (b) Quartiles of the shape complexity c = P²/A of the ground-truth mask (P: length of the outer contour in pixels; A: area in pixels); cut points 22.0, 32.3 and 48.1, computed from the 5,000 ground-truth masks alone and fixed before any system's bin readings were computed (preregistration U-6). Share of expressions that refer to a person: RefCOCO testA 93%; RefCOCO testB 0%; RefCOCO+ testA 93%; RefCOCO+ testB 0%; RefCOCOg test 36%. Descriptive only. Data: x_bins.json (RUN-0072, RUN-0092, RUN-0099; the last is the per-expression metadata).
+
+## 15. 种子波动（附录）：`tab_seeds.tex` / `tab_seeds.md`（DEV-0077）
+
+- 数据：`docs/analysis/seed_variance.json`（`scripts/mgr/seed_variance.py`；D150、D151、D153）：三个种子的 x2_spline_trimap（C1 的配方）与 x2_ellipse_trimap（椭圆消融）的合并 cIoU 与 95% CI、− W2-c 参照、− seed 0（逐句配对 bootstrap，10,000 次）、跨种子的均值与样本标准差（across_seeds）；语言读数（大题量 MMLU-Pro、IFEval 严格，T 文本定位、计数；相对基座的差与 95% CI）；健康检查的差与标红（†）。x2_select、x2_select5 两个设置与 IFEval instruction-level 不进表（任务书没有要）。
+- 健康检查的题数与标红门槛取各种子的 health_compare.json（路径取 seed_variance.py 的 SEEDS）；大题量的重抽次数取各自 lb_compare 的 statistics。
+- 这些都只在开发数据（explore_val 三层、devtune800、devcheck2）与语言检查上，不是 test；表注写明，并列出各自的运行编号与节点。
+
+**表注（英文）**
+
+- Seed variation of C1's training recipe (X-2) on Qwen3.5-9B, three training seeds. Everything here is on development data and language checks, not on the test splits. Segmentation: the development splits pooled (explore_val RefCOCO val 400, explore_val RefCOCO+ val 400, explore_val RefCOCOg val 200, devtune800 800, devcheck2 500; 2,300 expressions), cIoU ×100 with a 95% bootstrap CI; − W2-c reference: paired difference against a W2-c run on the same expressions; − seed 0: paired difference against seed 0; per-expression paired bootstrap of the ratio of sums, 95%, 10,000 resamples (seed 20260929). Across seeds: mean ± sample standard deviation of the pooled cIoU over the three seeds (×100, two decimals). The in-box ellipse ablation replaces the spline with the ellipse inscribed in the proposed box, everything else unchanged.
+- Language: difference from the base model in percentage points [95% paired bootstrap CI over items]. Language battery (MMLU-Pro letter answers, IFEval prompt-level strict; 1,000 resamples) against the base on the seed's node; T-text (grounding Acc@0.5, CountBench counting accuracy; 10,000 resamples) against the base T-text run of RUN-0069 on hpcgpu06.
+- Health check (brief §8.11; fixed items: MMLU-Pro 100, GSM8K 50, IFEval 50): difference only, against the base on the seed's node; † = flagged by its rule (the headline metric drops by more than 5 points).
+- Runs: seed 0: training and development evaluation RUN-0080 (hpcgpu07), language battery RUN-0084 (hpcgpu07), T-text RUN-0091 (hpcgpu06); seed 1: training and development evaluation RUN-0093 (hpcgpu07), language battery RUN-0096 (hpcgpu07), T-text RUN-0096 (hpcgpu06); seed 2: training and development evaluation RUN-0094 (hpcgpu06), language battery RUN-0096 (hpcgpu06), T-text RUN-0096 (hpcgpu06); W2-c reference RUN-0082. Data: seed_variance.json.
 
 ## 文件
 
@@ -276,3 +339,17 @@ Counting accuracy by ground-truth count on CountBench (442 items; bins 2–4 (n=
 - `fig_count_bins.png`
 - `fig_count_bins_caption.tex`
 - `data/fig_count_bins.json`
+- `tab_unified.tex`
+- `tab_unified.md`
+- `data/tab_unified.json`
+- `fig_unified.pdf`
+- `fig_unified.png`
+- `fig_unified_caption.tex`
+- `data/fig_unified.json`
+- `fig_bins.pdf`
+- `fig_bins.png`
+- `fig_bins_caption.tex`
+- `data/fig_bins.json`
+- `tab_seeds.tex`
+- `tab_seeds.md`
+- `data/tab_seeds.json`
