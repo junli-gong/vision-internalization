@@ -2,8 +2,8 @@
 
 <!-- 由 scripts/figures/make_paper_figures.py 生成；不要手改。数据补齐后重跑：python scripts/figures/make_paper_figures.py -->
 
-- 生成时间：2026-10-29 09:57 UTC
-- 代码 commit：a1633e86e62f498f28f85f089609d096fce7b055 (working tree has uncommitted changes)
+- 生成时间：2026-10-30 02:20 UTC
+- 代码 commit：e86559daabf5d91e1dfde09b90b3d675189aeca2 (working tree has uncommitted changes)
 - 结果树：`仓库根`
 - matplotlib 3.11.2；PDF 是矢量（TrueType 字体，无 Type 3），PNG 300 dpi；宽度：单栏 3.3 in，双栏 6.9 in。
 - 配色：dataviz 参考调色板。Qwen3.5 四个尺寸用一个有序的蓝色阶（浅→深 = 0.8B→9B），InternVL3.5 用第二个有序色阶（橙）；两类对比用分类槽 1（蓝）与槽 2（橙）。都在白底上过了 validate_palette.js（有序：单色相、亮度单调、相邻 ΔL ≥ 0.06；分类两色全对 CVD ΔE 24.7）。
@@ -97,7 +97,7 @@ Linear probes on frozen Qwen3.5 hidden states (E2). x: relative depth = layer in
   - 0.8B r128：computed with scripts/mgr/interference.py size_block: C3/E3b+C3 from experiments/E3/0054_r128_eval_hpcgpu07; E3b from experiments/E3/0050_hpc_eval_08b_hpcgpu07
   - 2B：docs/analysis/e3_interference_by_size.json
   - 4B：docs/analysis/e3_interference_by_size.json
-  - 9B：computed with scripts/mgr/interference.py size_block over experiments/E3/0056_hpc_9b_eval_hpcgpu06
+  - 9B：docs/analysis/e3_interference_by_size.json
 - (d) R_seg 的离群读数（DEV-0071，任务书第 5 条，二选一选了"箭头 + 数值"，没有用断轴）：秩 128 的读数（种子或平均）落在 r32 全部 R_seg 读数（各种子与平均）的范围 [lo, hi] 向外再扩 1 倍跨度的窗口之外时，不画进坐标轴，改在轴边画一个指向它的箭头并写数值；纵轴只容纳窗口内的点（含秩 128 的其余点与平均值）。其余三个面板不变。本次：0.8B r128 种子 2 = -3.278（窗口 [-0.838, 1.772]，纵轴 [-1.422, 1.117]）。
 
 **图注（英文）**
@@ -109,6 +109,7 @@ Interference vs. model size (E3, exploratory analysis §13). L = C3 − (E3b+C3)
 - 一致：0.8B 用 experiments/E3/0050_hpc_eval_08b_hpcgpu07 重算的 L/P/R 对 docs/analysis/e3_interference_by_size.json
 - 一致：2B 用 experiments/E3/0071_e3_reeval_e5v2_hpcgpu07, experiments/E3/0038_e3_eval_2b_s0, experiments/E3/0039_e3b_diag_2b_s0, experiments/E3/0046_e3_eval_2b_h1 重算的 L/P/R 对 docs/analysis/e3_interference_by_size.json
 - 一致：4B 用 experiments/E3/0071_e3_reeval_e5v2_hpcgpu07, experiments/E3/0052_hpc_eval_4b_hpcgpu06 重算的 L/P/R 对 docs/analysis/e3_interference_by_size.json
+- 一致：9B 用 experiments/E3/0056_hpc_9b_eval_hpcgpu06 重算的 L/P/R 对 docs/analysis/e3_interference_by_size.json
 
 ## 5. W2 test 主表：`tab_w2_test.tex` / `tab_w2_test.md`（gIoU 附录表 `tab_w2_test_giou.*`）
 

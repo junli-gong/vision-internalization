@@ -13,7 +13,8 @@
 
 用法：
   python scripts/mgr/interference.py --size 2B:B200:qwen3.5-2b:<T 文本与网格运行目录…> \\
-      --size 0.8B:hpcgpu07:qwen3.5-0.8b:<…> --size 4B:hpcgpu06:qwen3.5-4b:<…> [--json out.json]
+      --size 0.8B:hpcgpu07:qwen3.5-0.8b:<…> --size 4B:hpcgpu06:qwen3.5-4b:<…> [--size 9B:hpcgpu06:qwen3.5-9b:<…>] [--json out.json]
+  9B（D154-2(5)）作第 4 个尺寸，只描述：表里多一个尺寸、另起一行"加上 9B 的描述"；§13 的趋势判定只用 0.8B、2B、4B。
   每个 --size 是"尺寸:机器:模型:目录1,目录2,…"。各臂的读数在这些目录里按下面的相对路径找，先找到的为准：
     T 文本：<目录>/t_text/<变体>/seed<k>/<模型>/<任务>/metrics.json
     网格：  <目录>/eval/<变体>/<模型>/seed<k>/<refseg|depth>__structured/metrics.json
@@ -195,8 +196,10 @@ def main(argv=None):
     for spec in a.size:
         label, machine, model, dirs = spec.split(":", 3)
         blocks.append(size_block(label, machine, model, dirs.split(",")))
-    order = {"0.8B": 0, "2B": 1, "4B": 2}
+    order = {"0.8B": 0, "2B": 1, "4B": 2, "9B": 3}
     blocks.sort(key=lambda b: order.get(b["size"], 9))
+    # D154-2(5)：9B 作第 4 个尺寸，只有 seed 0，描述性。§13 的趋势判定只用 0.8B、2B、4B（JUDGED），9B 不进 trend()。
+    JUDGED = ("0.8B", "2B", "4B")
     lines = ["# 干扰随尺寸的变化（E3 预注册 §13）", "",
              "| 尺寸 | 机器 | 量 | 种子 0 | 种子 1 | 种子 2 | 平均（标准差） |", "|---|---|---|---:|---:|---:|---:|"]
     means = {"L": [], "P_seg": [], "P_depth": []}
@@ -204,13 +207,23 @@ def main(argv=None):
     for b in blocks:
         for q, unit in (("L", "点"), ("P_seg", "cIoU"), ("P_depth", "AbsRel"), ("R_seg", "比例，事后补充"), ("R_depth", "比例，事后补充")):
             m, sd = summary(b[q])
-            (means if q in means else rel_means)[q].append((b["size"], m))
+            if b["size"] in JUDGED:
+                (means if q in means else rel_means)[q].append((b["size"], m))
             cells = [(f"{b[q][s]:.1f}" if q == "L" else f"{b[q][s]:.3f}") if s in b[q] else "—" for s in SEEDS]
             ms = "—" if m is None else (f"{m:.1f}" if q == "L" else f"{m:.3f}") + ("" if sd is None else f"（{sd:.1f}）" if q == "L" else f"（{sd:.3f}）")
             lines.append(f"| {b['size']} | {b['machine']} | {q}（{unit}） | " + " | ".join(cells) + f" | {ms} |")
     lines += ["", "**趋势**（§13 的判定，现在定死）：" + "；".join(f"{q} {trend(v)}" for q, v in means.items()),
               "", "**相对干扰的趋势**（D96-4 事后补充，描述性，不参与判定，不改 §13a 的触发）：" +
               "；".join(f"{q} {trend(v)}（描述）" for q, v in rel_means.items()), ""]
+    extra = [b for b in blocks if b["size"] not in JUDGED]
+    desc = {}
+    if extra:
+        four = [b for b in blocks if b["size"] == "4B"]
+        for q in ("L", "P_seg", "P_depth", "R_seg", "R_depth"):
+            desc[q] = {b["size"]: summary(b[q])[0] for b in four + extra}
+        fmt = lambda q, v: "—" if v is None else (f"{v:.1f}" if q == "L" else f"{v:.3f}")
+        lines += ["**加上 9B 的描述**（D154-2(5)；9B 只有 seed 0，描述性，不参与 §13 的判定，上面的趋势不变）：" +
+                  "；".join(f"{q} " + " → ".join(f"{k} {fmt(q, v)}" for k, v in d.items()) for q, d in desc.items()), ""]
     cl = criteria_lines(blocks)
     if cl:  # DEV-0063：全是 v1 时没有这一节（输出与改动前相同）
         lines += ["**网格评测前合并核对的判据**（DEV-0063）：", ""] + cl + [""]
@@ -223,7 +236,8 @@ def main(argv=None):
     print("\n".join(lines))
     if a.json:
         Path(a.json).write_text(json.dumps({"blocks": blocks, "trend": {q: trend(v) for q, v in means.items()},
-                                            "relative_trend_descriptive": {q: trend(v) for q, v in rel_means.items()}},
+                                            "relative_trend_descriptive": {q: trend(v) for q, v in rel_means.items()},
+                                            **({"descriptive_beyond_4B": desc} if desc else {})},
                                            ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
 
