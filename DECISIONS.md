@@ -3470,3 +3470,18 @@
   - 仓库里只放抽样清单 `selection.json`、`figures.json` 与图注。论文按惯例用几张图并注明出处。
 - **matplotlib**：HPC 的 `$VI/env` 没有。建一个 `--system-site-packages` 的旁路 venv 只装 matplotlib，不动 `$VI/env`。
 - 抽样清单在开发机上算出：`experiments/U/0099_qual_select/selection.json`，先于任何作图。HPC 作图时用 `--expect-selection` 核对，必须逐条相同。
+
+## D159（2026-10-30，管理员）：DEV-0074 合入（统一主表的两只"手"在 test 子集上的运行器）
+
+- `scripts/run_u_hands.py` 与 `src/unified/hands.py`：E1 结构强制多边形（9B 零样本）、9B E3b 网格，在 `configs/w2_llmseg_subsets.json` 的 1,500 句上运行。
+  - 必须给 `--test-approval D154` 才放行。
+  - 推理原样调用 `src/e1/posthoc_runner.run_forced_poly_task` 与 `src/e3/evaluate.run_eval_task`，没改一行；输出 W2 叶目录格式。
+  - 原有运行器的输出逐字节不变：73 条快照测试通过。
+- 它提出的待裁：
+  - **失败的口径**：解析不出记为失败；解析成功但 mask 面积为 0 的不算失败，另记 `empty_mask.n`。两者计分都按空 mask，结果相同。接受。
+  - **CI 的重抽次数**：叶目录里的 CI 是 1,000 次，与 W2、LLMSeg 相同；主表的 10,000 次由 `scripts/mgr/unified_table.py` 另算。接受。
+  - **E3b 的合并核对在 06 上重跑一次**，不往 RUN-0056 的目录里写。接受。
+  - **驱动先核对检查点 manifest 的 sha256**（`316d25c7…`）与 `configs/w2.json` 冻结。接受。
+- **批准编号常量有两份**：`src/lisa/common.TEST_APPROVAL` 与 `src/unified/hands.TEST_APPROVAL`，都是 "D154"。
+  - 不合成一处：LISA 一侧只许 import 标准库、numpy 与 `src.lisa.common`（隔离），不能 import `src.unified`。
+  - 两边各有测试钉住。D156 里"合成一处"的说法作废。
