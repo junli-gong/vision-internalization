@@ -42,6 +42,11 @@ def leaf_preds(run: str | None, setting: str):
     return lambda sp: None if run is None else W2T.preds(XT.leaf(run, setting, sp))
 
 
+def lisa_preds(run: str | None):
+    """LISA 的叶目录在 <run>/lisa-7b-v1/refseg/lisa_7b/<划分>/（src/lisa/common 的布局，DEV-0075），不在 qwen3.5-9b/ 下。"""
+    return lambda sp: None if run is None else W2T.preds(ROOT / run / "lisa-7b-v1" / "refseg" / "lisa_7b" / sp)
+
+
 def w2a(sp: str):
     p = W2A / f"{sp}.jsonl"
     if not p.exists():
@@ -66,7 +71,7 @@ def systems(a) -> list[tuple[str, str, object, str]]:
             ("各种手", "9B E3b 像素 token 网格", leaf_preds(a.e3b_grid, "u_e3b_grid"), a.e3b_grid or "待跑"),
             ("外部方法", "LLMSeg 修正后（主配置）", llmseg(0), "RUN-0078"),
             ("外部方法", "LLMSeg 修正前", llmseg(1), "RUN-0078"),
-            ("外部方法", "LISA-7B（xinlai/LISA-7B-v1）", leaf_preds(a.lisa, "lisa_7b"), a.lisa or "待跑"),
+            ("外部方法", "LISA-7B（xinlai/LISA-7B-v1）", lisa_preds(a.lisa), a.lisa or "待跑"),
             ("附带", "C1 的椭圆消融", leaf_preds(X2, XT.ABL), f"RUN-0092 {X2}")]
 
 
