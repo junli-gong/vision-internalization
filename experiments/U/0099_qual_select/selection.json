@@ -1,0 +1,2300 @@
+{
+ "experiment": "U-5 定性图的抽样（DEV-0076）",
+ "prereg": "PREREGISTRATION.md U-5",
+ "framework": "scripts/figures/make_qualitative.py",
+ "constants": {
+  "POOL_SEED_BASE": 20260929,
+  "POOL_N": 40,
+  "N_RANDOM": 3,
+  "N_FAILURE": 2
+ },
+ "rules": {
+  "pool": "numpy.random.default_rng(POOL_SEED_BASE + k).choice(子集的 sent_id 列表（configs/w2_llmseg_subsets.json 里的顺序）, POOL_N, replace=False)；抽中顺序 = choice 返回的顺序",
+  "random": "池里抽中顺序的前 N_RANDOM 句",
+  "failure": "池里按 (X-2 的 score.iou, 样本 id) 升序取前 N_FAILURE 句（同分按 id 字典序）；与随机例重合也照样入选",
+  "main": "每个划分的第 1 个随机例与第 1 个失败例",
+  "iou": "x2_spline_trimap / x2_ellipse_trimap / w2c 的 predictions.jsonl 的 score（W2 的计分；失败按空 mask 计）"
+ },
+ "numpy": "2.5.3",
+ "tiny": false,
+ "inputs": {
+  "subsets": {
+   "path": "configs/w2_llmseg_subsets.json",
+   "sha256": "dfd53ce8e9a89d85ba828de6c0b3e331f83bfcf7d476cfc7ed1751e64c7497ae"
+  },
+  "predictions": {
+   "x2_spline_trimap": {
+    "test_refcoco_unc_testA": {
+     "path": "experiments/X/0092_x2_test_hpcgpu06/qwen3.5-9b/refseg/x2_spline_trimap/test_refcoco_unc_testA/predictions.jsonl",
+     "sha256": "dfbb81a028b6535c69a3a64d7ed68cf553c50fea919439d724cd3003321f74eb"
+    },
+    "test_refcoco_unc_testB": {
+     "path": "experiments/X/0092_x2_test_hpcgpu06/qwen3.5-9b/refseg/x2_spline_trimap/test_refcoco_unc_testB/predictions.jsonl",
+     "sha256": "0a379f373e40b22bb200ac30f3e9f05c494a1b8433d7fad52ca0047776338587"
+    },
+    "test_refcoco+_unc_testA": {
+     "path": "experiments/X/0092_x2_test_hpcgpu06/qwen3.5-9b/refseg/x2_spline_trimap/test_refcoco+_unc_testA/predictions.jsonl",
+     "sha256": "27f509a131c8a2348c00bddfc3776aa46d09186fed8c8be9f5384adeebb2ce45"
+    },
+    "test_refcoco+_unc_testB": {
+     "path": "experiments/X/0092_x2_test_hpcgpu06/qwen3.5-9b/refseg/x2_spline_trimap/test_refcoco+_unc_testB/predictions.jsonl",
+     "sha256": "497bc3dba328fb8ea113ec2d664ecf4309fea556286012da47c417a424b7a206"
+    },
+    "test_refcocog_umd_test": {
+     "path": "experiments/X/0092_x2_test_hpcgpu06/qwen3.5-9b/refseg/x2_spline_trimap/test_refcocog_umd_test/predictions.jsonl",
+     "sha256": "6577740371a36e7714634f90a108e03fbbe3ed87a107dd403ae414febf95ec75"
+    }
+   },
+   "x2_ellipse_trimap": {
+    "test_refcoco_unc_testA": {
+     "path": "experiments/X/0092_x2_test_hpcgpu06/qwen3.5-9b/refseg/x2_ellipse_trimap/test_refcoco_unc_testA/predictions.jsonl",
+     "sha256": "eac678fc98cba913c02b0ccc1513f764c480a24b73fa5a2a214c4215b1e7db2a"
+    },
+    "test_refcoco_unc_testB": {
+     "path": "experiments/X/0092_x2_test_hpcgpu06/qwen3.5-9b/refseg/x2_ellipse_trimap/test_refcoco_unc_testB/predictions.jsonl",
+     "sha256": "4a7194139165b1c891d0d226171d683ec991f3c3b6e1e06d581ab2ea63a4a4dd"
+    },
+    "test_refcoco+_unc_testA": {
+     "path": "experiments/X/0092_x2_test_hpcgpu06/qwen3.5-9b/refseg/x2_ellipse_trimap/test_refcoco+_unc_testA/predictions.jsonl",
+     "sha256": "653fb8448cc32634453dcbe74d94071592cc99fa2d4ffa8d198123dc7412806e"
+    },
+    "test_refcoco+_unc_testB": {
+     "path": "experiments/X/0092_x2_test_hpcgpu06/qwen3.5-9b/refseg/x2_ellipse_trimap/test_refcoco+_unc_testB/predictions.jsonl",
+     "sha256": "b66cddce70c2e3b7633f419ef27a79962275fbdc377a32959aa7ad2a45a073e6"
+    },
+    "test_refcocog_umd_test": {
+     "path": "experiments/X/0092_x2_test_hpcgpu06/qwen3.5-9b/refseg/x2_ellipse_trimap/test_refcocog_umd_test/predictions.jsonl",
+     "sha256": "b87a31169c14ded13d9f0bb88d4df7c7e58d73a0f53bc8df9684c25769f0064f"
+    }
+   },
+   "w2c": {
+    "test_refcoco_unc_testA": {
+     "path": "experiments/W2/0072_w2_test_hpcgpu06/qwen3.5-9b/refseg/w2c/test_refcoco_unc_testA/predictions.jsonl",
+     "sha256": "4515a365b9ee0e5e424bf0f460cb9b47e8f92d40aba69dcf284d9f3d231da31d"
+    },
+    "test_refcoco_unc_testB": {
+     "path": "experiments/W2/0072_w2_test_hpcgpu06/qwen3.5-9b/refseg/w2c/test_refcoco_unc_testB/predictions.jsonl",
+     "sha256": "c40fec8680f1a61b096698b6cc7ae980b2518f4f4a193ff4e9538430ad21c37e"
+    },
+    "test_refcoco+_unc_testA": {
+     "path": "experiments/W2/0072_w2_test_hpcgpu06/qwen3.5-9b/refseg/w2c/test_refcoco+_unc_testA/predictions.jsonl",
+     "sha256": "7c9ca7e875e8d963bf1d109c2040a2a2aedbce9b0d36c7b93e0812e7d62989be"
+    },
+    "test_refcoco+_unc_testB": {
+     "path": "experiments/W2/0072_w2_test_hpcgpu06/qwen3.5-9b/refseg/w2c/test_refcoco+_unc_testB/predictions.jsonl",
+     "sha256": "e49a6213534482145dd4b30669e344f8b5d4c35395d624dff130fb0338424152"
+    },
+    "test_refcocog_umd_test": {
+     "path": "experiments/W2/0072_w2_test_hpcgpu06/qwen3.5-9b/refseg/w2c/test_refcocog_umd_test/predictions.jsonl",
+     "sha256": "39996cba3b956e7b5f529572dd7ea1d4fa8c2178521dd8aea4f0f5bc0882eadd"
+    }
+   }
+  }
+ },
+ "splits": [
+  {
+   "split": "test_refcoco_unc_testA",
+   "k": 0,
+   "dataset": "refcoco",
+   "n_subset": 300,
+   "pool_n": 40,
+   "pool": [
+    {
+     "order": 0,
+     "sent_id": "33859",
+     "id": "refcoco_unc/testA/33859",
+     "x2_iou": 0.8156111615002934
+    },
+    {
+     "order": 1,
+     "sent_id": "16417",
+     "id": "refcoco_unc/testA/16417",
+     "x2_iou": 0.8365166596210752
+    },
+    {
+     "order": 2,
+     "sent_id": "38776",
+     "id": "refcoco_unc/testA/38776",
+     "x2_iou": 0.8709879912663755
+    },
+    {
+     "order": 3,
+     "sent_id": "34898",
+     "id": "refcoco_unc/testA/34898",
+     "x2_iou": 0.9033643980848153
+    },
+    {
+     "order": 4,
+     "sent_id": "323",
+     "id": "refcoco_unc/testA/323",
+     "x2_iou": 0.4855198408543608
+    },
+    {
+     "order": 5,
+     "sent_id": "130432",
+     "id": "refcoco_unc/testA/130432",
+     "x2_iou": 0.7816002375120612
+    },
+    {
+     "order": 6,
+     "sent_id": "112585",
+     "id": "refcoco_unc/testA/112585",
+     "x2_iou": 0.7397914856646395
+    },
+    {
+     "order": 7,
+     "sent_id": "88047",
+     "id": "refcoco_unc/testA/88047",
+     "x2_iou": 0.898076062639821
+    },
+    {
+     "order": 8,
+     "sent_id": "78182",
+     "id": "refcoco_unc/testA/78182",
+     "x2_iou": 0.013657515123313169
+    },
+    {
+     "order": 9,
+     "sent_id": "39256",
+     "id": "refcoco_unc/testA/39256",
+     "x2_iou": 0.9116422210581456
+    },
+    {
+     "order": 10,
+     "sent_id": "90607",
+     "id": "refcoco_unc/testA/90607",
+     "x2_iou": 0.9269513378621933
+    },
+    {
+     "order": 11,
+     "sent_id": "83995",
+     "id": "refcoco_unc/testA/83995",
+     "x2_iou": 0.8680922210489265
+    },
+    {
+     "order": 12,
+     "sent_id": "24785",
+     "id": "refcoco_unc/testA/24785",
+     "x2_iou": 0.6990716180371352
+    },
+    {
+     "order": 13,
+     "sent_id": "94001",
+     "id": "refcoco_unc/testA/94001",
+     "x2_iou": 0.7999209564272305
+    },
+    {
+     "order": 14,
+     "sent_id": "40611",
+     "id": "refcoco_unc/testA/40611",
+     "x2_iou": 0.7354278627532038
+    },
+    {
+     "order": 15,
+     "sent_id": "23964",
+     "id": "refcoco_unc/testA/23964",
+     "x2_iou": 0.8774015550539253
+    },
+    {
+     "order": 16,
+     "sent_id": "136196",
+     "id": "refcoco_unc/testA/136196",
+     "x2_iou": 0.6006495496047551
+    },
+    {
+     "order": 17,
+     "sent_id": "81803",
+     "id": "refcoco_unc/testA/81803",
+     "x2_iou": 0.8229320713792764
+    },
+    {
+     "order": 18,
+     "sent_id": "89736",
+     "id": "refcoco_unc/testA/89736",
+     "x2_iou": 0.0263509898341359
+    },
+    {
+     "order": 19,
+     "sent_id": "130431",
+     "id": "refcoco_unc/testA/130431",
+     "x2_iou": 0.760914760914761
+    },
+    {
+     "order": 20,
+     "sent_id": "36884",
+     "id": "refcoco_unc/testA/36884",
+     "x2_iou": 0.6998804304503786
+    },
+    {
+     "order": 21,
+     "sent_id": "100311",
+     "id": "refcoco_unc/testA/100311",
+     "x2_iou": 0.756850669529352
+    },
+    {
+     "order": 22,
+     "sent_id": "42519",
+     "id": "refcoco_unc/testA/42519",
+     "x2_iou": 0.8486605204688816
+    },
+    {
+     "order": 23,
+     "sent_id": "128950",
+     "id": "refcoco_unc/testA/128950",
+     "x2_iou": 0.8483519731980096
+    },
+    {
+     "order": 24,
+     "sent_id": "112462",
+     "id": "refcoco_unc/testA/112462",
+     "x2_iou": 0.7471590909090909
+    },
+    {
+     "order": 25,
+     "sent_id": "93964",
+     "id": "refcoco_unc/testA/93964",
+     "x2_iou": 0.6516373608646556
+    },
+    {
+     "order": 26,
+     "sent_id": "65771",
+     "id": "refcoco_unc/testA/65771",
+     "x2_iou": 0.7677936343582586
+    },
+    {
+     "order": 27,
+     "sent_id": "31788",
+     "id": "refcoco_unc/testA/31788",
+     "x2_iou": 0.8508133230054221
+    },
+    {
+     "order": 28,
+     "sent_id": "110730",
+     "id": "refcoco_unc/testA/110730",
+     "x2_iou": 0.8422236778401162
+    },
+    {
+     "order": 29,
+     "sent_id": "44274",
+     "id": "refcoco_unc/testA/44274",
+     "x2_iou": 0.7416912074042912
+    },
+    {
+     "order": 30,
+     "sent_id": "134918",
+     "id": "refcoco_unc/testA/134918",
+     "x2_iou": 0.950809557641252
+    },
+    {
+     "order": 31,
+     "sent_id": "26361",
+     "id": "refcoco_unc/testA/26361",
+     "x2_iou": 0.8128867742637684
+    },
+    {
+     "order": 32,
+     "sent_id": "60971",
+     "id": "refcoco_unc/testA/60971",
+     "x2_iou": 0.5754612653512601
+    },
+    {
+     "order": 33,
+     "sent_id": "40613",
+     "id": "refcoco_unc/testA/40613",
+     "x2_iou": 0.7905996500715763
+    },
+    {
+     "order": 34,
+     "sent_id": "60897",
+     "id": "refcoco_unc/testA/60897",
+     "x2_iou": 0.7294546515018956
+    },
+    {
+     "order": 35,
+     "sent_id": "101661",
+     "id": "refcoco_unc/testA/101661",
+     "x2_iou": 0.641667147057128
+    },
+    {
+     "order": 36,
+     "sent_id": "11940",
+     "id": "refcoco_unc/testA/11940",
+     "x2_iou": 0.9463533771264948
+    },
+    {
+     "order": 37,
+     "sent_id": "133198",
+     "id": "refcoco_unc/testA/133198",
+     "x2_iou": 0.7943982554177457
+    },
+    {
+     "order": 38,
+     "sent_id": "93286",
+     "id": "refcoco_unc/testA/93286",
+     "x2_iou": 0.844201874919738
+    },
+    {
+     "order": 39,
+     "sent_id": "66114",
+     "id": "refcoco_unc/testA/66114",
+     "x2_iou": 0.8055716264310384
+    }
+   ],
+   "random": [
+    "refcoco_unc/testA/33859",
+    "refcoco_unc/testA/16417",
+    "refcoco_unc/testA/38776"
+   ],
+   "failure": [
+    "refcoco_unc/testA/78182",
+    "refcoco_unc/testA/89736"
+   ]
+  },
+  {
+   "split": "test_refcoco_unc_testB",
+   "k": 1,
+   "dataset": "refcoco",
+   "n_subset": 300,
+   "pool_n": 40,
+   "pool": [
+    {
+     "order": 0,
+     "sent_id": "39007",
+     "id": "refcoco_unc/testB/39007",
+     "x2_iou": 0.8597900502053857
+    },
+    {
+     "order": 1,
+     "sent_id": "76806",
+     "id": "refcoco_unc/testB/76806",
+     "x2_iou": 0.6962600662022628
+    },
+    {
+     "order": 2,
+     "sent_id": "20698",
+     "id": "refcoco_unc/testB/20698",
+     "x2_iou": 0.7361203876613551
+    },
+    {
+     "order": 3,
+     "sent_id": "133077",
+     "id": "refcoco_unc/testB/133077",
+     "x2_iou": 0.8065140277329894
+    },
+    {
+     "order": 4,
+     "sent_id": "140062",
+     "id": "refcoco_unc/testB/140062",
+     "x2_iou": 0.8290922436995352
+    },
+    {
+     "order": 5,
+     "sent_id": "22330",
+     "id": "refcoco_unc/testB/22330",
+     "x2_iou": 0.7545474542716459
+    },
+    {
+     "order": 6,
+     "sent_id": "73240",
+     "id": "refcoco_unc/testB/73240",
+     "x2_iou": 0.8328126525432002
+    },
+    {
+     "order": 7,
+     "sent_id": "87787",
+     "id": "refcoco_unc/testB/87787",
+     "x2_iou": 0.8685562244457685
+    },
+    {
+     "order": 8,
+     "sent_id": "73310",
+     "id": "refcoco_unc/testB/73310",
+     "x2_iou": 0.8135460992907801
+    },
+    {
+     "order": 9,
+     "sent_id": "137788",
+     "id": "refcoco_unc/testB/137788",
+     "x2_iou": 0.8752077353074482
+    },
+    {
+     "order": 10,
+     "sent_id": "86825",
+     "id": "refcoco_unc/testB/86825",
+     "x2_iou": 0.6240028096934424
+    },
+    {
+     "order": 11,
+     "sent_id": "67048",
+     "id": "refcoco_unc/testB/67048",
+     "x2_iou": 0.6867761565137734
+    },
+    {
+     "order": 12,
+     "sent_id": "110109",
+     "id": "refcoco_unc/testB/110109",
+     "x2_iou": 0.4072291401422228
+    },
+    {
+     "order": 13,
+     "sent_id": "42757",
+     "id": "refcoco_unc/testB/42757",
+     "x2_iou": 0.9258286378857452
+    },
+    {
+     "order": 14,
+     "sent_id": "89851",
+     "id": "refcoco_unc/testB/89851",
+     "x2_iou": 0.8044987858390491
+    },
+    {
+     "order": 15,
+     "sent_id": "46214",
+     "id": "refcoco_unc/testB/46214",
+     "x2_iou": 0.9150871551870029
+    },
+    {
+     "order": 16,
+     "sent_id": "96675",
+     "id": "refcoco_unc/testB/96675",
+     "x2_iou": 0.8432975770759883
+    },
+    {
+     "order": 17,
+     "sent_id": "17819",
+     "id": "refcoco_unc/testB/17819",
+     "x2_iou": 0.28612188489144486
+    },
+    {
+     "order": 18,
+     "sent_id": "91885",
+     "id": "refcoco_unc/testB/91885",
+     "x2_iou": 0.8058069101594407
+    },
+    {
+     "order": 19,
+     "sent_id": "1029",
+     "id": "refcoco_unc/testB/1029",
+     "x2_iou": 0.8352463768115942
+    },
+    {
+     "order": 20,
+     "sent_id": "54760",
+     "id": "refcoco_unc/testB/54760",
+     "x2_iou": 0.8530954879328436
+    },
+    {
+     "order": 21,
+     "sent_id": "129918",
+     "id": "refcoco_unc/testB/129918",
+     "x2_iou": 0.09540400876918259
+    },
+    {
+     "order": 22,
+     "sent_id": "117040",
+     "id": "refcoco_unc/testB/117040",
+     "x2_iou": 0.5018572335880214
+    },
+    {
+     "order": 23,
+     "sent_id": "44798",
+     "id": "refcoco_unc/testB/44798",
+     "x2_iou": 0.7476362116700621
+    },
+    {
+     "order": 24,
+     "sent_id": "3826",
+     "id": "refcoco_unc/testB/3826",
+     "x2_iou": 0.9751476521840828
+    },
+    {
+     "order": 25,
+     "sent_id": "41732",
+     "id": "refcoco_unc/testB/41732",
+     "x2_iou": 0.9296650324559722
+    },
+    {
+     "order": 26,
+     "sent_id": "66231",
+     "id": "refcoco_unc/testB/66231",
+     "x2_iou": 0.6291684997800264
+    },
+    {
+     "order": 27,
+     "sent_id": "140064",
+     "id": "refcoco_unc/testB/140064",
+     "x2_iou": 0.8179058240396531
+    },
+    {
+     "order": 28,
+     "sent_id": "138963",
+     "id": "refcoco_unc/testB/138963",
+     "x2_iou": 0.7703632983267172
+    },
+    {
+     "order": 29,
+     "sent_id": "17886",
+     "id": "refcoco_unc/testB/17886",
+     "x2_iou": 0.9523709483793518
+    },
+    {
+     "order": 30,
+     "sent_id": "124940",
+     "id": "refcoco_unc/testB/124940",
+     "x2_iou": 0.9309649122807018
+    },
+    {
+     "order": 31,
+     "sent_id": "34544",
+     "id": "refcoco_unc/testB/34544",
+     "x2_iou": 0.038895027624309395
+    },
+    {
+     "order": 32,
+     "sent_id": "140778",
+     "id": "refcoco_unc/testB/140778",
+     "x2_iou": 0.8523379106553103
+    },
+    {
+     "order": 33,
+     "sent_id": "30751",
+     "id": "refcoco_unc/testB/30751",
+     "x2_iou": 0.9520982599795291
+    },
+    {
+     "order": 34,
+     "sent_id": "63807",
+     "id": "refcoco_unc/testB/63807",
+     "x2_iou": 0.9030295566502463
+    },
+    {
+     "order": 35,
+     "sent_id": "86463",
+     "id": "refcoco_unc/testB/86463",
+     "x2_iou": 0.6938993213293851
+    },
+    {
+     "order": 36,
+     "sent_id": "92027",
+     "id": "refcoco_unc/testB/92027",
+     "x2_iou": 0.8901900556728739
+    },
+    {
+     "order": 37,
+     "sent_id": "52467",
+     "id": "refcoco_unc/testB/52467",
+     "x2_iou": 0.9179198233524956
+    },
+    {
+     "order": 38,
+     "sent_id": "103196",
+     "id": "refcoco_unc/testB/103196",
+     "x2_iou": 0.8934925316335268
+    },
+    {
+     "order": 39,
+     "sent_id": "90374",
+     "id": "refcoco_unc/testB/90374",
+     "x2_iou": 0.9217210270645385
+    }
+   ],
+   "random": [
+    "refcoco_unc/testB/39007",
+    "refcoco_unc/testB/76806",
+    "refcoco_unc/testB/20698"
+   ],
+   "failure": [
+    "refcoco_unc/testB/34544",
+    "refcoco_unc/testB/129918"
+   ]
+  },
+  {
+   "split": "test_refcoco+_unc_testA",
+   "k": 2,
+   "dataset": "refcoco+",
+   "n_subset": 300,
+   "pool_n": 40,
+   "pool": [
+    {
+     "order": 0,
+     "sent_id": "80504",
+     "id": "refcoco+_unc/testA/80504",
+     "x2_iou": 0.737645374218559
+    },
+    {
+     "order": 1,
+     "sent_id": "132626",
+     "id": "refcoco+_unc/testA/132626",
+     "x2_iou": 0.7290417861176266
+    },
+    {
+     "order": 2,
+     "sent_id": "14877",
+     "id": "refcoco+_unc/testA/14877",
+     "x2_iou": 0.5121179522875403
+    },
+    {
+     "order": 3,
+     "sent_id": "59187",
+     "id": "refcoco+_unc/testA/59187",
+     "x2_iou": 0.9060575296108291
+    },
+    {
+     "order": 4,
+     "sent_id": "134693",
+     "id": "refcoco+_unc/testA/134693",
+     "x2_iou": 0.5225063938618926
+    },
+    {
+     "order": 5,
+     "sent_id": "100947",
+     "id": "refcoco+_unc/testA/100947",
+     "x2_iou": 0.8888193792791853
+    },
+    {
+     "order": 6,
+     "sent_id": "51847",
+     "id": "refcoco+_unc/testA/51847",
+     "x2_iou": 0.9221814715481307
+    },
+    {
+     "order": 7,
+     "sent_id": "54765",
+     "id": "refcoco+_unc/testA/54765",
+     "x2_iou": 0.8811965729034261
+    },
+    {
+     "order": 8,
+     "sent_id": "3792",
+     "id": "refcoco+_unc/testA/3792",
+     "x2_iou": 0.7847406503931038
+    },
+    {
+     "order": 9,
+     "sent_id": "42744",
+     "id": "refcoco+_unc/testA/42744",
+     "x2_iou": 0.7224486824865337
+    },
+    {
+     "order": 10,
+     "sent_id": "134699",
+     "id": "refcoco+_unc/testA/134699",
+     "x2_iou": 0.8984069732491734
+    },
+    {
+     "order": 11,
+     "sent_id": "100340",
+     "id": "refcoco+_unc/testA/100340",
+     "x2_iou": 0.8959047543118339
+    },
+    {
+     "order": 12,
+     "sent_id": "49951",
+     "id": "refcoco+_unc/testA/49951",
+     "x2_iou": 0.7349500835511376
+    },
+    {
+     "order": 13,
+     "sent_id": "97722",
+     "id": "refcoco+_unc/testA/97722",
+     "x2_iou": 0.8106864588930682
+    },
+    {
+     "order": 14,
+     "sent_id": "22277",
+     "id": "refcoco+_unc/testA/22277",
+     "x2_iou": 0.8116639070672028
+    },
+    {
+     "order": 15,
+     "sent_id": "120775",
+     "id": "refcoco+_unc/testA/120775",
+     "x2_iou": 0.9125728382459274
+    },
+    {
+     "order": 16,
+     "sent_id": "30852",
+     "id": "refcoco+_unc/testA/30852",
+     "x2_iou": 0.24094254462651973
+    },
+    {
+     "order": 17,
+     "sent_id": "86573",
+     "id": "refcoco+_unc/testA/86573",
+     "x2_iou": 0.9013583540306013
+    },
+    {
+     "order": 18,
+     "sent_id": "116339",
+     "id": "refcoco+_unc/testA/116339",
+     "x2_iou": 0.7519967850504847
+    },
+    {
+     "order": 19,
+     "sent_id": "89410",
+     "id": "refcoco+_unc/testA/89410",
+     "x2_iou": 0.040257648953301126
+    },
+    {
+     "order": 20,
+     "sent_id": "55792",
+     "id": "refcoco+_unc/testA/55792",
+     "x2_iou": 0.34080246218518934
+    },
+    {
+     "order": 21,
+     "sent_id": "100945",
+     "id": "refcoco+_unc/testA/100945",
+     "x2_iou": 0.1832705767226158
+    },
+    {
+     "order": 22,
+     "sent_id": "132637",
+     "id": "refcoco+_unc/testA/132637",
+     "x2_iou": 0.772780694194155
+    },
+    {
+     "order": 23,
+     "sent_id": "136962",
+     "id": "refcoco+_unc/testA/136962",
+     "x2_iou": 0.872290720311486
+    },
+    {
+     "order": 24,
+     "sent_id": "122880",
+     "id": "refcoco+_unc/testA/122880",
+     "x2_iou": 0.578700171657448
+    },
+    {
+     "order": 25,
+     "sent_id": "124784",
+     "id": "refcoco+_unc/testA/124784",
+     "x2_iou": 0.685923819501609
+    },
+    {
+     "order": 26,
+     "sent_id": "46958",
+     "id": "refcoco+_unc/testA/46958",
+     "x2_iou": 0.44929517559849314
+    },
+    {
+     "order": 27,
+     "sent_id": "132161",
+     "id": "refcoco+_unc/testA/132161",
+     "x2_iou": 0.8672497956839618
+    },
+    {
+     "order": 28,
+     "sent_id": "55123",
+     "id": "refcoco+_unc/testA/55123",
+     "x2_iou": 0.768599765627233
+    },
+    {
+     "order": 29,
+     "sent_id": "89390",
+     "id": "refcoco+_unc/testA/89390",
+     "x2_iou": 0.7920636679222985
+    },
+    {
+     "order": 30,
+     "sent_id": "98226",
+     "id": "refcoco+_unc/testA/98226",
+     "x2_iou": 0.6969417275106764
+    },
+    {
+     "order": 31,
+     "sent_id": "120898",
+     "id": "refcoco+_unc/testA/120898",
+     "x2_iou": 0.8877769835596855
+    },
+    {
+     "order": 32,
+     "sent_id": "112034",
+     "id": "refcoco+_unc/testA/112034",
+     "x2_iou": 0.8132179621065194
+    },
+    {
+     "order": 33,
+     "sent_id": "37470",
+     "id": "refcoco+_unc/testA/37470",
+     "x2_iou": 0.8590142577983644
+    },
+    {
+     "order": 34,
+     "sent_id": "73922",
+     "id": "refcoco+_unc/testA/73922",
+     "x2_iou": 0.7444849460329483
+    },
+    {
+     "order": 35,
+     "sent_id": "69455",
+     "id": "refcoco+_unc/testA/69455",
+     "x2_iou": 0.837267934907174
+    },
+    {
+     "order": 36,
+     "sent_id": "98459",
+     "id": "refcoco+_unc/testA/98459",
+     "x2_iou": 0.5500326655052264
+    },
+    {
+     "order": 37,
+     "sent_id": "36704",
+     "id": "refcoco+_unc/testA/36704",
+     "x2_iou": 0.7572691827425397
+    },
+    {
+     "order": 38,
+     "sent_id": "118684",
+     "id": "refcoco+_unc/testA/118684",
+     "x2_iou": 0.7388855054811205
+    },
+    {
+     "order": 39,
+     "sent_id": "138758",
+     "id": "refcoco+_unc/testA/138758",
+     "x2_iou": 0.609629072391644
+    }
+   ],
+   "random": [
+    "refcoco+_unc/testA/80504",
+    "refcoco+_unc/testA/132626",
+    "refcoco+_unc/testA/14877"
+   ],
+   "failure": [
+    "refcoco+_unc/testA/89410",
+    "refcoco+_unc/testA/100945"
+   ]
+  },
+  {
+   "split": "test_refcoco+_unc_testB",
+   "k": 3,
+   "dataset": "refcoco+",
+   "n_subset": 300,
+   "pool_n": 40,
+   "pool": [
+    {
+     "order": 0,
+     "sent_id": "114309",
+     "id": "refcoco+_unc/testB/114309",
+     "x2_iou": 0.2965396615297343
+    },
+    {
+     "order": 1,
+     "sent_id": "77177",
+     "id": "refcoco+_unc/testB/77177",
+     "x2_iou": 0.8320194222428325
+    },
+    {
+     "order": 2,
+     "sent_id": "45490",
+     "id": "refcoco+_unc/testB/45490",
+     "x2_iou": 0.9531082504055477
+    },
+    {
+     "order": 3,
+     "sent_id": "8594",
+     "id": "refcoco+_unc/testB/8594",
+     "x2_iou": 0.8249643592586726
+    },
+    {
+     "order": 4,
+     "sent_id": "87305",
+     "id": "refcoco+_unc/testB/87305",
+     "x2_iou": 0.9334317466506977
+    },
+    {
+     "order": 5,
+     "sent_id": "125095",
+     "id": "refcoco+_unc/testB/125095",
+     "x2_iou": 0.9321424062618356
+    },
+    {
+     "order": 6,
+     "sent_id": "95808",
+     "id": "refcoco+_unc/testB/95808",
+     "x2_iou": 0.8201668171917336
+    },
+    {
+     "order": 7,
+     "sent_id": "129375",
+     "id": "refcoco+_unc/testB/129375",
+     "x2_iou": 0.09855969294337664
+    },
+    {
+     "order": 8,
+     "sent_id": "46851",
+     "id": "refcoco+_unc/testB/46851",
+     "x2_iou": 0.2963964951569584
+    },
+    {
+     "order": 9,
+     "sent_id": "9378",
+     "id": "refcoco+_unc/testB/9378",
+     "x2_iou": 0.6819360168646554
+    },
+    {
+     "order": 10,
+     "sent_id": "64508",
+     "id": "refcoco+_unc/testB/64508",
+     "x2_iou": 0.8525185536080846
+    },
+    {
+     "order": 11,
+     "sent_id": "88954",
+     "id": "refcoco+_unc/testB/88954",
+     "x2_iou": 0.7209234762061553
+    },
+    {
+     "order": 12,
+     "sent_id": "26125",
+     "id": "refcoco+_unc/testB/26125",
+     "x2_iou": 0.8019911943199397
+    },
+    {
+     "order": 13,
+     "sent_id": "37107",
+     "id": "refcoco+_unc/testB/37107",
+     "x2_iou": 0.0
+    },
+    {
+     "order": 14,
+     "sent_id": "6783",
+     "id": "refcoco+_unc/testB/6783",
+     "x2_iou": 0.5857847134237365
+    },
+    {
+     "order": 15,
+     "sent_id": "67667",
+     "id": "refcoco+_unc/testB/67667",
+     "x2_iou": 0.0
+    },
+    {
+     "order": 16,
+     "sent_id": "34395",
+     "id": "refcoco+_unc/testB/34395",
+     "x2_iou": 0.0
+    },
+    {
+     "order": 17,
+     "sent_id": "90595",
+     "id": "refcoco+_unc/testB/90595",
+     "x2_iou": 0.9427611569932428
+    },
+    {
+     "order": 18,
+     "sent_id": "125058",
+     "id": "refcoco+_unc/testB/125058",
+     "x2_iou": 0.829780501136331
+    },
+    {
+     "order": 19,
+     "sent_id": "60274",
+     "id": "refcoco+_unc/testB/60274",
+     "x2_iou": 0.0
+    },
+    {
+     "order": 20,
+     "sent_id": "105563",
+     "id": "refcoco+_unc/testB/105563",
+     "x2_iou": 0.882540688593612
+    },
+    {
+     "order": 21,
+     "sent_id": "27312",
+     "id": "refcoco+_unc/testB/27312",
+     "x2_iou": 0.8624016624610361
+    },
+    {
+     "order": 22,
+     "sent_id": "140709",
+     "id": "refcoco+_unc/testB/140709",
+     "x2_iou": 0.748814532825753
+    },
+    {
+     "order": 23,
+     "sent_id": "65105",
+     "id": "refcoco+_unc/testB/65105",
+     "x2_iou": 0.912249236083433
+    },
+    {
+     "order": 24,
+     "sent_id": "1014",
+     "id": "refcoco+_unc/testB/1014",
+     "x2_iou": 0.8084943449575872
+    },
+    {
+     "order": 25,
+     "sent_id": "93551",
+     "id": "refcoco+_unc/testB/93551",
+     "x2_iou": 0.0
+    },
+    {
+     "order": 26,
+     "sent_id": "138396",
+     "id": "refcoco+_unc/testB/138396",
+     "x2_iou": 0.7771314829149618
+    },
+    {
+     "order": 27,
+     "sent_id": "104560",
+     "id": "refcoco+_unc/testB/104560",
+     "x2_iou": 0.5658566313704578
+    },
+    {
+     "order": 28,
+     "sent_id": "28130",
+     "id": "refcoco+_unc/testB/28130",
+     "x2_iou": 0.6465423507665543
+    },
+    {
+     "order": 29,
+     "sent_id": "40153",
+     "id": "refcoco+_unc/testB/40153",
+     "x2_iou": 0.005528332705113707
+    },
+    {
+     "order": 30,
+     "sent_id": "53935",
+     "id": "refcoco+_unc/testB/53935",
+     "x2_iou": 0.9396569433032046
+    },
+    {
+     "order": 31,
+     "sent_id": "70684",
+     "id": "refcoco+_unc/testB/70684",
+     "x2_iou": 0.9283154121863799
+    },
+    {
+     "order": 32,
+     "sent_id": "90917",
+     "id": "refcoco+_unc/testB/90917",
+     "x2_iou": 0.0
+    },
+    {
+     "order": 33,
+     "sent_id": "119972",
+     "id": "refcoco+_unc/testB/119972",
+     "x2_iou": 0.6060648341937585
+    },
+    {
+     "order": 34,
+     "sent_id": "56780",
+     "id": "refcoco+_unc/testB/56780",
+     "x2_iou": 0.0
+    },
+    {
+     "order": 35,
+     "sent_id": "102362",
+     "id": "refcoco+_unc/testB/102362",
+     "x2_iou": 0.810126582278481
+    },
+    {
+     "order": 36,
+     "sent_id": "53936",
+     "id": "refcoco+_unc/testB/53936",
+     "x2_iou": 0.9400380122380864
+    },
+    {
+     "order": 37,
+     "sent_id": "35141",
+     "id": "refcoco+_unc/testB/35141",
+     "x2_iou": 0.7089009611366486
+    },
+    {
+     "order": 38,
+     "sent_id": "2661",
+     "id": "refcoco+_unc/testB/2661",
+     "x2_iou": 0.7353244964709933
+    },
+    {
+     "order": 39,
+     "sent_id": "12766",
+     "id": "refcoco+_unc/testB/12766",
+     "x2_iou": 0.7465276329509906
+    }
+   ],
+   "random": [
+    "refcoco+_unc/testB/114309",
+    "refcoco+_unc/testB/77177",
+    "refcoco+_unc/testB/45490"
+   ],
+   "failure": [
+    "refcoco+_unc/testB/34395",
+    "refcoco+_unc/testB/37107"
+   ]
+  },
+  {
+   "split": "test_refcocog_umd_test",
+   "k": 4,
+   "dataset": "refcocog",
+   "n_subset": 300,
+   "pool_n": 40,
+   "pool": [
+    {
+     "order": 0,
+     "sent_id": "103049",
+     "id": "refcocog_umd/test/103049",
+     "x2_iou": 0.6773333333333333
+    },
+    {
+     "order": 1,
+     "sent_id": "59026",
+     "id": "refcocog_umd/test/59026",
+     "x2_iou": 0.8340308178890324
+    },
+    {
+     "order": 2,
+     "sent_id": "86648",
+     "id": "refcocog_umd/test/86648",
+     "x2_iou": 0.8807697509515621
+    },
+    {
+     "order": 3,
+     "sent_id": "88245",
+     "id": "refcocog_umd/test/88245",
+     "x2_iou": 0.729107687782639
+    },
+    {
+     "order": 4,
+     "sent_id": "5140",
+     "id": "refcocog_umd/test/5140",
+     "x2_iou": 0.9330735042735043
+    },
+    {
+     "order": 5,
+     "sent_id": "27840",
+     "id": "refcocog_umd/test/27840",
+     "x2_iou": 0.619401598215945
+    },
+    {
+     "order": 6,
+     "sent_id": "95757",
+     "id": "refcocog_umd/test/95757",
+     "x2_iou": 0.24066002490660024
+    },
+    {
+     "order": 7,
+     "sent_id": "65125",
+     "id": "refcocog_umd/test/65125",
+     "x2_iou": 0.13876824865260845
+    },
+    {
+     "order": 8,
+     "sent_id": "80534",
+     "id": "refcocog_umd/test/80534",
+     "x2_iou": 0.7683676456239633
+    },
+    {
+     "order": 9,
+     "sent_id": "8528",
+     "id": "refcocog_umd/test/8528",
+     "x2_iou": 0.4232615553422027
+    },
+    {
+     "order": 10,
+     "sent_id": "8489",
+     "id": "refcocog_umd/test/8489",
+     "x2_iou": 0.0
+    },
+    {
+     "order": 11,
+     "sent_id": "80389",
+     "id": "refcocog_umd/test/80389",
+     "x2_iou": 0.7424557752341311
+    },
+    {
+     "order": 12,
+     "sent_id": "31206",
+     "id": "refcocog_umd/test/31206",
+     "x2_iou": 0.1927794895645602
+    },
+    {
+     "order": 13,
+     "sent_id": "103091",
+     "id": "refcocog_umd/test/103091",
+     "x2_iou": 0.7706891701828411
+    },
+    {
+     "order": 14,
+     "sent_id": "31747",
+     "id": "refcocog_umd/test/31747",
+     "x2_iou": 0.8694940091371434
+    },
+    {
+     "order": 15,
+     "sent_id": "71420",
+     "id": "refcocog_umd/test/71420",
+     "x2_iou": 0.5129537525053819
+    },
+    {
+     "order": 16,
+     "sent_id": "8765",
+     "id": "refcocog_umd/test/8765",
+     "x2_iou": 0.7089670014347202
+    },
+    {
+     "order": 17,
+     "sent_id": "14438",
+     "id": "refcocog_umd/test/14438",
+     "x2_iou": 0.6381783032864272
+    },
+    {
+     "order": 18,
+     "sent_id": "46850",
+     "id": "refcocog_umd/test/46850",
+     "x2_iou": 0.7756532042246328
+    },
+    {
+     "order": 19,
+     "sent_id": "92390",
+     "id": "refcocog_umd/test/92390",
+     "x2_iou": 0.9014764039019246
+    },
+    {
+     "order": 20,
+     "sent_id": "66788",
+     "id": "refcocog_umd/test/66788",
+     "x2_iou": 0.793103960322528
+    },
+    {
+     "order": 21,
+     "sent_id": "96356",
+     "id": "refcocog_umd/test/96356",
+     "x2_iou": 0.8652693287770102
+    },
+    {
+     "order": 22,
+     "sent_id": "69829",
+     "id": "refcocog_umd/test/69829",
+     "x2_iou": 0.6928186368887177
+    },
+    {
+     "order": 23,
+     "sent_id": "93456",
+     "id": "refcocog_umd/test/93456",
+     "x2_iou": 0.7950065703022339
+    },
+    {
+     "order": 24,
+     "sent_id": "57118",
+     "id": "refcocog_umd/test/57118",
+     "x2_iou": 0.881555044204917
+    },
+    {
+     "order": 25,
+     "sent_id": "60148",
+     "id": "refcocog_umd/test/60148",
+     "x2_iou": 0.546704871060172
+    },
+    {
+     "order": 26,
+     "sent_id": "78607",
+     "id": "refcocog_umd/test/78607",
+     "x2_iou": 0.8691106512215443
+    },
+    {
+     "order": 27,
+     "sent_id": "75588",
+     "id": "refcocog_umd/test/75588",
+     "x2_iou": 0.7961902862271866
+    },
+    {
+     "order": 28,
+     "sent_id": "13334",
+     "id": "refcocog_umd/test/13334",
+     "x2_iou": 0.006618830871976307
+    },
+    {
+     "order": 29,
+     "sent_id": "95007",
+     "id": "refcocog_umd/test/95007",
+     "x2_iou": 0.9241390106449593
+    },
+    {
+     "order": 30,
+     "sent_id": "59458",
+     "id": "refcocog_umd/test/59458",
+     "x2_iou": 0.7705289672544081
+    },
+    {
+     "order": 31,
+     "sent_id": "2793",
+     "id": "refcocog_umd/test/2793",
+     "x2_iou": 0.8251612903225807
+    },
+    {
+     "order": 32,
+     "sent_id": "31750",
+     "id": "refcocog_umd/test/31750",
+     "x2_iou": 0.6886056971514243
+    },
+    {
+     "order": 33,
+     "sent_id": "62927",
+     "id": "refcocog_umd/test/62927",
+     "x2_iou": 0.816058599143479
+    },
+    {
+     "order": 34,
+     "sent_id": "33194",
+     "id": "refcocog_umd/test/33194",
+     "x2_iou": 0.00010009676020152815
+    },
+    {
+     "order": 35,
+     "sent_id": "25303",
+     "id": "refcocog_umd/test/25303",
+     "x2_iou": 0.8784146220323831
+    },
+    {
+     "order": 36,
+     "sent_id": "59418",
+     "id": "refcocog_umd/test/59418",
+     "x2_iou": 0.8955290945854865
+    },
+    {
+     "order": 37,
+     "sent_id": "100928",
+     "id": "refcocog_umd/test/100928",
+     "x2_iou": 0.792002327653616
+    },
+    {
+     "order": 38,
+     "sent_id": "98592",
+     "id": "refcocog_umd/test/98592",
+     "x2_iou": 0.770266661580132
+    },
+    {
+     "order": 39,
+     "sent_id": "100521",
+     "id": "refcocog_umd/test/100521",
+     "x2_iou": 0.4017232094776521
+    }
+   ],
+   "random": [
+    "refcocog_umd/test/103049",
+    "refcocog_umd/test/59026",
+    "refcocog_umd/test/86648"
+   ],
+   "failure": [
+    "refcocog_umd/test/8489",
+    "refcocog_umd/test/33194"
+   ]
+  }
+ ],
+ "entries": [
+  {
+   "key": "k0_random1",
+   "split": "test_refcoco_unc_testA",
+   "k": 0,
+   "type": "random",
+   "rank": 1,
+   "id": "refcoco_unc/testA/33859",
+   "sent_id": "33859",
+   "pool_order": 0,
+   "instruction": "11",
+   "main": true,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.8156111615002934,
+     "inter": 30574,
+     "union": 37486,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.43384571920227044,
+     "inter": 33784,
+     "union": 77871,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.841833529106455,
+     "inter": 30817,
+     "union": 36607,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k0_random2",
+   "split": "test_refcoco_unc_testA",
+   "k": 0,
+   "type": "random",
+   "rank": 2,
+   "id": "refcoco_unc/testA/16417",
+   "sent_id": "16417",
+   "pool_order": 1,
+   "instruction": "48",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.8365166596210752,
+     "inter": 21767,
+     "union": 26021,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.3633952670893227,
+     "inter": 23157,
+     "union": 63724,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.6633497599191307,
+     "inter": 20999,
+     "union": 31656,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k0_random3",
+   "split": "test_refcoco_unc_testA",
+   "k": 0,
+   "type": "random",
+   "rank": 3,
+   "id": "refcoco_unc/testA/38776",
+   "sent_id": "38776",
+   "pool_order": 2,
+   "instruction": "girl on left",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.8709879912663755,
+     "inter": 31913,
+     "union": 36640,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.6009906439185471,
+     "inter": 32760,
+     "union": 54510,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.5645169140910197,
+     "inter": 23196,
+     "union": 41090,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k0_failure1",
+   "split": "test_refcoco_unc_testA",
+   "k": 0,
+   "type": "failure",
+   "rank": 1,
+   "id": "refcoco_unc/testA/78182",
+   "sent_id": "78182",
+   "pool_order": 8,
+   "instruction": "female cops horse",
+   "main": true,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.013657515123313169,
+     "inter": 587,
+     "union": 42980,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.05103877346961449,
+     "inter": 2297,
+     "union": 45005,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.002613797514111726,
+     "inter": 94,
+     "union": 35963,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k0_failure2",
+   "split": "test_refcoco_unc_testA",
+   "k": 0,
+   "type": "failure",
+   "rank": 2,
+   "id": "refcoco_unc/testA/89736",
+   "sent_id": "89736",
+   "pool_order": 18,
+   "instruction": "arm of couch",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.0263509898341359,
+     "inter": 591,
+     "union": 22428,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.29856770468368976,
+     "inter": 10652,
+     "union": 35677,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.3652152105081664,
+     "inter": 11650,
+     "union": 31899,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k1_random1",
+   "split": "test_refcoco_unc_testB",
+   "k": 1,
+   "type": "random",
+   "rank": 1,
+   "id": "refcoco_unc/testB/39007",
+   "sent_id": "39007",
+   "pool_order": 0,
+   "instruction": "right monitor not laptop",
+   "main": true,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.8597900502053857,
+     "inter": 9419,
+     "union": 10955,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.8322185061315496,
+     "inter": 8958,
+     "union": 10764,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.7303314696485623,
+     "inter": 7315,
+     "union": 10016,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k1_random2",
+   "split": "test_refcoco_unc_testB",
+   "k": 1,
+   "type": "random",
+   "rank": 2,
+   "id": "refcoco_unc/testB/76806",
+   "sent_id": "76806",
+   "pool_order": 1,
+   "instruction": "stop light facing away",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.6962600662022628,
+     "inter": 14093,
+     "union": 20241,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.6394687813500215,
+     "inter": 13386,
+     "union": 20933,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.6924685151077704,
+     "inter": 13911,
+     "union": 20089,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k1_random3",
+   "split": "test_refcoco_unc_testB",
+   "k": 1,
+   "type": "random",
+   "rank": 3,
+   "id": "refcoco_unc/testB/20698",
+   "sent_id": "20698",
+   "pool_order": 2,
+   "instruction": "bike",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.7361203876613551,
+     "inter": 54004,
+     "union": 73363,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.6549584804810538,
+     "inter": 61758,
+     "union": 94293,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.5865831074371293,
+     "inter": 43711,
+     "union": 74518,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k1_failure1",
+   "split": "test_refcoco_unc_testB",
+   "k": 1,
+   "type": "failure",
+   "rank": 1,
+   "id": "refcoco_unc/testB/34544",
+   "sent_id": "34544",
+   "pool_order": 31,
+   "instruction": "first row from left second donut from bottom",
+   "main": true,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.038895027624309395,
+     "inter": 880,
+     "union": 22625,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.3842938745181814,
+     "inter": 8275,
+     "union": 21533,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.007137265736519777,
+     "inter": 155,
+     "union": 21717,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k1_failure2",
+   "split": "test_refcoco_unc_testB",
+   "k": 1,
+   "type": "failure",
+   "rank": 2,
+   "id": "refcoco_unc/testB/129918",
+   "sent_id": "129918",
+   "pool_order": 21,
+   "instruction": "click any one beside first and second right side",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.09540400876918259,
+     "inter": 9748,
+     "union": 102176,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.08303372877869102,
+     "inter": 8476,
+     "union": 102079,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.07723656883106705,
+     "inter": 7884,
+     "union": 102076,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k2_random1",
+   "split": "test_refcoco+_unc_testA",
+   "k": 2,
+   "type": "random",
+   "rank": 1,
+   "id": "refcoco+_unc/testA/80504",
+   "sent_id": "80504",
+   "pool_order": 0,
+   "instruction": "catcher",
+   "main": true,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.737645374218559,
+     "inter": 21121,
+     "union": 28633,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.49616068814879866,
+     "inter": 22034,
+     "union": 44409,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.6585640998092988,
+     "inter": 24519,
+     "union": 37231,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k2_random2",
+   "split": "test_refcoco+_unc_testA",
+   "k": 2,
+   "type": "random",
+   "rank": 2,
+   "id": "refcoco+_unc/testA/132626",
+   "sent_id": "132626",
+   "pool_order": 1,
+   "instruction": "blond girl pink shirt",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.7290417861176266,
+     "inter": 16784,
+     "union": 23022,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.4909715010961117,
+     "inter": 17021,
+     "union": 34668,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.5807049345417925,
+     "inter": 14416,
+     "union": 24825,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k2_random3",
+   "split": "test_refcoco+_unc_testA",
+   "k": 2,
+   "type": "random",
+   "rank": 3,
+   "id": "refcoco+_unc/testA/14877",
+   "sent_id": "14877",
+   "pool_order": 2,
+   "instruction": "man",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.5121179522875403,
+     "inter": 40465,
+     "union": 79015,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.3775534770086758,
+     "inter": 42343,
+     "union": 112151,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.48341195198890546,
+     "inter": 49498,
+     "union": 102393,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k2_failure1",
+   "split": "test_refcoco+_unc_testA",
+   "k": 2,
+   "type": "failure",
+   "rank": 1,
+   "id": "refcoco+_unc/testA/89410",
+   "sent_id": "89410",
+   "pool_order": 19,
+   "instruction": "arm of ocuch",
+   "main": true,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.040257648953301126,
+     "inter": 2500,
+     "union": 62100,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.13634305616020898,
+     "inter": 15659,
+     "union": 114850,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.09586090432864626,
+     "inter": 5563,
+     "union": 58032,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k2_failure2",
+   "split": "test_refcoco+_unc_testA",
+   "k": 2,
+   "type": "failure",
+   "rank": 2,
+   "id": "refcoco+_unc/testA/100945",
+   "sent_id": "100945",
+   "pool_order": 21,
+   "instruction": "cow in black shirt",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.1832705767226158,
+     "inter": 8615,
+     "union": 47007,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.3037375724387261,
+     "inter": 22852,
+     "union": 75236,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.3264735846310581,
+     "inter": 22432,
+     "union": 68710,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k3_random1",
+   "split": "test_refcoco+_unc_testB",
+   "k": 3,
+   "type": "random",
+   "rank": 1,
+   "id": "refcoco+_unc/testB/114309",
+   "sent_id": "114309",
+   "pool_order": 0,
+   "instruction": "white table not food table",
+   "main": true,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.2965396615297343,
+     "inter": 6273,
+     "union": 21154,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.24747001499250376,
+     "inter": 5282,
+     "union": 21344,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.3732369902035712,
+     "inter": 5372,
+     "union": 14393,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k3_random2",
+   "split": "test_refcoco+_unc_testB",
+   "k": 3,
+   "type": "random",
+   "rank": 2,
+   "id": "refcoco+_unc/testB/77177",
+   "sent_id": "77177",
+   "pool_order": 1,
+   "instruction": "tan kitty",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.8320194222428325,
+     "inter": 61002,
+     "union": 73318,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.7636693595597706,
+     "inter": 65225,
+     "union": 85410,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.8096715576597402,
+     "inter": 65500,
+     "union": 80897,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k3_random3",
+   "split": "test_refcoco+_unc_testB",
+   "k": 3,
+   "type": "random",
+   "rank": 3,
+   "id": "refcoco+_unc/testB/45490",
+   "sent_id": "45490",
+   "pool_order": 2,
+   "instruction": "whole bus",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.9531082504055477,
+     "inter": 100470,
+     "union": 105413,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.8934698823722358,
+     "inter": 98061,
+     "union": 109753,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.9144205428753556,
+     "inter": 96112,
+     "union": 105107,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k3_failure1",
+   "split": "test_refcoco+_unc_testB",
+   "k": 3,
+   "type": "failure",
+   "rank": 1,
+   "id": "refcoco+_unc/testB/34395",
+   "sent_id": "34395",
+   "pool_order": 16,
+   "instruction": "regular donut with a little brown frosting and powdered sugar",
+   "main": true,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.0,
+     "inter": 0,
+     "union": 41163,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.0,
+     "inter": 0,
+     "union": 53689,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.0,
+     "inter": 0,
+     "union": 41856,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k3_failure2",
+   "split": "test_refcoco+_unc_testB",
+   "k": 3,
+   "type": "failure",
+   "rank": 2,
+   "id": "refcoco+_unc/testB/37107",
+   "sent_id": "37107",
+   "pool_order": 13,
+   "instruction": "brown bismark above the row of donuts",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.0,
+     "inter": 0,
+     "union": 27155,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.0,
+     "inter": 0,
+     "union": 27431,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.0,
+     "inter": 0,
+     "union": 28122,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k4_random1",
+   "split": "test_refcocog_umd_test",
+   "k": 4,
+   "type": "random",
+   "rank": 1,
+   "id": "refcocog_umd/test/103049",
+   "sent_id": "103049",
+   "pool_order": 0,
+   "instruction": "the humming bird on the left",
+   "main": true,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.6773333333333333,
+     "inter": 7874,
+     "union": 11625,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.4470467385721623,
+     "inter": 8704,
+     "union": 19470,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.4490287607288059,
+     "inter": 5964,
+     "union": 13282,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k4_random2",
+   "split": "test_refcocog_umd_test",
+   "k": 4,
+   "type": "random",
+   "rank": 2,
+   "id": "refcocog_umd/test/59026",
+   "sent_id": "59026",
+   "pool_order": 1,
+   "instruction": "a young boy wearing a london sweatshirt playing with a windsock walking down a cobblestone street",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.8340308178890324,
+     "inter": 43247,
+     "union": 51853,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.39764668594746644,
+     "inter": 50185,
+     "union": 126205,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.6584855692188317,
+     "inter": 39037,
+     "union": 59283,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k4_random3",
+   "split": "test_refcocog_umd_test",
+   "k": 4,
+   "type": "random",
+   "rank": 3,
+   "id": "refcocog_umd/test/86648",
+   "sent_id": "86648",
+   "pool_order": 2,
+   "instruction": "the closest cow",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.8807697509515621,
+     "inter": 45586,
+     "union": 51757,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.6439106308411215,
+     "inter": 44095,
+     "union": 68480,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.7706863539923757,
+     "inter": 44679,
+     "union": 57973,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k4_failure1",
+   "split": "test_refcocog_umd_test",
+   "k": 4,
+   "type": "failure",
+   "rank": 1,
+   "id": "refcocog_umd/test/8489",
+   "sent_id": "8489",
+   "pool_order": 10,
+   "instruction": "giraffe whose head is in the barn",
+   "main": true,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.0,
+     "inter": 0,
+     "union": 52465,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.07254292777443709,
+     "inter": 8686,
+     "union": 119736,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.3676954847351677,
+     "inter": 6588,
+     "union": 17917,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  },
+  {
+   "key": "k4_failure2",
+   "split": "test_refcocog_umd_test",
+   "k": 4,
+   "type": "failure",
+   "rank": 2,
+   "id": "refcocog_umd/test/33194",
+   "sent_id": "33194",
+   "pool_order": 34,
+   "instruction": "a small pile of carrots on a pile of beans on a plate",
+   "main": false,
+   "also": null,
+   "iou": {
+    "x2_spline_trimap": {
+     "iou": 0.00010009676020152815,
+     "inter": 3,
+     "union": 29971,
+     "failure": null,
+     "fallback": null
+    },
+    "x2_ellipse_trimap": {
+     "iou": 0.43403379195398545,
+     "inter": 26562,
+     "union": 61198,
+     "failure": null,
+     "fallback": null
+    },
+    "w2c": {
+     "iou": 0.5982653663700959,
+     "inter": 29385,
+     "union": 49117,
+     "failure": null,
+     "fallback": null
+    }
+   }
+  }
+ ],
+ "main": [
+  "k0_random1",
+  "k0_failure1",
+  "k1_random1",
+  "k1_failure1",
+  "k2_random1",
+  "k2_failure1",
+  "k3_random1",
+  "k3_failure1",
+  "k4_random1",
+  "k4_failure1"
+ ]
+}

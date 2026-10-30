@@ -3456,3 +3456,17 @@
   - 定性图、分档只用 CPU，干扰曲线已补完。
 - 管线不用新代码：出框、候选与标签、回放、X-2 数据、训练、评测，都是现有脚本换 `--model qwen3.5-4b`。驱动由管理员照 RUN-0067、0069、0076、0080、0093 写，tiny 彩排通过。
 - 只在开发数据上评，不碰 test 与 devcheck3。约 9 GPU 小时，探索累计约 97 / 120。
+
+## D158（2026-10-30，管理员）：DEV-0076 合入（定性图 U-5、test 逐句元数据 U-6），以及它提出的待裁
+
+- **U-5、U-6 的歧义**：都按最字面的实现接受。
+  - 池：`default_rng(20260929 + k).choice(子集的 300 个 id, 40, replace=False)`，id 照清单里的顺序。
+    - 开发 agent 已在开发机上看过这种读法的抽样结果；改用另一种读法（`permutation(300)[:40]`）就成了看过结果再挑规则，所以不改。
+  - 失败例的同分按完整 id 的字典序；失败例不排除随机例。
+  - 每格 IoU 的口径、样条的画法（夹进提出框的一步用虚线框表示）照实现。
+  - 元数据：连通块用 8 邻接，A = 0 的句子不进 c 的分位数。大类取 `coco_train2014_e1dev/instances_train2014_e1dev.json` 的 categories 表，按 id 核对名称。
+- **D28-9（不再分发数据或由数据生成的图像）**：
+  - 带 COCO 原图的定性图（PDF、PNG）与 bundle **只留在 HPC，不进 git**，放在仓库以外的目录。
+  - 仓库里只放抽样清单 `selection.json`、`figures.json` 与图注。论文按惯例用几张图并注明出处。
+- **matplotlib**：HPC 的 `$VI/env` 没有。建一个 `--system-site-packages` 的旁路 venv 只装 matplotlib，不动 `$VI/env`。
+- 抽样清单在开发机上算出：`experiments/U/0099_qual_select/selection.json`，先于任何作图。HPC 作图时用 `--expect-selection` 核对，必须逐条相同。
