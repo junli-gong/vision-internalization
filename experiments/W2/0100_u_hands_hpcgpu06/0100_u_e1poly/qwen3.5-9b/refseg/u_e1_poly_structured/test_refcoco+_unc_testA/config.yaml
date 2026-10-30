@@ -1,0 +1,69 @@
+experiment: U
+framework: src/unified/hands.py（DEV-0074；预注册 U-2，D154）
+system: e1_poly_structured
+w2:
+  task: refseg
+  split: test_refcoco+_unc_testA
+  setting: u_e1_poly_structured
+  splits_config: configs/w2_splits.json
+  splits_sha256: 9dd22dff2ad422ec5d51106bb6e40227ec51afa27130f2a968c945d69055c0f1
+  split_sha256: 18782733cda29f6f8b5fc2cbc7b4b573c1c29e322290f2017660473a8a632778
+  split_n: 1000
+  n_samples: 300
+  limit: null
+  sample_ids_sha256: b35235e25e575b052a9650218cdeccf215625281be39d14ce34bce512ed45f53
+  test_unlock:
+    approval: D154
+    rule: D154-2(2)：统一主表的新跑基线在 W2 test 的 5 × 300 句子集（configs/w2_llmseg_subsets.json）上运行；预注册
+      U-2
+  subset:
+    config: configs/w2_llmseg_subsets.json
+    rule: 每个 W2 test 划分（configs/w2_splits.json，各 1,000 句）按 sha256(w2_llmseg_v1|<划分名>|sent_id)
+      升序（src/data/subsets.hash_rank，purpose = 划分名）取前 300 句，按 id 自然顺序列出；sha256 = population_digest（自然顺序、换行连接后的
+      sha256）
+    salt: w2_llmseg_v1
+    n: 300
+    sha256: 6447673051b83fc0d557cd774c51f0405e1a2531c9366036b51191fd4a71e01c
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  adapter_model_key: qwen3.5-9b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+e1_poly_structured:
+  protocol: E1 结构强制的多边形（src/e1/posthoc_runner.run_forced_poly_task 原样）
+  posthoc:
+    config: configs/e1_posthoc.json
+    config_sha256: 9a5607826bae8b2387cd9b5bbd88cd71d5887ebf86237b786546ab13ac613ce1
+    variant: poly_structured
+    min_points: 3
+    max_points: 64
+    rule: 至少 3 个点（E1 解析的下限 MIN_POLYGON_POINTS）：第 3 个点写完之前不允许 close。
+  prompts:
+    config: configs/e1_prompts.json
+    config_sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+  enable_thinking: false
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  batch_size: 64
+raw:
+  dir: raw
+  rule: 原运行器的输出原样（格式见它自己的 README）；本目录由它导出
+scoring:
+  mask: 解析出的多边形经 src/executors/raster.polygons_to_mask（E1 计分的同一个光栅化）
+  per_sentence: W2 的计分：GT = src/e1/scoring.gt_mask；src/metrics/seg.mask_inter_union
+    + sample_iou；解析失败按空 mask（交 0、并 |GT|、IoU 0）；与 raw 的逐句交并逐个核对
+  headline: src/w1/scoring.headline（cIoU = Σinter / Σunion、gIoU = 逐句 IoU 均值，bootstrap
+    95% CI）
