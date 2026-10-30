@@ -2101,3 +2101,4 @@
 - 10-30 04:0xZ：[merge] DEV-0076（D158）：`scripts/analysis/test_metadata.py`、`scripts/figures/make_qualitative.py`，26 条新测试。抽样清单在开发机上算好、先提交。定性图只留在 HPC（D28-9）。
 - 10-30 04:1xZ：写 RUN-0099（CPU，登录节点）：test 逐句元数据与定性图（D158）。定性图只留在 HPC 的 `$VI/private/`。
 - 10-30 04:2xZ：写好 `scripts/mgr/x_bins.py`（U-6 分档），用合成元数据试跑通过。等 RUN-0099 的元数据。
+- 10-30 04:3xZ：RUN-0099 完成（元数据 5,000 句，定性图 6 张留在 HPC；抽样与开发机上的清单逐条相同）。U-6 分档（`docs/analysis/x_bins.md`）：X-2 − W2-c 人 +0.121、非人 +0.047，testA/testB 的差距由人的占比（0.93 对 0.00）解释；X-2 − 椭圆随复杂度 +0.08 → +0.17；X-2 − W2-c 在复杂度高的两档最大，与预测（中间两档）不符。
