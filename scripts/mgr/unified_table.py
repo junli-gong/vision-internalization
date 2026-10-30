@@ -59,6 +59,44 @@ def llmseg(which: int):
     return lambda sp: (XT.llmseg_preds(sp) or (None, None))[which]
 
 
+def raw_path(name: str, a) -> object:
+    """该系统逐句预测文件的路径（split → Path），用于数失败与退回；W2-a 的逐句预测只在 HPC（RUN-0095 只抽回交并），返回 None。"""
+    leafp = lambda run, setting: (lambda sp: ROOT / run / M / "refseg" / setting / sp / "predictions.jsonl")  # noqa: E731
+    table = {MAIN: leafp(X2, XT.MAIN), "X-3（C2，消融）": leafp(X3, XT.MAIN), "W2-c": leafp(REF, "w2c"),
+             "模型自己的框": leafp(REF, "ownbox"), "W1-F": leafp(REF, "w1f"), "C1 的椭圆消融": leafp(X2, XT.ABL),
+             "LLMSeg 修正后（主配置）": lambda sp: ROOT / XT.LLMSEG / M / "refseg" / "llmseg" / sp / "predictions.jsonl",
+             "LLMSeg 修正前": lambda sp: ROOT / XT.LLMSEG / M / "refseg" / "llmseg" / sp / "predictions.jsonl"}
+    if a.e1_poly:
+        table["E1 结构强制多边形（9B 零样本）"] = leafp(a.e1_poly, "u_e1_poly_structured")
+    if a.e3b_grid:
+        table["9B E3b 像素 token 网格"] = leafp(a.e3b_grid, "u_e3b_grid")
+    if a.lisa:
+        table["LISA-7B（xinlai/LISA-7B-v1）"] = lambda sp: ROOT / a.lisa / "lisa-7b-v1" / "refseg" / "lisa_7b" / sp / "predictions.jsonl"
+    return table.get(name)
+
+
+def failure_counts(fn, ids: dict[str, list[str]]) -> dict | None:
+    """U-1"失败率单列"：子集里 failure 非空或 status 为 failed 的句数（按空 mask 计分），与 fallback 非空的句数（退回替补，不是空 mask）。"""
+    if fn is None:
+        return None
+    failed = fallback = n = 0
+    for sp in SPLITS:
+        p = fn(sp)
+        if not p.exists():
+            return None
+        want = set(ids[sp])
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            if r.get("id") not in want:
+                continue
+            n += 1
+            failed += bool(r.get("failure")) or r.get("status") == "failed"
+            fallback += bool(r.get("fallback"))
+    return {"n": n, "failed": failed, "fallback": fallback}
+
+
 def systems(a) -> list[tuple[str, str, object, str]]:
     """(组, 名, 取预测的函数 split → {id: {inter, union}}, 来源)；顺序即预注册 U-2。"""
     return [("本文的方法", MAIN, leaf_preds(X2, XT.MAIN), f"RUN-0092 {X2}"),
@@ -107,6 +145,7 @@ def main(argv=None) -> int:
             continue
         pool = {k: v for sp in SPLITS for k, v in per[sp].items()}
         mpool = {k: v for sp in SPLITS for k, v in main_per[sp].items()}
+        e["failures"] = failure_counts(raw_path(name, a), ids)
         e |= {"status": "完成",
               "per_split": {sp: {"cIoU": XT.single_ci(per[sp]), "gIoU": XT.single_g(per[sp])} for sp in SPLITS},
               "pooled": {"cIoU": XT.single_ci(pool), "gIoU": XT.single_g(pool)}}
@@ -139,6 +178,14 @@ def main(argv=None) -> int:
         L.append(f"| {e['group']} | {e['name']} | " + " | ".join(c(e["per_split"][sp]["cIoU"]) for sp in SPLITS) +
                  f" | {ci(e['pooled']['cIoU'], 'ciou')} | {ci(e['pooled']['gIoU'], 'giou')} | "
                  f"{d(mm['cIoU']) if mm else '—'} | {d(mm['gIoU']) if mm else '—'} |")
+    L += ["", "## 失败率（预注册 U-1：单列）", "",
+          "失败 = 解析或管线失败，按空 mask 计分；退回 = 输出解析不出、按规则改用替补（如 1 号候选），不是空 mask。", "",
+          "| 系统 | 句数 | 失败 | 退回 |", "|---|---|---|---|"]
+    for e in doc["systems"]:
+        f = e.get("failures")
+        L.append(f"| {e['name']} | " + ("— | — | — |" if not f else f"{f['n']:,} | {f['failed']} ({f['failed'] / f['n']:.1%}) | {f['fallback']} ({f['fallback'] / f['n']:.1%}) |"))
+    L += ["", "W2-a 的逐句预测只在 HPC（RUN-0095 只抽回交并），这里记为 —；它挑选的解析失败按规则退回 W1-F，全 test 上 9B 为 2.9%（144 / 4,897，见 tab_w2_test）。",
+          "LLMSeg 修正前后是同一次运行的两个读数，失败数相同。"]
     L += ["", "专家 SOTA 的灰色参考线见 `docs/references/refseg_sota_notes.md`（预注册 U-3a；完整 test 划分上的文献数字，不参与配对）。"]
     out.with_suffix(".md").write_text("\n".join(L) + "\n", encoding="utf-8")
     print(out.with_suffix(".md").read_text(encoding="utf-8"))
