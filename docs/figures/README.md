@@ -2,8 +2,8 @@
 
 <!-- 由 scripts/figures/make_paper_figures.py 生成；不要手改。数据补齐后重跑：python scripts/figures/make_paper_figures.py -->
 
-- 生成时间：2026-10-31 06:55 UTC
-- 代码 commit：dfa4383e7d97a1eb671e1a534c65869f7b0fba31 (working tree has uncommitted changes)
+- 生成时间：2026-10-31 06:58 UTC
+- 代码 commit：e01429643eeed740a4090f0c748f006e740ebf0f (working tree has uncommitted changes)
 - 结果树：`仓库根`
 - matplotlib 3.11.2；PDF 是矢量（TrueType 字体，无 Type 3），PNG 300 dpi；宽度：单栏 3.3 in，双栏 6.9 in。
 - 配色：dataviz 参考调色板。Qwen3.5 四个尺寸用一个有序的蓝色阶（浅→深 = 0.8B→9B），InternVL3.5 用第二个有序色阶（橙）；两类对比用分类槽 1（蓝）与槽 2（橙）。都在白底上过了 validate_palette.js（有序：单色相、亮度单调、相邻 ΔL ≥ 0.06；分类两色全对 CVD ΔE 24.7）。
