@@ -1,7 +1,7 @@
 """计数错误按物体个数分档（D125-2 (c)：确认 W2-c 的"数多"集中在哪些情况）。管理员的分析脚本，只读已有的 T 文本计数预测，不跑模型。
 
 输入：CountBench 评测 442 条的 E1 格式 predictions.jsonl（score.gt、parsed.count、failure）。每个系统与它同节点的基座配对：
-- W2-c、W2-c+回放（RUN-0076 补充 3）、X-2、X-3（RUN-0091）对 RUN-0069 的基座（0069_ttext）；
+- W2-c、W2-c+回放（RUN-0076 补充 3）、X-2、X-3（RUN-0091）、X-2 的 seed 1、2（RUN-0096；D162）对 RUN-0069 的基座（0069_ttext）；
 - E3b+C3、C3 对 RUN-0056 的基座（0056 的 qwen3.5-9b/count）。
 按真值个数分档（2–10 各一档，CountBench 的范围），每档报：条数、准确率、多数率（答的 > 真值）、少数率、解析失败率、
 带符号误差的均值；与配对基座的准确率差与配对 bootstrap 95% CI（按条重抽，10,000 次，种子 0），以及"基座对 → 系统错"
@@ -18,6 +18,12 @@ import random
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+# D162：C1 的另外两个种子（RUN-0096，06，配同一个 base@0069），看"数多"变"数少"在三个种子上是否一致。
+# 只在 --with-c1-seeds 时加进来，输出另存（缺省 docs/analysis/count_errors_c1_seeds），主文件 count_errors_9b 与论文图的数据不变。
+C1_SEEDS = {
+    "X-2（C1）seed 1": ("experiments/X/0096_lang_seeds_hpcgpu06/t_text/x2s1/seed1/qwen3.5-9b/count/predictions.jsonl", "base@0069"),
+    "X-2（C1）seed 2": ("experiments/X/0096_lang_seeds_hpcgpu06/t_text/x2s2/seed2/qwen3.5-9b/count/predictions.jsonl", "base@0069"),
+}
 SYSTEMS = {
     # 名称: (预测文件, 配对的基座名)
     "base@0069": ("experiments/W2/0069_w2c_hpcgpu06/0069_ttext/qwen3.5-9b/count/predictions.jsonl", None),
@@ -25,6 +31,7 @@ SYSTEMS = {
     "W2-c+回放": ("experiments/W2/0076_w2c_replay_ttext_hpcgpu06/t_text/w2c_replay/seed0/qwen3.5-9b/count/predictions.jsonl", "base@0069"),
     "X-2（C1）": ("experiments/X/0091_x_ttext_hpcgpu06/t_text/x2/seed0/qwen3.5-9b/count/predictions.jsonl", "base@0069"),
     "X-3（C2）": ("experiments/X/0091_x_ttext_hpcgpu06/t_text/x3/seed0/qwen3.5-9b/count/predictions.jsonl", "base@0069"),
+
     "base@0056": ("experiments/E3/0056_hpc_9b_eval_hpcgpu06/qwen3.5-9b/count/predictions.jsonl", None),
     "E3b+C3": ("experiments/E3/0056_hpc_9b_eval_hpcgpu06/t_text/e3b_c3/seed0/qwen3.5-9b/count/predictions.jsonl", "base@0056"),
     "C3": ("experiments/E3/0056_hpc_9b_eval_hpcgpu06/t_text/c3/seed0/qwen3.5-9b/count/predictions.jsonl", "base@0056"),
@@ -75,9 +82,12 @@ def paired(sys_rows: list[dict], base_rows: list[dict], seed: int = 0) -> dict:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--out", default="docs/analysis/count_errors_9b")
+    ap.add_argument("--out", help="缺省 docs/analysis/count_errors_9b；--with-c1-seeds 时缺省 docs/analysis/count_errors_c1_seeds")
+    ap.add_argument("--with-c1-seeds", action="store_true", help="另加 C1 的 seed 1、2（D162），输出另存")
     a = ap.parse_args(argv)
-    data = {k: load(p) for k, (p, _) in SYSTEMS.items()}
+    a.out = a.out or ("docs/analysis/count_errors_c1_seeds" if a.with_c1_seeds else "docs/analysis/count_errors_9b")
+    systems = {**SYSTEMS, **(C1_SEEDS if a.with_c1_seeds else {})}
+    data = {k: load(p) for k, (p, _) in systems.items()}
     ids = sorted(data["base@0069"], key=lambda s: int(s.rsplit("/", 1)[1]))
     for k, v in data.items():
         if set(v) != set(ids):
@@ -86,9 +96,9 @@ def main(argv=None) -> int:
     bins.update({k: [i for i in ids if data["base@0069"][i]["gt"] in r] for k, r in COARSE.items()})
     bins["all"] = ids
     base_agree = sum(data["base@0069"][i]["pred"] == data["base@0056"][i]["pred"] for i in ids) / len(ids)
-    doc = {"source": {k: p for k, (p, _) in SYSTEMS.items()}, "n_boot": N_BOOT, "seed": 0,
+    doc = {"source": {k: p for k, (p, _) in systems.items()}, "n_boot": N_BOOT, "seed": 0,
            "base_0069_vs_0056_same_answer_rate": base_agree, "systems": {}}
-    for k, (_, base) in SYSTEMS.items():
+    for k, (_, base) in systems.items():
         per = {}
         for b, bid in bins.items():
             e = summarize([data[k][i] for i in bid])
@@ -104,7 +114,7 @@ def main(argv=None) -> int:
         return "—" if x is None else f"{x:.{p}f}"
     lines = ["# 9B 计数错误按真值个数分档（CountBench 442 条；`scripts/mgr/count_errors.py` 生成）", "",
              f"基座两次读数（RUN-0069 与 RUN-0056）逐条答案相同的比例：{base_agree:.3f}。", ""]
-    for k, (_, base) in SYSTEMS.items():
+    for k, (_, base) in systems.items():
         lines += [f"## {k}" + (f"（配对 {base}）" if base else ""), "",
                   "| 真值 | n | 准确率 | 多数 | 少数 | 失败 | 带符号误差 | Δ准确率 [95% CI] | 基座对→错（多/少/失败） | 基座错→对 |",
                   "|---|---|---|---|---|---|---|---|---|---|"]
