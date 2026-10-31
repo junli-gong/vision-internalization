@@ -36,6 +36,10 @@
   它的图 fig_unified（5 个划分面板加合并面板，文献线只画在划分面板）；分档图 fig_bins（人与非人、形状复杂度四分位）；附录的种子波动表
   tab_seeds。数字取 docs/analysis/unified_table.json、x_bins.json、seed_variance.json 与 docs/references/refseg_sota.json。tab_main 改作附录的
   全 5,000 句版，只改 caption。
+- 语言代价的种子范围与 4B 补充表（DEV-0078；D162）：tab_lang_cost（与 _full）在 C1 列（seed 0，与 test 主表同一个检查点）后面加一列
+  "C1 的 3 个种子的范围"，fig_lang_cost 在 C1 的点下面另画一行范围（细线 + 每个种子一个空心点）；范围取 seed_variance.json 各种子的读数，
+  只做最小、最大与均值的算术。表注、图注写明其余各列单种子、以大题量为准（健康检查的标红只作并列说明）。tab_seeds 的表注加一句种子稳定性。
+  新增附录表 tab_x2_4b：4B 上的 X-2（预注册 X-7，补充实验）与 9B 三个种子的范围并列，数字取 docs/analysis/x2_4b.json 与 seed_variance.json。
 """
 
 from __future__ import annotations
@@ -287,6 +291,16 @@ BINS_DIFFS = (("x2_minus_w2c", "C1 − W2-c", "本文的方法", "against W2-c")
 SEED_SETTINGS = ((XT.MAIN, "C1 recipe (spline)"), (XT.ABL, "In-box ellipse ablation"))
 DEV_SPLIT_LABELS = {"explore_val_refcoco_unc_val": "explore_val RefCOCO val", "explore_val_refcoco+_unc_val": "explore_val RefCOCO+ val",
                     "explore_val_refcocog_umd_val": "explore_val RefCOCOg val"}
+
+# DEV-0078（D162）：C1 配方 3 个种子的语言读数范围（seed_variance.json；四方表加一列、语言代价图加一行），与 4B 补充表 tab_x2_4b。
+SEED_RANGE_MEAN = {"count": "counting"}  # 范围之外再给 3 个种子均值的读数 → 表注里的说法（负责人答复 N46：计数写范围与均值）
+SEED_RANGE_LABEL = "C1 = X-2, range over {n} seeds"  # 四方表的列名、语言代价图的图例
+SEED_RANGE_TEXT_PAD = 8.0  # 语言代价图：范围的文字（"+3.4 to +3.5"）比单个读数长，横轴右端为它多留的余量（百分点）
+X4 = _load_script("_paperfig_x2_4b", "scripts/mgr/x2_4b.py")  # 4B 的运行目录、健康检查与大题量的 compare 路径（RUN、HEALTH、BATTERY）
+X2_4B_JSON = "docs/analysis/x2_4b.json"  # 补充实验：4B 上的 X-2（预注册 X-7；RUN-0098、0101），附 9B 三个种子的合并读数
+X4B_SELECT = "x2_select"  # 只挑工具候选（W2-c 的挑选管线换成 X-2 的检查点；不描样条）
+assert X4B_SELECT in SV.SETTINGS and X4B_SELECT in X4.SETTINGS, "seed_variance.py / x2_4b.py 的设置名变了"
+X4B_SETTINGS = SEED_SETTINGS + ((X4B_SELECT, "Picking a tool candidate (no spline)"),)  # tab_x2_4b 的分割行（x2_4b.json 的 settings 键）
 
 # ---------------------------------------------------------------------------------------------
 # 怎么画：尺寸、字体、配色（dataviz 参考调色板；validate_palette.js 在白底上校验通过）
@@ -1194,6 +1208,10 @@ def collect_lang_cost(root: Path, with_explore: bool = False) -> dict:
                 rec["values"][key] = None if not r else _point(r["delta_pp"], {"low": ci[0], "high": ci[1], "level": 0.95}, r.get("n"),
                                                                f"{battery} :: rows[{reading}/{metric}]")
             out["systems"].append(rec)
+    # DEV-0078（D162）：C1 = X-2 的点仍是 seed 0（lang_cost_9b.json）；另画 3 个种子的范围（seed_variance.json）
+    out["seed_range"] = seed_range(collect_seeds(root), (((j or {}).get("systems") or {}).get("X-2（C1）") or {}).get("sources") or {})
+    if j is not None:
+        out["missing"] += out["seed_range"]["missing"]
     return out
 
 
@@ -1278,6 +1296,10 @@ def collect_lang_table(root: Path) -> dict:
                                             "node": rec["nodes"][sec], "source": path}
         out["systems"].append(rec)
     out["resamples"] = {k: sorted(x for x in v if x) for k, v in res.items()}
+    # DEV-0078（D162）：C1 列照旧是 seed 0（与 test 主表同一个检查点）；另加一列 3 个种子的范围（seed_variance.json）
+    out["seed_range"] = seed_range(collect_seeds(root), (((j or {}).get("systems") or {}).get("X-2（C1）") or {}).get("sources") or {})
+    if j is not None:
+        out["missing"] += out["seed_range"]["missing"]
     return out
 
 
@@ -1590,6 +1612,112 @@ def collect_seeds(root: Path) -> dict:
     return out
 
 
+def seed_range(sd: dict, c1_sources: dict | None = None) -> dict:
+    """DEV-0078（D162）：C1 配方各种子的语言读数（collect_seeds 的输出）→ 每个读数的最小、最大与均值。只做算术，不重算 bootstrap。
+    键同 collect_lang_table 的格子（<节>/<读数>）：大题量两项、T 文本两项、健康检查三项（另记标红的种子）。
+    配对的节点：大题量取各种子 lb_compare 的目录，健康检查取 health_compare 的目录，T 文本取基座 T 文本的目录。
+    c1_sources：lang_cost_9b.json 里 C1 的 sources；c1_seed = 大题量与 T 文本的来源都与它相同的那个种子（表注、图注写"C1 是 seed k"）。"""
+    seeds = [s for s in sd["seeds"] if s["status"] == "完成"]
+    c1 = c1_sources or {}
+    match = [s["seed"] for s in seeds if c1 and all(s["lang_sources"].get(k) == c1.get(k) for k in ("battery", "ttext"))]
+    out = {"json": SEED_JSON, "seeds": [s["seed"] for s in seeds], "rows": {}, "missing": [], "c1_seed": match[0] if len(match) == 1 else None,
+           "nodes": {"battery": {s["seed"]: s["lang_nodes"].get("battery") for s in seeds},
+                     "health": {s["seed"]: s.get("health_node") for s in seeds},
+                     "ttext": {s["seed"]: s["lang_nodes"].get("ttext") for s in seeds}},
+           "sources": [p for s in seeds for p in [s["source"], *(s["lang_sources"].get(k) for k in ("battery", "ttext", "ttext_base")),
+                                                 s.get("health_source")] if p]}
+    if not seeds:
+        out["missing"].append(f"C1 的种子范围：{SEED_JSON} 里没有完成的种子" if sd["seeds"] else f"C1 的种子范围：{SEED_JSON} 不在")
+    elif len(seeds) < len(sd["seeds"]):
+        out["missing"].append(f"C1 的种子范围只用了 {len(seeds)} 个种子（{SEED_JSON} 里有 {len(sd['seeds'])} 个）")
+    if seeds and c1_sources is not None and out["c1_seed"] is None:
+        out["missing"].append(f"C1 的种子范围：{LANG_COST_JSON} 里 C1 的来源对不上 {SEED_JSON} 的任何一个种子")
+    keys = [(sec, key, "language") for sec, key, _lab in LANG_READOUTS] + [("health", f"{r}.{m}", "health") for r, m in LCT.HEALTH_ROWS]
+    for sec, key, part in keys:
+        cells = [s[part].get(key) for s in seeds]
+        if not seeds or any(c is None for c in cells):
+            out["rows"][f"{sec}/{key}"] = None
+            if seeds:
+                out["missing"].append(f"C1 的种子范围 {sec} {key}（有的种子没有读数）")
+            continue
+        vals = [c["delta"] for c in cells]
+        out["rows"][f"{sec}/{key}"] = {
+            "values": vals, "seeds": out["seeds"], "low": min(vals), "high": max(vals),
+            "mean": sum(vals) / len(vals) if key in SEED_RANGE_MEAN else None, "n": next((c["n"] for c in cells if c.get("n")), None),
+            "flagged": [s["seed"] for s, c in zip(seeds, cells) if c.get("flag")] if part == "health" else None,
+            "source": f"{SEED_JSON} :: seeds.<{','.join(str(x) for x in out['seeds'])}>.{part}.{sec + '.' if part == 'language' else 'rows.'}{key}"}
+    return out
+
+
+def collect_x2_4b(root: Path) -> dict:
+    """tab_x2_4b（DEV-0078）：4B 上的 X-2（x2_4b.json：分割三个设置的合并 cIoU 与 CI、样条 − 椭圆的配对差、健康检查、大题量）与 9B 三个种子
+    （分割取 x2_4b.json 的 nine_b，即 seed_variance.json 的 across_seeds；语言取 seed_range）。9B 的样条 − 椭圆 = 每个种子两个合并读数之差
+    （同一批句子上 ratio-of-sums 配对差的点估计；JSON 里没有它的 CI，不重算）。题数、标红门槛与重抽次数取 4B 的 compare 文件。"""
+    out = {"json": X2_4B_JSON, "settings": {}, "nine_b": {}, "battery": {}, "health": {}, "missing": [],
+           "sources": {"run": X4.RUN, "health": X4.HEALTH, "battery": X4.BATTERY}}
+    j = _load(root / X2_4B_JSON)
+    if j is None:
+        out["missing"].append(f"4B 补充表：{X2_4B_JSON} 不在")
+    j = j or {}
+    n_res, lev = j.get("n_resamples"), j.get("level")
+    out.update({"n_resamples": n_res, "level": lev, "seed_bootstrap": j.get("seed"), "splits": j.get("splits") or [],
+                "run": j.get("run"), "node": _node(j.get("run"))})
+    for st, _lab in X4B_SETTINGS:
+        x = ((j.get("settings") or {}).get(st) or {}).get("pooled")
+        out["settings"][st] = _ut_point(x, lev, n_res, f"{X2_4B_JSON} :: settings.{st}.pooled")
+        nb = (j.get("nine_b") or {}).get(st) or {}
+        pooled = nb.get("pooled") or []
+        out["nine_b"][st] = None if not pooled else {"values": pooled, "seeds": nb.get("seeds"), "low": min(pooled), "high": max(pooled),
+                                                     "mean": None, "across": {"mean": nb.get("mean"), "sd": nb.get("sd")},
+                                                     "source": f"{X2_4B_JSON} :: nine_b.{st}.pooled"}
+        if j and (out["settings"][st] is None or out["nine_b"][st] is None):
+            out["missing"].append(f"4B 补充表 {st}（{X2_4B_JSON} 里没有）")
+    out["spline_minus_ellipse"] = _ut_point(j.get("spline_minus_ellipse"), lev, n_res, f"{X2_4B_JSON} :: spline_minus_ellipse")
+    sp, el = out["nine_b"].get(XT.MAIN), out["nine_b"].get(XT.ABL)
+    if sp and el and sp["seeds"] == el["seeds"]:
+        d = [a - b for a, b in zip(sp["values"], el["values"])]
+        out["nine_b_spline_minus_ellipse"] = {"values": d, "seeds": sp["seeds"], "low": min(d), "high": max(d), "mean": None,
+                                              "source": f"{X2_4B_JSON} :: nine_b.{XT.MAIN}.pooled − nine_b.{XT.ABL}.pooled (per seed)"}
+    else:
+        out["nine_b_spline_minus_ellipse"] = None
+        if j:
+            out["missing"].append(f"4B 补充表：9B 的样条 − 椭圆（{X2_4B_JSON} 的 nine_b 两个设置的种子对不上）")
+    if j and out["spline_minus_ellipse"] is None:
+        out["missing"].append(f"4B 补充表：4B 的样条 − 椭圆（{X2_4B_JSON} 里没有）")
+    hc, bc = _load(root / X4.HEALTH), _load(root / X4.BATTERY)
+    out["health_threshold"] = (hc or {}).get("threshold_pp")
+    out["battery_resamples"] = (((bc or {}).get("statistics") or {}).get("bootstrap") or {}).get("n_resamples")
+    for _sec, key, _lab in LANG_READOUTS:
+        if _sec != "battery":
+            continue
+        r = (j.get("battery") or {}).get(key)
+        out["battery"][key] = None if not r or r.get("delta_pp") is None else {
+            "delta": r["delta_pp"], "low": (r.get("ci95_pp") or [None, None])[0], "high": (r.get("ci95_pp") or [None, None])[1],
+            "n": r.get("n"), "base": r.get("base_pct"), "source": f"{X2_4B_JSON} :: battery.{key}"}
+        if j and out["battery"][key] is None:
+            out["missing"].append(f"4B 补充表：大题量 {key}（{X2_4B_JSON} 里没有）")
+    for reading, metric in LCT.HEALTH_ROWS:
+        k = f"{reading}.{metric}"
+        r = ((j.get("health") or {}).get("rows") or {}).get(k)
+        n = next((x.get("n") for x in (hc or {}).get("rows") or [] if x.get("reading") == reading and x.get("metric") == metric), None)
+        out["health"][k] = None if r is None or r.get("delta_pp") is None else {
+            "delta": r["delta_pp"], "flag": bool(r.get("flag")), "n": n, "base": r.get("base_pct"), "source": f"{X2_4B_JSON} :: health.rows.{k}"}
+        if j and out["health"][k] is None:
+            out["missing"].append(f"4B 补充表：健康检查 {k}（{X2_4B_JSON} 里没有）")
+    out["nodes"] = {"health": _node(X4.HEALTH), "battery": _node(X4.BATTERY)}
+    out["runs"] = {"segmentation": run_ids([j.get("run") or X4.RUN]), "health": run_ids([X4.HEALTH]), "battery": run_ids([X4.BATTERY])}
+    sd = collect_seeds(root)
+    out["nine_b_language"] = seed_range(sd)
+    out["nine_b_split_n"] = (sd.get("w2c_ref") or {}).get("split_n") or {}
+    # 9B 的运行：这张表只用到分割、大题量与健康检查（没有 T 文本）
+    out["nine_b_runs"] = sorted({r for s in sd["seeds"] if s["status"] == "完成"
+                                 for r in run_ids([s["source"], s["lang_sources"].get("battery"), s.get("health_source")])})
+    if j and sd["splits"] and out["splits"] != sd["splits"]:
+        out["missing"].append(f"4B 补充表：{X2_4B_JSON} 与 {SEED_JSON} 的划分不同（{out['splits']} 对 {sd['splits']}）")
+    out["missing"] += [m for m in out["nine_b_language"]["missing"] if j]
+    return out
+
+
 # ---------------------------------------------------------------------------------------------
 # 画图
 # ---------------------------------------------------------------------------------------------
@@ -1852,9 +1980,17 @@ def _legend_cols(n: int, per_row: int) -> int:
 
 
 def fig_lang_cost(lc: dict, out: Path) -> list[Path]:
-    """相对同节点基座的差（百分点）与 95% CI；读数自上而下，每个读数里各系统错开一行。"""
+    """相对同节点基座的差（百分点）与 95% CI；读数自上而下，每个读数里各系统错开一行。
+    DEV-0078（D162）：C1 的点仍是 seed 0；紧接着另一行画 C1 配方 3 个种子的范围（同色细线连最小到最大，每个种子一个空心点，没有端帽，
+    以免与 CI 混淆；右侧写范围，离 0 近的一端在前）。"""
     systems = lc["systems"]
-    n_s = len(systems)
+    sr = lc.get("seed_range") or {}
+    rows = [("point", s) for s in systems]
+    if sr.get("seeds"):
+        i = next((k + 1 for k, s in enumerate(systems) if s["name"] == "X-2（C1）"), None)
+        if i is not None:
+            rows.insert(i, ("range", systems[i - 1]))
+    n_s = len(rows)
     fig, ax = plt.subplots(figsize=(SINGLE_COL_IN, 1.0 + 0.36 * len(LANG_READOUTS) * max(n_s, 3) / 3 + 0.25), layout="constrained")
     step = 0.8 / max(n_s, 1)
     lows = [0.0]
@@ -1862,11 +1998,24 @@ def fig_lang_cost(lc: dict, out: Path) -> list[Path]:
     for g, (sec, key, _lab) in enumerate(LANG_READOUTS):
         if sec == "ttext":
             ax.axhspan(g - 0.5, g + 0.5, color=BAND, zorder=0, lw=0)
-        for j, s in enumerate(systems):
+        for j, (kind, s) in enumerate(rows):
+            y = g + (j - (n_s - 1) / 2) * step
+            if kind == "range":
+                r = sr["rows"].get(f"{sec}/{key}")
+                if r is None:
+                    continue
+                c = W2_COLORS.get(s["name"], INK_2)
+                ax.plot([r["low"], r["high"]], [y, y], color=c, lw=0.8, solid_capstyle="butt", zorder=2)
+                ax.plot(r["values"], [y] * len(r["values"]), ls="none", marker="o", ms=3.0, mfc="white", mec=c, mew=0.8, zorder=3)
+                a, b = (_signed(x) for x in range_ends(r))
+                ax.text(r["high"] + 1.2, y, a if a == b else f"{a} to {b}", ha="left", va="center", fontsize=5.5, color=INK_2, zorder=4,
+                        bbox={"fc": BAND if sec == "ttext" else "white", "ec": "none", "pad": 0.4})
+                lows.append(r["low"])
+                highs.append(r["high"] + SEED_RANGE_TEXT_PAD)
+                continue
             p = s["values"].get(key)
             if p is None:
                 continue
-            y = g + (j - (n_s - 1) / 2) * step
             ax.errorbar([p["value"]], [y], xerr=_yerr([p]), fmt="o", ms=3.4, color=W2_COLORS.get(s["name"], INK_2),
                         ecolor=W2_COLORS.get(s["name"], INK_2), elinewidth=0.9, capsize=1.4, capthick=0.9, mec="white", mew=0.4, zorder=3)
             hi = p["high"] if p["high"] is not None else p["value"]
@@ -1887,9 +2036,15 @@ def fig_lang_cost(lc: dict, out: Path) -> list[Path]:
     ax.grid(False)
     ax.grid(True, axis="x")
     ax.set_xlabel("Difference from the base (percentage points)")
-    handles = [Line2D([], [], marker="o", ms=4.5, color=W2_COLORS.get(s["name"], INK_2), mec="white", ls="none", label=s["label"])
-               for s in systems]
-    fig.legend(handles=handles, loc="outside upper center", ncol=_legend_cols(n_s, 3), handletextpad=0.2, columnspacing=0.9)
+    handles = []
+    for kind, s in rows:
+        c = W2_COLORS.get(s["name"], INK_2)
+        handles.append(Line2D([], [], marker="o", ms=4.5, color=c, mec="white", ls="none", label=s["label"]) if kind == "point" else
+                       Line2D([], [], marker="o", ms=3.5, color=c, lw=0.8, mfc="white", mec=c, mew=0.8,
+                              label=SEED_RANGE_LABEL.format(n=len(sr["seeds"]))))
+    # 每行至多 3 项；--with-explore 加上范围一共 7 项时 3 列超出单栏宽度（范围的图例名较长），改每行 2 项
+    fig.legend(handles=handles, loc="outside upper center", ncol=_legend_cols(len(handles), 3 if len(handles) <= 6 else 2), handletextpad=0.2,
+               columnspacing=0.9)
     return _save(fig, out, "fig_lang_cost")
 
 
@@ -2547,6 +2702,29 @@ def _lang_cell(c: dict | None, sec: str, latex: bool) -> str:
     return f"${d}$\\,{{\\scriptsize ${ci}$}}" if latex else f"{d} {ci}"
 
 
+def range_ends(r: dict) -> tuple:
+    """范围的两端，离 0 近的一端在前（负责人答复 N46 的写法：MMLU-Pro −0.2 到 −2.3、IFEval 0.0 到 −3.5、定位 +3.4 到 +3.5）。"""
+    return tuple(sorted((r["low"], r["high"]), key=abs))
+
+
+def _range_cell(r: dict | None, latex: bool, scale: float = 1.0, signed: bool = True) -> str:
+    """种子范围的一格（DEV-0078）："a to b"（同表的数字写法，一位小数）；有均值时加"(mean m)"，健康检查加标红的种子"(† seeds 1 and 2)"。"""
+    if r is None:
+        return "--" if latex else "—"
+    f = (lambda x: f"{scale * x:+.1f}") if signed else (lambda x: f"{scale * x:.1f}")
+    m = (lambda t: f"${t}$") if latex else (lambda t: t)
+    a, b = (f(x) for x in range_ends(r))
+    s = m(a) if a == b else f"{m(a)} to {m(b)}"
+    extra = []
+    if r.get("mean") is not None:
+        extra.append(f"mean {m(f(r['mean']))}")
+    if r.get("flagged"):
+        extra.append(("\\dag{} " if latex else "† ") + ("seeds " if len(r["flagged"]) > 1 else "seed ") + _and([str(x) for x in r["flagged"]]))
+    if extra:
+        s += f"\\,{{\\scriptsize ({'; '.join(extra)})}}" if latex else f" ({'; '.join(extra)})"
+    return s
+
+
 def _lang_base(systems: list[dict], row: dict) -> str:
     """表头下的基座读数：各系统配对的基座读数相同就写一个；不同就按节点分别写（同一节点有两个读数时按系统写）。"""
     vals = [(c["base"], c["node"], s["label"]) for s in systems for c in [s["cells"].get(f"{row['section']}/{row['key']}")]
@@ -2590,7 +2768,65 @@ def _pairing_text(systems: list[dict]) -> str:
     return "; ".join(f"{', '.join(labs)}: {desc}" for desc, labs in groups.items())
 
 
-def lang_table_notes(lt: dict, systems: list[dict]) -> list[str]:
+def _seeds_text(seeds) -> str:
+    """[1, 2] → "seeds 1 and 2"；[2] → "seed 2"。"""
+    return ("seeds " if len(seeds) > 1 else "seed ") + _and([str(x) for x in seeds])
+
+
+def seed_pairing_text(sr: dict, secs=tuple(SECTION_WORDS)) -> str:
+    """种子范围里各种子配的基座在哪个节点；分组相同的检查合在一起（如 "health check and language battery: seeds 0 and 1 on hpcgpu07,
+    seed 2 on hpcgpu06; T-text: seeds 0, 1 and 2 on hpcgpu06"）。secs：只写这几项检查（4B 补充表没有 T 文本）。"""
+    groups: dict = {}
+    for sec, word in ((s, w) for s, w in SECTION_WORDS.items() if s in secs):
+        by: dict = {}
+        for seed, node in ((sr.get("nodes") or {}).get(sec) or {}).items():
+            by.setdefault(node or MISSING, []).append(seed)
+        key = tuple((n, tuple(ss)) for n, ss in sorted(by.items(), key=lambda kv: min(kv[1])))
+        groups.setdefault(key, []).append(word)
+    return "; ".join(f"{' and '.join(words)}: " + ", ".join(f"{_seeds_text(ss)} on {n}" for n, ss in key) for key, words in groups.items())
+
+
+def _c1_seed_text(sr: dict) -> str:
+    """lang_cost_9b.json 里 C1 是哪个种子（seed_range 按来源路径对上的；对不上时写 missing）。"""
+    return MISSING if sr.get("c1_seed") is None else str(sr["c1_seed"])
+
+
+def _seed_means(sr: dict) -> list[tuple[str, float]]:
+    """范围之外另给均值的读数（SEED_RANGE_MEAN）：[(表注里的说法, 均值)]。"""
+    return [(w, r["mean"]) for k, w in SEED_RANGE_MEAN.items() for kk, r in sr["rows"].items()
+            if kk.endswith("/" + k) and r and r.get("mean") is not None]
+
+
+def seed_range_def_text(sr: dict, mean: bool = True) -> str:
+    """四方表与语言代价图里"3 个种子的范围"是什么（DEV-0078，D162）。mean：说明哪些读数另给均值（表里有均值；图注直接写均值的数）。"""
+    means = [w for w, _m in _seed_means(sr)] if mean else []
+    return (f"the differences of the {len(sr['seeds'])} training seeds of C1's recipe ({_seeds_text(sr['seeds'])}), the end nearer "
+            f"zero first, each seed against the base on its own node ({seed_pairing_text(sr)})" +
+            (f"; for {_and(means)}, also the mean of the {len(sr['seeds'])} seeds" if means else ""))
+
+
+def seed_battery_text(sr: dict) -> str:
+    """D154、D162：以大题量为准，健康检查的标红只作并列说明。标红的种子与读数、大题量上各种子最大的降幅都从 seed_range 读。"""
+    flags = []
+    for r, m in LCT.HEALTH_ROWS:
+        row = sr["rows"].get(f"health/{r}.{m}")
+        if row and row["flagged"]:
+            fv = [v for x, v in zip(row["seeds"], row["values"]) if x in row["flagged"]]
+            rest = [(x, v) for x, v in zip(row["seeds"], row["values"]) if x not in row["flagged"]]
+            flags.append(f"C1's {_seeds_text(row['flagged'])} on {HEALTH_LABELS.get(r, r)} (n={_nfmt(row['n'])}: {_and([_signed(v) for v in fv])}" +
+                         ("; not flagged: " + ", ".join(f"seed {x} {_signed(v)}" for x, v in rest) if rest else "") + ")")
+    drops = [-v for k, row in sr["rows"].items() if k.startswith("battery/") and row for v in row["values"]]
+    n = len(sr["seeds"])
+    battery = (MISSING if not drops else
+               f"none of the {n} seeds loses more than {max(drops):.1f} points" if max(drops) > 0 else f"none of the {n} seeds loses points")
+    flagged = "; ".join(flags) if flags else "none of C1's seeds"
+    return ("Language cost is read on the language battery (D154, D162); the health-check flags are reported alongside only: the health "
+            f"check flags {flagged}, while on the language battery {battery}.")
+
+
+def lang_table_notes(lt: dict, systems: list[dict], sr: dict | None = None) -> list[str]:
+    """表注。sr（DEV-0078）：C1 配方 3 个种子的范围（seed_range）。有它时加两条——范围是什么、C1 列是 seed 0 而其余各列单种子；
+    以大题量为准、健康检查的标红只作并列说明——并在 Data 一条写它的来源。"""
     def n_of(sec, key):
         return next((c["n"] for s in systems for c in [s["cells"].get(f"{sec}/{key}")] if c and c.get("n")), None)
     hn = [f"{HEALTH_LABELS.get(r['key'].split('.')[0])} {n_of('health', r['key']) or MISSING}" for r in lt["rows"] if r["section"] == "health"]
@@ -2613,7 +2849,13 @@ def lang_table_notes(lt: dict, systems: list[dict]) -> list[str]:
              "and C1 = X-2 (ours; its LoRA also trains on self-distillation replay of the base model's own answers, general instructions "
              "and counting)" + ("; C2 = X-3 (ablation: C1's recipe without the box-correction stream)"
                                 if any(s["role"] == "ablation" for s in systems) else "") + ".",
-             f"Data: {LANG_COST_JSON.split('/')[-1]} ({_runs_of(srcs)})."]
+             f"Data: {LANG_COST_JSON.split('/')[-1]} ({_runs_of(srcs)})" +
+             (f"; the {len(sr['seeds'])}-seed range: {SEED_JSON.split('/')[-1]} ({_runs_of(sr['sources'])})" if sr else "") + "."]
+    if sr:  # DEV-0078（D162）：C1 列是 seed 0（与 test 主表同一个检查点），其余各列单种子；以大题量为准
+        notes.insert(1, f"C1 = X-2 (ours) is training seed {_c1_seed_text(sr)}, the checkpoint in the test tables; every other column is a "
+                        f"single training seed. {SEED_RANGE_LABEL.format(n=len(sr['seeds']))}: {seed_range_def_text(sr)}; for the health "
+                        "check, also the seeds it flags (†).")
+        notes.insert(4, seed_battery_text(sr))
     shown = {s["name"] for s in systems}  # 只列这张表里的系统的缺项（四方表不列 X-3 的）
     miss = [m for m in lt["missing"] if not any(n in m for n, _l in LANG_SYSTEMS + LANG_ABLATION if n not in shown)]
     if miss:
@@ -2622,27 +2864,41 @@ def lang_table_notes(lt: dict, systems: list[dict]) -> list[str]:
 
 
 def tab_lang_cost(lt: dict, out: Path, full: bool = False) -> list[Path]:
-    """行 = 健康检查三项、大题量两项、T 文本两项（按节分组）；列 = 基座读数与各系统（四方，附录版加 X-3）。"""
+    """行 = 健康检查三项、大题量两项、T 文本两项（按节分组）；列 = 基座读数与各系统（四方，附录版加 X-3）。
+    DEV-0078（D162）：C1 列（seed 0）后面加一列 C1 配方 3 个种子的范围（seed_range；seed_variance.json 不在时不加这一列，进 missing）。"""
     systems = [s for s in lt["systems"] if full or s["role"] == "main"]
-    heads = ["Check", "Reading", "Base"] + [s["label"] for s in systems]
-    body, M = [], ["| " + " | ".join(heads) + " |", "|---|---|---:|" + "---:|" * len(systems)]
+    sr = lt.get("seed_range") or {}
+    cols: list = [("sys", s) for s in systems]
+    if sr.get("seeds"):
+        i = next((k + 1 for k, s in enumerate(systems) if s["name"] == "X-2（C1）"), len(systems))
+        cols.insert(i, ("range", sr))
+
+    def head(c):
+        return c[1]["label"] if c[0] == "sys" else SEED_RANGE_LABEL.format(n=len(c[1]["seeds"]))
+
+    def cell(c, sec, key, latex):
+        if c[0] == "sys":
+            return _lang_cell(c[1]["cells"].get(f"{sec}/{key}"), sec, latex)
+        return _range_cell(c[1]["rows"].get(f"{sec}/{key}"), latex)
+    heads = ["Check", "Reading", "Base"] + [head(c) for c in cols]
+    body, M = [], ["| " + " | ".join(heads) + " |", "|---|---|---:|" + "---:|" * len(cols)]
     for sec, sec_lab in LANG_SECTIONS:
         rows = [r for r in lt["rows"] if r["section"] == sec]
         body.append("\\midrule")
         for i, row in enumerate(rows):
             lab, base = _lang_row_label(systems, row), _lang_base(systems, row)
-            cells_t = [_lang_cell(s["cells"].get(f"{sec}/{row['key']}"), sec, True) for s in systems]
-            cells_m = [_lang_cell(s["cells"].get(f"{sec}/{row['key']}"), sec, False) for s in systems]
+            cells_t = [cell(c, sec, row["key"], True) for c in cols]
+            cells_m = [cell(c, sec, row["key"], False) for c in cols]
             first = f"\\multirow{{{len(rows)}}}{{*}}{{{_tex_escape(sec_lab)}}}" if i == 0 else ""
             body.append(f"{first} & {_tex_escape(lab)} & {_tex_escape(base).replace('—', '--')} & " + " & ".join(cells_t) + " \\\\")
             M.append(f"| {sec_lab if i == 0 else ''} | {lab} | {base} | " + " | ".join(cells_m) + " |")
-    notes = lang_table_notes(lt, systems)
+    notes = lang_table_notes(lt, systems, sr if sr.get("seeds") else None)
     name = "tab_lang_cost_full" if full else "tab_lang_cost"
     title = "Language cost" + (" (with the C2 ablation, appendix)" if full else "")
     caption = (f"\\caption{{{title}: difference from the base on the same node (Qwen3.5-9B, percentage points). " +
                " ".join(_tex_escape(n) for n in notes) + "}")
     header = [" & ".join(_tex_escape(h) for h in heads) + " \\\\"]
-    return _write_table(out, name, caption, name.replace("tab_", "").replace("_", "-"), "lll" + "c" * len(systems), header, body,
+    return _write_table(out, name, caption, name.replace("tab_", "").replace("_", "-"), "lll" + "c" * len(cols), header, body,
                         title[0].lower() + title[1:], M, notes)
 
 
@@ -2805,9 +3061,27 @@ def seeds_table_notes(sd: dict) -> list[str]:
                  f"({_node(s['lang_sources'].get('ttext')) or MISSING})"
                  for s in seeds) +
              f"; W2-c reference {', '.join(f'RUN-{r}' for r in run_ids([ref.get('source')])) or MISSING}. Data: {SEED_JSON.split('/')[-1]}."]
+    stab = seed_stability_text(sd)
+    if stab:  # DEV-0078（D162）：种子稳定性一句
+        notes.insert(1, stab)
     if sd["missing"]:
         notes.append("Missing: " + "; ".join(sd["missing"]) + ".")
     return notes
+
+
+def seed_stability_text(sd: dict) -> str | None:
+    """D162（种子稳定性）：三个种子的分割在开发数据上几乎相同，差异全在语言的副作用上（主要是计数）；列出计数的三个值与均值（seed_range）。
+    缺读数时不写这一句（缺项照旧进 Missing）。"""
+    seeds = [s for s in sd["seeds"] if s["status"] == "完成"]
+    sp = [((s["settings"].get(XT.MAIN) or {}).get("pooled") or {}).get("value") for s in seeds]
+    cnt = seed_range(sd)["rows"].get(f"ttext/{LCT.TTEXT[1][0]}")  # 计数（LANG_READOUTS 的第 4 项）
+    if not seeds or any(v is None for v in sp) or cnt is None:
+        return None
+    lab = dict(SEED_SETTINGS)[XT.MAIN].split(" (")[0]
+    return (f"Segmentation on the development data is almost the same for the {len(seeds)} seeds ({lab}, pooled: "
+            f"{_and([f'{100 * v:.1f}' for v in sp])}); the differences between seeds are all in the language side effects, mostly counting "
+            f"(CountBench counting accuracy, {_seeds_text(cnt['seeds'])}: {_and([_signed(v) for v in cnt['values']])} points"
+            + (f"; mean {_signed(cnt['mean'])}" if cnt.get("mean") is not None else "") + ").")
 
 
 def tab_seeds(sd: dict, out: Path) -> list[Path]:
@@ -2860,6 +3134,87 @@ def tab_seeds(sd: dict, out: Path) -> list[Path]:
     header = [" & ".join(_tex_escape(h) for h in heads) + " \\\\"]
     return _write_table(out, "tab_seeds", caption, "seeds", "l" + "c" * (len(seeds) + 1), header, body,
                         "seed variation of C1's recipe (appendix; development data, not test)", M, notes)
+
+
+# ---- tab_x2_4b（DEV-0078：4B 上的 X-2，补充实验，附录）----------------------------------------------------
+
+
+def x2_4b_table_notes(x4: dict) -> list[str]:
+    sr = x4["nine_b_language"]
+    ns = x4.get("nine_b_split_n") or {}
+    parts = [f"{DEV_SPLIT_LABELS.get(sp, sp)} {_nfmt(ns.get(sp))}" for sp in x4["splits"]]
+    npool = (x4["settings"].get(XT.MAIN) or {}).get("n")
+    hn = [f"{HEALTH_LABELS.get(r, r)} {_nfmt((x4['health'].get(f'{r}.{m}') or {}).get('n'))}" for r, m in LCT.HEALTH_ROWS]
+    bk = [key for sec, key, _lab in LANG_READOUTS if sec == "battery"]
+    bb = [(x4["battery"].get(k) or {}).get("base") for k in bk]
+    hb = [(x4["health"].get(f"{r}.{m}") or {}).get("base") for r, m in LCT.HEALTH_ROWS]
+    thr = x4.get("health_threshold")
+    nine = len(sr["seeds"]) or MISSING
+    runs9 = ", ".join(f"RUN-{r}" for r in x4["nine_b_runs"]) or MISSING
+    runs4 = ", ".join(f"RUN-{r}" for r in dict.fromkeys(x4["runs"]["segmentation"] + x4["runs"]["health"])) or MISSING
+    notes = [f"Supplementary experiment (preregistration X-7, written before any 4B data were generated, trained or evaluated; descriptive "
+             f"only): C1's training recipe (X-2) unchanged, with Qwen3.5-4B in place of Qwen3.5-9B and its training data regenerated with the "
+             f"4B model. Qwen3.5-4B: one training seed. Qwen3.5-9B: the {nine} training seeds of C1's recipe "
+             f"({_seeds_text(sr['seeds']) if sr['seeds'] else MISSING}), given as their range (the end nearer zero first); the per-seed "
+             "readings are in the seed-variation table.",
+             "Development data only, not the test splits: the development splits pooled (" + ", ".join(parts) + f"; {_nfmt(npool)} "
+             f"expressions), cIoU ×100. 4B: 95% bootstrap CI over expressions; spline − in-box ellipse: per-expression paired bootstrap of "
+             f"the ratio of sums, 95%, {_res_text([x4.get('n_resamples')])} resamples (seed {x4.get('seed_bootstrap') or MISSING}). 9B "
+             "spline − in-box ellipse: each seed's pooled spline reading minus its pooled ellipse reading on the same expressions (the "
+             "point estimate of the paired difference; no interval). In-box ellipse ablation: the spline replaced by the ellipse inscribed "
+             "in the proposed box, everything else unchanged. Picking a tool candidate: the same checkpoint proposes a box and picks one of "
+             "the four tool candidates (W2-c's pipeline), without the spline.",
+             "Language: difference from the base model of the same size, in percentage points. Language battery (MMLU-Pro "
+             f"{_nfmt((x4['battery'].get(bk[0]) or {}).get('n'))} questions, letter answers; IFEval {_nfmt((x4['battery'].get(bk[1]) or {}).get('n'))} "
+             f"prompts, prompt-level strict): 4B against the 4B base on {x4['nodes'].get('battery') or MISSING} (base "
+             f"{_and([MISSING if b is None else f'{b:.1f}' for b in bb])}) [95% paired bootstrap CI over items, "
+             f"{_res_text([x4.get('battery_resamples')])} resamples]; 9B: each seed against the 9B base on its own node "
+             f"({seed_pairing_text(sr, ('health', 'battery')) if sr['seeds'] else MISSING}). Health check (brief §8.11; fixed items: {', '.join(hn)}): difference "
+             f"only; † = flagged by its rule (the headline metric drops by more than {thr if thr is not None else MISSING} points); 4B base "
+             f"{_and([MISSING if b is None else f'{b:.1f}' for b in hb])}, on {x4['nodes'].get('health') or MISSING}.",
+             "Language cost is read on the language battery (D154, D162); the health-check flags are reported alongside only.",
+             f"Runs: 4B training, development evaluation and health check {runs4} "
+             f"({x4.get('node') or MISSING}); 4B language battery {', '.join(f'RUN-{r}' for r in x4['runs']['battery']) or MISSING} "
+             f"({x4['nodes'].get('battery') or MISSING}; the 4B base and the 4B model on the same node); 9B: {runs9}. "
+             f"Data: {X2_4B_JSON.split('/')[-1]}, {SEED_JSON.split('/')[-1]}."]
+    if x4["missing"]:
+        notes.append("Missing: " + "; ".join(x4["missing"]) + ".")
+    return notes
+
+
+def tab_x2_4b(x4: dict, out: Path) -> list[Path]:
+    """附录：4B 上的 X-2（1 个种子）与 9B 三个种子的范围并列。行 = 分割（主设置、椭圆消融、只挑工具候选的合并 cIoU，样条 − 椭圆）、
+    大题量两项、健康检查三项；4B 给读数 [95% CI]（健康检查只给差与 †），9B 给范围（seed_range 的写法）。"""
+    sr = x4["nine_b_language"]
+    heads = ["Reading", "Qwen3.5-4B (1 seed)", f"Qwen3.5-9B (range over {len(sr['seeds']) or MISSING} seeds)"]
+    npool = (x4["settings"].get(XT.MAIN) or {}).get("n")
+    seg = [(f"{lab}, pooled (n={_nfmt(npool)})", (x4["settings"].get(st), False), (x4["nine_b"].get(st), 100.0, False))
+           for st, lab in X4B_SETTINGS]
+    seg.append((f"{dict(SEED_SETTINGS)[XT.MAIN]} − in-box ellipse", (x4.get("spline_minus_ellipse"), True),
+                (x4.get("nine_b_spline_minus_ellipse"), 100.0, True)))
+    bat = [(f"{LANG_TABLE_LABELS['battery'].get(key, key)} (n={_nfmt((x4['battery'].get(key) or {}).get('n'))})", (x4["battery"].get(key), "battery"),
+            (sr["rows"].get(f"battery/{key}"), 1.0, True)) for sec, key, _lab in LANG_READOUTS if sec == "battery"]
+    hea = [(f"{HEALTH_LABELS.get(r, r)} (n={_nfmt((x4['health'].get(f'{r}.{m}') or {}).get('n'))})", (x4["health"].get(f"{r}.{m}"), "health"),
+            (sr["rows"].get(f"health/{r}.{m}"), 1.0, True)) for r, m in LCT.HEALTH_ROWS]
+    sections = (("Segmentation, development data (cIoU ×100)", seg), ("Language battery (points)", bat),
+                ("Health check (points; † flagged)", hea))
+
+    def left(c, latex):
+        p, kind = c
+        return _lang_cell(p, kind, latex) if kind in ("battery", "health") else fmt_w2(p, kind, latex)
+    body, M = [], ["| " + " | ".join(heads) + " |", "|---|---:|---:|"]
+    for sec_lab, rows in sections:
+        body += ["\\midrule", f"\\multicolumn{{{len(heads)}}}{{l}}{{\\emph{{{_tex_escape(sec_lab)}}}}} \\\\"]
+        M.append(f"| *{sec_lab}* |" + " |" * (len(heads) - 1))
+        for lab, c4, (r9, scale, signed) in rows:
+            body.append(f"{_tex_escape(lab)} & {left(c4, True)} & {_range_cell(r9, True, scale, signed)} \\\\")
+            M.append(f"| {lab} | {left(c4, False)} | {_range_cell(r9, False, scale, signed)} |")
+    notes = x2_4b_table_notes(x4)
+    caption = ("\\caption{Supplementary: C1's recipe on Qwen3.5-4B (appendix; development data and language checks, not test). " +
+               " ".join(_tex_escape(n) for n in notes) + "}")
+    header = [" & ".join(_tex_escape(h) for h in heads) + " \\\\"]
+    return _write_table(out, "tab_x2_4b", caption, "x2-4b", "lcc", header, body,
+                        "supplementary, C1's recipe on Qwen3.5-4B (appendix; development data, not test)", M, notes)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -3004,22 +3359,32 @@ def caption_lang_cost(lc: dict) -> str:
     extra = [s for s in lc["systems"] if s["role"] != "main"]
     base = next((s.get("base_pct") for s in main if s.get("base_pct")), None) or {}
     bt = " / ".join(f"{base[k]:.1f}%" for _sec, k, _lab in LANG_READOUTS if k in base)
+    sr = lc.get("seed_range") if (lc.get("seed_range") or {}).get("seeds") else None
     flags = []
     for s in lc["systems"]:
         fl = ", ".join(f"{HEALTH_LABELS.get(f['reading'], f['reading'])} {_signed(f['delta_pp'])} (n={f['n']})" for f in s["health_flags"])
-        flags.append(f"{s['label']}: {fl or 'none'}")
+        flags.append(f"{s['label']}" + (f", seed {_c1_seed_text(sr)}" if sr and s["name"] == "X-2（C1）" else "") + f": {fl or 'none'}")
     srcs = [v for s in lc["systems"] if not s["explore"] for v in (s.get("sources") or {}).values() if isinstance(v, str)]
     expl = [s for s in lc["systems"] if s["explore"]]
     s = ("Language cost on Qwen3.5-9B: difference from the base model evaluated on the same node (percentage points; 95% paired "
          "bootstrap CI). MMLU-Pro (letter answers) and IFEval (prompt-level strict) from the large language battery; grounding "
          "Acc@0.5 and counting accuracy (CountBench) on the T-text channel (shaded"
          + (f"; base {bt}" if bt else "") + "). Systems: " + _and([LANG_DESCRIPTIONS.get(x["name"], x["label"]) for x in main]) + ".")
+    if sr:  # DEV-0078（D162）：C1 的点是 seed 0；另一行是 3 个种子的范围；其余系统单种子
+        means = "; ".join(f"{w}: mean {_signed(v)} over the {len(sr['seeds'])} seeds" for w, v in _seed_means(sr))
+        s += (f" C1 = X-2 (ours) is training seed {_c1_seed_text(sr)}, the checkpoint in the test tables; every other system is a single "
+              f"training seed. The thin {COLOR_NAMES.get(W2_COLORS['X-2（C1）'], '')} line with open circles, just below C1's point, is "
+              f"{SEED_RANGE_LABEL.format(n=len(sr['seeds']))} (one circle per seed; no CI): {seed_range_def_text(sr, mean=False)}" +
+              (f"; {means}" if means else "") + ".")
     if extra:
         s += (" Also shown: " + _and([f"{x['label']} (C1's recipe without the box-correction stream)" if x["role"] == "ablation" else
                                       f"{x['label']} (an exploration candidate not taken to G-EX; T-text not measured)" for x in extra]) + ".")
     s += (" Pairing (D93-1): " + _pairing_text(lc["systems"]) + ". Not drawn: the small health check (brief §8.11: MMLU-Pro 100, GSM8K 50, "
           "IFEval 50 items) flags " + "; ".join(flags) + ".")
-    s += f" Data: {LANG_COST_JSON.split('/')[-1]} ({_runs_of(srcs)})" + (f"; X-3L: {EXPLORE_RUNS}" if expl else "") + "."
+    if sr:
+        s += " " + seed_battery_text(sr)
+    s += (f" Data: {LANG_COST_JSON.split('/')[-1]} ({_runs_of(srcs)})" + (f"; X-3L: {EXPLORE_RUNS}" if expl else "") +
+          (f"; the {len(sr['seeds'])}-seed range: {SEED_JSON.split('/')[-1]} ({_runs_of(sr['sources'])})" if sr else "") + ".")
     if lc["missing"]:
         s += " Missing: " + "; ".join(lc["missing"]) + "."
     return s
@@ -3159,8 +3524,24 @@ def readme_unified(u: dict, bn: dict, sd: dict, captions: dict) -> list[str]:
           "x2_select、x2_select5 两个设置与 IFEval instruction-level 不进表（任务书没有要）。",
           "- 健康检查的题数与标红门槛取各种子的 health_compare.json（路径取 seed_variance.py 的 SEEDS）；大题量的重抽次数取各自 lb_compare 的 statistics。",
           "- 这些都只在开发数据（explore_val 三层、devtune800、devcheck2）与语言检查上，不是 test；表注写明，并列出各自的运行编号与节点。",
+          "- DEV-0078（D162）：表注第二条加一句种子稳定性——三个种子的分割几乎相同（列出主设置三个种子的合并读数），差异全在语言的副作用上，主要是计数"
+          "（列出三个种子的计数差与均值，取 seed_range 的算术）。表的数值与版式不变。",
           "", "**表注（英文）**", ""] + [f"- {n}" for n in seeds_table_notes(sd)] + [""]
     return L
+
+
+def readme_x2_4b(x4: dict) -> list[str]:
+    """README 的 DEV-0078 一节：4B 补充表。"""
+    return ["## 16. 4B 补充实验（附录）：`tab_x2_4b.tex` / `tab_x2_4b.md`（DEV-0078）", "",
+            f"- 数据：`{X2_4B_JSON}`（`scripts/mgr/x2_4b.py`；预注册 X-7；D157、D162-2）：4B 的 {XT.MAIN}（C1 的配方）、{XT.ABL}（椭圆消融）、"
+            f"{X4B_SELECT}（只挑工具候选）的合并 cIoU 与 95% CI（{_res_text([x4.get('n_resamples')])} 次重抽）、样条 − 椭圆的配对差（spline_minus_ellipse）、"
+            "健康检查（health.rows：差与 flag）与大题量（battery：差与 95% CI，RUN-0101）。题数、标红门槛取 "
+            f"`{X4.HEALTH}`，大题量的重抽次数取 `{X4.BATTERY}` 的 statistics（路径取 x2_4b.py 的 HEALTH、BATTERY）。",
+            f"- 9B 一列：分割取 x2_4b.json 的 nine_b（= `{SEED_JSON}` 的 across_seeds，测试里核对）；语言与健康检查取 seed_variance.json 各种子的读数"
+            "（seed_range，同四方表的范围一列）。都写范围\"a to b\"（离 0 近的一端在前）。9B 的样条 − 椭圆在分析 JSON 里没有：取每个种子两个合并读数之差"
+            "（同一批句子上 ratio-of-sums 配对差的点估计），只给范围、不给 CI，表注写明。x2_select5 不进表（任务书没有要）。",
+            "- 只在开发数据上（2,300 句，与 tab_seeds 同一份），不是 test；4B 只有一个种子；只描述。表注写明预注册 X-7、运行编号与节点。",
+            "", "**表注（英文）**", ""] + [f"- {n}" for n in x2_4b_table_notes(x4)] + [""]
 
 
 def _git_commit(root: Path) -> str:
@@ -3233,6 +3614,12 @@ def readme_w2(w2: dict, sz: dict, lc: dict, cb: dict, lt: dict, captions: dict, 
           "- 版式：读数自上而下（底色 = T 文本通道），每个读数里各系统各一行，点 = 差，横线 = 95% CI，右侧写数值。"
           "健康检查的标红只写在图注（本次：" + "；".join(f"{s['name']} " + ("、".join(f"{f['reading']} {f['delta_pp']:+.1f}" for f in s["health_flags"]) or "没有标红")
                                            for s in lc["systems"]) + "）。配对的基座节点从来源路径的 _hpcgpuNN 读：" + _pairing_text(lc["systems"]) + "。",
+          f"- C1 配方 3 个种子的范围（DEV-0078；D162）：X-2 的点仍是 lang_cost_9b.json 的那个（按来源路径对上 `{SEED_JSON}` 的 seed "
+          f"{_c1_seed_text(lc.get('seed_range') or {})}，与 test 主表同一个检查点）；紧接着另一行画 3 个种子的范围：同色细线连最小到最大、每个种子一个"
+          "空心点、没有端帽（以免与 CI 混淆），右侧写范围（离 0 近的一端在前）。各种子的读数取 seed_variance.json 的 seeds.<k>.language（相对各自节点"
+          "基座的差），只做最小、最大与均值的算术，不重算 bootstrap；计数的均值写在图注。图注另写明其余系统单种子、以大题量为准（健康检查的标红只作并列说明，"
+          "含 seed 1、2 在 50 条 IFEval 上的标红）。来源：" + "、".join(f"`{p}`" for p in dict.fromkeys((lc.get("seed_range") or {}).get("sources") or [])) + "。"
+          "图例多一项（共 5 项，每行至多 3 项）；--with-explore 时共 7 项，改每行 2 项（3 列超出单栏宽度）。",
           "", "**图注（英文）**", "", captions["fig_lang_cost"], "",
           "## 8. 计数分档：`fig_count_bins.pdf` / `fig_count_bins.png`", "",
           f"- 数据：`{COUNT_ERRORS_JSON}`（`scripts/mgr/count_errors.py`）的三个大档 {', '.join(cb['bins'])}："
@@ -3266,7 +3653,13 @@ def readme_w2(w2: dict, sz: dict, lc: dict, cb: dict, lt: dict, captions: dict, 
           ("；".join(f"{_lang_row_label(main_lt, r)} = {_lang_base(main_lt, r)}" for r in lt["rows"] if " / " in _lang_base(main_lt, r))
            or "各读数的基座都相同") + "。",
           "- 健康检查只给差与是否标红（† = 照简报 8.11 的规则标红）；大题量与 T 文本给差 [95% CI]。",
-          "", "**表注（英文，四方表）**", ""] + [f"- {n}" for n in lang_table_notes(lt, main_lt)] + [""]
+          f"- 3 个种子的范围（DEV-0078；D162）：版式选\"加一列\"——C1 列（seed {_c1_seed_text(lt.get('seed_range') or {})}，与 test 主表同一个检查点，"
+          f"读数照旧取 {LANG_COST_JSON}）后面紧接一列 \"{SEED_RANGE_LABEL.format(n=len((lt.get('seed_range') or {}).get('seeds') or []))}\"，"
+          "每个读数（健康检查、大题量、T 文本）一格，写\"a to b\"（离 0 近的一端在前，同表的一位小数写法）；计数另写 3 个种子的均值，健康检查另写标红的种子。"
+          f"各种子的读数取 `{SEED_JSON}`（大题量、T 文本：seeds.<k>.language；健康检查：seeds.<k>.health.rows），只做最小、最大与均值的算术，不重算 bootstrap。"
+          "附录版的这一列也紧跟 C1、在 C2 之前。表注加两条：C1 列是哪个种子、其余各列都是单种子、范围怎么取与各种子的配对节点；以大题量为准，健康检查的标红只作并列说明"
+          "（标红的种子与读数、大题量上 3 个种子最大的降幅都从数据生成）；Data 一条加上种子范围的来源。",
+          "", "**表注（英文，四方表）**", ""] + [f"- {n}" for n in lang_table_notes(lt, main_lt, lt.get("seed_range") if (lt.get("seed_range") or {}).get("seeds") else None)] + [""]
     L += ["## 11. 计算记账表：`tab_compute.tex` / `tab_compute.md`（DEV-0073）", "",
           f"- 数据：`{X_TEST_JSON}` 的 candidates.<候选>.compute（C1 主设置与椭圆消融、C2 主设置）与 compute_reference（W1-F、W2-c、LLMSeg）：每句的模型调用、"
           "生成 token、输入 token、模型调用时间、墙钟（5 个划分按句数加权的均值）。小数位同 x_test_table.md。",
@@ -3276,7 +3669,7 @@ def readme_w2(w2: dict, sz: dict, lc: dict, cb: dict, lt: dict, captions: dict, 
 
 
 def write_readme(root: Path, out: Path, e1, e2, e3, itf, captions: dict, files: dict, w2=None, sz=None, lc=None, cb=None,
-                 lt=None, u=None, bn=None, sd=None) -> Path:
+                 lt=None, u=None, bn=None, sd=None, x4=None) -> Path:
     now = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     L = ["# 论文用图表（docs/figures/）", "",
          "<!-- 由 scripts/figures/make_paper_figures.py 生成；不要手改。数据补齐后重跑：python scripts/figures/make_paper_figures.py -->", "",
@@ -3298,9 +3691,11 @@ def write_readme(root: Path, out: Path, e1, e2, e3, itf, captions: dict, files: 
          "外部方法槽 2（橙）、附带的椭圆消融中性深灰（同 C3 的\"对照\"）；文献的竖虚线用中性灰（MUTED）。validate_palette.js（白底 #ffffff）："
          "按画出的相邻顺序（紫、蓝、青、橙、深灰）与全对都是 CVD ΔE 最小 9.2、常规最小 16.3（深灰是中性色，色度检查照例不适用）。"
          "fig_bins 的两色（蓝、深灰）CVD ΔE 21.3、常规 21.8（深灰的色度检查同上不适用）。按组上色时 C2、W2-a、E3b、LISA 等与它们在别的图里的颜色不同（那些图里没有组）。",
+         "- DEV-0078：fig_lang_cost 里 C1 配方 3 个种子的范围用 C1 的同一个紫色（槽 7），以细线与空心点区别于 seed 0 的实心点与 CI，不加新颜色，"
+         "相邻顺序与配色检查不变。",
          "- 每个数字都从结果文件读；逐点来源见 `data/*.json`（每个点带 source 路径）。", ""]
     # 缺的数据
-    w2s = [x for x in (w2, sz, lc, cb, lt, u, bn, sd) if x is not None]
+    w2s = [x for x in (w2, sz, lc, cb, lt, u, bn, sd, x4) if x is not None]
     miss = e1["missing"] + e2["missing"] + e3["missing"] + itf["missing"] + [m for x in w2s for m in x["missing"]]
     L += ["## 缺的数据（missing）", ""]
     L += [f"- {m}" for m in miss] if miss else ["- 无"]
@@ -3379,6 +3774,8 @@ def write_readme(root: Path, out: Path, e1, e2, e3, itf, captions: dict, files: 
         L += readme_w2(w2, sz, lc, cb, lt, captions, u)
     if u is not None and bn is not None and sd is not None:
         L += readme_unified(u, bn, sd, captions)
+    if x4 is not None:
+        L += readme_x2_4b(x4)
     L += ["## 文件", ""] + [f"- `{_rel(out, p)}`" for ps in files.values() for p in ps] + [""]
     p = out / "README.md"
     p.write_text("\n".join(L), encoding="utf-8")
@@ -3439,6 +3836,7 @@ def main(argv=None) -> int:
     w2, sz, lc, cb = collect_w2(root), collect_w2_size(root), collect_lang_cost(root, a.with_explore), collect_count_bins(root, a.with_explore)
     lt = collect_lang_table(root)  # DEV-0073
     u, bn, sd = collect_unified(root), collect_bins(root), collect_seeds(root)  # DEV-0077
+    x4 = collect_x2_4b(root)  # DEV-0078
     for metric, name in W2_METRICS:
         files[name] = tab_w2(w2, out, metric, name)
     files["tab_main"] = tab_main(w2, out, u)
@@ -3453,6 +3851,7 @@ def main(argv=None) -> int:
     files["fig_unified"] = fig_unified(u, out)
     files["fig_bins"] = fig_bins(bn, out)
     files["tab_seeds"] = tab_seeds(sd, out)
+    files["tab_x2_4b"] = tab_x2_4b(x4, out)  # DEV-0078：在原有各项之后出
     w2caps = {"fig_w2_size": caption_w2_size(sz), "fig_lang_cost": caption_lang_cost(lc), "fig_count_bins": caption_count_bins(cb)}
     for name, cap in w2caps.items():
         p = out / f"{name}_caption.tex"
@@ -3477,14 +3876,14 @@ def main(argv=None) -> int:
         p = out / "data" / f"{name}.json"
         p.write_text(json.dumps(_jsonable(data), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         files[name].append(p)
-    for name, data in (("tab_unified", u), ("fig_unified", fig_unified_data(u)), ("fig_bins", bn), ("tab_seeds", sd)):
+    for name, data in (("tab_unified", u), ("fig_unified", fig_unified_data(u)), ("fig_bins", bn), ("tab_seeds", sd), ("tab_x2_4b", x4)):
         p = out / "data" / f"{name}.json"
         p.write_text(json.dumps(_jsonable(data), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         files[name].append(p)
-    readme = write_readme(root, out, e1, e2, e3, itf, captions, files, w2, sz, lc, cb, lt, u, bn, sd)
+    readme = write_readme(root, out, e1, e2, e3, itf, captions, files, w2, sz, lc, cb, lt, u, bn, sd, x4)
     print(f"wrote {sum(len(v) for v in files.values()) + 1} files to {out} (README: {readme})")
     miss = e1["missing"] + e2["missing"] + e3["missing"] + itf["missing"] + w2["missing"] + sz["missing"] + lc["missing"] + cb["missing"] + \
-        lt["missing"] + u["missing"] + bn["missing"] + sd["missing"]
+        lt["missing"] + u["missing"] + bn["missing"] + sd["missing"] + x4["missing"]
     if miss:
         print("missing:\n  " + "\n  ".join(miss))
     return 0

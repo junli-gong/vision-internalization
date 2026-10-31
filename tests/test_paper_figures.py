@@ -12,6 +12,9 @@
   E1、E2、E3、干扰图与 fig_w2_size 逐字节不变。
 - DEV-0077：统一主表 tab_unified 与图 fig_unified、分档图 fig_bins、种子波动表 tab_seeds 与分析 JSON 逐项一致；跑坏的系统照样占一行；
   已有图表与 DEV-0077 动手前（a29e96c81）的逐字节相同，tab_main 只改了 caption。
+- DEV-0078（D162）：四方表（与 _full）在 C1 列后加一列 C1 配方 3 个种子的范围，语言代价图在 C1 的点下面另画一行范围；范围与 seed_variance.json
+  逐项一致（并钉住负责人答复 N46 的数）；表注、图注写明其余各列单种子、以大题量为准；tab_seeds 的表注加种子稳定性一句；新增 4B 补充表 tab_x2_4b
+  与 x2_4b.json、seed_variance.json 逐项一致。其余图表与 DEV-0078 动手前（dfa4383e7）的逐字节相同，改了的几个只多出点名的列、行与表注。
 """
 
 from __future__ import annotations
@@ -629,6 +632,11 @@ def test_real_existing_outputs_byte_identical(real_run):
 
 
 PRE_DEV0077 = "a29e96c81"  # DEV-0077 动手前的 origin/main：那时 docs/figures/ 里的图表除 tab_main 的 caption 外都不该变
+PRE_DEV0078 = "dfa4383e7"  # DEV-0078 动手前的 origin/main：除下面点名的几个外，docs/figures/ 逐字节不变
+DEV0078_CHANGED = ("tab_lang_cost.tex", "tab_lang_cost.md", "tab_lang_cost_full.tex", "tab_lang_cost_full.md", "data/tab_lang_cost.json",
+                   "fig_lang_cost.pdf", "fig_lang_cost.png", "fig_lang_cost_caption.tex", "data/fig_lang_cost.json",
+                   "tab_seeds.tex", "tab_seeds.md")
+DEV0078_NEW = ("tab_x2_4b.tex", "tab_x2_4b.md", "data/tab_x2_4b.json")
 
 
 def _git_show(spec: str) -> bytes | None:
@@ -647,7 +655,8 @@ def test_real_outputs_unchanged_since_dev0077_base(real_run):
     files = [f.removeprefix("docs/figures/") for f in ls.stdout.split()]
     assert "tab_main.tex" in files and "fig_count_bins.png" in files and "tab_unified.tex" not in files
     for f in files:
-        if f not in ("README.md", "tab_main.tex", "tab_main.md"):
+        # DEV-0078 点名改的几个（四方表、语言代价图）由 test_real_outputs_unchanged_since_dev0078_base 对照 dfa4383e7 核对
+        if f not in ("README.md", "tab_main.tex", "tab_main.md") + DEV0078_CHANGED:
             assert (real_run / f).read_bytes() == _git_show(f"{PRE_DEV0077}:docs/figures/{f}"), f
     old = _git_show(f"{PRE_DEV0077}:docs/figures/tab_main.tex").decode("utf-8").splitlines()
     new = (real_run / "tab_main.tex").read_text(encoding="utf-8").splitlines()
@@ -662,6 +671,85 @@ def test_real_outputs_unchanged_since_dev0077_base(real_run):
     added = [x for x in new[1:] if x not in old]
     assert len(added) == 1 and added[0].startswith("- Appendix version on all 5,000 W2 test expressions") and "tab_unified" in added[0]
     assert [x for x in new[1:] if x != added[0]] == old[1:]
+
+
+RANGE_HEAD = "C1 = X-2, range over 3 seeds"
+
+
+def _drop_col(line: str, i: int, sep: str) -> str:
+    """表的一行去掉第 i 格（Markdown 用 " | "，LaTeX 用 " & "）。"""
+    if sep == " | ":
+        cells = line.strip().strip("|").split("|")
+        return "|" + "|".join(c for k, c in enumerate(cells) if k != i) + "|"
+    body = line.removesuffix(" \\\\")
+    cells = body.split(sep)
+    return sep.join(c for k, c in enumerate(cells) if k != i) + " \\\\"
+
+
+def test_real_outputs_unchanged_since_dev0078_base(real_run):
+    """DEV-0078 任务书：其余图表除点名改动的以外逐字节不变。对照 dfa4383e7 的 docs/figures/：
+    - 没点名的文件逐字节相同；新增的只有 tab_x2_4b 三个文件；
+    - 四方表（与 _full）：每一行去掉"3 个种子的范围"那一列后与原来相同（.md 与 .tex），列格式多一个 c；表注原有各条一字不改（Data 一条只在末尾
+      加种子范围的来源），另多两条；
+    - tab_seeds：只多了表注的种子稳定性一条（.md 一行；.tex 的 caption 里同一句），表的数值与版式不变；
+    - data/tab_lang_cost.json、data/fig_lang_cost.json 只多了 seed_range 一个键。"""
+    ls = subprocess.run(["git", "-C", str(REPO), "ls-tree", "-r", "--name-only", PRE_DEV0078, "docs/figures"], capture_output=True,
+                        text=True, timeout=60)
+    if ls.returncode != 0 or not ls.stdout.strip():
+        pytest.skip(f"没有 {PRE_DEV0078} 的 git 历史")
+    files = [f.removeprefix("docs/figures/") for f in ls.stdout.split()]
+    assert set(DEV0078_CHANGED) <= set(files) and not set(DEV0078_NEW) & set(files)
+    now = sorted(str(f.relative_to(real_run)) for f in real_run.rglob("*") if f.is_file())
+    assert sorted(set(now) - set(files)) == sorted(DEV0078_NEW)
+    for f in files:
+        if f not in ("README.md",) + DEV0078_CHANGED:
+            assert (real_run / f).read_bytes() == _git_show(f"{PRE_DEV0078}:docs/figures/{f}"), f
+    for name in ("tab_lang_cost", "tab_lang_cost_full"):
+        old = _git_show(f"{PRE_DEV0078}:docs/figures/{name}.md").decode("utf-8").splitlines()
+        new = (real_run / f"{name}.md").read_text(encoding="utf-8").splitlines()
+        head = _cells(new[2])
+        i = head.index(RANGE_HEAD)
+        assert head[i - 1] == "C1 = X-2 (ours)"
+        old_rows, new_rows = [x for x in old if x.startswith("|")], [x for x in new if x.startswith("|")]
+        assert len(old_rows) == len(new_rows) == 9
+        assert new_rows[1] == old_rows[1] + "---:|"
+        for a, b in zip(old_rows[:1] + old_rows[2:], new_rows[:1] + new_rows[2:]):
+            assert _drop_col(b, i, " | ") == a, b
+        old_notes, new_notes = [x for x in old if x.startswith("- ")], [x for x in new if x.startswith("- ")]
+        assert old_notes[-1].startswith("- Data: ") and new_notes[-1].startswith(old_notes[-1][:-1] + "; the 3-seed range: seed_variance.json (")
+        added = [x for x in new_notes if x not in old_notes[:-1] and not x.startswith("- Data: ")]
+        assert [x for x in new_notes[:-1] if x not in added] == old_notes[:-1] and len(added) == 2
+        assert added[0].startswith("- C1 = X-2 (ours) is training seed 0") and added[1].startswith("- Language cost is read on the language battery")
+        assert new[0] == old[0]
+        # .tex：表的每一行去掉同一列后与原来相同；列格式多一个 c；caption 一行之外都相同
+        old_t = _git_show(f"{PRE_DEV0078}:docs/figures/{name}.tex").decode("utf-8").splitlines()
+        new_t = (real_run / f"{name}.tex").read_text(encoding="utf-8").splitlines()
+        assert len(old_t) == len(new_t)
+        for a, b in zip(old_t, new_t):
+            if a.startswith("\\caption{"):
+                assert b.startswith("\\caption{") and "range over 3 seeds" in b
+            elif a.startswith("\\begin{tabular}"):
+                assert b == a.replace("c}", "cc}")
+            elif " & " in a:
+                assert _drop_col(b, i, " & ") == a, b
+            else:
+                assert a == b
+    old = _git_show(f"{PRE_DEV0078}:docs/figures/tab_seeds.md").decode("utf-8").splitlines()
+    new = (real_run / "tab_seeds.md").read_text(encoding="utf-8").splitlines()
+    added = [x for x in new if x not in old]
+    assert len(added) == 1 and added[0].startswith("- Segmentation on the development data is almost the same for the 3 seeds")
+    assert [x for x in new if x != added[0]] == old
+    old_t = _git_show(f"{PRE_DEV0078}:docs/figures/tab_seeds.tex").decode("utf-8").splitlines()
+    new_t = (real_run / "tab_seeds.tex").read_text(encoding="utf-8").splitlines()
+    diff = [(a, b) for a, b in zip(old_t, new_t) if a != b]
+    assert len(old_t) == len(new_t) and len(diff) == 1 and diff[0][0].startswith("\\caption{")
+    a, b = diff[0]
+    sentence = MPF._tex_escape(added[0][2:])
+    assert b.replace(" " + sentence, "", 1) == a  # caption 里只多了这一句
+    for name in ("tab_lang_cost", "fig_lang_cost"):
+        old_j = json.loads(_git_show(f"{PRE_DEV0078}:docs/figures/data/{name}.json"))
+        new_j = data(real_run, name)
+        assert set(new_j) - set(old_j) == {"seed_range"} and {k: v for k, v in new_j.items() if k != "seed_range"} == old_j, name
 
 
 def test_real_w2_table_matches_analysis_json(real_run):
@@ -874,20 +962,20 @@ def test_real_tab_lang_cost_matches_analysis_json(real_run):
     j = _repo_json(MPF.LANG_COST_JSON)["systems"]
     md, full = (out / "tab_lang_cost.md").read_text(encoding="utf-8"), (out / "tab_lang_cost_full.md").read_text(encoding="utf-8")
     head = md.splitlines()[2]
-    assert head == "| Check | Reading | Base | E3b+C3 | W2-c | W2-c + replay | C1 = X-2 (ours) |"
-    assert full.splitlines()[2] == head + " C2 = X-3 (ablation) |"
+    assert head == f"| Check | Reading | Base | E3b+C3 | W2-c | W2-c + replay | C1 = X-2 (ours) | {RANGE_HEAD} |"
+    assert full.splitlines()[2] == head + " C2 = X-3 (ablation) |"  # 附录版：范围一列也紧跟 C1，在 C2 之前
     lt = data(out, "tab_lang_cost")
     x2 = next(s for s in lt["systems"] if s["name"] == "X-2（C1）")
-    # 抽查：X-2 的大题量 MMLU-Pro 与计数
+    # 抽查：X-2 的大题量 MMLU-Pro 与计数（C1 列，第 7 格）
     for sec, key in (("battery", "mmlu_pro_letter.accuracy"), ("ttext", "count")):
         r, c = j["X-2（C1）"][sec][key], x2["cells"][f"{sec}/{key}"]
         assert (c["delta"], c["low"], c["high"], c["n"]) == (r["delta_pp"], r["ci95_pp"][0], r["ci95_pp"][1], r["n"])
     row = next(r for r in md.splitlines() if "MMLU-Pro, letter answers" in r)
     r = j["X-2（C1）"]["battery"]["mmlu_pro_letter.accuracy"]
-    assert row.endswith(f"| {r['delta_pp']:+.1f} [{r['ci95_pp'][0]:+.1f}, {r['ci95_pp'][1]:+.1f}] |")
+    assert _cells(row)[6] == f"{r['delta_pp']:+.1f} [{r['ci95_pp'][0]:+.1f}, {r['ci95_pp'][1]:+.1f}]"
     row = next(r for r in md.splitlines() if "CountBench counting accuracy" in r)
     r = j["X-2（C1）"]["ttext"]["count"]
-    assert row.endswith(f"| {r['delta_pp']:+.1f} [{r['ci95_pp'][0]:+.1f}, {r['ci95_pp'][1]:+.1f}] |")
+    assert _cells(row)[6] == f"{r['delta_pp']:+.1f} [{r['ci95_pp'][0]:+.1f}, {r['ci95_pp'][1]:+.1f}]"
     # 健康检查：差与标红（†）；X-2 没有标红
     health = [r for r in md.splitlines() if r.startswith("|") and r.split("|")[2].strip().split(" (")[0] in ("MMLU-Pro", "GSM8K", "IFEval")]
     assert len(health) == 3
@@ -926,6 +1014,84 @@ def test_real_tab_lang_cost_matches_analysis_json(real_run):
     assert "C2 = X-3" not in md.split("\n- ")[0] and "X-3" in full
 
 
+def _seed_readings() -> dict:
+    """seed_variance.json 各种子的读数（相对各自节点基座的差）：{"<节>/<读数>": [(种子, 差, 标红)]}，独立于出图脚本取。"""
+    sj = _repo_json(MPF.SEED_JSON)["seeds"]
+    out: dict = {}
+    for k in sorted(sj, key=int):
+        for sec, key in (("battery", "mmlu_pro_letter.accuracy"), ("battery", "ifeval.prompt_level_strict"), ("ttext", "refexp_box"),
+                         ("ttext", "count")):
+            out.setdefault(f"{sec}/{key}", []).append((int(k), sj[k]["language"][sec][key]["delta_pp"], False))
+        for key, h in sj[k]["health"]["rows"].items():
+            out.setdefault(f"health/{key}", []).append((int(k), h["delta_pp"], h["flag"]))
+    return out
+
+
+def _expected_range(rows, mean=False, scale=1.0, signed=True) -> str:
+    """范围一格的期望写法：最小与最大，离 0 近的一端在前；计数加均值，健康检查加标红的种子。"""
+    vals = [v for _k, v, _f in rows]
+    f = (lambda x: f"{scale * x:+.1f}") if signed else (lambda x: f"{scale * x:.1f}")
+    a, b = (f(x) for x in sorted((min(vals), max(vals)), key=abs))
+    s = a if a == b else f"{a} to {b}"
+    extra = ([f"mean {f(sum(vals) / len(vals))}"] if mean else []) + \
+        ([f"† seeds {' and '.join(str(k) for k, _v, fl in rows if fl)}"] if any(fl for _k, _v, fl in rows) else [])
+    return s + (f" ({'; '.join(extra)})" if extra else "")
+
+
+TABLE_ROWS = {"health/mmlu_pro_letter.accuracy": "MMLU-Pro (n=100)", "health/gsm8k.flexible": "GSM8K (n=50)",
+              "health/ifeval.prompt_level_strict": "IFEval (n=50)", "battery/mmlu_pro_letter.accuracy": "MMLU-Pro, letter answers (n=2,000)",
+              "battery/ifeval.prompt_level_strict": "IFEval, prompt-level strict (n=541)", "ttext/refexp_box": "Grounding Acc@0.5 (n=56,857)",
+              "ttext/count": "CountBench counting accuracy (n=442)"}
+
+
+def test_real_tab_lang_cost_seed_range(real_run):
+    """DEV-0078（D162）：四方表与附录版的"3 个种子的范围"一列 = seed_variance.json 各种子读数的最小与最大（离 0 近的一端在前），计数另给均值，
+    健康检查另给标红的种子；钉住负责人答复 N46 的数（MMLU-Pro −0.2 到 −2.3、IFEval 0.0 到 −3.5、定位 +3.4 到 +3.5、计数 −8.1 到 −16.1、
+    均值 −10.9）。C1 列是 seed 0（来源路径对上，读数相同）。表注写明其余各列单种子、以大题量为准、seed 1、2 在 50 条 IFEval 上标红、大题量上三个种子
+    都没有超过 3.5 点。"""
+    out = real_run
+    sr = _seed_readings()
+    j = _repo_json(MPF.LANG_COST_JSON)["systems"]["X-2（C1）"]
+    s0 = _repo_json(MPF.SEED_JSON)["seeds"]["0"]
+    # C1 列 = seed 0：来源相同、读数相同
+    assert {k: s0["language"]["sources"][k] for k in ("battery", "ttext")} == {k: j["sources"][k] for k in ("battery", "ttext")}
+    for sec in ("battery", "ttext"):
+        for key, r in j[sec].items():
+            if key in s0["language"][sec]:
+                assert (s0["language"][sec][key]["delta_pp"], s0["language"][sec][key]["ci95_pp"]) == (r["delta_pp"], r["ci95_pp"]), key
+    assert {k: v["delta_pp"] for k, v in s0["health"]["rows"].items()} == {k: v["delta_pp"] for k, v in j["health"].items()}
+    lt = data(out, "tab_lang_cost")
+    assert lt["seed_range"]["c1_seed"] == 0 and lt["seed_range"]["seeds"] == [0, 1, 2] and not lt["seed_range"]["missing"]
+    # 计数的三个种子与 count_errors_c1_seeds.json 的 all 档一致（同一批预测文件的另一份分析）
+    ce = _repo_json("docs/analysis/count_errors_c1_seeds.json")["systems"]
+    assert [round(100 * ce[n]["bins"]["all"]["vs_base"]["d_acc"], 6) for n in ("X-2（C1）", "X-2（C1）seed 1", "X-2（C1）seed 2")] == \
+           [round(v, 6) for _k, v, _f in sr["ttext/count"]]
+    pins = {"battery/mmlu_pro_letter.accuracy": "-0.2 to -2.3", "battery/ifeval.prompt_level_strict": "+0.0 to -3.5",
+            "ttext/refexp_box": "+3.4 to +3.5", "ttext/count": "-8.1 to -16.1 (mean -10.9)",
+            "health/ifeval.prompt_level_strict": "-4.0 to -12.0 († seeds 1 and 2)"}
+    for name in ("tab_lang_cost", "tab_lang_cost_full"):
+        md = (out / f"{name}.md").read_text(encoding="utf-8")
+        i = _cells(md.splitlines()[2]).index(RANGE_HEAD)
+        for k, lab in TABLE_ROWS.items():
+            cell = _cells(next(r for r in md.splitlines() if f"| {lab} |" in r))[i]
+            assert cell == _expected_range(sr[k], mean=k == "ttext/count"), (name, k)
+            if k in pins:
+                assert cell == pins[k], (name, k)
+        notes = md.split("\n\n- ")[1]
+        assert "C1 = X-2 (ours) is training seed 0, the checkpoint in the test tables; every other column is a single training seed." in notes
+        assert "the end nearer zero first" in notes and "seeds 0 and 1 on hpcgpu07, seed 2 on hpcgpu06" in notes
+        flagged = [(k, v) for k, v, fl in sr["health/ifeval.prompt_level_strict"] if fl]
+        assert [k for k, _v in flagged] == [1, 2]
+        drop = max(-v for k in ("battery/mmlu_pro_letter.accuracy", "battery/ifeval.prompt_level_strict") for _s, v, _f in sr[k])
+        assert drop == 3.5
+        assert ("Language cost is read on the language battery (D154, D162); the health-check flags are reported alongside only: the health "
+                f"check flags C1's seeds 1 and 2 on IFEval (n=50: {MPF._signed(flagged[0][1])} and {MPF._signed(flagged[1][1])}; not flagged: "
+                f"seed 0 −4.0), while on the language battery none of the 3 seeds loses more than {drop:.1f} points.") in md
+        assert "the 3-seed range: seed_variance.json (RUN-0069, RUN-0080, RUN-0084, RUN-0091, RUN-0093, RUN-0094, RUN-0096)" in md
+        tex = (out / f"{name}.tex").read_text(encoding="utf-8")
+        assert "$-8.1$ to $-16.1$\\,{\\scriptsize (mean $-10.9$)}" in tex and "$-4.0$ to $-12.0$\\,{\\scriptsize (\\dag{} seeds 1 and 2)}" in tex
+
+
 def test_real_w2_size_matches_analysis_json(real_run):
     out = real_run
     d = data(out, "fig_w2_size")
@@ -960,7 +1126,23 @@ def test_real_lang_cost_matches_analysis_json(real_run, tmp_path):
             assert (p["value"], p["low"], p["high"]) == (r["delta_pp"], r["ci95_pp"][0], r["ci95_pp"][1])
     cap = (out / "fig_lang_cost_caption.tex").read_text(encoding="utf-8")
     assert "W2-c + replay: IFEval $-$6.0 (n=50)" in cap and "W2-c: MMLU-Pro $-$6.0 (n=100), IFEval $-$6.0 (n=50)" in cap
-    assert "C1 = X-2 (ours): none" in cap  # 健康检查的标红只写在图注：X-2 没有
+    assert "C1 = X-2 (ours), seed 0: none" in cap  # 健康检查的标红只写在图注：X-2（seed 0）没有
+    # DEV-0078（D162）：C1 的点仍是 seed 0；另一行画 3 个种子的范围（每个种子一个空心点）= seed_variance.json 各种子的读数
+    sr, rng = _seed_readings(), d["seed_range"]
+    assert rng["c1_seed"] == 0 and rng["seeds"] == [0, 1, 2]
+    for sec, key, _lab in MPF.LANG_READOUTS:
+        r = rng["rows"][f"{sec}/{key}"]
+        assert r["values"] == [v for _k, v, _f in sr[f"{sec}/{key}"]] and (r["low"], r["high"]) == (min(r["values"]), max(r["values"]))
+        assert r["values"][0] == j["X-2（C1）"][sec][key]["delta_pp"]  # seed 0 = 图里 C1 的点
+    assert MPF.range_ends(rng["rows"]["ttext/count"]) == (max(r for r in rng["rows"]["ttext/count"]["values"]),
+                                                          min(r for r in rng["rows"]["ttext/count"]["values"]))
+    assert MPF.range_ends(rng["rows"]["ttext/refexp_box"])[0] == min(rng["rows"]["ttext/refexp_box"]["values"])
+    assert "C1 = X-2 (ours) is training seed 0, the checkpoint in the test tables; every other system is a single training seed." in cap
+    assert "The thin violet line with open circles, just below C1's point, is C1 = X-2, range over 3 seeds" in cap
+    assert f"counting: mean $-${-rng['rows']['ttext/count']['mean']:.1f} over the 3 seeds" in cap and "mean $-$10.9" in cap
+    assert "the health check flags C1's seeds 1 and 2 on IFEval (n=50: $-$12.0 and $-$6.0" in cap
+    assert "none of the 3 seeds loses more than 3.5 points" in cap and "Language cost is read on the language battery (D154, D162)" in cap
+    assert "the 3-seed range: seed\\_variance.json (RUN-0069, RUN-0080, RUN-0084, RUN-0091, RUN-0093, RUN-0094, RUN-0096)" in cap
     assert "C1 = X-2 (ours): health check and language battery against the base on hpcgpu07, T-text against the base on hpcgpu06" in cap
     assert "X-3" not in cap
     # --with-explore：再加 X-3（C2，同一份 JSON，含 T 文本）与 X-3L（读它自己的 compare，没有 T 文本）
@@ -976,6 +1158,7 @@ def test_real_lang_cost_matches_analysis_json(real_run, tmp_path):
     assert data(tmp_path, "fig_lang_cost")["with_explore"] is True
     cap = (tmp_path / "fig_lang_cost_caption.tex").read_text(encoding="utf-8")
     assert "Also shown: C2 = X-3 (ablation)" in cap and "C2 = X-3 (ablation): IFEval $-$10.0 (n=50)" in cap and "X-3L" in cap
+    assert "range over 3 seeds" in cap and data(tmp_path, "fig_lang_cost")["seed_range"]["seeds"] == [0, 1, 2]
     assert "--with-explore 打开" in (tmp_path / "README.md").read_text(encoding="utf-8")
     cb = data(tmp_path, "fig_count_bins")  # 计数分档：--with-explore 时 X-3（C2）排在 X-2 后面
     assert [s["name"] for s in cb["systems"]] == ["base@0069", "W2-c", "W2-c+回放", "X-2（C1）", "X-3（C2）", "C3", "E3b+C3"]
@@ -1113,8 +1296,11 @@ def test_fake_tree_without_w2_data_reports_missing(base_run):
     for name in ("tab_unified", "tab_seeds"):
         assert (out / f"{name}.md").is_file() and (out / f"{name}.tex").is_file()
     for m in (f"统一主表：{MPF.UNIFIED_JSON} 不在", f"统一主表的文献读数：{MPF.SOTA_JSON} 不在", f"分档：{MPF.X_BINS_JSON} 不在",
-              f"种子波动：{MPF.SEED_JSON} 不在"):
+              f"种子波动：{MPF.SEED_JSON} 不在", f"4B 补充表：{MPF.X2_4B_JSON} 不在"):
         assert m in miss, m
+    # DEV-0078：4B 补充表照常出文件；没有种子的 JSON 时四方表不加范围一列（缺项照旧由"语言代价表"报）
+    assert (out / "tab_x2_4b.md").is_file() and (out / "tab_x2_4b.tex").is_file() and (out / "data" / "tab_x2_4b.json").is_file()
+    assert RANGE_HEAD not in (out / "tab_lang_cost.md").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1311,6 +1497,89 @@ def test_real_tab_seeds_matches_json(real_run):
               "RUN-0096", "RUN-0069", "hpcgpu07", "hpcgpu06", "10,000 resamples"):
         assert s in md, s
     assert not data(out, "tab_seeds")["missing"]
+    # DEV-0078（D162）：种子稳定性一句——分割几乎相同（三个种子的合并读数），差异全在语言的副作用上，列出计数的三个值与均值
+    sp = [f"{100 * e['settings'][MPF.XT.MAIN]['pooled']['ciou']:.1f}" for e in seeds]
+    cv = [c["delta_pp"] for c in cnt]
+    want = (f"- Segmentation on the development data is almost the same for the 3 seeds (C1 recipe, pooled: {sp[0]}, {sp[1]} and {sp[2]}); "
+            "the differences between seeds are all in the language side effects, mostly counting (CountBench counting accuracy, seeds 0, 1 "
+            f"and 2: {MPF._signed(cv[0])}, {MPF._signed(cv[1])} and {MPF._signed(cv[2])} points; mean {MPF._signed(sum(cv) / 3)}).")
+    assert want in md.splitlines() and md.splitlines().index(want) == md.splitlines().index(next(x for x in md.splitlines() if x.startswith("- "))) + 1
+    assert "(C1 recipe, pooled: 73.0, 73.1 and 73.2)" in want and "−8.6, −16.1 and −8.1 points; mean −10.9" in want
+    assert MPF._tex_escape(want[2:]) in tex
+
+
+def test_real_tab_x2_4b_matches_json(real_run):
+    """DEV-0078：4B 补充表（附录）。4B 一列 = x2_4b.json（分割三个设置的合并读数与 CI、样条 − 椭圆、大题量的差与 CI、健康检查的差与 †）；
+    9B 一列 = 三个种子的范围（分割取 x2_4b.json 的 nine_b，与 seed_variance.json 的 across_seeds 相同；语言与健康检查取 seed_variance.json）；
+    9B 的样条 − 椭圆 = 每个种子两个合并读数之差。表注写明补充实验、预注册 X-7、只在开发数据上、4B 一个种子、RUN-0098 与 0101。"""
+    out = real_run
+    xj, svj = _repo_json(MPF.X2_4B_JSON), _repo_json(MPF.SEED_JSON)
+    md, tex = (out / "tab_x2_4b.md").read_text(encoding="utf-8"), (out / "tab_x2_4b.tex").read_text(encoding="utf-8")
+    assert md.splitlines()[2] == "| Reading | Qwen3.5-4B (1 seed) | Qwen3.5-9B (range over 3 seeds) |"
+    rows = {_cells(r)[0]: _cells(r)[1:] for r in _rows(md)}
+    assert len(rows) == 4 + 2 + 3
+    # 9B 的分割：x2_4b.json 的 nine_b 就是 seed_variance.json 的 across_seeds
+    for st in ("x2_spline_trimap", "x2_ellipse_trimap", "x2_select"):
+        assert xj["nine_b"][st] == svj["across_seeds"][st], st
+    for st, lab in MPF.X4B_SETTINGS:
+        p, nb = xj["settings"][st]["pooled"], xj["nine_b"][st]["pooled"]
+        assert rows[f"{lab}, pooled (n=2,300)"] == [_cell(p["ciou"], *p["ci"]), _expected_range([(0, v, False) for v in nb], scale=100, signed=False)]
+    sme = xj["spline_minus_ellipse"]
+    d9 = [a - b for a, b in zip(xj["nine_b"]["x2_spline_trimap"]["pooled"], xj["nine_b"]["x2_ellipse_trimap"]["pooled"])]
+    assert rows["C1 recipe (spline) − in-box ellipse"] == [_cell(sme["diff"], *sme["ci"], signed=True),
+                                                         _expected_range([(0, v, False) for v in d9], scale=100)]
+    # 抽查（任务书）：4B 样条、4B IFEval 的差与 CI、9B 三个种子的范围
+    assert rows["C1 recipe (spline), pooled (n=2,300)"] == ["72.2 [70.8, 73.5]", "73.0 to 73.2"]
+    assert rows["C1 recipe (spline) − in-box ellipse"] == ["+16.2 [+15.4, +17.0]", "+16.8 to +17.2"]
+    b = xj["battery"]["ifeval.prompt_level_strict"]
+    assert rows["IFEval, prompt-level strict (n=541)"] == [f"{b['delta_pp']:+.1f} [{b['ci95_pp'][0]:+.1f}, {b['ci95_pp'][1]:+.1f}]",
+                                                          _expected_range(_seed_readings()["battery/ifeval.prompt_level_strict"])]
+    assert rows["IFEval, prompt-level strict (n=541)"] == ["-5.7 [-8.7, -2.8]", "+0.0 to -3.5"]
+    b = xj["battery"]["mmlu_pro_letter.accuracy"]
+    assert rows["MMLU-Pro, letter answers (n=2,000)"] == [f"{b['delta_pp']:+.1f} [{b['ci95_pp'][0]:+.1f}, {b['ci95_pp'][1]:+.1f}]", "-0.2 to -2.3"]
+    sr = _seed_readings()
+    for k, lab in (("mmlu_pro_letter.accuracy", "MMLU-Pro (n=100)"), ("gsm8k.flexible", "GSM8K (n=50)"), ("ifeval.prompt_level_strict", "IFEval (n=50)")):
+        h = xj["health"]["rows"][k]
+        assert rows[lab] == [f"{h['delta_pp']:+.1f}" + ("†" if h["flag"] else ""), _expected_range(sr[f"health/{k}"])], lab
+    assert rows["IFEval (n=50)"] == ["-10.0†", "-4.0 to -12.0 († seeds 1 and 2)"]
+    # 题数、重抽次数取 4B 的 compare 文件
+    hc, bc = _repo_json(MPF.X4.HEALTH), _repo_json(MPF.X4.BATTERY)
+    assert [r["n"] for r in hc["rows"] if r["headline"]] == [100, 50, 50] and bc["statistics"]["bootstrap"]["n_resamples"] == 1000
+    for s in ("Supplementary experiment (preregistration X-7", "Development data only, not the test splits", "Qwen3.5-4B: one training seed",
+              "RUN-0098 (hpcgpu07)", "4B language battery RUN-0101 (hpcgpu07", "no interval", "10,000 resamples (seed 20260929)",
+              "1,000 resamples", "base 47.4 and 83.0", "4B base 48.0, 86.0 and 88.0", "Language cost is read on the language battery",
+              "Data: x2_4b.json, seed_variance.json"):
+        assert s in md, s
+    assert "T-text" not in md  # 这张表没有 T 文本
+    assert "\\label{tab:x2-4b}" in tex and tex.count("\\caption{") == 1 and "\\textsuperscript{\\dag}" in tex
+    d = data(out, "tab_x2_4b")
+    assert not d["missing"] and d["runs"] == {"segmentation": ["0098"], "health": ["0098"], "battery": ["0101"]}
+    assert d["nodes"] == {"health": "hpcgpu07", "battery": "hpcgpu07"} and d["node"] == "hpcgpu07"
+    readme = (out / "README.md").read_text(encoding="utf-8")
+    assert "## 16. 4B 补充实验（附录）：`tab_x2_4b.tex` / `tab_x2_4b.md`（DEV-0078）" in readme and MPF.X2_4B_JSON in readme
+    assert all(f"`{f}`" in readme.split("## 文件")[1] for f in DEV0078_NEW)
+
+
+def test_range_cell_and_seed_range_rules():
+    """范围的写法（离 0 近的一端在前；两端写出来相同时只写一个；均值与标红的种子）与 seed_range 的缺项：少一个种子、C1 的来源对不上。"""
+    r = {"low": -16.06, "high": -8.14, "mean": -10.93, "flagged": None}
+    assert MPF._range_cell(r, False) == "-8.1 to -16.1 (mean -10.9)"
+    assert MPF._range_cell({"low": 3.41, "high": 3.52}, False) == "+3.4 to +3.5"
+    assert MPF._range_cell({"low": -3.5, "high": 0.0}, False) == "+0.0 to -3.5"
+    assert MPF._range_cell({"low": 0.7302, "high": 0.7304}, False, 100.0, False) == "73.0"
+    assert MPF._range_cell({"low": -12.0, "high": -4.0, "flagged": [1, 2]}, True) == "$-4.0$ to $-12.0$\\,{\\scriptsize (\\dag{} seeds 1 and 2)}"
+    assert MPF._range_cell({"low": -6.0, "high": -4.0, "flagged": [2]}, False) == "-4.0 to -6.0 († seed 2)"
+    assert MPF._range_cell(None, False) == "—"
+    sd = MPF.collect_seeds(REPO)
+    full = MPF.seed_range(sd, _repo_json(MPF.LANG_COST_JSON)["systems"]["X-2（C1）"]["sources"])
+    assert full["c1_seed"] == 0 and not full["missing"]
+    sd2 = json.loads(json.dumps(sd))
+    sd2["seeds"][1]["status"] = "缺"
+    part = MPF.seed_range(sd2)
+    assert part["seeds"] == [0, 2] and any("只用了 2 个种子" in m for m in part["missing"])
+    bad = MPF.seed_range(sd, {"battery": "experiments/X/0999_x_hpcgpu07/lb.json", "ttext": "x"})
+    assert bad["c1_seed"] is None and any("对不上" in m for m in bad["missing"])
+    assert MPF.seed_range({"seeds": []})["missing"] == [f"C1 的种子范围：{MPF.SEED_JSON} 不在"]
 
 
 def test_real_latex_compiles(real_run, tmp_path):

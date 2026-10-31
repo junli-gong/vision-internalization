@@ -2,14 +2,15 @@
 
 <!-- 由 scripts/figures/make_paper_figures.py 生成；不要手改。数据补齐后重跑：python scripts/figures/make_paper_figures.py -->
 
-- 生成时间：2026-10-30 05:46 UTC
-- 代码 commit：a29e96c813d16a3d31adb6815ad5d15bfe2dbdbb (working tree has uncommitted changes)
+- 生成时间：2026-10-31 06:55 UTC
+- 代码 commit：dfa4383e7d97a1eb671e1a534c65869f7b0fba31 (working tree has uncommitted changes)
 - 结果树：`仓库根`
 - matplotlib 3.11.2；PDF 是矢量（TrueType 字体，无 Type 3），PNG 300 dpi；宽度：单栏 3.3 in，双栏 6.9 in。
 - 配色：dataviz 参考调色板。Qwen3.5 四个尺寸用一个有序的蓝色阶（浅→深 = 0.8B→9B），InternVL3.5 用第二个有序色阶（橙）；两类对比用分类槽 1（蓝）与槽 2（橙）。都在白底上过了 validate_palette.js（有序：单色相、亮度单调、相邻 ΔL ≥ 0.06；分类两色全对 CVD ΔE 24.7）。
 - W2 的图（DEV-0071）：同一个系统在各张图里同一个颜色——W2-c 槽 1（蓝）、E3b+C3 槽 2（橙）、W2-c + 回放 槽 3（青）；基座与 C3 （对照）用中性灰（浅、深）；W2-a 只在 fig_w2_size 出现，用槽 2（与 E3b+C3 不同图）。槽 1–3 三色全对过 validate_palette.js（CVD ΔE ≥ 9.2）；青色对白底不足 3:1，图上带数值标签或有表可查（lang_cost_9b.md、count_errors_9b.md）。
 - C1 = X-2（主方法，DEV-0073）固定用分类槽 7（紫 #4a3aa7，对白底 ≥ 3:1），出现 C1 的每张图（fig_lang_cost、fig_count_bins）都是它；--with-explore 的 X-3（C2）用槽 5（粉）、X-3L 用槽 6（绿）；槽 4（黄，DEV-0071 给 X-2 的）不再用。validate_palette.js（白底 #ffffff）：fig_lang_cost 缺省四色（橙、蓝、青、紫）全对 PASS（CVD ΔE 最小 9.2，常规最小 16.3）；--with-explore 六色按画出的相邻顺序 PASS（相邻 CVD ΔE 最小 17.6、常规 24.0）；fig_count_bins 缺省（灰、蓝、青、紫、深灰、橙）与 --with-explore（再加粉）按画出的相邻顺序 PASS（CVD ΔE 最小 15.9、常规最小 17.2；两个灰色是有意的中性色，色度检查照例不适用）。粉与橙全对的常规 ΔE 12.9 不到 15，但两者在两张图里都不相邻，图例与数值标签可查。
 - 统一主表的图与分档（DEV-0077）：fig_unified 按组分色，C1 = X-2 仍是槽 7（紫），本文的方法其余槽 1（蓝，W2-c 的颜色）、各种手槽 3（青）、外部方法槽 2（橙）、附带的椭圆消融中性深灰（同 C3 的"对照"）；文献的竖虚线用中性灰（MUTED）。validate_palette.js（白底 #ffffff）：按画出的相邻顺序（紫、蓝、青、橙、深灰）与全对都是 CVD ΔE 最小 9.2、常规最小 16.3（深灰是中性色，色度检查照例不适用）。fig_bins 的两色（蓝、深灰）CVD ΔE 21.3、常规 21.8（深灰的色度检查同上不适用）。按组上色时 C2、W2-a、E3b、LISA 等与它们在别的图里的颜色不同（那些图里没有组）。
+- DEV-0078：fig_lang_cost 里 C1 配方 3 个种子的范围用 C1 的同一个紫色（槽 7），以细线与空心点区别于 seed 0 的实心点与 CI，不加新颜色，相邻顺序与配色检查不变。
 - 每个数字都从结果文件读；逐点来源见 `data/*.json`（每个点带 source 路径）。
 
 ## 缺的数据（missing）
@@ -165,10 +166,11 @@ W2-a − W1-F across model size (Qwen3.5 2B, 4B, 9B; W2 test, five splits pooled
   - X-2（C1）：health `experiments/X/0080_x2_hpcgpu07/0080_eval/health/health_compare.json`；battery `experiments/X/0084_lb_explore_hpcgpu07/lb_compare_x2.json`；ttext `experiments/X/0091_x_ttext_hpcgpu06/t_text/x2/seed0/qwen3.5-9b`；ttext_base `experiments/W2/0069_w2c_hpcgpu06/0069_ttext/qwen3.5-9b`
 - `--with-explore`：再加 X-3（C2，消融；同一份 JSON 的 "X-3（C2，消融）"）与 X-3L（探索候选，没有进 G-EX；大题量取 `experiments/X/0084_lb_explore_hpcgpu06/lb_compare_x3l.json`，健康检查的标红取 `experiments/X/0083_x3l_hpcgpu06/0083_eval/health/health_compare.json`，RUN-0083 (health), RUN-0084 (battery)；没有 T 文本读数，图注写明）。（本次生成时 --with-explore 关着，缺省）
 - 版式：读数自上而下（底色 = T 文本通道），每个读数里各系统各一行，点 = 差，横线 = 95% CI，右侧写数值。健康检查的标红只写在图注（本次：E3b+C3 mmlu_pro_letter -8.0、ifeval -20.0；W2-c mmlu_pro_letter -6.0、ifeval -6.0；W2-c+回放 ifeval -6.0；X-2（C1） 没有标红）。配对的基座节点从来源路径的 _hpcgpuNN 读：E3b+C3, W2-c, W2-c + replay: every check against the base on hpcgpu06; C1 = X-2 (ours): health check and language battery against the base on hpcgpu07, T-text against the base on hpcgpu06。
+- C1 配方 3 个种子的范围（DEV-0078；D162）：X-2 的点仍是 lang_cost_9b.json 的那个（按来源路径对上 `docs/analysis/seed_variance.json` 的 seed 0，与 test 主表同一个检查点）；紧接着另一行画 3 个种子的范围：同色细线连最小到最大、每个种子一个空心点、没有端帽（以免与 CI 混淆），右侧写范围（离 0 近的一端在前）。各种子的读数取 seed_variance.json 的 seeds.<k>.language（相对各自节点基座的差），只做最小、最大与均值的算术，不重算 bootstrap；计数的均值写在图注。图注另写明其余系统单种子、以大题量为准（健康检查的标红只作并列说明，含 seed 1、2 在 50 条 IFEval 上的标红）。来源：`experiments/X/0080_x2_hpcgpu07/0080_eval`、`experiments/X/0084_lb_explore_hpcgpu07/lb_compare_x2.json`、`experiments/X/0091_x_ttext_hpcgpu06/t_text/x2/seed0/qwen3.5-9b`、`experiments/W2/0069_w2c_hpcgpu06/0069_ttext/qwen3.5-9b`、`experiments/X/0080_x2_hpcgpu07/0080_eval/health/health_compare.json`、`experiments/X/0093_x2s1_hpcgpu07/0093_eval`、`experiments/X/0096_lang_seeds_hpcgpu07/lb_compare_x2s1.json`、`experiments/X/0096_lang_seeds_hpcgpu06/t_text/x2s1/seed1/qwen3.5-9b`、`experiments/X/0093_x2s1_hpcgpu07/0093_eval/health/health_compare.json`、`experiments/X/0094_x2s2_hpcgpu06/0094_eval`、`experiments/X/0096_lang_seeds_hpcgpu06/lb_compare_x2s2.json`、`experiments/X/0096_lang_seeds_hpcgpu06/t_text/x2s2/seed2/qwen3.5-9b`、`experiments/X/0094_x2s2_hpcgpu06/0094_eval/health/health_compare.json`。图例多一项（共 5 项，每行至多 3 项）；--with-explore 时共 7 项，改每行 2 项（3 列超出单栏宽度）。
 
 **图注（英文）**
 
-Language cost on Qwen3.5-9B: difference from the base model evaluated on the same node (percentage points; 95% paired bootstrap CI). MMLU-Pro (letter answers) and IFEval (prompt-level strict) from the large language battery; grounding Acc@0.5 and counting accuracy (CountBench) on the T-text channel (shaded; base 87.1% / 89.4%). Systems: E3b+C3 (E3), W2-c, W2-c + replay (post hoc self-distillation replay) and C1 = X-2 (ours). Pairing (D93-1): E3b+C3, W2-c, W2-c + replay: every check against the base on hpcgpu06; C1 = X-2 (ours): health check and language battery against the base on hpcgpu07, T-text against the base on hpcgpu06. Not drawn: the small health check (brief §8.11: MMLU-Pro 100, GSM8K 50, IFEval 50 items) flags E3b+C3: MMLU-Pro −8.0 (n=100), IFEval −20.0 (n=50); W2-c: MMLU-Pro −6.0 (n=100), IFEval −6.0 (n=50); W2-c + replay: IFEval −6.0 (n=50); C1 = X-2 (ours): none. Data: lang_cost_9b.json (RUN-0056, RUN-0069, RUN-0074, RUN-0076, RUN-0080, RUN-0084, RUN-0091).
+Language cost on Qwen3.5-9B: difference from the base model evaluated on the same node (percentage points; 95% paired bootstrap CI). MMLU-Pro (letter answers) and IFEval (prompt-level strict) from the large language battery; grounding Acc@0.5 and counting accuracy (CountBench) on the T-text channel (shaded; base 87.1% / 89.4%). Systems: E3b+C3 (E3), W2-c, W2-c + replay (post hoc self-distillation replay) and C1 = X-2 (ours). C1 = X-2 (ours) is training seed 0, the checkpoint in the test tables; every other system is a single training seed. The thin violet line with open circles, just below C1's point, is C1 = X-2, range over 3 seeds (one circle per seed; no CI): the differences of the 3 training seeds of C1's recipe (seeds 0, 1 and 2), the end nearer zero first, each seed against the base on its own node (health check and language battery: seeds 0 and 1 on hpcgpu07, seed 2 on hpcgpu06; T-text: seeds 0, 1 and 2 on hpcgpu06); counting: mean −10.9 over the 3 seeds. Pairing (D93-1): E3b+C3, W2-c, W2-c + replay: every check against the base on hpcgpu06; C1 = X-2 (ours): health check and language battery against the base on hpcgpu07, T-text against the base on hpcgpu06. Not drawn: the small health check (brief §8.11: MMLU-Pro 100, GSM8K 50, IFEval 50 items) flags E3b+C3: MMLU-Pro −8.0 (n=100), IFEval −20.0 (n=50); W2-c: MMLU-Pro −6.0 (n=100), IFEval −6.0 (n=50); W2-c + replay: IFEval −6.0 (n=50); C1 = X-2 (ours), seed 0: none. Language cost is read on the language battery (D154, D162); the health-check flags are reported alongside only: the health check flags C1's seeds 1 and 2 on IFEval (n=50: −12.0 and −6.0; not flagged: seed 0 −4.0), while on the language battery none of the 3 seeds loses more than 3.5 points. Data: lang_cost_9b.json (RUN-0056, RUN-0069, RUN-0074, RUN-0076, RUN-0080, RUN-0084, RUN-0091); the 3-seed range: seed_variance.json (RUN-0069, RUN-0080, RUN-0084, RUN-0091, RUN-0093, RUN-0094, RUN-0096).
 
 ## 8. 计数分档：`fig_count_bins.pdf` / `fig_count_bins.png`
 
@@ -212,15 +214,18 @@ Counting accuracy by ground-truth count on CountBench (442 items; bins 2–4 (n=
 - 数据：`docs/analysis/lang_cost_9b.json`：健康检查三项（health.<读数>：差与 flag）、大题量 MMLU-Pro 与 IFEval 严格（battery：差与 95% CI）、T 文本的定位与计数（ttext：差与 95% CI）。列：E3b+C3、W2-c、W2-c+回放、X-2（C1）；附录版再加 C2 = X-3 (ablation)。
 - 基座读数（Base 列，表头下）：都取 lang_cost_9b.json 这一个来源——健康检查取 health.*.base_pct、大题量取 battery.*.base（origin/main 5b3bb70ee 修了 lang_cost_table.py 的键名之后才有数）、T 文本取 ttext.*.base。与来源 lb_compare 文件的核对（基座读数、差与 CI）写在测试里（tests/test_paper_figures.py）。同一读数各系统配的基座若不同，就按节点分别写；本次：IFEval, prompt-level strict (n=541) = 83.5 (hpcgpu06) / 83.7 (hpcgpu07)。
 - 健康检查只给差与是否标红（† = 照简报 8.11 的规则标红）；大题量与 T 文本给差 [95% CI]。
+- 3 个种子的范围（DEV-0078；D162）：版式选"加一列"——C1 列（seed 0，与 test 主表同一个检查点，读数照旧取 docs/analysis/lang_cost_9b.json）后面紧接一列 "C1 = X-2, range over 3 seeds"，每个读数（健康检查、大题量、T 文本）一格，写"a to b"（离 0 近的一端在前，同表的一位小数写法）；计数另写 3 个种子的均值，健康检查另写标红的种子。各种子的读数取 `docs/analysis/seed_variance.json`（大题量、T 文本：seeds.<k>.language；健康检查：seeds.<k>.health.rows），只做最小、最大与均值的算术，不重算 bootstrap。附录版的这一列也紧跟 C1、在 C2 之前。表注加两条：C1 列是哪个种子、其余各列都是单种子、范围怎么取与各种子的配对节点；以大题量为准，健康检查的标红只作并列说明（标红的种子与读数、大题量上 3 个种子最大的降幅都从数据生成）；Data 一条加上种子范围的来源。
 
 **表注（英文，四方表）**
 
 - Language cost on Qwen3.5-9B under one set of checks (D147-4, preregistration X-6): each cell is the difference from the base model evaluated on the same node, in percentage points. Base: the base model's reading (%); where the bases on two nodes differ, each is given with its node.
+- C1 = X-2 (ours) is training seed 0, the checkpoint in the test tables; every other column is a single training seed. C1 = X-2, range over 3 seeds: the differences of the 3 training seeds of C1's recipe (seeds 0, 1 and 2), the end nearer zero first, each seed against the base on its own node (health check and language battery: seeds 0 and 1 on hpcgpu07, seed 2 on hpcgpu06; T-text: seeds 0, 1 and 2 on hpcgpu06); for counting, also the mean of the 3 seeds; for the health check, also the seeds it flags (†).
 - Health check (brief §8.11; fixed items: MMLU-Pro 100, GSM8K 50, IFEval 50): difference only; † = flagged by its rule (the headline metric drops by more than 5 points).
 - Language battery (MMLU-Pro 2,000 questions, letter answers; IFEval 541 prompts, prompt-level strict) and T-text (grounding Acc@0.5 on 56,857 expressions; counting accuracy on CountBench, 442 items): difference [95% paired bootstrap CI over items; battery 1,000 resamples, T-text 10,000 resamples].
+- Language cost is read on the language battery (D154, D162); the health-check flags are reported alongside only: the health check flags C1's seeds 1 and 2 on IFEval (n=50: −12.0 and −6.0; not flagged: seed 0 −4.0), while on the language battery none of the 3 seeds loses more than 3.5 points.
 - Pairing (D93-1): E3b+C3, W2-c, W2-c + replay: every check against the base on hpcgpu06; C1 = X-2 (ours): health check and language battery against the base on hpcgpu07, T-text against the base on hpcgpu06.
 - Systems: E3b+C3 (E3, pixel-token channel mixed with text), W2-c, W2-c + replay (W2-c with post hoc self-distillation replay) and C1 = X-2 (ours; its LoRA also trains on self-distillation replay of the base model's own answers, general instructions and counting).
-- Data: lang_cost_9b.json (RUN-0056, RUN-0069, RUN-0074, RUN-0076, RUN-0080, RUN-0084, RUN-0091).
+- Data: lang_cost_9b.json (RUN-0056, RUN-0069, RUN-0074, RUN-0076, RUN-0080, RUN-0084, RUN-0091); the 3-seed range: seed_variance.json (RUN-0069, RUN-0080, RUN-0084, RUN-0091, RUN-0093, RUN-0094, RUN-0096).
 
 ## 11. 计算记账表：`tab_compute.tex` / `tab_compute.md`（DEV-0073）
 
@@ -286,13 +291,29 @@ Where C1 = X-2 (ours) gains, on all 5,000 W2 test expressions (Qwen3.5-9B): pair
 - 数据：`docs/analysis/seed_variance.json`（`scripts/mgr/seed_variance.py`；D150、D151、D153）：三个种子的 x2_spline_trimap（C1 的配方）与 x2_ellipse_trimap（椭圆消融）的合并 cIoU 与 95% CI、− W2-c 参照、− seed 0（逐句配对 bootstrap，10,000 次）、跨种子的均值与样本标准差（across_seeds）；语言读数（大题量 MMLU-Pro、IFEval 严格，T 文本定位、计数；相对基座的差与 95% CI）；健康检查的差与标红（†）。x2_select、x2_select5 两个设置与 IFEval instruction-level 不进表（任务书没有要）。
 - 健康检查的题数与标红门槛取各种子的 health_compare.json（路径取 seed_variance.py 的 SEEDS）；大题量的重抽次数取各自 lb_compare 的 statistics。
 - 这些都只在开发数据（explore_val 三层、devtune800、devcheck2）与语言检查上，不是 test；表注写明，并列出各自的运行编号与节点。
+- DEV-0078（D162）：表注第二条加一句种子稳定性——三个种子的分割几乎相同（列出主设置三个种子的合并读数），差异全在语言的副作用上，主要是计数（列出三个种子的计数差与均值，取 seed_range 的算术）。表的数值与版式不变。
 
 **表注（英文）**
 
 - Seed variation of C1's training recipe (X-2) on Qwen3.5-9B, three training seeds. Everything here is on development data and language checks, not on the test splits. Segmentation: the development splits pooled (explore_val RefCOCO val 400, explore_val RefCOCO+ val 400, explore_val RefCOCOg val 200, devtune800 800, devcheck2 500; 2,300 expressions), cIoU ×100 with a 95% bootstrap CI; − W2-c reference: paired difference against a W2-c run on the same expressions; − seed 0: paired difference against seed 0; per-expression paired bootstrap of the ratio of sums, 95%, 10,000 resamples (seed 20260929). Across seeds: mean ± sample standard deviation of the pooled cIoU over the three seeds (×100, two decimals). The in-box ellipse ablation replaces the spline with the ellipse inscribed in the proposed box, everything else unchanged.
+- Segmentation on the development data is almost the same for the 3 seeds (C1 recipe, pooled: 73.0, 73.1 and 73.2); the differences between seeds are all in the language side effects, mostly counting (CountBench counting accuracy, seeds 0, 1 and 2: −8.6, −16.1 and −8.1 points; mean −10.9).
 - Language: difference from the base model in percentage points [95% paired bootstrap CI over items]. Language battery (MMLU-Pro letter answers, IFEval prompt-level strict; 1,000 resamples) against the base on the seed's node; T-text (grounding Acc@0.5, CountBench counting accuracy; 10,000 resamples) against the base T-text run of RUN-0069 on hpcgpu06.
 - Health check (brief §8.11; fixed items: MMLU-Pro 100, GSM8K 50, IFEval 50): difference only, against the base on the seed's node; † = flagged by its rule (the headline metric drops by more than 5 points).
 - Runs: seed 0: training and development evaluation RUN-0080 (hpcgpu07), language battery RUN-0084 (hpcgpu07), T-text RUN-0091 (hpcgpu06); seed 1: training and development evaluation RUN-0093 (hpcgpu07), language battery RUN-0096 (hpcgpu07), T-text RUN-0096 (hpcgpu06); seed 2: training and development evaluation RUN-0094 (hpcgpu06), language battery RUN-0096 (hpcgpu06), T-text RUN-0096 (hpcgpu06); W2-c reference RUN-0082. Data: seed_variance.json.
+
+## 16. 4B 补充实验（附录）：`tab_x2_4b.tex` / `tab_x2_4b.md`（DEV-0078）
+
+- 数据：`docs/analysis/x2_4b.json`（`scripts/mgr/x2_4b.py`；预注册 X-7；D157、D162-2）：4B 的 x2_spline_trimap（C1 的配方）、x2_ellipse_trimap（椭圆消融）、x2_select（只挑工具候选）的合并 cIoU 与 95% CI（10,000 次重抽）、样条 − 椭圆的配对差（spline_minus_ellipse）、健康检查（health.rows：差与 flag）与大题量（battery：差与 95% CI，RUN-0101）。题数、标红门槛取 `experiments/X/0098_x2_4b_hpcgpu07/0098_eval/health/health_compare.json`，大题量的重抽次数取 `experiments/X/0101_lb_4b_hpcgpu07/lb_compare_x2_4b.json` 的 statistics（路径取 x2_4b.py 的 HEALTH、BATTERY）。
+- 9B 一列：分割取 x2_4b.json 的 nine_b（= `docs/analysis/seed_variance.json` 的 across_seeds，测试里核对）；语言与健康检查取 seed_variance.json 各种子的读数（seed_range，同四方表的范围一列）。都写范围"a to b"（离 0 近的一端在前）。9B 的样条 − 椭圆在分析 JSON 里没有：取每个种子两个合并读数之差（同一批句子上 ratio-of-sums 配对差的点估计），只给范围、不给 CI，表注写明。x2_select5 不进表（任务书没有要）。
+- 只在开发数据上（2,300 句，与 tab_seeds 同一份），不是 test；4B 只有一个种子；只描述。表注写明预注册 X-7、运行编号与节点。
+
+**表注（英文）**
+
+- Supplementary experiment (preregistration X-7, written before any 4B data were generated, trained or evaluated; descriptive only): C1's training recipe (X-2) unchanged, with Qwen3.5-4B in place of Qwen3.5-9B and its training data regenerated with the 4B model. Qwen3.5-4B: one training seed. Qwen3.5-9B: the 3 training seeds of C1's recipe (seeds 0, 1 and 2), given as their range (the end nearer zero first); the per-seed readings are in the seed-variation table.
+- Development data only, not the test splits: the development splits pooled (explore_val RefCOCO val 400, explore_val RefCOCO+ val 400, explore_val RefCOCOg val 200, devtune800 800, devcheck2 500; 2,300 expressions), cIoU ×100. 4B: 95% bootstrap CI over expressions; spline − in-box ellipse: per-expression paired bootstrap of the ratio of sums, 95%, 10,000 resamples (seed 20260929). 9B spline − in-box ellipse: each seed's pooled spline reading minus its pooled ellipse reading on the same expressions (the point estimate of the paired difference; no interval). In-box ellipse ablation: the spline replaced by the ellipse inscribed in the proposed box, everything else unchanged. Picking a tool candidate: the same checkpoint proposes a box and picks one of the four tool candidates (W2-c's pipeline), without the spline.
+- Language: difference from the base model of the same size, in percentage points. Language battery (MMLU-Pro 2,000 questions, letter answers; IFEval 541 prompts, prompt-level strict): 4B against the 4B base on hpcgpu07 (base 47.4 and 83.0) [95% paired bootstrap CI over items, 1,000 resamples]; 9B: each seed against the 9B base on its own node (health check and language battery: seeds 0 and 1 on hpcgpu07, seed 2 on hpcgpu06). Health check (brief §8.11; fixed items: MMLU-Pro 100, GSM8K 50, IFEval 50): difference only; † = flagged by its rule (the headline metric drops by more than 5 points); 4B base 48.0, 86.0 and 88.0, on hpcgpu07.
+- Language cost is read on the language battery (D154, D162); the health-check flags are reported alongside only.
+- Runs: 4B training, development evaluation and health check RUN-0098 (hpcgpu07); 4B language battery RUN-0101 (hpcgpu07; the 4B base and the 4B model on the same node); 9B: RUN-0080, RUN-0084, RUN-0093, RUN-0094, RUN-0096. Data: x2_4b.json, seed_variance.json.
 
 ## 文件
 
@@ -353,3 +374,6 @@ Where C1 = X-2 (ours) gains, on all 5,000 W2 test expressions (Qwen3.5-9B): pair
 - `tab_seeds.tex`
 - `tab_seeds.md`
 - `data/tab_seeds.json`
+- `tab_x2_4b.tex`
+- `tab_x2_4b.md`
+- `data/tab_x2_4b.json`
