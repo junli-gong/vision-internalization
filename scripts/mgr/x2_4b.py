@@ -27,6 +27,7 @@ _spec.loader.exec_module(SV)
 XT, W2T, SPLITS, SETTINGS = SV.XT, SV.W2T, SV.SPLITS, SV.SETTINGS
 RUN = "experiments/X/0098_x2_4b_hpcgpu07/0098_eval"
 HEALTH = "experiments/X/0098_x2_4b_hpcgpu07/0098_eval/health/health_compare.json"
+BATTERY = "experiments/X/0101_lb_4b_hpcgpu07/lb_compare_x2_4b.json"  # RUN-0101，D162-2、D163
 M4 = "qwen3.5-4b"
 
 
@@ -56,6 +57,11 @@ def main(argv=None) -> int:
         doc["health"] = {"any_flag": hj.get("any_flag"),
                          "rows": {f"{r['reading']}.{r['metric']}": {"base_pct": r.get("base_pct"), "delta_pp": r.get("delta_pp"),
                                                                      "flag": r.get("flag")} for r in hj.get("rows", []) if r.get("headline")}}
+    b = ROOT / BATTERY
+    if b.exists():
+        bj = json.loads(b.read_text(encoding="utf-8"))
+        doc["battery"] = {f"{r['reading']}.{r['metric']}": {k: r.get(k) for k in ("base_pct", "other_pct", "delta_pp", "ci95_pp", "n")}
+                          for r in bj["rows"] if r.get("headline")}
     out = Path(a.out) if Path(a.out).is_absolute() else ROOT / a.out
     out.with_suffix(".json").write_text(json.dumps(doc, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
@@ -75,6 +81,9 @@ def main(argv=None) -> int:
     if "health" in doc:
         L += ["", "健康检查（4B 基座对 4B X-2，07）：" + "；".join(
             f"{k} 基座 {v['base_pct']} 差 {v['delta_pp']:+.1f}{' 标红' if v['flag'] else ''}" for k, v in doc["health"]["rows"].items())]
+    if "battery" in doc:
+        L += ["", "大题量（RUN-0101，4B 基座对 4B X-2，07；D162-2）：" + "；".join(
+            f"{k} 基座 {v['base_pct']} 差 {v['delta_pp']:+.1f} [{v['ci95_pp'][0]:+.1f}, {v['ci95_pp'][1]:+.1f}]（n={v['n']}）" for k, v in doc["battery"].items())]
     out.with_suffix(".md").write_text("\n".join(L) + "\n", encoding="utf-8")
     print(out.with_suffix(".md").read_text(encoding="utf-8"))
     return 0
