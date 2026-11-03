@@ -2122,3 +2122,4 @@
 - 10-31 06:5xZ：写 DEV-0078 的任务书（四方表加 3 个种子的范围、表注按 D162 改，新增 tab_x2_4b）并派发。
 - 10-31 07:2xZ：[merge] DEV-0078（D164）：四方表加 3 个种子的范围，新增 tab_x2_4b，tab_seeds 表注补一句。40 条测试通过。D154、D162 的事项全部完成。
 - 11-03 02:2xZ：负责人 X-M 指令记为 D165（原文要点存 `docs/lead_answers/2026-11-03-xm-directive.md`）。D0 = 今天；今晚报可行性。
+- 11-03 02:3xZ：发 RUN-0102（hpcmgt，X-M 的数据落地：COCO 2017、LVIS v1 val、ReasonSeg val，记 sha256；数据不进 git）。
