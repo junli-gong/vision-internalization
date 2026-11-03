@@ -3560,3 +3560,22 @@
   - 条件：中转前后逐文件 sha256 相同；MANIFEST 与报告里写明"经 Mac 中转、来自官方 Drive 文件夹"；Mac 上的临时副本验证后即删。
   - 不用任何非官方拷贝。
 - **HPC 连不上**：从 Mac 到跳板机（pi.machenyu.cn:8889）的 SSH 全部超时或被关闭，hpcmgt 与两台 GPU 节点都到不了。需要用户处理网络或跳板机。服务器在后台每 5 分钟重试一次，最长 6 小时，不改任何 SSH 配置。连上之前，RUN-0102 与所有 HPC 上的 X-M 工作都开不了头。
+
+## D167（2026-11-03，管理员）：DEV-0079 合入（X-M 的数据、划分、密封、去重、训练目标）与它的待裁
+
+- `src/xm/data.py`、`exclusions.py`、`targets.py`，`scripts/xm/build_configs.py`、`build_targets.py`、`data_stats.py`。
+  - 数据接口照约定，末尾只加了一个字段 `meta`，原有字段名不变。
+  - 三个划分、密封（G-XM）、gate 的检查、去重清单与训练目标都已实现。
+  - 两份清单 `configs/xm_splits.json`、`configs/xm_train_exclusions.json` 由服务器在 HPC 上生成，管理员审过再提交。
+- 待裁的处理：
+  1. **三个 COCO 划分都剔除 E1 的 COCO val2017 检测子集（500 张）**：基座在这些图上的读数已被看过，做法同 D128 让 devcheck3 剔除 E1 的子集。接受。
+  2. **剔除 D20 的两张探针图**（139、39769），照 D20。接受。
+  3. **ReasonSeg**：只取 text[0]，照 LISA 官方验证集；ignore 区域按像素忽略，放在 `meta.ignore_rle`。接受。
+  4. **训练对里，同一张图中这个类别带 crowd 标注的，整对剔除**（两条 COCO 流都剔除）。只列非 crowd 实例会教模型漏掉人群里的个体，SFT 又表达不了"忽略"。由 DEV-0081 的抽样实现并记数。
+     - 样条目标不可用的对（真值为空或拟合失败）只进列框流。
+  5. **阅读顺序**：两两判定，不做链式合并。接受。
+  6. **gate 的结论串**统一为 `src/xm/data.XM_GATE_PASS` 这一处，值为"通过"，与 gate_explore 一致。
+  7. **统计只读真值**：`data_stats` 读判定集与最终报告集的真值，不经过密封守卫。它不跑任何系统，也看不到任何系统的读数。接受。
+  8. LVIS 的类名把下划线换成空格。接受。
+  9. 一条 16 点样条约 157 个 token，30 个实例约 4,700 个。调用 2 的生成上限按框数放大，已告诉 DEV-0080。
+  10. 去重只比文件名与字节 sha256。ReasonSeg 的图来自 OpenImages 与 ScanNet，不来自 COCO。接受。
