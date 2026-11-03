@@ -19,7 +19,7 @@
 
 | 文件 | sha256 |
 |---|---|
-| `prompts/server_hpc/0104-hpc-06-xm-train/xm_train.sh` | `ad743d0b83e4da83718a5cb01003de98f77f7dd8ebaa5084835f2d19dc662abe` |
+| `prompts/server_hpc/0104-hpc-06-xm-train/xm_train.sh` | `1992b75a20c68e161ef77655ba41ae8fc8e37f513ce454738490715e96e2b984` |
 | `scripts/build_xm_data.py` | `2f10dcc486d31da62ab66351d8f227c9a753b97cdd1530ad06b7696dded92872` |
 | `scripts/train_w2c.py` | `f33994e72dca082b3ffa33792c90b27bd873d02416aaa3cbf043a9e461bf7f84` |
 | `src/w2/w2c_train.py` | `4086a0015dcf87319a540bc72ff4b03250ea7b1bf9b7275ef6243d10cb424ec1` |
@@ -51,3 +51,13 @@
 5. 跑完写 `reports/0104-hpc-06-xm-train.md`，再跑一次 `squeue`。
 
 管理员在开发机上用 tiny 彩排过：建样本、探测、续跑、写检查点都是 rc=0；重启时各步按已有结果跳过；门槛判断在 12.3 s、60 s、nan 三种情形下都对。
+
+## 补充 2（D175）：06 的 GPU 被别的项目占着时，改在 07 上训练
+
+- 06 上 lly-mle 项目的两个进程（vLLM 与一个 LoRA 训练，合计约 14.5 GB）占着卡，9B 的 X-M 训练（峰值约 28–31 GB）放不下。
+- 驱动的节点改为可选：`NODE=hpcgpu07`，配 `srun --jobid=157297`。训练节点不影响判定的同节点配对，配对只看评测节点（XM-4a）。
+- 规则：
+  - 06 这次启动等到 claim_gpu 超时，约 08:43Z。06 先空出来，就照常在 06 上训练。
+  - 06 超时仍被占、而 07 上 RUN-0105 已跑完，就用同一个驱动 `NODE=hpcgpu07` 在 07 上启动。
+  - **同一时间只启动一次**：先确认另一个节点上没有 RUN-0104 在跑。
+  - 两个节点都忙时，等其中一个空出来。不碰别的项目的进程。

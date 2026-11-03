@@ -5,7 +5,7 @@
 #   3. 判断（XM-4a）：中位数 × 2,000 ≤ 30 小时（≤ 54 s/步）就续跑到 2,000 步；否则停下报告，由管理员定退路（从 X-2 继续训，XM-4b）。
 #   4. train：同一条命令 --resume 到 2,000 步。
 # 铁律：任何情况下都不能取消或停止 Slurm 任务 157296、157297。只用本节点自己的暂停文件。
-# 用法：srun --jobid=157296 --overlap -n1 -c 12 env PATH=… TINY=0 EV_CAP_H=… bash …/xm_train.sh < /dev/null
+# 用法：srun --jobid=<157296（06）或 157297（07）> --overlap -n1 -c 12 env PATH=… TINY=0 [NODE=hpcgpu07] EV_CAP_H=… bash …/xm_train.sh < /dev/null
 # 彩排（开发机）：TINY=1 WT=… REPO=… LOGS=… PY=… XM_TARGETS=<build_targets --tiny 的输出> XM_DATA_ROOT=<假数据根>
 #   X2DATA=… REPLAY=… W2C_DATA=… bash xm_train.sh（tiny 训练 3 步代替 50 步、续跑到 4 步）
 set -uo pipefail
@@ -17,7 +17,9 @@ if [ "$TINY" = 1 ]; then
   NODE=tiny; M=qwen3.5-0.8b; T=(--tiny); TD=(); PROBE=3; FULL=(--steps 4)
   export EV_NO_GIT=1
 else
-  NODE=hpcgpu06; M=qwen3.5-9b
+  # 补充 2（D175）：节点可选。06 的 GPU 被别的项目占着时改在 07 上训练；训练节点不影响判定的同节点配对（只看评测节点）
+  NODE=${NODE:-hpcgpu06}; M=qwen3.5-9b
+  case "$NODE" in hpcgpu06|hpcgpu07) ;; *) echo "NODE 只能是 hpcgpu06 或 hpcgpu07：$NODE" >&2; exit 2;; esac
   VI=/home/mail/chenyuma/visint
   WT=$VI/wt/wt$RUN_ID
   REPO=$VI/repo
@@ -57,7 +59,7 @@ if [ "$TINY" != 1 ]; then
 fi
 die() { echo "$(now) ABORT: $*" | tee -a "$OUT/steps.log"; progress "blocked: $*"; push_out "X-M train aborted: $*"; exit 1; }
 NOK=0
-claim_gpu "0104-hpc-06-xm-train.md" || { progress "blocked: gpu not free after ${CLAIM_MAX_S}s"; exit 1; }
+claim_gpu "0104-hpc-06-xm-train.md ($NODE)" || { progress "blocked: gpu not free after ${CLAIM_MAX_S}s"; exit 1; }
 mkdir -p "$OUT"
 echo "$(now) start commit $(git -C "$WT" rev-parse HEAD 2>/dev/null || echo unknown) node $NODE model $M xm cfg $(sha "$WT/configs/xm_train.json" | cut -d' ' -f1)" >> "$OUT/steps.log"
 MEMPID=""
