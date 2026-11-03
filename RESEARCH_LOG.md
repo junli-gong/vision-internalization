@@ -2124,3 +2124,4 @@
 - 11-03 02:2xZ：负责人 X-M 指令记为 D165（原文要点存 `docs/lead_answers/2026-11-03-xm-directive.md`）。D0 = 今天；今晚报可行性。
 - 11-03 02:3xZ：发 RUN-0102（hpcmgt，X-M 的数据落地：COCO 2017、LVIS v1 val、ReasonSeg val，记 sha256；数据不进 git）。
 - 11-03 02:5xZ：写 DEV-0079（X-M 数据、划分、密封、去重、训练目标、统计）与 DEV-0080（X-M 推理、后处理、对照设置、F1 指标、密封守卫）的任务书并派发；两份共用同一个数据接口。DEV-0081（训练流与判定脚本）随后派。开发 agent 开工前删掉自己 worktree 里的 experiments/ 省盘。
+- 11-03 03:1xZ：D166：开发 worktree 同时派时写满磁盘，改为错开派；ReasonSeg 可经 Mac 中转（官方 Drive，sha256 核对）；HPC 的 SSH 不通，等用户处理。DEV-0079 已派出。
