@@ -2141,3 +2141,4 @@
 - 11-03 03:54Z：用户指示（D171）：不设冻结日，越快越好；LVIS 子集由管理员定为 1,000 张 × 每张最多 3 个类别（约 3,000 对），补记 XM-2b。
 - 11-03 03:54Z：D172：ReasonSeg val 改从 HF 镜像取，sha256 与官方 Drive 文件一致才收；中转停掉。RUN-0103 只等训练图。
 - 11-03 04:20Z：[merge] DEV-0080（D168）：X-M 的提示（xm-prompts-v1，已冻结）、后处理（NMS 0.7，样条失败退回缺省 GrabCut）、6 个设置、Rex-Omni 口径的 F1、按图像重抽的 bootstrap、密封守卫、ReasonSeg 计分。主仓库上 66 条测试通过，worktree 里 X-2 测试 118 条通过。
+- 11-03 04:23Z：写好 RUN-0105 的驱动（07：基座零样本在调参集上；X-2 在 ReasonSeg val 上，描述性），tiny 彩排首次与重启都 rc=0。等 configs/xm_splits.json 提交后发任务书。
