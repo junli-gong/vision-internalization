@@ -52,7 +52,8 @@ if [ "$TINY" != 1 ]; then
   [ "${CUDA_VISIBLE_DEVICES:-}" = 0 ] || { progress "blocked: 不在 srun 的资源范围里"; exit 1; }
   "$PY" -c "import json,sys; sys.exit(0 if json.load(open('configs/w2.json'))['frozen'] is True else 1)" || { progress "blocked: configs/w2.json 没有冻结"; exit 1; }
   "$PY" -c "import sys; sys.path.insert(0,'.'); from src.xm import prompts as P; sys.exit(0 if P.FROZEN else 1)" || { progress "blocked: 提示没有冻结"; exit 1; }
-  [ -f "$XM_TARGETS/manifest.json" ] || { progress "blocked: 没有 RUN-0103 的训练目标 $XM_TARGETS"; exit 1; }
+  # build_targets 的布局：<out>/xm_targets/manifest.json（src/xm/targets.DATA_DIR）；--targets 给的是 <out>（RUN-0104 补充 1）
+  [ -f "$XM_TARGETS/xm_targets/manifest.json" ] || { progress "blocked: 没有 RUN-0103 的训练目标 $XM_TARGETS/xm_targets"; exit 1; }
 fi
 die() { echo "$(now) ABORT: $*" | tee -a "$OUT/steps.log"; progress "blocked: $*"; push_out "X-M train aborted: $*"; exit 1; }
 NOK=0

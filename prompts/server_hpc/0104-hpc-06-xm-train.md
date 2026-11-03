@@ -19,7 +19,7 @@
 
 | 文件 | sha256 |
 |---|---|
-| `prompts/server_hpc/0104-hpc-06-xm-train/xm_train.sh` | `b26af733b5ef6947f50b4ccdc252fb07cc327576460ada96608d340df0b0757d` |
+| `prompts/server_hpc/0104-hpc-06-xm-train/xm_train.sh` | `ad743d0b83e4da83718a5cb01003de98f77f7dd8ebaa5084835f2d19dc662abe` |
 | `scripts/build_xm_data.py` | `2f10dcc486d31da62ab66351d8f227c9a753b97cdd1530ad06b7696dded92872` |
 | `scripts/train_w2c.py` | `f33994e72dca082b3ffa33792c90b27bd873d02416aaa3cbf043a9e461bf7f84` |
 | `src/w2/w2c_train.py` | `4086a0015dcf87319a540bc72ff4b03250ea7b1bf9b7275ef6243d10cb424ec1` |
@@ -35,7 +35,7 @@
 ## 做法
 
 1. hpcmgt 上 `squeue`。建工作树 wt0104（稀疏，含 `src/xm/`、`src/w2/`、`configs/`、`scripts/`），核对上表 12 个 sha256。
-   - 确认 `$VI/repo/experiments/XM/0103_xm_targets/manifest.json` 在，即 RUN-0103 第 2 步已完成。
+   - 确认 `$VI/repo/experiments/XM/0103_xm_targets/xm_targets/manifest.json` 在，即 RUN-0103 第 2 步已完成。（补充 1：原写的少了一层 `xm_targets/`。）
 2. 启动：
    ```bash
    ssh -n hpcgpu06 'setsid nohup srun --jobid=157296 --overlap -n1 -c 12 \
