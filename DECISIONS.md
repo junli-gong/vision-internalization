@@ -3626,3 +3626,15 @@
 - HF 上 `Myszz/ReasonSeg` 的 val.zip，sha256 9248ec01…、277,101,832 字节，与服务器在 Mac 上从 LISA 官方 Drive 文件夹下到的 val.zip 完全相同。经 hf-mirror 约 70 秒。
 - 允许改用它，条件是 sha256 与字节数都与官方文件相同，否则拒收、回到中转。原则同 D169：以与官方文件逐字节相同为准。
 - MANIFEST 记官方来源（LISA Drive 文件夹）、实际送达的镜像仓库与 revision，以及 sha256 与官方一致。核对通过后停掉中转、删掉 Mac 上的副本。
+
+## D173（2026-11-03，管理员）：DEV-0081 合入（X-M 的训练流、训练配置、吞吐探测、判定脚本 gate_xm）
+
+- 训练：
+  - `src/w2/w2c_train.py` 加 `coco_det`、`coco_inst` 两条流；`configs/xm_train.json`；`src/xm/train_data.py`、`scripts/build_xm_data.py`；`scripts/train_w2c.py` 加 `--xm-data`。
+  - X-2 的配置、样本与输出逐字节不变，有快照测试钉住。改动前的训练文件存为 `tests/fixtures/xm/*_7e1008d6.py`。
+  - 带 crowd 的对剔除（D167-4）。训练数据与检查点记冻结的提示版本 `xm-prompts-v1`。
+- 判定 `scripts/gate_xm.py`：
+  - 第 1–3 条照 XM-5；第 4 条照 D170（XM-5a），由逐题结果按 10,000 次重算（XM-5b）。
+  - 原文的写法 d165 总是照算，作诊断，不进结论；`--criterion4` 只接受 d170。接受。
+  - 同节点核对三组：判定集三个叶目录、指代分割、大题量。另核对提示版本与冻结、X-M 检查点的 manifest。
+- 测试：在 main 上 164 条通过。

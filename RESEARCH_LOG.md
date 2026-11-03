@@ -2142,3 +2142,4 @@
 - 11-03 03:54Z：D172：ReasonSeg val 改从 HF 镜像取，sha256 与官方 Drive 文件一致才收；中转停掉。RUN-0103 只等训练图。
 - 11-03 04:20Z：[merge] DEV-0080（D168）：X-M 的提示（xm-prompts-v1，已冻结）、后处理（NMS 0.7，样条失败退回缺省 GrabCut）、6 个设置、Rex-Omni 口径的 F1、按图像重抽的 bootstrap、密封守卫、ReasonSeg 计分。主仓库上 66 条测试通过，worktree 里 X-2 测试 118 条通过。
 - 11-03 04:23Z：写好 RUN-0105 的驱动（07：基座零样本在调参集上；X-2 在 ReasonSeg val 上，描述性），tiny 彩排首次与重启都 rc=0。等 configs/xm_splits.json 提交后发任务书。
+- 11-03 05:09Z：[merge] DEV-0081（D173）：X-M 的训练流与配置、吞吐探测、gate_xm（第 4 条按 D170、10,000 次重算、同节点与提示版本核对）。main 上 164 条测试通过。X-M 的开发全部合入。

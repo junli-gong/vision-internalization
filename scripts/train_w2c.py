@@ -94,6 +94,21 @@ W2-c 加回放（DEV-0065；D125-2 (b)；配置 configs/w2c_replay_train.json = 
     #     微批短，预计同 RUN-0080（28.5 GB）。
     # 检查点的 config.yaml 的 x2 一节没有 correct（参数、池、提示都只有样条）：scripts/run_x2.py 照常加载，修正类设置跳过并在 x2_summary 里写明。
 
+X-M（DEV-0081；D165；预注册 XM-4；配置 configs/xm_train.json = configs/x2_train.json + xm_data、coco_det、coco_inst 三节；规则见
+src/w2/w2c_train.py 的"X-M 的两条 COCO 流"一段与 src/xm/train_data.py；COCO 样本由 scripts/build_xm_data.py 在 CPU 上生成）：
+    python scripts/train_w2c.py --config configs/xm_train.json --model qwen3.5-9b \
+        --w2c-data experiments/W2/0067_w2c_data_hpcgpu06/w2c_data --x2-data experiments/X/0080_x2_hpcgpu07/0080_x2_data \
+        --replay-data experiments/W2/0076_w2c_replay_hpcgpu07/0076_replay_data --data-root $VI/data/train_data \
+        --xm-data experiments/XM/<NNNN>_xm_data --xm-data-root $VI/data \
+        --out experiments/XM/<NNNN>_xm_train [--resume] [--stop-after-steps 50]
+    # --w2c-data、--x2-data、--replay-data 与 X-2（RUN-0080）是同一份，X-2 的六条流、条数、损失归一一字不变；--xm-data：build_xm_data.py
+    #   的 --out；--xm-data-root：COCO 样本行里 image 的相对根（DEV-0079 用的那个数据根，缺省 = --data-root）。
+    # 每步 8 + 8 + 6 + 6 + 6 + 6 + 3 + 2 = 45 条：提出、挑选、样条、修正、列框、每实例样条、回放通用、回放计数；八条流各自按本流的监督
+    #   token 数平均，权重 1 : 1 : 1 : 1 : 1 : 1 : 0.5 : 0.5；微批 4，每实例样条单独 2（2 + 2 + 2）。
+    # 吞吐探测：--stop-after-steps 50 写检查点退出；logs/timing_run_001.jsonl 每步有 step_s、peak_mem_bytes 与 by_stream（每条流的用时、
+    #   微批数、显存峰值）；src/w2/w2c_train.timing_summary(<叶目录>) 取第 5 步以后 step_s 的中位数。之后同一条命令加 --resume 接着训。
+    # 没有 coco_det、coco_inst 两节的配置不收 --xm-data / --xm-data-root；有时必须给 --xm-data（或配置的 xm_data.path）。
+
 开发机彩排（小型随机模型、CPU、fp32；数据用测试造的假数据，图像在 tests/fixtures/e3/root）：
     python -m tests._w2c_fakes <dir>/w2c_data            # 按当前的 configs/w2.json 造 §5 格式的假数据
     python scripts/train_w2c.py --tiny --model qwen3.5-0.8b --w2c-data <dir>/w2c_data --out <dir>/t
@@ -126,6 +141,7 @@ from src.explore import x2_data as XD  # noqa: E402
 from src.w2 import runner as R  # noqa: E402
 from src.w2 import w2c_replay as RP  # noqa: E402
 from src.w2 import w2c_train as T  # noqa: E402
+from src.xm import train_data as XTD  # noqa: E402
 
 DTYPES = {"bf16": torch.bfloat16, "fp32": torch.float32}
 RUN_DIR_NAME = re.compile(r"[0-9]{4}_[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -149,6 +165,8 @@ def parse_args(argv=None):
     p.add_argument("--replay-data", help="DEV-0065：回放数据（scripts/build_w2c_replay.py 的 --out）；只配有 replay 一节的配置")
     p.add_argument("--x2-data", help="DEV-0069：X-2 的数据（scripts/build_x2_data.py 的 --out）；只配有 spline、correct 两节的配置"
                                      "（DEV-0070：或只有 spline 一节，如 configs/x3_train.json：只读其中的样条行）")
+    p.add_argument("--xm-data", help="DEV-0081：X-M 的 COCO 样本（scripts/build_xm_data.py 的 --out）；只配有 coco_det、coco_inst 两节的配置")
+    p.add_argument("--xm-data-root", help="DEV-0081：COCO 样本行里 image 的相对根（缺省 = --data-root）；只配 --xm-data")
     p.add_argument("--w2-config", help="换一份 W2 配置（只配 --tiny；正式运行用 configs/w2c_train.json 写死的那一份）")
     p.add_argument("--candidates-module", default=R.DEFAULT_CANDIDATES_MODULE, help="Candidate 类所在的模块（非默认只配 --tiny）")
     p.add_argument("--render-module", default=R.DEFAULT_RENDER_MODULE, help="render_selection 所在的模块（非默认只配 --tiny）")
@@ -228,6 +246,25 @@ def load_x2(a, cfg: T.W2CConfig, rc, root: Path):
     return XD.load_x2_data(p, params=rc["x2"]["data_params"], source=source, data_root=root, kinds=tuple(rc["x2"]["order"]))
 
 
+def load_xm(a, cfg: T.W2CConfig, rc, root: Path):
+    """DEV-0081：配置有 coco_det、coco_inst 两节时读 X-M 的 COCO 样本（--xm-data 优先，其次配置的 xm_data.path）；没有这两节时不收
+    --xm-data 与 --xm-data-root。核对：参数等于配置的；图像都在 xm_data_root 下；非 --tiny 时每条流的池不少于 步数 × 每步条数。
+    返回 (数据, 图像根)；没有这两节时 (None, None)。"""
+    if rc.get("xm") is None:
+        if a.xm_data is not None or a.xm_data_root is not None:
+            raise T.W2CConfigError(f"{cfg.path} 没有 coco_det、coco_inst 两节，不收 --xm-data / --xm-data-root")
+        return None, None
+    path = a.xm_data or cfg.doc["xm_data"]["path"]
+    if path is None:
+        raise T.W2CConfigError(f"{cfg.path} 的 xm_data.path 是占位（null）：要给 --xm-data")
+    p = Path(path)
+    if a.xm_data is None and not p.is_absolute():
+        p = REPO_ROOT / p
+    xroot = Path(a.xm_data_root) if a.xm_data_root else root
+    need = None if a.tiny else {s: int(rc["steps"]) * int(v["per_step"]) for s, v in rc["xm"]["streams"].items()}
+    return XTD.load_xm_data(p, params=rc["xm"]["data_params"], data_root=xroot, need=need), xroot
+
+
 def cmd_run(a, argv) -> int:
     cfg = T.load_w2c_config(a.config)
     key = a.model or cfg.doc["model"]["default_key"]
@@ -239,6 +276,7 @@ def cmd_run(a, argv) -> int:
     rc = T.resolve_w2c_run(cfg, tiny=a.tiny, steps=a.steps)
     replay = load_replay(a, cfg, rc, key, root)
     x2 = load_x2(a, cfg, rc, root)
+    xm, xm_root = load_xm(a, cfg, rc, root)
     entry, ad, dtype = build_adapter(a, cfg, key)
     spec = T.W2CRunSpec(model_key=entry.key, family=entry.family, repo=entry.repo, revision=entry.revision,
                         adapter_model_key=str(getattr(ad, "model_key", entry.key)), tiny=a.tiny, image_policy=policy_spec(ad.image_policy),
@@ -246,7 +284,7 @@ def cmd_run(a, argv) -> int:
     s = T.run_w2c_training(ad, cfg, spec, rc, data, w2=w2, w2_info=w2_info, impl=impl, data_root=root, out_dir=a.out, resume=a.resume,
                            argv=argv, ckpt_root=a.ckpt_root, stop_after_steps=a.stop_after_steps,
                            keep_optimizer_state=a.keep_optimizer_state, **({} if replay is None else {"replay": replay}),
-                           **({} if x2 is None else {"x2": x2}))
+                           **({} if x2 is None else {"x2": x2}), **({} if xm is None else {"xm": xm, "xm_data_root": xm_root}))
     if s is None:
         print(f"{entry.key} w2c seed{seed}：按 --stop-after-steps 停下，检查点已写；加 --resume 接着跑")
         return 0
