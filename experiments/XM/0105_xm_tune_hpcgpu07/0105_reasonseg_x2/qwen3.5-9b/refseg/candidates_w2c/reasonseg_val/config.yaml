@@ -1,0 +1,45 @@
+experiment: W2
+framework: src/w2（DEV-0059；docs/w2_plan.md）
+w2:
+  task: refseg
+  split: reasonseg_val
+  setting: candidates_w2c
+  splits_config: /home/mail/chenyuma/visint/repo/experiments/XM/0105_xm_tune_hpcgpu07/0105_reasonseg_x2/qwen3.5-9b/reasonseg_splits.json
+  splits_sha256: d78bc15976048500ff50c5eef7e9db56b4a3bad4ffa6f006f5c06c5b9fd94318
+  split_sha256: 34712e91d5d66981f465522564744e01a55d0f9f2ba512f76bae1f2a3583fbee
+  split_n: 196
+  n_samples: 196
+  limit: null
+  sample_ids_sha256: 34712e91d5d66981f465522564744e01a55d0f9f2ba512f76bae1f2a3583fbee
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  tiny: false
+propose:
+  mode: box
+  run:
+    leaf: <out>/qwen3.5-9b/refexp_box/propose_w2c/reasonseg_val
+    predictions_sha256: 1af33ec4e950cd3e51157315d402b2bd781cc271c9228c27e50408e7fccc17a6
+    config_sha256: 0346ba5f23474dc79c988697c7bd8fe8cbdcd27c85349b8f5fe73f7f618f9ba6
+candidates:
+  module: src.w2.candidates
+  generators:
+  - type: grabcut_default
+  - type: grabcut
+    iterations: 5
+    box_pct: -10.0
+    init: mask
+  - type: grabcut_default
+    post:
+    - largest_cc
+    - fill_holes
+  - type: watershed
+    use_points: true
+    fg_shrink_pct: 30.0
+    bg_margin_pct: 0.0
+    seed_radius_pct: 4.0
+  k: 4
+  generators_sha256: c134cfab5d94adaebf57db2e94ff9a7ac7159d48f38425ed322673f31d1e46b2
+chunk_size: 64
