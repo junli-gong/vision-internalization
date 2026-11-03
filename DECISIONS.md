@@ -3619,3 +3619,10 @@
   - 全量约 1 万对、15–18 GPU 小时，是描述性结果，不值得。
   - 写进预注册 XM-2b，早于任何 LVIS 运行。
   - 代码由开发任务加进 `src/xm/data.py` 的 LVIS 子集构造，在判定之后、跑 LVIS 之前合入。
+
+## D172（2026-11-03，管理员）：ReasonSeg val 改从 HF 镜像取，以与官方文件 sha256 相同为准
+
+- RUN-0103 生成清单时要读 ReasonSeg val：去重要对它的图算哈希，清单也要记它的 sha256。经 Mac 中转约 9 KB/s，要 8 小时，会把整条线拖住。
+- HF 上 `Myszz/ReasonSeg` 的 val.zip，sha256 9248ec01…、277,101,832 字节，与服务器在 Mac 上从 LISA 官方 Drive 文件夹下到的 val.zip 完全相同。经 hf-mirror 约 70 秒。
+- 允许改用它，条件是 sha256 与字节数都与官方文件相同，否则拒收、回到中转。原则同 D169：以与官方文件逐字节相同为准。
+- MANIFEST 记官方来源（LISA Drive 文件夹）、实际送达的镜像仓库与 revision，以及 sha256 与官方一致。核对通过后停掉中转、删掉 Mac 上的副本。
