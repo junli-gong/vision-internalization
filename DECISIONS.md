@@ -3588,3 +3588,14 @@
 - 其余照实现接受：基座用宽松的 E1 解析（对第 2 条保守）、调用 2 只拿 NMS 后的框、ReasonSeg 走 X-2 的完整轨迹、`--merge-check-data-root`。
 - 预注册补记 XM-3b，包括 Rex-Omni 的 P_c 是插值精度这一点。
 - 两个常量与相应的测试由 DEV-0080 在自己的 worktree 里改，再合入：管理员在 main 上直接改常量，会让钉住旧值的 3 条测试失败。
+
+## D169（2026-11-03，管理员）：COCO 2017 用 hf-mirror 的镜像，按官方字节数与 MD5 核对
+
+- hpcmgt 到官方 images.cocodataset.org 只有约 33 KB/s，train2017（19.34 GB）要下约 6.8 天。hf-mirror 约 16 MB/s。
+- 允许用镜像，条件是每个文件同时满足两条，否则拒收并报告：
+  - 字节数等于官方的 Content-Length；
+  - MD5 等于官方的 MD5（annotations 为 S3 的单段 ETag，val2017、train2017 为官方公布值）。
+  - 两条都满足，即与官方文件逐字节相同。
+- 解压后照常核对 CRC 与张数（118,287 / 5,000）。MANIFEST 记镜像仓库与 revision、URL、字节数、md5、sha256，以及"与官方 MD5 一致"。
+- ReasonSeg val 经 Mac 中转（D166）：hpcmgt 连不上 Google Drive，Mac 到 HPC 约 10 KB/s，约 7.5 小时。它只在 X-2 的描述性运行或判定之后才用到，照常跑。
+  - Mac 上的副本 sha256 9248ec01…，等 HPC 上核对一致后删除。
