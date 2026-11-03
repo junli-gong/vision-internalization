@@ -2129,3 +2129,4 @@
 - 11-03 03:4xZ：写预注册 XM：数据与划分、协议与设置、F1 指标、训练、第五节原文照录、预测，写于任何 X-M 运行之前。去重清单与划分哈希、F1 与 Rex-Omni 的对齐、训练条数与退路，留待补记 XM-2a、3a、4a。
 - 11-03 03:5xZ：写 X-M 可行性初报 `reports/xm_feasibility_D0.md`：HPC 恢复的前提下，9B 从基座训约 14–17 小时，D3 前可训完；阻塞是 SSH 不通；请负责人定 N47、新的冻结日、LVIS 子集规模。
 - 11-03 04:0xZ：写 DEV-0081（X-M 的 COCO 训练流、xm_train.json、50 步探测、gate_xm）任务书并派发。
+- 11-03 04:2xZ：外部参照核对完（`docs/references/xm_refs_notes.md`）：Rex-Omni 为 IDEA License 1.0，限非商业研究，可跑；它的 F1 是按类别宏平均、COCOeval 贪心、按输出顺序。补记 XM-3a，主口径改为与 Rex-Omni 一致，早于任何评测；已通知 DEV-0080、0081。
