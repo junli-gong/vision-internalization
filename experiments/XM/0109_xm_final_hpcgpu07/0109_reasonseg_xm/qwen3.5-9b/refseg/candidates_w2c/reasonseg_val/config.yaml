@@ -1,0 +1,53 @@
+experiment: W2
+framework: src/w2（DEV-0059；docs/w2_plan.md）
+w2:
+  task: refseg
+  split: reasonseg_val
+  setting: candidates_w2c
+  splits_config: /home/mail/chenyuma/visint/repo/experiments/XM/0109_xm_final_hpcgpu07/0109_reasonseg_xm/qwen3.5-9b/reasonseg_splits.json
+  splits_sha256: d78bc15976048500ff50c5eef7e9db56b4a3bad4ffa6f006f5c06c5b9fd94318
+  split_sha256: 34712e91d5d66981f465522564744e01a55d0f9f2ba512f76bae1f2a3583fbee
+  split_n: 196
+  n_samples: 196
+  limit: null
+  sample_ids_sha256: 34712e91d5d66981f465522564744e01a55d0f9f2ba512f76bae1f2a3583fbee
+  unseal:
+    gate: G-XM 通过（gate_xm.json）
+    xm_gate:
+      path: /home/mail/chenyuma/visint/repo/experiments/XM/0108_gate_xm_hpcgpu07/0108_gate/gate_xm.json
+      sha256: d2f32d22fcf11acf75e312fd93d7d2390f28c12376fe8b98a05c124ff7dfc8f0
+      verdict: 通过
+      candidate_manifest_sha256: 29e26667c7810ef2cf6f1704e72e4d025697c0ab974fe7a74f121ded972d4e8e
+      checkpoint_compared: true
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  tiny: false
+propose:
+  mode: box
+  run:
+    leaf: <out>/qwen3.5-9b/refexp_box/propose_w2c/reasonseg_val
+    predictions_sha256: 46930d1d497e55afaacdb05efe80c682e0ef2b027f104448e2b62613fbe42bee
+    config_sha256: 3bc813323f45e91e6b5a28b027097d1f85c00f10f1eea6c2dd9dc363a3265690
+candidates:
+  module: src.w2.candidates
+  generators:
+  - type: grabcut_default
+  - type: grabcut
+    iterations: 5
+    box_pct: -10.0
+    init: mask
+  - type: grabcut_default
+    post:
+    - largest_cc
+    - fill_holes
+  - type: watershed
+    use_points: true
+    fg_shrink_pct: 30.0
+    bg_margin_pct: 0.0
+    seed_radius_pct: 4.0
+  k: 4
+  generators_sha256: c134cfab5d94adaebf57db2e94ff9a7ac7159d48f38425ed322673f31d1e46b2
+chunk_size: 64

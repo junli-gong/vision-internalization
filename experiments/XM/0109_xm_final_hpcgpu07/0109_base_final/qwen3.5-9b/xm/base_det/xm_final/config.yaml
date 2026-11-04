@@ -1,0 +1,99 @@
+experiment: X-M
+framework: src/xm/runner.py（DEV-0080；X-M）
+xm:
+  task: xm
+  split: xm_final
+  system: base
+  n_pairs: 2940
+  pair_ids_sha256: 2d53047cc38453f5935f3d6948938433b41759347ca38bbcc423c2822aa8ed9f
+  n_images: 1000
+  n_instances: 7323
+  sources:
+    coco2017: 2940
+  limit: null
+  xm_gate:
+    path: /home/mail/chenyuma/visint/repo/experiments/XM/0108_gate_xm_hpcgpu07/0108_gate/gate_xm.json
+    sha256: d2f32d22fcf11acf75e312fd93d7d2390f28c12376fe8b98a05c124ff7dfc8f0
+    verdict: 通过
+    candidate_manifest_sha256: 29e26667c7810ef2cf6f1704e72e4d025697c0ab974fe7a74f121ded972d4e8e
+    checkpoint_compared: false
+  setting: base_det
+  definition:
+    system: base
+    masks: null
+    stages:
+    - list
+    role: 对照（判定第 2 条）：基座零样本，只出框
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  adapter_model_key: qwen3.5-9b
+  tiny: false
+image_policy:
+  tag: default
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+checkpoint: null
+prompts:
+  version: xm-prompts-v1
+  templates_sha256: d3e0a7dddeb855eb1411be2406cd2e6b6ee58829a2f6c3e7e37c20db2b2d001c
+  frozen: true
+  n: 16
+  max_instances: 30
+  max_new_tokens:
+    list: 1504
+    trace_base: 64
+    trace_per_spline: 200
+    rule: 调用 1：64 + 48 × 30；调用 2：64 + 200 × 框数（一批取批内各对的最大值）；截断记失败
+post:
+  version: xm-post-v1
+  nms_iou: 0.7
+  nms_rule: 输出顺序贪心，IoU > nms_iou 去掉后者
+  trimap_mode: trimap
+  band_pct: 4.0
+  band_min_px: 2.0
+  context_pct: 50.0
+  grabcut_iterations: 5
+  box_grabcut: gc_default
+  spline_failure_fallback: box_grabcut
+generation:
+  enable_thinking: false
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  e1_prompts_sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+  list_parser: adapter.parse_boxes（E1 ovd 的 boxes 解析）
+metrics:
+  version: xm-metrics-v2
+  matching: coco
+  max_dets: 100
+  headline_iou: 0.5
+  iou_thresholds:
+  - 0.5
+  - 0.55
+  - 0.6
+  - 0.65
+  - 0.7
+  - 0.75
+  - 0.8
+  - 0.85
+  - 0.8999999999999999
+  - 0.95
+  primary: f1_rexomni
+  bootstrap_unit: image
+  runtime_resamples: 1000
+  decision_resamples: 10000
+  seed: 20260929
+  level: 0.95
+trace:
+  leaf: <out>/qwen3.5-9b/xm/base_trace/xm_final
+  config_sha256: 113c0d04311947db084c4c5f86499e3283e6bd6d5d42aa745567d31837b9fb2c
