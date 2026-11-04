@@ -3682,3 +3682,21 @@
   - (b) run_x2 凭 gate_xm.json 放行 X-M 检查点跑 RefCOCO 的 W2 test 子集（同 RUN-0092 的 5 个划分与设置）；
   - (c) Rex-Omni 外部参照的运行器，只做检测，跑最终报告集。它是学习型检测器，属于 CLAUDE.md 允许的"单独运行的对照系统"，D165 第四节点名批准；输出不进入我们的任何数据或训练。
 - test 子集的节点：X-2 的 test（RUN-0092）在 06 上。X-M 的 test 优先在 06 上跑，以便同节点配对。06 到时仍被占，就在 07 上跑，表里注明两者不同节点。
+
+## D178（2026-11-04，管理员）：DEV-0083 合入，Rex-Omni 外部参照运行器
+
+- 新增 `src/rexomni/`、`scripts/run_rexomni.py`、`configs/rexomni_weights.json`（IDEA-Research/Rex-Omni@0e5693d2，12 个文件，逐文件 sha256），另有测试。X-M 与 X-2 的代码一行没改。
+- 照搬官方 github.com/IDEA-Research/Rex-Omni@6508981c 的提示、预处理、生成参数与解析，61 条引文逐字核对。不装新包。
+- 两个设置：
+  - **`rexomni_det_joint`**：Rex-Omni 自己的协议，每张图问一次，列出该图本划分里的全部正类别，作为论文里外部参照的标题读数。
+  - `rexomni_det`：每个（图, 类别）问一次，与 X-M 同协议，作诊断。
+  - 叶目录都是每对一行，可与 X-M 配对 bootstrap。
+- 与官方的不同（写进运行身份的 deviations）：
+  - joint 的类别顺序用 category_id 升序。官方 COCO.jsonl 在 xm_tune 的 239 张多类别图里，172 张不是这个顺序；
+  - 用 transformers 与 sdpa，不用 vLLM 与 flash-attn；
+  - 重建分词器：transformers 5 直接加载会把 1,022 个坐标 token 的 id 排错，重建后逐个对 config 核对通过；
+  - 未问类名的框丢掉并计数。
+- 批大小用 1，同官方评测。
+- 冒烟线：xm_tune 上 joint 的 `f1_rexomni_exact` 低于 0.60，就不跑 xm_final，退出码 3。
+- 隔离同 LISA：静态测试保证训练、数据、标签代码不引用 Rex-Omni 的模块、脚本与结果；Rex-Omni 一侧只读真值、计分与 gate。
+- 全量测试没在开发机上跑完（磁盘只剩 2–4 GB）；main 上相关测试 107 passed、3 skipped。全量等磁盘宽裕时再补。
