@@ -1,7 +1,9 @@
-"""DEV-0079：X-M 的数据接口、三个评测划分与密封、LVIS 子集、ReasonSeg、去重清单（src/xm/data.py、src/xm/exclusions.py）。"""
+"""DEV-0079：X-M 的数据接口、三个评测划分与密封、LVIS 子集、ReasonSeg、去重清单（src/xm/data.py、src/xm/exclusions.py）。
+DEV-0082：LVIS 子集载入时每图最多 3 个类别（预注册 XM-2b）；COCO 的划分与 stats_pairs 对 COCO 的结果不变（末节）。"""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 
@@ -9,7 +11,7 @@ import cv2
 import numpy as np
 import pytest
 
-from src.data.subsets import population_digest
+from src.data.subsets import hash_key, population_digest
 from src.executors.raster import rle_to_mask
 from src.xm import data as D
 from src.xm import exclusions as X
@@ -404,3 +406,145 @@ def test_build_configs_tiny_end_to_end(tmp_path, built):
     ex = json.loads((out / "xm_train_exclusions.json").read_text())
     assert ex["exclude_train2017_image_ids"] == built["ex"]["exclude_train2017_image_ids"]
     assert m.main(["--tiny", "--out", str(out)]) == 2  # 已存在，不覆盖
+
+
+# ---------------------------------------------------------------------------
+# DEV-0082：LVIS 子集每图最多 3 个类别（预注册 XM-2b，D171）
+# ---------------------------------------------------------------------------
+
+XM_SPLITS_SHA256 = "995345f470111e3ac73c9681754dd46eca66da7d9ca0b648873cc1429219db8d"  # 预注册 XM-2a
+# 上限之前（HEAD 671599d77 的 src/xm/data.py）在假数据根上 stats_pairs 的输出：json.dumps([pair_to_dict(p)], sort_keys=True) 的 sha256
+COCO_PAIRS_PIN = {"xm_tune": (3, "5bc38460fefc07706537f3cee035d8cf090418f639dcc6737c1f6abaaac9ad65"),
+                  "xm_decision": (6, "24ee814862ceb85af0f3ed32f497a749fcd9cbe79a48c91b27adb5036b5b0872"),
+                  "xm_final": (6, "bd50c234b7ef549a9054b7bf5acf534d01d6a4615daa8af4fead4c6b3d119769")}
+
+
+def _pairs_digest(pairs):
+    return hashlib.sha256(json.dumps([D.pair_to_dict(p) for p in pairs], sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _many_cats_doc():
+    """合成的 LVIS 文档：5001 有 5 个类别、5002 有 3 个、5003 有 1 个、5004 有 4 个（每类 1–2 个实例）。"""
+    from tests._xm_fakes import _image_entry, _rect
+
+    cats = [{"id": c, "name": f"thing_{c}", "synonyms": [f"thing_{c}"], "frequency": "c"} for c in range(1, 9)]
+    layout = {5001: [1, 2, 3, 5, 8], 5002: [2, 4, 6], 5003: [7], 5004: [1, 3, 4, 6]}
+    images, anns, aid = [], [], 0
+    for iid, cids in layout.items():
+        e = _image_entry(iid, "val2017")
+        del e["file_name"]
+        e.update(neg_category_ids=[], not_exhaustive_category_ids=[cids[0]])
+        images.append(e)
+        for j, cid in enumerate(cids):
+            for k in range(1 + j % 2):
+                aid += 1
+                poly = _rect(2 + 6 * j, 2 + 20 * k, 7 + 6 * j, 18 + 20 * k)
+                anns.append({"id": aid, "image_id": iid, "category_id": cid, "segmentation": [poly], "area": 80.0,
+                             "bbox": [2.0 + 6 * j, 2.0 + 20 * k, 5.0, 16.0]})
+    return {"info": {}, "licenses": [], "images": images, "annotations": anns, "categories": cats}, layout
+
+
+def _want_top3(iid, cids):
+    return sorted(sorted(cids, key=lambda c: hashlib.sha256(f"xm_lvis_cats_v1|lvis_v1_val/{iid}|{c}".encode("utf-8")).hexdigest())[:3])
+
+
+def test_lvis_cap_constants_and_key():
+    assert D.LVIS_MAX_CATS_PER_IMAGE == 3 and D.LVIS_CAT_SALT == "xm_lvis_cats_v1"  # 预注册 XM-2b
+    assert D.lvis_cat_purpose(397133) == "lvis_v1_val/397133" and D.LVIS_PURPOSE == "lvis_v1_val"
+    want = hashlib.sha256("xm_lvis_cats_v1|lvis_v1_val/5001|18".encode("utf-8")).hexdigest()
+    assert hash_key(D.lvis_cat_purpose(5001), "18", D.LVIS_CAT_SALT) == want
+
+
+def test_lvis_cap_at_most_3_per_image_hash_ranked_and_deterministic():
+    doc, layout = _many_cats_doc()
+    pairs, st0 = D.lvis_pairs(doc, image_ids=sorted(layout))
+    assert st0["n_pairs"] == 13  # lvis_pairs 本身不加上限（清单用它生成）
+    kept, st = D.cap_lvis_pairs(pairs)
+    by = {}
+    for p in kept:
+        by.setdefault(p.meta["image_id"], []).append(p.category_id)
+    assert all(len(v) <= 3 for v in by.values())
+    for iid, cids in layout.items():
+        want = cids if len(cids) <= 3 else _want_top3(iid, cids)  # 不到 3 个类别的图全保留
+        assert by[iid] == sorted(want), iid
+    assert by[5002] == [2, 4, 6] and by[5003] == [7]
+    assert by[5001] == [1, 3, 5] and by[5004] == [3, 4, 6]  # 钉住：按哈希取，不是取 category_id 最小的 3 个（[1, 2, 3]、[1, 3, 4]）
+    assert kept == [p for p in pairs if p in kept]  # 原顺序（image_id、category_id 升序），对本身不改
+    # 确定：同样的输入同样的结果；输入的顺序不影响选中谁
+    again, st2 = D.cap_lvis_pairs(pairs)
+    assert again == kept and st2 == st
+    rev, _ = D.cap_lvis_pairs(list(reversed(pairs)))
+    assert sorted(p.id for p in rev) == sorted(p.id for p in kept)
+    # 计数：上限前后的对数与被去掉的对数
+    assert (st["n_pairs_before_cap"], st["n_pairs_after_cap"], st["n_pairs_dropped"]) == (13, 10, 3)
+    assert (st["n_images"], st["n_images_capped"], st["max_cats_per_image"], st["salt"]) == (4, 2, 3, "xm_lvis_cats_v1")
+    assert st["purpose"] == "lvis_v1_val/<image_id>" and st["n_instances_before_cap"] == sum(len(p.instances) for p in pairs)
+    assert st["n_instances_after_cap"] == sum(len(p.instances) for p in kept)
+    assert st["pairs_sha256_after_cap"] == population_digest(p.id for p in kept)
+    assert st["n_not_exhaustive_pairs_after_cap"] == sum(p.meta["not_exhaustive"] for p in kept)
+    with pytest.raises(D.XMDataError, match="LVIS"):
+        D.cap_lvis_pairs(D.coco_pairs(_coco_val_doc(), coco_split="val2017", split="xm_tune", image_ids=[2003])[0])
+
+
+def _coco_val_doc():
+    from tests._xm_fakes import VAL_IDS, _coco_doc, _image_entry, _val_anns
+
+    return _coco_doc([_image_entry(i, "val2017") for i in VAL_IDS], _val_anns())
+
+
+@pytest.fixture(scope="module")
+def many_cats(built, tmp_path_factory):
+    """DEV-0079 的假数据根，LVIS 的 2004（tiny 的 lvis_sub 里）另加 4 个类别 → 5 个；清单重新生成（tiny）。"""
+    from tests._xm_fakes import add_lvis_categories
+
+    d = tmp_path_factory.mktemp("xm_lvis_cap")
+    shutil.copytree(built["root"], d / "root")
+    info = add_lvis_categories(d / "root", 2004)
+    doc = D.build_splits_doc(d / "root", tiny=True)
+    sp = d / "xm_splits.json"
+    sp.write_text(D.dump_config(doc), encoding="utf-8")
+    return {"root": d / "root", "splits": sp, "doc": doc, "info": info}
+
+
+def test_lvis_cap_on_load_pairs_and_stats_pairs(built, many_cats, tmp_path):
+    root, sp, doc = many_cats["root"], many_cats["splits"], many_cats["doc"]
+    assert many_cats["info"]["category_ids"] == [3, 4, 5, 6, 7]
+    e = doc["splits"]["lvis_sub"]
+    assert e["image_ids"] == built["doc"]["splits"]["lvis_sub"]["image_ids"] == [2004, 2015]  # 抽到的图不变
+    lv = D.read_json(root / D.LVIS_ANN)
+    full, _ = D.lvis_pairs(lv, image_ids=e["image_ids"])
+    assert e["n_pairs"] == len(full) == 7 and e["pairs_sha256"] == population_digest(p.id for p in full)  # 清单记的是上限之前的
+    ok = D.check_xm_gate(_gate_file(tmp_path, tmp_path / "ck"), checkpoint=tmp_path / "ck")
+    pairs, st = D.load_pairs_with_stats("lvis_sub", root, xm_gate=ok, splits_path=sp)
+    assert pairs == D.load_pairs("lvis_sub", root, xm_gate=ok, splits_path=sp) == D.stats_pairs("lvis_sub", root, splits_path=sp)
+    assert pairs == D.cap_lvis_pairs(full)[0]
+    by = {}
+    for p in pairs:
+        by.setdefault(p.meta["image_id"], []).append(p.category_id)
+    assert by == {2004: _want_top3(2004, [3, 4, 5, 6, 7]), 2015: [1, 3]} and by[2004] == [3, 4, 7]  # 2015 只有 2 个类别：全保留
+    assert (st["n_pairs_before_cap"], st["n_pairs_after_cap"], st["n_pairs_dropped"], st["n_images_capped"]) == (7, 5, 2, 1)
+    with pytest.raises(D.XMGateError):  # 上限不改 gate 的要求
+        D.load_pairs_with_stats("lvis_sub", root, splits_path=sp)
+    # 原来的假数据根：每张图都不到 3 个类别，上限什么都不去掉
+    p0, st0 = D.load_pairs_with_stats("lvis_sub", built["root"], xm_gate=ok, splits_path=built["splits"])
+    assert st0["n_pairs_dropped"] == 0 and len(p0) == built["doc"]["splits"]["lvis_sub"]["n_pairs"]
+
+
+def test_coco_splits_and_stats_pairs_unchanged_by_lvis_cap(built, many_cats, tmp_path):
+    """COCO 的划分与 stats_pairs 对 COCO 的结果一字不变（与上限之前的代码逐字节相同；改了 LVIS 的标注也不影响 COCO）。"""
+    for s, (n, dig) in COCO_PAIRS_PIN.items():
+        for root, sp in ((built["root"], built["splits"]), (many_cats["root"], many_cats["splits"])):
+            ps = D.stats_pairs(s, root, splits_path=sp)
+            assert (len(ps), _pairs_digest(ps)) == (n, dig), s
+        assert many_cats["doc"]["splits"][s] == built["doc"]["splits"][s]
+    ok = D.check_xm_gate(_gate_file(tmp_path, tmp_path / "ck"), checkpoint=tmp_path / "ck")
+    for s, kw in (("xm_tune", {}), ("xm_decision", {"gate": "G-XM"}), ("xm_final", {"xm_gate": ok})):
+        pairs, st = D.load_pairs_with_stats(s, built["root"], splits_path=built["splits"], **kw)
+        assert st is None and _pairs_digest(pairs) == COCO_PAIRS_PIN[s][1]
+        assert pairs == D.coco_pairs(_val_doc(built), coco_split="val2017", split=s, image_ids=built["doc"]["splits"][s]["image_ids"])[0]
+    assert D.load_pairs_with_stats("reasonseg_val", built["root"], splits_path=built["splits"])[1] is None
+    # 入库的清单不改（sha256 写进预注册 XM-2a）；其中 lvis_sub 的对数是上限之前的
+    assert D.file_sha256(D.XM_SPLITS_PATH) == XM_SPLITS_SHA256
+    real = D.read_json(D.XM_SPLITS_PATH)["splits"]["lvis_sub"]
+    assert (real["n_images"], real["n_pairs"], real["n_instances"]) == (1000, 3134, 10163)
+    assert D.check_splits_doc(D.read_json(D.XM_SPLITS_PATH)) == []

@@ -21,6 +21,8 @@
     # 最终报告集、LVIS 子集（判定通过之后）：--xm-gate <DEV-0081 写的 gate_xm.json>
     python scripts/run_xm.py --model qwen3.5-9b --checkpoint $CK --split xm_final --xm-gate <gate_xm.json> --data-root $VI/data \\
         --out experiments/XM/<NNNN>_xm_final --tool-workers 8
+    # lvis_sub 同上（--split lvis_sub）：载入时每张图最多 3 个类别（预注册 XM-2b，src/xm/data.cap_lvis_pairs，DEV-0082），上限前后的
+    # 对数与被去掉的对数记进运行身份的 xm.lvis_cap（各设置的 config.yaml）。
     # ReasonSeg val 的指代分割（X-2 的原协议：src/explore/x2_runner.run_split，导出 x2_spline_trimap；W2 格式，输出在
     # <out>/<模型>/refseg/<设置>/reasonseg_val/；扣掉忽略区域的 gIoU、cIoU 另写 <out>/<模型>/reasonseg_readout/reasonseg_val.json）。
     # --system x2：X-2 的检查点（描述性，不要 gate）；--system xm：X-M 的检查点（要 --xm-gate）。
@@ -184,18 +186,20 @@ def data_root(a) -> Path:
     return Path(os.environ["VISINT_DATA_ROOT"])
 
 
-def load_split_pairs(a, gates: dict) -> list:
-    """对：--pairs-json（只配 --tiny）读 JSON；否则 src/xm/data.load_pairs（DEV-0079；它对 xm_decision 再核一次门名，对 xm_final 与 lvis_sub
-    要 check_gates 认过的 XMGatePass）。"""
+def load_split_pairs(a, gates: dict) -> tuple[list, dict | None]:
+    """对：--pairs-json（只配 --tiny）读 JSON；否则 src/xm/data.load_pairs_with_stats（DEV-0079；它对 xm_decision 再核一次门名，对 xm_final
+    与 lvis_sub 要 check_gates 认过的 XMGatePass；lvis_sub 施加 XM-2b 的每图类别上限，DEV-0082）。返回 (对, 载入时的计数：lvis_sub 是
+    类别上限前后的计数，进运行身份的 xm.lvis_cap；其余 None)。--limit 在上限之后截；--pairs-json 的对原样用（tiny，不经过上限）。"""
+    stats = None
     if a.pairs_json is not None:
         pairs = XR.pairs_from_json(a.pairs_json)
     else:
         xg = gates["xm_gate"]["pass"] if gates["xm_gate"] is not None and a.split in XG.GATED else None
-        pairs = XD.load_pairs(a.split, data_root(a), gate=a.gate, xm_gate=xg, splits_path=a.splits_file)
+        pairs, stats = XD.load_pairs_with_stats(a.split, data_root(a), gate=a.gate, xm_gate=xg, splits_path=a.splits_file)
     wrong = sorted({p.split for p in pairs} - {a.split})
     if wrong:
         raise XR.XMRunError(f"对的 split {wrong} 不是 --split {a.split}")
-    return pairs[: a.limit] if a.limit is not None else pairs
+    return (pairs[: a.limit] if a.limit is not None else pairs), stats
 
 
 def merge_check_root(a) -> str | None:
@@ -229,7 +233,7 @@ def cmd_xm(a, argv) -> int:
     system = system_of_args(a)
     gates = check_gates(a, system)
     entry = registry.get_model(a.model)
-    pairs = load_split_pairs(a, gates)
+    pairs, load_stats = load_split_pairs(a, gates)
     prompts = load_prompt_config(PROMPTS_PATH)
     ck_info = None
     if system == "xm":
@@ -255,7 +259,8 @@ def cmd_xm(a, argv) -> int:
                         data_root=data_root(a), tiny=a.tiny, list_batch_size=prompts.batch_protocol()["batch_size"], resume=a.resume,
                         tool_workers=a.tool_workers, settings=a.setting, limit=a.limit, unseal=XG.seal_identity(gates["unseal"]),
                         xm_gate=None if gates["xm_gate"] is None else gates["xm_gate"]["identity"],
-                        files=[f for f in (a.pairs_json, a.splits_file) if f is not None], argv=argv)
+                        files=[f for f in (a.pairs_json, a.splits_file) if f is not None], argv=argv,
+                        lvis_cap=load_stats if a.split == XD.LVIS_SUB else None)
     head = "; ".join(f"{k}: det {v['det']['f1_rexomni']}" + ("" if v["seg"] is None else f", seg {v['seg']['f1_rexomni']}")
                      for k, v in summ["settings"].items())
     print(f"X-M {a.model} {a.split} n={summ['n_pairs']} {head}")
@@ -295,7 +300,7 @@ def cmd_reasonseg(a, argv) -> int:
     if a.system == "xm":
         XR.checkpoint_xm_params(a.checkpoint)
     entry = registry.get_model(a.model)
-    pairs = load_split_pairs(a, gates)
+    pairs, _ = load_split_pairs(a, gates)
     samples = XR.reasonseg_samples(pairs, data_root(a))
     splits_doc = reasonseg_splits_doc(a, entry.key, samples)
     prompts = load_prompt_config(PROMPTS_PATH)

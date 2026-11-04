@@ -294,13 +294,15 @@ def batching(*, tiny: bool, list_batch_size: int) -> dict[str, Any]:
 
 
 def run_record(split: str, system: str, pairs: Sequence[XD.XMPair], *, limit: int | None, unseal: Mapping[str, Any] | None = None,
-               xm_gate: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """运行身份里的 X-M 一节。"""
+               xm_gate: Mapping[str, Any] | None = None, lvis_cap: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """运行身份里的 X-M 一节。lvis_cap：lvis_sub 载入时 XM-2b 类别上限的计数（src/xm/data.cap_lvis_pairs；DEV-0082），只在给了时加这个键
+    （其余划分的身份不变）。"""
     src = Counter(p.source for p in pairs)
     return {"task": TASK, "split": split, "system": system, "n_pairs": len(pairs), "pair_ids_sha256": pairs_digest(pairs),
             "n_images": len({image_key(p) for p in pairs}), "n_instances": sum(len(p.instances) for p in pairs),
             "sources": {k: src[k] for k in sorted(src)}, "limit": limit,
-            **({"unseal": dict(unseal)} if unseal is not None else {}), **({"xm_gate": dict(xm_gate)} if xm_gate is not None else {})}
+            **({"unseal": dict(unseal)} if unseal is not None else {}), **({"xm_gate": dict(xm_gate)} if xm_gate is not None else {}),
+            **({"lvis_cap": dict(lvis_cap)} if lvis_cap is not None else {})}
 
 
 def trace_identity(model: Mapping[str, Any], image_policy: Mapping[str, Any], checkpoint: Mapping[str, Any] | None, xm: Mapping[str, Any],
@@ -578,8 +580,9 @@ def run_split(adapter: Any, pairs: Sequence[XD.XMPair], out: str | Path, *, syst
               image_policy: Mapping[str, Any], checkpoint: Mapping[str, Any] | None, prompts: PromptConfig, data_root: str | Path,
               tiny: bool, list_batch_size: int, resume: bool, tool_workers: int = 1, settings: Sequence[str] | None = None,
               limit: int | None = None, unseal: Mapping[str, Any] | None = None, xm_gate: Mapping[str, Any] | None = None,
-              files: Sequence[str | Path] = (), argv: Sequence[str] = (), log: Callable[[str], None] | None = None) -> dict[str, Any]:
-    """模块说明的 1–4。返回汇总。"""
+              files: Sequence[str | Path] = (), argv: Sequence[str] = (), log: Callable[[str], None] | None = None,
+              lvis_cap: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """模块说明的 1–4。返回汇总。lvis_cap 见 run_record。"""
     if system not in TRACES:
         raise XMRunError(f"system 必须是 {list(TRACES)} 之一，收到 {system!r}")
     if (system == "xm") != (checkpoint is not None):
@@ -587,7 +590,7 @@ def run_split(adapter: Any, pairs: Sequence[XD.XMPair], out: str | Path, *, syst
     if settings is not None and system_of(settings) != system:
         raise XMRunError(f"设置 {list(settings)} 不属于系统 {system}")
     bat = batching(tiny=tiny, list_batch_size=list_batch_size)
-    xm = run_record(split, system, pairs, limit=limit, unseal=unseal, xm_gate=xm_gate)
+    xm = run_record(split, system, pairs, limit=limit, unseal=unseal, xm_gate=xm_gate, lvis_cap=lvis_cap)
     ident = trace_identity(model, image_policy, checkpoint, xm, prompts, bat)
     files = [*files, *([XM_SPLITS_PATH] if XM_SPLITS_PATH.is_file() else [])]
     with XPOST.ToolPool(tool_workers) as pool:

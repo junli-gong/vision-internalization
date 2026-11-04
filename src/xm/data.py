@@ -34,6 +34,13 @@ crowd_rles（评测时忽略落在其中的预测，COCO 惯例）。某类在�
 类别一对（LVIS 没有 crowd）；category = LVIS 类名把 "_" 换成空格（原名进 meta.lvis_name）；meta 记该类的 frequency、该图的
 not_exhaustive_category_ids 与 neg_category_ids（官方惯例：not_exhaustive 的类，没匹配上的预测不计 FP；评测时 DEV-0080 用）以及
 本对的 not_exhaustive。id = lvis_v1/val/<image_id>/<category_id>。
+- **每图的类别上限**（预注册 XM-2b，D171；DEV-0082）：载入 lvis_sub 时（_pairs，load_pairs 与 stats_pairs 都经过它），每张图在它的
+  正类别（有标注实例的类别，即该图的对）里按 hash_rank 排序：键 = category_id 的十进制字符串，purpose = lvis_v1_val/<image_id>
+  （lvis_cat_purpose），salt = LVIS_CAT_SALT（xm_lvis_cats_v1），即 sha256(xm_lvis_cats_v1|lvis_v1_val/<image_id>|<category_id>) 升序，
+  取前 LVIS_MAX_CATS_PER_IMAGE（3）个；不到 3 个类别的图全保留。留下的对保持原顺序（image_id、category_id 升序）。
+  configs/xm_splits.json 不变（sha256 写进预注册 XM-2a）：清单里 lvis_sub 的对数、对的指纹、实例数是上限之前的，载入时先照它核对
+  上限之前的对，再施加上限（cap_lvis_pairs）。上限前后的对数、被去掉的对数等计数由 load_pairs_with_stats 返回，运行器记进运行身份。
+  lvis_pairs 本身不加上限（build_splits_doc 用它生成清单，清单要逐字节可复现）。非穷尽类别的处理不变（DEV-0080：没配上的预测忽略）。
 
 **ReasonSeg val**（reasonseg_pairs）：同 LISA 官方的验证读法（utils/data_processing.get_mask_from_json + ValDataset）：
 - 每个 .jpg 一对，表达式取 text[0]（LISA 的 ValDataset：sampled_sents = [sampled_sents[0]]）；category 放表达式原文，category_id = 0；
@@ -85,6 +92,8 @@ COCO_EVAL_N_TINY: Mapping[str, int] = {XM_TUNE: 2, XM_DECISION: 3, XM_FINAL: 4}
 SPLITS_SALT, SPLITS_PURPOSE = "xm_splits_v1", "coco2017_val2017"
 LVIS_SALT, LVIS_PURPOSE = "xm_lvis_v1", "lvis_v1_val"
 LVIS_N, LVIS_N_TINY = 1000, 2
+LVIS_MAX_CATS_PER_IMAGE = 3  # 预注册 XM-2b（D171）：每张图在它的正类别里最多取 3 个类别，只在载入 lvis_sub 时生效
+LVIS_CAT_SALT = "xm_lvis_cats_v1"  # XM-2b 的 salt；purpose 见 lvis_cat_purpose
 EXCLUDE_E1_COCO = True  # 剔除 E1 的 COCO val2017 检测子集（模块说明；上报待裁）
 E1_COCO_TINY_K = 2  # --tiny 时 E1 子集按同一规则只取 2 张（fixture 只有十几张图）
 REASONSEG_TEXT_INDEX = 0  # LISA 的 ValDataset 只用 text[0]
@@ -383,6 +392,39 @@ def lvis_pairs(doc: Mapping[str, Any], *, image_ids: Iterable[int], split: str =
                                                    "neg_category_ids": neg}))
     keys = ("n_images", "n_pairs", "n_instances", "n_not_exhaustive_pairs", "n_empty_mask_instances", "n_degenerate_polygons_dropped")
     return out, {k: int(st[k]) for k in keys}
+
+
+def lvis_cat_purpose(image_id: int) -> str:
+    """XM-2b 每图类别排序的 purpose：lvis_v1_val/<image_id>（LVIS_PURPOSE 加上图号）。"""
+    return f"{LVIS_PURPOSE}/{int(image_id)}"
+
+
+def cap_lvis_pairs(pairs: Sequence[XMPair], *, max_cats: int = LVIS_MAX_CATS_PER_IMAGE,
+                   salt: str = LVIS_CAT_SALT) -> tuple[list[XMPair], dict[str, Any]]:
+    """XM-2b 的每图类别上限（模块说明）：每张图的对（= 它的正类别）按 hash_rank(str(category_id), lvis_cat_purpose(image_id), salt)
+    取前 max_cats 个，留下的对保持原顺序。返回 (留下的对, 计数)。"""
+    if int(max_cats) < 1:
+        raise XMDataError(f"每图的类别上限必须是正整数，收到 {max_cats!r}")
+    by_img: dict[int, list[int]] = defaultdict(list)
+    for p in pairs:
+        if p.source != SOURCE_LVIS:
+            raise XMDataError(f"类别上限只用于 LVIS 的对，收到 {p.id}（来源 {p.source}）")
+        by_img[int(p.meta["image_id"])].append(int(p.category_id))
+    keep: set[tuple[int, int]] = set()
+    for iid, cids in by_img.items():
+        keep |= {(iid, int(c)) for c in hash_rank([str(c) for c in cids], lvis_cat_purpose(iid), salt)[: int(max_cats)]}
+    out = [p for p in pairs if (int(p.meta["image_id"]), int(p.category_id)) in keep]
+    stats = {
+        "rule": "预注册 XM-2b（D171）：每张图在它的正类别里按 sha256(salt|lvis_v1_val/<image_id>|<category_id>) 升序取前 max_cats 个",
+        "max_cats_per_image": int(max_cats), "salt": salt, "purpose": f"{LVIS_PURPOSE}/<image_id>",
+        "key": "category_id 的十进制字符串",
+        "n_images": len(by_img), "n_images_capped": sum(len(c) > int(max_cats) for c in by_img.values()),
+        "n_pairs_before_cap": len(pairs), "n_pairs_after_cap": len(out), "n_pairs_dropped": len(pairs) - len(out),
+        "n_instances_before_cap": int(sum(len(p.instances) for p in pairs)), "n_instances_after_cap": int(sum(len(p.instances) for p in out)),
+        "n_not_exhaustive_pairs_after_cap": int(sum(bool((p.meta or {}).get("not_exhaustive")) for p in out)),
+        "pairs_sha256_after_cap": population_digest(p.id for p in out),
+    }
+    return out, stats
 
 
 # ---------------------------------------------------------------------------
@@ -816,7 +858,9 @@ def _verify_pairs(split: str, pairs: Sequence[XMPair], e: Mapping[str, Any]) -> 
         raise XMDataError(f"{split}：重建的（对数、对的指纹、实例数）{got[0]}、{got[1][:12]}…、{got[2]} 与清单记的 {want[0]}、{want[1][:12]}…、{want[2]} 不同")
 
 
-def _pairs(split: str, data_root: str | Path, *, splits_path: str | Path | None, exclusions_path: str | Path | None) -> list[XMPair]:
+def _pairs(split: str, data_root: str | Path, *, splits_path: str | Path | None,
+           exclusions_path: str | Path | None) -> tuple[list[XMPair], dict[str, Any] | None]:
+    """一个划分的对与载入时的计数（lvis_sub：XM-2b 上限前后的计数；其余划分 None）。"""
     if split not in SPLITS:
         raise XMDataError(f"没有划分 {split!r}；可用：{list(SPLITS)}")
     root = Path(data_root)
@@ -831,7 +875,7 @@ def _pairs(split: str, data_root: str | Path, *, splits_path: str | Path | None,
         drop = set(int(i) for i in ex["exclude_train2017_image_ids"])
         keep = [int(im["id"]) for im in tr["images"] if int(im["id"]) not in drop]
         pairs, _ = coco_pairs(tr, coco_split="train2017", split=TRAIN, image_ids=keep)
-        return pairs
+        return pairs, None
     e = doc["splits"][split]
     if split in COCO_EVAL_SPLITS:
         _verify_source(root, doc["sources"]["coco_val2017"], "COCO val2017 的标注")
@@ -844,15 +888,17 @@ def _pairs(split: str, data_root: str | Path, *, splits_path: str | Path | None,
         if reasonseg_file_records(root, stems) != e["files"]:
             raise XMDataError("ReasonSeg val 的文件与清单记的 sha256 不同")
         pairs, _ = reasonseg_pairs(root, stems)
-    _verify_pairs(split, pairs, e)
-    return pairs
+    _verify_pairs(split, pairs, e)  # 清单记的是 XM-2b 上限之前的（lvis_sub 也先照它核对）
+    if split == LVIS_SUB:
+        return cap_lvis_pairs(pairs)
+    return pairs, None
 
 
-def load_pairs(split: str, data_root: str | Path, *, gate: str | None = None, xm_gate: XMGatePass | None = None,
-               splits_path: str | Path | None = None, exclusions_path: str | Path | None = None) -> list[XMPair]:
-    """一个划分的全部对（按 id 的来源顺序：image_id、category_id 升序；ReasonSeg 按文件名）。
-    xm_decision 要 gate = "G-XM"（require_unsealed）；xm_final、lvis_sub 要 xm_gate（check_xm_gate 的结果）；train 自动剔除去重清单里的图。
-    splits_path / exclusions_path 缺省是入库的 configs/xm_splits.json 与 configs/xm_train_exclusions.json。"""
+def load_pairs_with_stats(split: str, data_root: str | Path, *, gate: str | None = None, xm_gate: XMGatePass | None = None,
+                          splits_path: str | Path | None = None,
+                          exclusions_path: str | Path | None = None) -> tuple[list[XMPair], dict[str, Any] | None]:
+    """同 load_pairs，另返回载入时的计数：lvis_sub 是 XM-2b 类别上限的计数（cap_lvis_pairs：上限前后的对数、被去掉的对数……），
+    其余划分 None。"""
     if split not in SPLITS:
         raise XMDataError(f"没有划分 {split!r}；可用：{list(SPLITS)}")
     require_unsealed(split, gate)
@@ -860,17 +906,26 @@ def load_pairs(split: str, data_root: str | Path, *, gate: str | None = None, xm
     return _pairs(split, data_root, splits_path=splits_path, exclusions_path=exclusions_path)
 
 
+def load_pairs(split: str, data_root: str | Path, *, gate: str | None = None, xm_gate: XMGatePass | None = None,
+               splits_path: str | Path | None = None, exclusions_path: str | Path | None = None) -> list[XMPair]:
+    """一个划分的全部对（按 id 的来源顺序：image_id、category_id 升序；ReasonSeg 按文件名）。
+    xm_decision 要 gate = "G-XM"（require_unsealed）；xm_final、lvis_sub 要 xm_gate（check_xm_gate 的结果）；train 自动剔除去重清单里的图；
+    lvis_sub 施加 XM-2b 的每图类别上限（cap_lvis_pairs；计数见 load_pairs_with_stats）。
+    splits_path / exclusions_path 缺省是入库的 configs/xm_splits.json 与 configs/xm_train_exclusions.json。"""
+    return load_pairs_with_stats(split, data_root, gate=gate, xm_gate=xm_gate, splits_path=splits_path, exclusions_path=exclusions_path)[0]
+
+
 def stats_pairs(split: str, data_root: str | Path, *, splits_path: str | Path | None = None,
                 exclusions_path: str | Path | None = None) -> list[XMPair]:
     """只给数据统计用（scripts/xm/data_stats.py）：读真值、不跑任何系统，所以不过密封守卫（同 explore_splits"生成清单只写 id，不受守卫
-    限制"）。运行器一律用 load_pairs。"""
-    return _pairs(split, data_root, splits_path=splits_path, exclusions_path=exclusions_path)
+    限制"）。运行器一律用 load_pairs。lvis_sub 与 load_pairs 一样施加 XM-2b 的类别上限。"""
+    return _pairs(split, data_root, splits_path=splits_path, exclusions_path=exclusions_path)[0]
 
 
 __all__ = [
-    "COCO_EVAL_N", "COCO_EVAL_SPLITS", "FINAL_GATED", "GATE", "LVIS_SUB", "REASONSEG_VAL", "SPLITS", "TRAIN", "XM_DECISION", "XM_FINAL",
-    "XM_GATE_PASS", "XM_TUNE", "SealedSplitError", "XMDataError", "XMGateError", "XMGatePass", "XMInstance", "XMPair", "build_splits_doc",
-    "check_run_dir", "check_splits_doc", "check_xm_gate", "coco_pairs", "dump_config", "load_pairs", "load_splits_doc", "lvis_pairs",
-    "pair_by_id", "pair_from_dict", "pair_to_dict", "reasonseg_pairs", "require_unsealed",
-    "require_xm_gate", "seal_identity", "segm_to_rle", "stats_pairs",
+    "COCO_EVAL_N", "COCO_EVAL_SPLITS", "FINAL_GATED", "GATE", "LVIS_CAT_SALT", "LVIS_MAX_CATS_PER_IMAGE", "LVIS_SUB", "REASONSEG_VAL", "SPLITS",
+    "TRAIN", "XM_DECISION", "XM_FINAL", "XM_GATE_PASS", "XM_TUNE", "SealedSplitError", "XMDataError", "XMGateError", "XMGatePass", "XMInstance",
+    "XMPair", "build_splits_doc", "cap_lvis_pairs", "check_run_dir", "check_splits_doc", "check_xm_gate", "coco_pairs", "dump_config",
+    "load_pairs", "load_pairs_with_stats", "load_splits_doc", "lvis_cat_purpose", "lvis_pairs", "pair_by_id", "pair_from_dict", "pair_to_dict",
+    "reasonseg_pairs", "require_unsealed", "require_xm_gate", "seal_identity", "segm_to_rle", "stats_pairs",
 ]

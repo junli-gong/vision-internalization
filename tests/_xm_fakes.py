@@ -208,6 +208,33 @@ def build_fake_root(root: str | Path) -> dict[str, Any]:
             "lvis_train_ids": [3001, 3002], "chosen": chosen}
 
 
+LVIS_EXTRA_CATS = [{"id": 4, "name": "apple", "synonyms": ["apple"], "frequency": "f"},
+                   {"id": 5, "name": "baseball_bat", "synonyms": ["baseball_bat"], "frequency": "c"},
+                   {"id": 6, "name": "cabana", "synonyms": ["cabana"], "frequency": "r"},
+                   {"id": 7, "name": "dartboard", "synonyms": ["dartboard"], "frequency": "r"}]
+
+
+def add_lvis_categories(root: str | Path, image_id: int = 2004) -> dict[str, Any]:
+    """DEV-0082（XM-2b 的每图 3 类上限）：在已写好的假数据根里，给 LVIS 的 image_id 这张图另加 LVIS_EXTRA_CATS 的 4 个类别（各 1 个实例），
+    原有的图、类别与标注不变（2004 原有 1 个类别 → 5 个；它在 tiny 的 lvis_sub 里）。改的是 lvis/lvis_v1_val.json，划分清单要重新生成。
+    返回 {image_id, category_ids（这张图全部的正类别，升序）}。"""
+    from pycocotools import mask as M
+
+    p = Path(root) / "lvis" / "lvis_v1_val.json"
+    doc = json.loads(p.read_text(encoding="utf-8"))
+    doc["categories"] = doc["categories"] + LVIS_EXTRA_CATS
+    aid = max(int(a["id"]) for a in doc["annotations"])
+    for j, c in enumerate(LVIS_EXTRA_CATS):
+        aid += 1
+        poly = _rect(2 + 15 * j, 32, 12 + 15 * j, 46)
+        rle = M.merge(M.frPyObjects([poly], H, W))
+        doc["annotations"].append({"id": aid, "image_id": int(image_id), "category_id": c["id"], "segmentation": [poly],
+                                   "area": float(M.area(rle)), "bbox": [float(v) for v in M.toBbox(rle)]})
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    cids = sorted({int(a["category_id"]) for a in doc["annotations"] if int(a["image_id"]) == int(image_id)})
+    return {"image_id": int(image_id), "category_ids": cids}
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if len(argv) != 1:

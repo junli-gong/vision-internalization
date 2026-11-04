@@ -30,6 +30,17 @@
     #           --settings x2_spline_trimap x2_ellipse_trimap --test-gate <RUN-0090 的 gate_C1>/gate_explore.json --test-approval D147 \\
     #           --candidate-workers 8 --tool-workers 8 [--resume]
     #     done
+    # test 的另一条路（DEV-0082，D165 第五节、D177）：X-M 的检查点凭 G-XM 的 gate_xm.json 放行（同 RUN-0092 的 5 个划分与设置）：
+    #   --xm-gate <scripts/gate_xm.py 写的 gate_xm.json> --test-approval D165。核对用 src/xm/gate.check_xm_gate（结论"通过"、非彩排、
+    #   判定点核对全部为真、candidate.manifest_sha256 = --checkpoint 的 manifest.json）；--settings 必须是 X-2 的设置：有 G-XM 判 X-M
+    #   指代分割用的 x2_spline_trimap（XM_TEST_SETTING = scripts/gate_xm.REFSEG_SETTING），其余只能是 D147 的消融（x2_ellipse_trimap）；
+    #   与 --test-gate 不能同给；非 test 划分给 --xm-gate 也拒绝。清单、冻结、运行身份的写法同 D147 那一条：批准编号、门名 G-XM、
+    #   gate_xm.json 的路径与 sha256 记进 w2.test_unlock，放行记录追加进 test_unlock.jsonl。例：
+    #     for S in <同上 5 个 test 划分>; do
+    #       python scripts/run_x2.py --model qwen3.5-9b --checkpoint $XMCK --split $S --data-root $DATA --out experiments/XM/<NNNN>_xm_test \\
+    #           --settings x2_spline_trimap x2_ellipse_trimap --xm-gate <RUN-0108 的>/gate_xm.json --test-approval D165 \\
+    #           --candidate-workers 8 --tool-workers 8 [--resume]
+    #     done
     # 用时（9B、A100、explore_val 1,000 句，全部设置；每句的模型调用：提出 1、挑选 K = 4 一次、描样条一次、挑选 K = 5 一次、两条修正轨迹
     #   各至多 3 次）：
     #   - 提出约 6 分钟（W2-c：500 句约 3 分钟）；候选 1,000 × 4.5 s / 8 进程约 10 分钟（CPU）；
@@ -115,8 +126,15 @@ GATE_PASS = "通过"  # scripts/gate_explore.py 的 PASS（= scripts/w2_gate.PAS
 GATE_REHEARSAL = "彩排，不作数"  # scripts/gate_explore.py：判定点核对不全为真时 verdict 的前缀
 
 
+# X-M 的检查点上 test（DEV-0082）：依据 DECISIONS.md D165 第五节（负责人指令原文：G-XM 四条全部满足——跑最终报告集、LVIS 子集、
+#   ReasonSeg，以及 RefCOCO 的 test 子集）与 D177（同 RUN-0092 的 5 个划分与设置）。gate 文件是 scripts/gate_xm.py 写的 gate_xm.json，
+#   核对用 src/xm/gate.check_xm_gate。别的编号一律不认。
+XM_TEST_APPROVAL = "D165"
+XM_TEST_SETTING = "x2_spline_trimap"  # = scripts/gate_xm.REFSEG_SETTING：G-XM 第 3 条判 X-M 指代分割用的设置（X-2 的协议）；测试钉住
+
+
 class X2TestGateError(ValueError):
-    """test 的放行不合格（D147）。"""
+    """test 的放行不合格（D147；X-M 的 D165）。"""
 
 
 def check_test_gate(gate: str | Path | None, approval: str | None, *, checkpoint: str | Path, model: str, settings, rounds: int) -> dict:
@@ -180,15 +198,50 @@ def check_test_gate(gate: str | Path | None, approval: str | None, *, checkpoint
     return {"identity": ident, "gate": summary, "checkpoint_manifest_sha256": want}
 
 
+def check_xm_test_gate(gate: str | Path | None, approval: str | None, *, checkpoint: str | Path, settings, rounds: int) -> dict:
+    """X-M 的检查点上 test 的放行（DEV-0082；D165 第五节、D177）：两个参数都给、批准编号恰是 D165、gate_xm.json 经
+    src/xm/gate.check_xm_gate（结论"通过"、非彩排、判定点核对全部为真、candidate.manifest_sha256 = --checkpoint 的 manifest.json）、
+    --settings 里有 XM_TEST_SETTING 且其余只有 D147 批准的消融。不满足抛 X2TestGateError。返回值的结构同 check_test_gate：
+    {"identity"（进运行身份 w2.test_unlock：批准编号、门名 gate_name、gate_xm.json 的路径与 sha256、设置）, "gate"（结论与判定点核对，进
+    test_unlock.jsonl）, "checkpoint_manifest_sha256"}。"""
+    from src.xm import gate as XMG  # 按需 import：X-2 原有的路径不加载 X-M 的模块
+
+    if gate is None or approval is None:
+        raise X2TestGateError("--xm-gate 与 --test-approval 要一起给（D165：test 只经通过 G-XM 判定的 X-M 检查点与负责人的批准编号放行），"
+                            f"收到 --xm-gate {gate!r}、--test-approval {approval!r}")
+    if approval != XM_TEST_APPROVAL:
+        raise X2TestGateError(f"--xm-gate 配的 --test-approval 必须恰是 {XM_TEST_APPROVAL}（D165 第五节：G-XM 通过后上 test），收到 {approval!r}")
+    try:
+        r = XMG.check_xm_gate(gate, checkpoint=checkpoint)
+    except XMG.XMGateError as e:
+        raise X2TestGateError(f"--xm-gate {gate}：{e}") from e
+    if XM_TEST_SETTING not in XR.setting_defs(rounds):
+        raise X2TestGateError(f"{XM_TEST_SETTING} 不是 X-2 的一个设置（--run-config）")
+    if not settings:
+        raise X2TestGateError(f"test 上要用 --settings 只导出 X-2 的设置 {XM_TEST_SETTING}（与 D147 批准的消融 {list(TEST_ABLATIONS)}）")
+    if XM_TEST_SETTING not in settings:
+        raise X2TestGateError(f"--settings {list(settings)} 里没有 G-XM 判过的 X-2 设置 {XM_TEST_SETTING}")
+    extra = [s for s in settings if s != XM_TEST_SETTING and s not in TEST_ABLATIONS]
+    if extra:
+        raise X2TestGateError(f"--settings 里的 {extra} 不是 G-XM 判过的 {XM_TEST_SETTING}，也不是 D147 批准的消融 {list(TEST_ABLATIONS)}：test 上不导出")
+    ident = {"approval": XM_TEST_APPROVAL, "gate_name": XMG.GATE, "gate_xm": {"path": str(gate), "sha256": r["identity"]["sha256"]},
+             "candidate_setting": XM_TEST_SETTING}
+    return {"identity": ident, "gate": r["summary"], "checkpoint_manifest_sha256": r["identity"]["candidate_manifest_sha256"]}
+
+
 def check_test_split_args(a) -> dict:
     """命令行上 test 的放行（parse_args 与 cmd 共用）：清单只能是默认的 configs/w2_splits.json（与 run_w2 的 test 划分同一份），再
-    check_test_gate。不合格抛 X2TestGateError。"""
+    check_test_gate（D147）；给了 --xm-gate 时改为 check_xm_test_gate（D165，DEV-0082）。不合格抛 X2TestGateError。"""
     if not RW2.is_default_splits(a):
         raise X2TestGateError(f"test 划分只用 configs/w2_splits.json 的 test_*（与 run_w2 同一份清单），不配 --splits-file {a.splits_file}")
     try:
         rounds = XR.load_run_config(a.run_config).rounds
     except (OSError, ValueError) as e:
         raise X2TestGateError(f"--run-config {a.run_config} 读不了：{e}") from e
+    if getattr(a, "xm_gate", None) is not None:
+        if a.test_gate is not None:
+            raise X2TestGateError("--xm-gate（X-M，D165）与 --test-gate（G-EX，D147）不能同给")
+        return check_xm_test_gate(a.xm_gate, a.test_approval, checkpoint=a.checkpoint, settings=a.settings, rounds=rounds)
     return check_test_gate(a.test_gate, a.test_approval, checkpoint=a.checkpoint, model=a.model, settings=a.settings, rounds=rounds)
 
 
@@ -217,11 +270,16 @@ def parse_args(argv=None):
     p.add_argument("--merge-check-n", type=int, help="合并核对的开发样本数（默认 configs/e3b_train.json 的 eval.merge_check.n）")
     p.add_argument("--test-gate", metavar="GATE_JSON", help="test 划分（D147）：scripts/gate_explore.py 写的 gate_explore.json（通过、判定点、"
                                                             "候选检查点与 --checkpoint 相同）；与 --test-approval 一起给")
-    p.add_argument("--test-approval", metavar="ID", help=f"test 划分：负责人的批准编号，必须恰是 {TEST_APPROVAL}")
+    p.add_argument("--test-approval", metavar="ID", help=f"test 划分：负责人的批准编号，必须恰是 {TEST_APPROVAL}（配 --test-gate）"
+                                                         f"或 {XM_TEST_APPROVAL}（配 --xm-gate）")
+    p.add_argument("--xm-gate", metavar="GATE_XM_JSON", help=f"test 划分（DEV-0082，D165）：X-M 的检查点凭 scripts/gate_xm.py 写的 gate_xm.json "
+                                                             f"放行；与 --test-approval {XM_TEST_APPROVAL} 一起给，不与 --test-gate 同给")
     a = p.parse_args(argv)
     if a.model not in registry.MODELS:
         p.error(f"未登记的模型键 {a.model!r}")
-    if is_test_split(a.split) and a.test_gate is None and a.test_approval is None:
+    if a.xm_gate is not None and a.test_gate is not None:
+        p.error("--xm-gate（X-M，D165）与 --test-gate（G-EX，D147）不能同给")
+    if is_test_split(a.split) and a.test_gate is None and a.test_approval is None and a.xm_gate is None:
         p.error(f"X-2 是探索：不碰 test（预注册 X §1），拒绝 --split {a.split}")
     if not a.tiny and (a.candidates_module != R.DEFAULT_CANDIDATES_MODULE or a.render_module != R.DEFAULT_RENDER_MODULE):
         p.error("--candidates-module、--render-module（非默认）只配 --tiny")
@@ -259,6 +317,8 @@ def parse_args(argv=None):
             check_test_split_args(a)
         except X2TestGateError as e:
             p.error(str(e))
+    elif a.xm_gate is not None:
+        p.error(f"--xm-gate 只配 test 划分（--split {a.split} 不是）")
     elif a.test_gate is not None or a.test_approval is not None:
         p.error(f"--test-gate、--test-approval 只配 test 划分（--split {a.split} 不是）")
     a.device = a.device or ("cpu" if a.tiny else "cuda")
@@ -273,7 +333,7 @@ def cmd(a, argv) -> int:
     splits_doc = RW2.load_splits_doc(a, cfg)
     unlock = None
     if is_test_split(a.split):  # parse_args 已核对；这里再核对一次（直接调用 cmd 时）
-        if getattr(a, "test_gate", None) is None and getattr(a, "test_approval", None) is None:
+        if getattr(a, "test_gate", None) is None and getattr(a, "test_approval", None) is None and getattr(a, "xm_gate", None) is None:
             raise XR.X2RunError("X-2 不碰 test")
         unlock = check_test_split_args(a)
         if not a.tiny and cfg.data.get("frozen") is not True:
@@ -289,11 +349,16 @@ def cmd(a, argv) -> int:
         log.parent.mkdir(parents=True, exist_ok=True)
         with open(log, "a", encoding="utf-8") as f:
             f.write(json.dumps({**unseal, "split": a.split, "task": TASK, "setting": "x2", "argv": list(argv)}, ensure_ascii=False) + "\n")
-    if unlock is not None:  # test 的放行（D147）：身份进 w2.test_unlock，放行记录追加进 test_unlock.jsonl
+    if unlock is not None:  # test 的放行（D147；X-M 的 D165）：身份进 w2.test_unlock，放行记录追加进 test_unlock.jsonl
         a.test_unlock = unlock["identity"]
         log = Path(a.out) / a.model / TEST_UNLOCK_LOG
         log.parent.mkdir(parents=True, exist_ok=True)
-        rec = {**unlock["identity"], "gate_explore_resolved": str(Path(a.test_gate).resolve()), "gate": unlock["gate"],
+        xm_gate = getattr(a, "xm_gate", None)
+        if xm_gate is not None:
+            resolved = {"gate_xm_resolved": str(Path(xm_gate).resolve())}
+        else:
+            resolved = {"gate_explore_resolved": str(Path(a.test_gate).resolve())}
+        rec = {**unlock["identity"], **resolved, "gate": unlock["gate"],
                "checkpoint_manifest_sha256": unlock["checkpoint_manifest_sha256"],
                "unlocked_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "split": a.split, "task": TASK,
                "setting": "x2", "settings": list(a.settings), "argv": list(argv)}

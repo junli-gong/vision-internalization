@@ -5,7 +5,8 @@
 - ReasonSeg：对 → 样本、忽略区域的计分；
 - 密封与 gate（进程内调 parse_args，另有一条子进程核对退出码 2、什么都不写）；
 - 命令行 tiny 端到端（真的小模型）：基座两个设置、X-M 四个设置（X-2 的 tiny 检查点改装成 X-M 的）、ReasonSeg 的 --system x2；
-- X-2 的代码、配置不动（与 git HEAD 逐字节相同）。
+- X-2 的代码、配置不动（与 git HEAD 逐字节相同）；
+- DEV-0082：lvis_sub 的每图 3 类上限经命令行生效，上限前后的计数进运行身份的 xm.lvis_cap（其余划分的身份不多这个键）。
 """
 
 from __future__ import annotations
@@ -378,6 +379,49 @@ def test_cli_tiny_base_xm_final_with_gate(fake_root, tmp_path):
     assert len(jsonl(m / XG.UNLOCK_LOG)) == 1 and not (m / "xm" / "xm_spline_trimap").exists()
     with pytest.raises(XD.XMGateError):  # load_pairs 自己也要 gate（DEV-0079）
         XD.load_pairs("xm_final", root, splits_path=sp)
+
+
+def test_run_record_lvis_cap_key_only_when_given(tmp_path):
+    """DEV-0082：运行身份的 xm 一节只在给了 lvis_cap 时多这个键（其余划分的身份与以前逐键相同）。"""
+    pairs = XR.pairs_from_json(F.write_fixture(tmp_path / "d"))
+    base = XR.run_record("xm_tune", "base", pairs, limit=None)
+    assert set(base) == {"task", "split", "system", "n_pairs", "pair_ids_sha256", "n_images", "n_instances", "sources", "limit"}
+    cap = {"n_pairs_before_cap": 9, "n_pairs_after_cap": 7, "n_pairs_dropped": 2}
+    assert XR.run_record("lvis_sub", "base", pairs, limit=None, lvis_cap=cap) == {**XR.run_record("lvis_sub", "base", pairs, limit=None),
+                                                                                  "lvis_cap": cap}
+
+
+def test_cli_tiny_base_lvis_sub_cap(tmp_path):
+    """DEV-0082：命令行经 load_pairs 读 lvis_sub（DEV-0079 的假数据根，2004 另加 4 个类别 → 5 个）：每图至多 3 个类别，上限前后的计数进
+    运行身份的 xm.lvis_cap（各设置的 config.yaml 与轨迹）。"""
+    from tests._xm_fakes import add_lvis_categories, build_fake_root
+
+    root = tmp_path / "root"
+    build_fake_root(root)
+    add_lvis_categories(root, 2004)
+    sp = tmp_path / "xm_splits.json"
+    sp.write_text(XD.dump_config(XD.build_splits_doc(root, tiny=True)), encoding="utf-8")
+    ck, sha = _fake_ckpt(tmp_path)
+    good = _gate_json(tmp_path / "g.json", sha)
+    out = tmp_path / "0020_base_lvis"
+    p = run(["--tiny", "--model", QWEN, "--data-root", root, "--splits-file", sp, "--split", "lvis_sub", "--xm-gate", good, "--out", out], tmp_path)
+    assert "n=5" in p.stdout
+    gp = XG.check_xm_gate(good, checkpoint=None)["pass"]
+    want, st = XD.load_pairs_with_stats("lvis_sub", root, xm_gate=gp, splits_path=sp)
+    assert (st["n_pairs_before_cap"], st["n_pairs_after_cap"], st["n_pairs_dropped"]) == (7, 5, 2)
+    m = out / QWEN
+    for s in ("base_det", "base_box_grabcut"):
+        leaf = m / "xm" / s / "lvis_sub"
+        recs = jsonl(leaf / "predictions.jsonl")
+        assert [r["id"] for r in recs] == [q.id for q in want]
+        per_img = {}
+        for r in recs:
+            per_img[r["id"].split("/")[2]] = per_img.get(r["id"].split("/")[2], 0) + 1
+        assert per_img == {"2004": 3, "2015": 2}
+        cfg = yaml.safe_load((leaf / "config.yaml").read_text())
+        assert cfg["xm"]["lvis_cap"] == st and cfg["xm"]["n_pairs"] == 5 and cfg["xm"]["xm_gate"]["sha256"] == hashlib.sha256(good.read_bytes()).hexdigest()
+    tcfg = yaml.safe_load((m / "xm" / "base_trace" / "lvis_sub" / "config.yaml").read_text())
+    assert tcfg["xm"]["lvis_cap"] == st
 
 
 @pytest.fixture(scope="module")

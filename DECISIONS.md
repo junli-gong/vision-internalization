@@ -3700,3 +3700,19 @@
 - 冒烟线：xm_tune 上 joint 的 `f1_rexomni_exact` 低于 0.60，就不跑 xm_final，退出码 3。
 - 隔离同 LISA：静态测试保证训练、数据、标签代码不引用 Rex-Omni 的模块、脚本与结果；Rex-Omni 一侧只读真值、计分与 gate。
 - 全量测试没在开发机上跑完（磁盘只剩 2–4 GB）；main 上相关测试 107 passed、3 skipped。全量等磁盘宽裕时再补。
+
+## D179（2026-11-04，管理员）：DEV-0082 合入：LVIS 每图最多 3 类，X-M 凭 G-XM 上 W2 test
+
+- **LVIS 上限（XM-2b）**：载入 lvis_sub 时，每张图的正类别按 sha256(xm_lvis_cats_v1|lvis_v1_val/<image_id>|<category_id>) 升序取前 3 个；不到 3 个类别的图全部保留。
+  - `configs/xm_splits.json` 不变，sha256 仍是 995345f4…，清单记的是上限之前的 3,134 对。
+  - 上限前后的计数记进各叶目录 config.yaml 的 `xm.lvis_cap`。
+  - COCO 各划分的输出与改动前逐字节相同，测试钉住。
+- **待裁 1 的裁定：保留上限。** D171 当初的依据"全量约 1 万对"其实是实例数（10,163）；上限前的对数只有 3,134，所以上限省下的时间远少于设想。
+  - 上限照预注册 XM-2b 保留：它写在任何 LVIS 运行之前，LVIS 只作描述。
+  - 这一处估算错误如实记在这里。
+- **X-M 上 test**：`run_x2 --xm-gate <gate_xm.json> --test-approval D165`。核对经 src/xm/gate.check_xm_gate：结论"通过"、非彩排、判定点全真、manifest 一致。
+  - 设置限于 x2_spline_trimap 与 D147 的消融 x2_ellipse_trimap。
+  - 与 `--test-gate` 不能同给；非 test 划分不能给。
+  - G-EX 那条路一字没动。
+- run_xm 的 COCO 与 ReasonSeg 运行身份不变，正在跑的 RUN-0109 续跑不受影响。
+- main 上相关测试：388 passed、3 skipped、2 failed。两条失败都是"工作区与 git HEAD 相同"的护栏（test_rexomni.test_xm_code_unchanged、test_xm_runner.test_x2_code_and_configs_unchanged），本次本来就要改这些文件，提交后复跑通过。

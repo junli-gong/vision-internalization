@@ -7,7 +7,9 @@
 - 拒绝（退出码 2，什么都不写）：不通过、彩排、判定点核对有假、manifest 不符、设置不符或没给 --settings、导出未经判定的设置、批准编号不对、
   缺任一参数、模型不同、配 --splits-file、非 test 划分给了这两个参数；两个参数都不给时与以前逐字相同；
 - test 的句子：与 run_w2 的 test 划分同一份清单（configs/w2_splits.json）、同一个取样函数，逐 id 相同（tiny 现算；真清单 5 × 1,000 句）；
-- 其余划分不变：W2RunSpec 不带放行时 w2 一节的键与以前相同（tests/test_x2_runner 的端到端另钉 devcheck2、devcheck3 的输出）。
+- 其余划分不变：W2RunSpec 不带放行时 w2 一节的键与以前相同（tests/test_x2_runner 的端到端另钉 devcheck2、devcheck3 的输出）；
+- DEV-0082（D165 第五节、D177）：X-M 的检查点另走 --xm-gate <gate_xm.json> --test-approval D165（src/xm/gate.check_xm_gate；设置只能是
+  x2_spline_trimap 与 D147 的消融）；与 --test-gate 不能同给、非 test 划分拒绝；tiny 端到端用 DEV-0080 的 X-M 检查点与 gate_xm.json 写法。
 """
 
 from __future__ import annotations
@@ -284,3 +286,104 @@ def test_non_test_splits_take_no_unlock(rx, fake_ck, tmp_path):
     ex = ["--splits-file", REPO / "configs" / "explore_splits.json"]
     a = rx.parse_args(_args(fake_ck, tmp_path / "o", *ex, split="explore_val_refcoco_unc_val"))
     assert a.test_gate is None and not hasattr(a, "test_unlock")
+
+
+# ---------------------------------------------------------------------------
+# DEV-0082（D165 第五节、D177）：X-M 的检查点凭 gate_xm.json 上 test（--xm-gate + --test-approval D165）
+# ---------------------------------------------------------------------------
+
+from tests.test_xm_runner import _gate_json, xm_ckpt  # noqa: E402,F401 —— DEV-0080 的 gate_xm.json 写法与 tiny 的 X-M 检查点（fixture）
+
+XM_OK = ["--settings", *SETTINGS]
+
+
+def _xm_gate_for(ck: Path, path: Path, **edit) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return _gate_json(path, hashlib.sha256((Path(ck) / "manifest.json").read_bytes()).hexdigest(), **edit)
+
+
+def test_xm_constants(rx):
+    gx = _load("_gate_xm_for_x2_test_gate", REPO / "scripts" / "gate_xm.py")
+    assert rx.XM_TEST_APPROVAL == "D165" and rx.XM_TEST_SETTING == gx.REFSEG_SETTING == "x2_spline_trimap"  # G-XM 第 3 条判的设置
+    assert rx.XM_TEST_SETTING in rx.XR.setting_defs(3) and rx.TEST_APPROVAL == "D147" and rx.TEST_ABLATIONS == ("x2_ellipse_trimap",)
+    assert SETTINGS == [rx.XM_TEST_SETTING, *rx.TEST_ABLATIONS]  # 同 RUN-0092 的两个设置
+
+
+def test_xm_gate_refusals(rx, fake_ck, fake_gate, tmp_path, capsys):
+    out = tmp_path / "o"
+    good = _xm_gate_for(fake_ck, tmp_path / "xg" / "gate_xm.json")
+    xm = ["--xm-gate", good, "--test-approval", "D165"]
+    a = rx.parse_args(_args(fake_ck, out, *XM_OK, *xm))  # 合格：放行
+    assert a.xm_gate == str(good) and a.test_gate is None and a.test_approval == "D165"
+    u = rx.check_test_split_args(a)
+    assert u["identity"] == {"approval": "D165", "gate_name": "G-XM", "gate_xm": {"path": str(good), "sha256": hashlib.sha256(good.read_bytes()).hexdigest()},
+                             "candidate_setting": "x2_spline_trimap"}
+    assert u["gate"]["verdict"] == "通过" and u["gate"]["rehearsal"] is False
+    assert u["checkpoint_manifest_sha256"] == hashlib.sha256((fake_ck / "manifest.json").read_bytes()).hexdigest()
+    for i, (edit, msg) in enumerate([({"verdict": "不通过"}, "结论不是"), ({"verdict": "彩排，不作数（规则给出：通过）"}, "结论不是"),
+                                     ({"rehearsal": True}, "彩排"), ({"checks": {"n_is_500": True, "not_tiny": False}}, "判定点"),
+                                     ({"checks": {}}, "判定点"), ({"candidate": {"manifest_sha256": "d" * 64}}, "不是本次的"),
+                                     ({"candidate": {}}, "不是本次的")]):
+        g = _xm_gate_for(fake_ck, tmp_path / f"xg{i}" / "gate_xm.json", **edit)
+        assert msg in _refused(rx, capsys, _args(fake_ck, out, *XM_OK, "--xm-gate", g, "--test-approval", "D165")), (edit, msg)
+    for argv, msg in [
+        (_args(fake_ck, out, *XM_OK, "--xm-gate", good, "--test-approval", "D147"), "必须恰是 D165"),
+        (_args(fake_ck, out, *XM_OK, "--xm-gate", good, "--test-approval", "d165"), "必须恰是 D165"),
+        (_args(fake_ck, out, *XM_OK, "--xm-gate", good), "要一起给"),
+        (_args(fake_ck, out, *XM_OK, *xm, "--test-gate", fake_gate), "不能同给"),
+        (_args(fake_ck, out, *XM_OK, "--xm-gate", good, "--test-gate", fake_gate, "--test-approval", "D147"), "不能同给"),
+        (_args(fake_ck, out, *XM_OK, *xm, split="devcheck2"), "--xm-gate 只配 test 划分"),
+        (_args(fake_ck, out, "--xm-gate", good, split="devtune800"), "--xm-gate 只配 test 划分"),
+        (_args(fake_ck, out, *xm), "要用 --settings"),
+        (_args(fake_ck, out, "--settings", "x2_ellipse_trimap", *xm), "没有 G-XM 判过的 X-2 设置 x2_spline_trimap"),
+        (_args(fake_ck, out, *XM_OK, "x2_select", *xm), "不是 G-XM 判过的"),
+        (_args(fake_ck, out, "--settings", "x2_spline_trimap", "x2_oracle4", *xm), "不是 G-XM 判过的"),
+        (_args(fake_ck, out, *XM_OK, "--xm-gate", tmp_path / "nowhere.json", "--test-approval", "D165"), "读不了"),
+        (_args(fake_ck, out, *XM_OK, *xm, "--splits-file", REPO / "configs" / "explore_splits.json"), "configs/w2_splits.json"),
+        # G-EX 那一条不因此放宽：gate_explore.json 配 D165、gate_xm.json 当 --test-gate 用，都拒绝
+        (_args(fake_ck, out, *XM_OK, "--test-gate", fake_gate, "--test-approval", "D165"), "必须恰是 D147"),
+        (_args(fake_ck, out, *XM_OK, "--test-gate", good, "--test-approval", "D147"), "不是 scripts/gate_explore.py 写的"),
+    ]:
+        assert msg in _refused(rx, capsys, argv), msg
+    a = rx.parse_args(_args(fake_ck, out, *XM_OK, "--settings", "x2_spline_trimap", *xm))  # 只导出主设置也行（消融可选，同 D147）
+    assert a.settings == ["x2_spline_trimap"]
+    assert not out.exists()
+
+
+def test_xm_gate_refusal_cli_writes_nothing(fake_ck, tmp_path):
+    out = tmp_path / "t"
+    g = _xm_gate_for(fake_ck, tmp_path / "xg" / "gate_xm.json", candidate={"manifest_sha256": "e" * 64})
+    p = run(RUN_X2, _args(fake_ck, out, *XM_OK, "--xm-gate", g, "--test-approval", "D165"), tmp_path, ok=False)
+    assert p.returncode == 2 and "不是本次的" in p.stderr and not out.exists()
+
+
+def test_xm_unlock_end_to_end(xm_ckpt, tmp_path):  # noqa: F811
+    """tiny：X-M 的检查点（X-2 的 tiny 检查点改装，DEV-0080 的 fixture）+ gate_xm.json（DEV-0080 的写法）走新路径跑 test。"""
+    sha = hashlib.sha256((Path(xm_ckpt) / "manifest.json").read_bytes()).hexdigest()
+    g = _xm_gate_for(xm_ckpt, tmp_path / "g" / "gate_xm.json")
+    g_sha = hashlib.sha256(g.read_bytes()).hexdigest()
+    out = tmp_path / "ev"
+    argv = _args(xm_ckpt, out, *XM_OK, "--xm-gate", g, "--test-approval", "D165")
+    p = run(RUN_X2, argv, tmp_path)
+    assert "x2_spline_trimap=" in p.stdout and "x2_ellipse_trimap=" in p.stdout
+    m = out / QWEN
+    want_unlock = {"approval": "D165", "gate_name": "G-XM", "gate_xm": {"path": str(g), "sha256": g_sha}, "candidate_setting": "x2_spline_trimap"}
+    ids, doc = _run_w2_ids(TEST_SPLIT, tiny=True)
+    for name in SETTINGS:
+        leaf = m / "refseg" / name / TEST_SPLIT
+        cfg = yaml.safe_load((leaf / "config.yaml").read_text(encoding="utf-8"))
+        assert cfg["w2"]["test_unlock"] == want_unlock and cfg["w2"]["split"] == TEST_SPLIT and cfg["checkpoint"]["manifest_sha256"] == sha
+        assert cfg["w2"]["split_sha256"] == doc["splits"][TEST_SPLIT]["sha256"] and "unseal" not in cfg["w2"]
+        assert [r["id"] for r in jsonl(leaf / "predictions.jsonl")] == ids  # 与 run_w2 的 test 划分（W2-c、X-2 的 test）逐 id 相同
+    tcfg = yaml.safe_load((m / "refseg" / "x2_trace" / TEST_SPLIT / "config.yaml").read_text(encoding="utf-8"))
+    assert tcfg["w2"]["test_unlock"] == want_unlock
+    assert {d.name for d in (m / "refseg").iterdir()} == {"candidates_w2c", "x2_trace", "x2_summary", *SETTINGS}
+    log = jsonl(m / "test_unlock.jsonl")
+    assert len(log) == 1 and {k: log[0][k] for k in want_unlock} == want_unlock
+    assert log[0]["gate_xm_resolved"] == str(g.resolve()) and "gate_explore_resolved" not in log[0]
+    assert log[0]["gate"] == {"verdict": "通过", "rehearsal": False, "checks": {"n_is_500": True, "not_tiny": True}}
+    assert log[0]["checkpoint_manifest_sha256"] == sha and log[0]["settings"] == SETTINGS and log[0]["argv"] == [str(x) for x in argv]
+    before = (m / "refseg" / "x2_spline_trimap" / TEST_SPLIT / "predictions.jsonl").read_bytes()
+    run(RUN_X2, argv + ["--resume"], tmp_path)  # 续跑：同一个放行，身份相同；追加一行放行记录
+    assert (m / "refseg" / "x2_spline_trimap" / TEST_SPLIT / "predictions.jsonl").read_bytes() == before
+    assert len(jsonl(m / "test_unlock.jsonl")) == 2
