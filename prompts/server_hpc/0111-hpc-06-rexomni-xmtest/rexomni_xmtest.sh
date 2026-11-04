@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RUN-0111（ITSC HPC hpcgpu06）：G-XM 通过后的两项（D165 第四、五节；D177、D178、D179）。
+# RUN-0111（ITSC HPC，节点可选：06 或 07，补充 1）：G-XM 通过后的两项（D165 第四、五节；D177、D178、D179）。
 #   A. Rex-Omni 外部参照，只做检测（scripts/run_rexomni.py；两个设置：rexomni_det_joint = 它自己的协议、标题读数；rexomni_det = 逐类诊断）：
 #      1. xm_tune 冒烟：joint 的 f1_rexomni_exact < 0.60 时 run_rexomni 退出码 3，本驱动跳过 2、3（D178）；
 #      2. xm_final（--xm-gate = RUN-0108 的 gate_xm.json）；
@@ -7,7 +7,9 @@
 #   B. X-M 在 W2 test 的 5 个划分上（run_x2 --xm-gate … --test-approval D165；设置同 RUN-0092），与 RUN-0092 的 X-2 同在 06 上，逐句配对。
 #   命令行照抄 RUN-0092（run_x2 的 D、CW、TW、续跑）与 DEV-0083、DEV-0082 的总结。权重先由服务器在 hpcmgt 上下载并核对（任务书第 2 步）。
 # 铁律：任何情况下都不能取消或停止 Slurm 任务 157296、157297。只用本节点自己的暂停文件。
-# 用法：srun --jobid=157296 --overlap -n1 -c 8 env PATH=… TINY=0 EV_CAP_H=… [STAGES=…] bash …/rexomni_xmtest.sh < /dev/null
+# 补充 1（D180）：06 又被别的项目的 vLLM 占满，节点改为可选：NODE=hpcgpu06（与 RUN-0092 同节点）或 hpcgpu07（等 WAIT_DONE，缺省 eval_0112 跑完；
+#   X-M 的 test 与 RUN-0092 不同节点，表里注明，D177）。
+# 用法：srun --jobid=<157296（06）或 157297（07）> --overlap -n1 -c 8 env PATH=… TINY=0 NODE=<hpcgpu06|hpcgpu07> EV_CAP_H=… [STAGES=…] bash …/rexomni_xmtest.sh < /dev/null
 # 彩排（开发机）：TINY=1 WT=… REPO=… LOGS=… PY=… PAIRS_JSON=… bash rexomni_xmtest.sh（Rex-Omni 只跑 tiny 的 xm_tune；其余只写命令行）
 set -uo pipefail
 TINY=${TINY:-0}
@@ -22,7 +24,12 @@ if [ "$TINY" = 1 ]; then
   CK=/nonexistent/xm_ck; GATE_JSON=/nonexistent/gate_xm.json
   export EV_NO_GIT=1
 else
-  NODE=hpcgpu06
+  : "${NODE:?hpcgpu06 或 hpcgpu07}"
+  case "$NODE" in
+    hpcgpu06) WAIT_DONE=${WAIT_DONE:-} ;;
+    hpcgpu07) WAIT_DONE=${WAIT_DONE:-"eval_0112.status:done 0112"} ;;
+    *) echo "NODE 只能是 hpcgpu06 或 hpcgpu07：$NODE" >&2; exit 2;;
+  esac
   VI=/home/mail/chenyuma/visint
   WT=$VI/wt/wt$RUN_ID
   REPO=$VI/repo
@@ -57,9 +64,19 @@ if [ "$TINY" != 1 ]; then
   "$PY" -c "import json,sys; sys.exit(0 if json.load(open('configs/w2.json'))['frozen'] is True else 1)" || { progress "blocked: configs/w2.json 没有冻结"; exit 1; }
   [ -f "$CK/manifest.json" ] || { progress "blocked: 没有 X-M 的检查点 $CK"; exit 1; }
   [ -f "$GATE_JSON" ] || { progress "blocked: 没有 G-XM 的判定文件 $GATE_JSON"; exit 1; }
+  if [ -n "$WAIT_DONE" ]; then
+    wf=${WAIT_DONE%%:*}; wp=${WAIT_DONE#*:}; t0=$(date +%s)
+    while :; do
+      st=$(cut -d' ' -f2- "$LOGS/$wf" 2>/dev/null || true)
+      case "$st" in "$wp"*) break;; blocked*) progress "blocked: $wf 是 blocked：$st"; exit 1;; esac
+      progress "waiting for $wf to start with '$wp' (now: ${st:-missing})"
+      [ $(( $(date +%s) - t0 )) -ge 172800 ] && { progress "blocked: 等 $wf 超时"; exit 1; }
+      sleep 60
+    done
+  fi
 fi
 NOK=0
-claim_gpu "0111-hpc-06-rexomni-xmtest.md" || { progress "blocked: gpu not free after ${CLAIM_MAX_S}s"; exit 1; }
+claim_gpu "0111-hpc-rexomni-xmtest.md ($NODE)" || { progress "blocked: gpu not free after ${CLAIM_MAX_S}s"; exit 1; }
 has() { case " $STAGES " in *" $1 "*) return 0;; esac; return 1; }
 echo "$(now) stages [$STAGES]" >> "$OUT/steps.log"
 echo "$(now) start commit $(git -C "$WT" rev-parse HEAD 2>/dev/null || echo unknown) node $NODE x-m checkpoint manifest $( [ -f "$CK/manifest.json" ] && sha "$CK/manifest.json" | cut -d' ' -f1 || echo none) gate $( [ -f "$GATE_JSON" ] && sha "$GATE_JSON" | cut -d' ' -f1 || echo none)" >> "$OUT/steps.log"

@@ -69,3 +69,25 @@
 管理员在开发机上做了 tiny 彩排：首次与重启都 rc=0。Rex-Omni 跑了 tiny 的 xm_tune；xm_final、lvis_sub 与 test 只写出命令行，逐条核对过与 DEV-0082、DEV-0083 的总结及 RUN-0092 的写法相同：
 - run_x2：`--data-root $VI/b200/data`，CW、TW 为 8，按叶目录续跑；
 - run_rexomni：xm_tune 不带 gate，其余带 `--xm-gate`，目录名含 `_rexomni`。
+
+## 补充 1（2026-11-04 12:23Z，D180）：06 又被占，节点改为谁先空出来用谁
+
+**原因。** 12:20Z，06 上有别的项目的 vLLM（VLLM::EngineCore，34.9 GB，约 11:45Z 起），40 GB 的卡放不下本任务。不碰它。
+
+**驱动的改动**，只有节点这一处，其余一字不变：
+- 必须给 \`NODE=hpcgpu06\` 或 \`hpcgpu07\`。
+- 07 上缺省等 \`eval_0112.status\` 以 \`done 0112\` 开头（\`WAIT_DONE\`）。
+- 输出目录随节点：\`experiments/XM/0111_rexomni_xmtest_<节点>\`。
+- tiny 彩排：\`STAGES=xmtest\`、\`STAGES=rexomni\` 分别 rc=0；NODE 写错时拒绝。
+
+| 文件 | sha256 |
+|---|---|
+| \`prompts/server_hpc/0111-hpc-06-rexomni-xmtest/rexomni_xmtest.sh\` | \`21817d27bd5f88ad2a521322071d33c1aa5655a3a87596c8536d80d5e55c6dbe\` |
+
+其余 16 个文件不变，sha256 同上表。
+
+**怎么跑。** 一个启动器，每分钟查一次，以先满足的那一条为准，只定一次，之后不改道：
+- **(i) 06 上没有别的计算进程**：\`NODE=hpcgpu06\`、\`srun --jobid=157296\`。先 \`STAGES=xmtest\`；跑完、权重也核对通过之后，再 \`STAGES=rexomni\`。X-M 的 test 与 RUN-0092 同节点。
+- **(ii) \`eval_0112.status\` 以 \`done 0112\` 开头，07 空出来了**：\`NODE=hpcgpu07\`、\`srun --jobid=157297\`，顺序同上。X-M 的 test 与 RUN-0092 不同节点，报告里写明。
+
+两次启动都用任务书第 5 步的那一行，加上 \`NODE=…\` 与 \`STAGES=…\`，EV_CAP_H=14。第二次的驱动日志另起一个文件名。同一时间只跑一个。

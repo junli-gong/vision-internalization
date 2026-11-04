@@ -3716,3 +3716,14 @@
   - G-EX 那条路一字没动。
 - run_xm 的 COCO 与 ReasonSeg 运行身份不变，正在跑的 RUN-0109 续跑不受影响。
 - main 上相关测试：388 passed、3 skipped、2 failed。两条失败都是"工作区与 git HEAD 相同"的护栏（test_rexomni.test_xm_code_unchanged、test_xm_runner.test_x2_code_and_configs_unchanged），本次本来就要改这些文件，提交后复跑通过。
+
+## D180（2026-11-04，管理员）：RUN-0111 改为谁先空出来用谁
+
+- 12:20Z，06 上又有别的项目的 vLLM（34.9 GB，约 11:45Z 起）。40 GB 的卡放不下 9B，也放不下 Rex-Omni 3B（约 10 GB）。不碰它。
+- RUN-0111 补充 1：驱动节点可选。启动器以先满足的一条为准：
+  - (i) 06 上没有别的计算进程，就在 06 上跑；
+  - (ii) 07 跑完 RUN-0112，就在 07 上跑。
+  - 只定一次，不改道。顺序都是先 X-M 的 test，再 Rex-Omni。
+- 落在 (ii) 时，X-M 的 test 与 RUN-0092 的 X-2 不同节点。两边的逐句配对照算，表里注明不同节点，同 D177。
+  - 理由：同节点只是为了排除跨机器的数值差，跨机器只会加一点噪声，不会让方向偏向哪一边；等 06 空出来的时间不可知。
+- Rex-Omni 是外部参照，节点不影响它的读数。
