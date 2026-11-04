@@ -1,0 +1,222 @@
+experiment: X-M
+framework: src/xm/runner.py（DEV-0080；X-M）
+xm:
+  task: xm
+  split: xm_tune
+  system: xm
+  n_pairs: 923
+  pair_ids_sha256: 8881e78aff615ef8c09e2469d793cc369281d4967bd674562555d5d5c2f28ff1
+  n_images: 300
+  n_instances: 2263
+  sources:
+    coco2017: 923
+  limit: null
+  setting: xm_ellipse_trimap
+  definition:
+    system: xm
+    masks: ellipse_trimap
+    stages:
+    - list
+    role: 消融：X-M 的框的内切椭圆 → 三元图贴边（同 X-2）
+model:
+  key: qwen3.5-9b
+  family: qwen3.5
+  repo: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  adapter_model_key: qwen3.5-9b
+  tiny: false
+image_policy:
+  tag: checkpoint
+  type: PixelBudget
+  pixel_budget_tokens: 300
+  min_pixels: 307200
+  max_pixels: 307200
+checkpoint:
+  path: /home/mail/chenyuma/visint/repo/experiments/XM/0104_xm_hpcgpu07/0104_xm_train/w2c/qwen3.5-9b/seed0/ckpt/final/model
+  manifest_sha256: 29e26667c7810ef2cf6f1704e72e4d025697c0ab974fe7a74f121ded972d4e8e
+  label: w2c
+  build_spec:
+    family_kw: {}
+    image_policy: pixel_budget:300
+    key: qwen3.5-9b
+    tiny: false
+  image_policy: pixel_budget:300
+  dtype: bfloat16
+  lora:
+    lora_alpha: 64.0
+    lora_dropout: 0.05
+    n_parameters: 86556672
+    n_targets: 248
+    n_tensors: 496
+    r: 32
+    targets_sha256: a257b17856bd4838091495d454b3e87b3d09609149406f49d38b54528e47b51b
+  trainable_token_rows: null
+  n_grid_tokens: 0
+  merge_check:
+    criteria_version: v1
+    n: 200
+    checks:
+    - merge
+  training:
+    variant: w2c
+    seed: 0
+    identity_sha256: 4d8d74910f3e35f9f1af57edd5884eee93156fb21bc6cdfadf3ed5f13fae3c0d
+    w2_config_sha256: c4d083489783039d46718e19ede810370bd4b9272ef94e99f406104c2e0f9b29
+    config_sha256: 45c35566c37cd8f187c4fe67fd602d24f85a5b335836917eb9193b1ec0a6c1a0
+    complete: true
+    steps: 2000
+  xm:
+    section:
+      format: src/xm/train_data.py（DEV-0081；X-M 的 COCO 两条训练流）
+      manifest_sha256: 0ed52c065d2f7406ca8516a3bfbbfcf4e5c0881ae30534157d87941886eea5db
+      params:
+        pair_salt: xm_train_pairs_v1
+        margin: 0.2
+        inst_max_boxes: 12
+      sizing:
+        steps: 2000
+        per_step:
+          coco_det: 6
+          coco_inst: 6
+        margin: 0.2
+        need:
+          coco_det: 14400
+          coco_inst: 14400
+      target_format:
+        prompt_version: xm-prompts-v1
+        prompts_frozen: true
+        templates_sha256: d3e0a7dddeb855eb1411be2406cd2e6b6ee58829a2f6c3e7e37c20db2b2d001c
+        max_boxes: 30
+        n_ctrl: 16
+      selection:
+        salt: xm_train_pairs_v1
+        n_available_pairs: 320464
+        n_crowd_dropped: 9626
+        n_eligible_pairs: 310838
+        n_selected_pairs: 14400
+        n_selected_spline_unusable: 2
+        selected_ids_sha256: 68a84e01278e20fa119232f08576b81e82e94f85c25ded90cceeed2134a52b30
+      source_manifest_sha256: cdc96d5b58c8799abae5b8989d72cc362ae818ab34daea424da4663c21c5ee11
+      pools:
+        coco_det:
+          n: 14400
+          ids_sha256: 50b850ef35c94e3300a2d13b3ffdf1a243672be7b0ea57b8d67899305b01b64d
+        coco_inst:
+          n: 14477
+          ids_sha256: 1367a8ec5e7498a432e7d7a254233333b1ff59b72f49a0046e9bbc4077483867
+      counts:
+        coco_det: 14400
+        coco_inst: 14477
+        pairs: 14400
+        images: 13494
+        pairs_split: 79
+        pairs_det_only: 2
+        crowd_pairs_dropped: 9626
+      streams:
+        coco_det:
+          per_step: 6
+          loss_weight: 1.0
+          order: image_first
+          micro_batch_size: 4
+          micro_batches: 2
+          index: 6
+        coco_inst:
+          per_step: 6
+          loss_weight: 1.0
+          order: image_first
+          micro_batch_size: 2
+          micro_batches: 3
+          index: 7
+      prompts:
+        version: xm-prompts-v1
+        templates_sha256: d3e0a7dddeb855eb1411be2406cd2e6b6ee58829a2f6c3e7e37c20db2b2d001c
+        frozen: true
+        n: 16
+        max_instances: 30
+        max_new_tokens:
+          list: 1504
+          trace_base: 64
+          trace_per_spline: 200
+          rule: 调用 1：64 + 48 × 30；调用 2：64 + 200 × 框数（一批取批内各对的最大值）；截断记失败
+        call1_example: 'Find every instance of the category "<category>" in the image.
+          Give the bounding box of each instance in reading order (top to bottom,
+          then left to right), at most 30 boxes. Coordinates are integers on a 0-1000
+          grid of the image, x first. If there is no instance, output []. Output only
+          JSON: [[x1, y1, x2, y2], ...].'
+        call2_example: 'Each numbered box below contains one instance of the category
+          "<category>" in the image (2 listed):
+
+          1: [100, 100, 300, 300]
+
+          2: [500, 500, 700, 700]
+
+          For each box, in the same order, trace the outer contour of its instance
+          with a closed periodic uniform cubic B-spline of exactly 16 control points.
+          Coordinates are integers on a 0-1000 grid of the image, x first. Output
+          only JSON: a list of 2 splines, one per box, each [[x, y], ...] with exactly
+          16 points.'
+      n: 16
+      sample: 列框：原图 + call1_prompt(类别) → format_boxes(全部框)；每实例样条：原图 + call2_prompt(类别,
+        这一段的框) → format_splines(这一段的样条)（一段至多 coco_inst.max_boxes 个框）；目标加回合结束 token，全部监督
+      loss: 两条流各自除以这一步里自己的监督 token 数，再乘 loss_weight，与其余各项相加
+    prompts_version: xm-prompts-v1
+    n: 16
+prompts:
+  version: xm-prompts-v1
+  templates_sha256: d3e0a7dddeb855eb1411be2406cd2e6b6ee58829a2f6c3e7e37c20db2b2d001c
+  frozen: true
+  n: 16
+  max_instances: 30
+  max_new_tokens:
+    list: 1504
+    trace_base: 64
+    trace_per_spline: 200
+    rule: 调用 1：64 + 48 × 30；调用 2：64 + 200 × 框数（一批取批内各对的最大值）；截断记失败
+post:
+  version: xm-post-v1
+  nms_iou: 0.7
+  nms_rule: 输出顺序贪心，IoU > nms_iou 去掉后者
+  trimap_mode: trimap
+  band_pct: 4.0
+  band_min_px: 2.0
+  context_pct: 50.0
+  grabcut_iterations: 5
+  box_grabcut: gc_default
+  spline_failure_fallback: box_grabcut
+generation:
+  enable_thinking: false
+  decoding:
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.0
+    temperature: null
+    top_p: null
+    top_k: null
+  order: image_first
+  e1_prompts_sha256: f3353de0d53de22b8f2226e07afef94b643d02ec106868eaf6bf2766a45bf452
+  list_parser: src/xm/prompts.parse_boxes（严格 JSON）
+metrics:
+  version: xm-metrics-v2
+  matching: coco
+  max_dets: 100
+  headline_iou: 0.5
+  iou_thresholds:
+  - 0.5
+  - 0.55
+  - 0.6
+  - 0.65
+  - 0.7
+  - 0.75
+  - 0.8
+  - 0.85
+  - 0.8999999999999999
+  - 0.95
+  primary: f1_rexomni
+  bootstrap_unit: image
+  runtime_resamples: 1000
+  decision_resamples: 10000
+  seed: 20260929
+  level: 0.95
+trace:
+  leaf: <out>/qwen3.5-9b/xm/xm_trace/xm_tune
+  config_sha256: 461d4695e9cc387e5c627ae97d6eab6e4fc6ecdbb19fdcdbe993fd3f3940d1ac
