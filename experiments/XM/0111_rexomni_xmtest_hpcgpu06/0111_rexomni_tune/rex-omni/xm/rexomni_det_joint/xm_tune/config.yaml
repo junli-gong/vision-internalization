@@ -1,0 +1,151 @@
+experiment: X-M-ext-RexOmni
+framework: src/rexomni/runner.py（DEV-0083；Rex-Omni 外部参照）
+approval: D165 第四节（外部参照，仅检测）；D177-c；CLAUDE.md 硬约束第 1 条的单独运行的对照系统
+system: rex-omni
+task: xm
+setting: rexomni_det_joint
+query_mode: joint
+role: 标题读数：Rex-Omni 自己的协议（每图一次，列出该图本划分里的全部正类别，category_id 升序）
+split: xm_tune
+tiny: false
+data:
+  n_pairs: 923
+  pair_ids_sha256: 8881e78aff615ef8c09e2469d793cc369281d4967bd674562555d5d5c2f28ff1
+  n_images: 300
+  n_instances: 2263
+  n_calls: 300
+  sources:
+    coco2017: 923
+  limit: null
+  files_sha256:
+    /home/mail/chenyuma/visint/wt/wt0111/configs/xm_splits.json: 995345f470111e3ac73c9681754dd46eca66da7d9ca0b648873cc1429219db8d
+xm_gate: null
+model:
+  kind: real
+  dir: /home/mail/chenyuma/visint/hf/hub/models--IDEA-Research--Rex-Omni/snapshots/0e5693d24657f6c0e091008dd6809bb1bd28988c
+  weights:
+    repo: IDEA-Research/Rex-Omni
+    revision: 0e5693d24657f6c0e091008dd6809bb1bd28988c
+    dir: /home/mail/chenyuma/visint/hf/hub/models--IDEA-Research--Rex-Omni/snapshots/0e5693d24657f6c0e091008dd6809bb1bd28988c
+    n_files: 12
+    total_bytes: 8136991717
+    sha256_verified: true
+    manifest_sha256: a4c77e863d74010ea02e1feec50965ca237648decb7735ec6c710e3634752aae
+  dtype: bfloat16
+  device: cuda:0
+  attn_implementation: sdpa
+  tokenizer:
+    n_tokens: 151665
+    n_added_checked: 1022
+    coord_token_ids:
+    - 150643
+    - 151642
+    eos_token_id: 151645
+    rebuild:
+      n_added: 1022
+      n_vocab_overridden: 1000
+      n_merges: 151387
+      n_merges_kept: 150387
+  image_processor:
+    class: transformers.models.qwen2_vl.image_processing_pil_qwen2_vl.Qwen2VLImageProcessorPil
+    min_pixels: 12544
+    max_pixels: 2007040
+    patch_size: 14
+    merge_size: 2
+    resample: 3
+  chat_template_sha256: a0bc6f6fc7a29a80017a433e8f03a1cc1236e838a944a2d034295a60c4f2fddb
+  model_class: Qwen2_5_VLForConditionalGeneration
+  loading:
+    missing_keys: 0
+    unexpected_keys: 0
+    mismatched_keys: 0
+protocol:
+  upstream: https://github.com/IDEA-Research/Rex-Omni
+  commit: 6508981c1e0c3fbb2dbe7b962a4bb745005f3e2e
+  license: IDEA License 1.0（限非商业研究；权重另受 Qwen Research License 约束）
+  paper: Jiang et al., Detect Anything via Next Point Prediction（arXiv 2510.12798）
+  weights:
+    repo: IDEA-Research/Rex-Omni
+    revision: 0e5693d24657f6c0e091008dd6809bb1bd28988c
+  query_mode: joint
+  category_order: category_id 升序（官方 COCO.jsonl 的顺序不是升序：xm_tune 239 张多类别图里 67 张是升序、172
+    张不是）
+  system_prompt: You are a helpful assistant
+  question_template: Detect [OBJ]. Output the bounding box coordinates in [x0, y0,
+    x1, y1] format.
+  category_join: ', '
+  image:
+    mode: RGB
+    min_pixels: 12544
+    max_pixels: 2007040
+    factor: 28
+    resize: smart_resize（Qwen2.5-VL；PIL 后端的图像处理器，bicubic）
+  generation:
+    backend: transformers generate（官方 rex_omni/wrapper.py 的 transformers 分支）
+    do_sample: false
+    num_beams: 1
+    repetition_penalty: 1.05
+    max_new_tokens: 4096
+    max_model_len: 4096
+    max_new_tokens_rule: min(max_new_tokens, max_model_len − 提示长度)；一批取批内最长的提示
+    stop_strings:
+    - <0><0><0><0>
+    eos: <|im_end|>
+    pad_token_id: eos（wrapper.py:838）
+    skip_special_tokens: false
+    clean_up_tokenization_spaces: false
+    padding_side: left
+    official_sampling:
+      temperature: 0.0
+      top_p: 0.8
+      top_k: 1
+      repetition_penalty: 1.05
+    torch_dtype: bfloat16
+    attn_implementation: sdpa
+  parsing:
+    source: evaluation/inference_text_prompt.py parse_prediction / _process_box_text
+    bins: <0>…<999>，像素 = 网格 / 999.0 × 原图宽或高，不截到图内
+    boxes: 只认恰好 4 个数的坐标串（convert_coco_lvis_to_standard_format.py:102），类名 lower() 且
+      '_' → ' ' 后比较
+    order: 输出顺序，不去重、不加 NMS（官方没有；分数常数 0.2）
+  deviations:
+  - 提示里的类别顺序：category_id 升序（官方 COCO.jsonl 的顺序不是升序：xm_tune 239 张多类别图里 67 张是升序、172 张不是）；类别
+    = 该图在本划分里的全部正类别（lvis_sub 是每图至多 3 类的上限之后的那几类）
+  - transformers 后端（官方 wrapper 的 transformers 分支），不是论文读数用的 vLLM；vLLM 的停止串 <0><0><0><0>
+    与 max_model_len 4096 照搬
+  - 注意力 sdpa（官方缺省 flash_attention_2；服务器没有 flash-attn）
+  - 分词器由官方慢分词器文件重建（src/rexomni/model.build_tokenizer）：transformers 5 直接读会把 1,022 个新增
+    token 的 id 排错；重建后与 tokenizer_config.json 逐个相同，与慢分词器只在含被顶掉的 1,000 个罕见 BPE token
+    的文本上不同
+  - 不在所问类别里的类名下的框丢掉并计数（官方是记到那个类别上再按 positive_only 过滤）
+metrics:
+  version: xm-metrics-v2
+  matching: coco
+  max_dets: 100
+  headline_iou: 0.5
+  iou_thresholds:
+  - 0.5
+  - 0.55
+  - 0.6
+  - 0.65
+  - 0.7
+  - 0.75
+  - 0.8
+  - 0.85
+  - 0.8999999999999999
+  - 0.95
+  primary: f1_rexomni
+  bootstrap_unit: image
+  runtime_resamples: 1000
+  decision_resamples: 10000
+  seed: 20260929
+  level: 0.95
+smoke_line:
+  split: xm_tune
+  setting: rexomni_det_joint
+  statistic: f1_rexomni_exact
+  threshold: 0.6
+batching:
+  batch_size: 1
+  unit: 一张图
+  order: 划分的对序（load_pairs：image_id、category_id 升序），每 batch_size 个调用单位一批
