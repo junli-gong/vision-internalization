@@ -1,0 +1,422 @@
+{
+ "gate": "G-XM",
+ "rules_source": "D165 第五节（负责人原文，docs/lead_answers/2026-11-03-xm-directive.md）；预注册 XM-5；F1 口径 XM-3a（Rex-Omni 宏平均）",
+ "verdict": "通过",
+ "decision": "通过",
+ "pass": true,
+ "rehearsal": false,
+ "rehearsal_reasons": [],
+ "checks": {
+  "decision_n_images_is_500": true,
+  "decision_splits_is_repo_config": true,
+  "decision_unsealed_with_G-XM": true,
+  "decision_same_node": true,
+  "refseg_same_node": true,
+  "lb_same_node": true,
+  "prompt_version_matches": true,
+  "decision_prompts_frozen": true,
+  "not_tiny": true,
+  "no_limit": true,
+  "same_model": true,
+  "refseg_is_dev2300": true,
+  "lb_full": true,
+  "candidate_is_xm_train_seed0": true,
+  "reference_is_x2_train_seed0": true
+ },
+ "is_gate_point": true,
+ "criteria": {
+  "1": {
+   "rule": "描轮廓仍然关键：实例分割 F1，X-M 显著高于\"X-M 的框直接交给 GrabCut\"，即差值的 CI 下界 > 0。",
+   "metric": "mask_f1_rexomni",
+   "statistic": "f1_rexomni",
+   "iou": "mask",
+   "candidate_name": "X-M xm_spline_trimap",
+   "control_name": "X-M xm_box_grabcut",
+   "candidate": 0.6076440340726511,
+   "control": 0.41358379745233187,
+   "diff": 0.19406023662031924,
+   "ci_low": 0.16475934191014407,
+   "ci_high": 0.21805558948314024,
+   "threshold": 0.0,
+   "pass": true,
+   "result": "满足",
+   "n_pairs": 1437,
+   "n_images": 500,
+   "bootstrap": {
+    "unit": "image",
+    "n_resamples": 10000,
+    "level": 0.95,
+    "seed": 20260929,
+    "function": "src/xm/metrics.paired_bootstrap(table, table, PRIMARY)"
+   }
+  },
+  "2": {
+   "rule": "成为检测器：检测 F1，X-M 显著高于基座零样本，即差值的 CI 下界 > 0。",
+   "metric": "box_f1_rexomni",
+   "statistic": "f1_rexomni",
+   "iou": "box",
+   "candidate_name": "X-M（调用 1 的框）",
+   "control_name": "基座零样本 base_det",
+   "candidate": 0.7266483693650354,
+   "control": 0.674795746645535,
+   "diff": 0.05185262271950042,
+   "ci_low": 0.02631008361228222,
+   "ci_high": 0.06278829350499716,
+   "threshold": 0.0,
+   "pass": true,
+   "result": "满足",
+   "n_pairs": 1437,
+   "n_images": 500,
+   "bootstrap": {
+    "unit": "image",
+    "n_resamples": 10000,
+    "level": 0.95,
+    "seed": 20260929,
+    "function": "src/xm/metrics.paired_bootstrap(table, table, PRIMARY)"
+   }
+  },
+  "3": {
+   "rule": "指代分割不退步：在 2,300 句开发数据上，X-M 的 cIoU 不劣于 X-2，即差值的 CI 下界 > −0.02。",
+   "metric": "ciou",
+   "candidate_name": "X-M",
+   "control_name": "X-2 seed 0",
+   "candidate": 0.735652344101431,
+   "control": 0.7302658102245763,
+   "diff": 0.005386533876854727,
+   "ci_low": -0.0017458126931547448,
+   "ci_high": 0.012253356774756573,
+   "threshold": -0.02,
+   "pass": true,
+   "result": "满足",
+   "n": 2300,
+   "bootstrap": {
+    "unit": "sentence",
+    "n_resamples": 10000,
+    "level": 0.95,
+    "seed": 20260929,
+    "function": "口径同 scripts/mgr/x_test_table.paired（w2_test_table.fast_paired_ratio_ci）"
+   }
+  },
+  "4": {
+   "rule": "大题量 MMLU-Pro（字母准确率，2,000 题）与 IFEval（prompt-level strict，541 条），X-M 相对同节点基座的差值，95% CI 下界都不低于\"X-2 配方三个种子相对各自同节点基座的 CI 下界中最低者，再减 2 个百分点\"：MMLU-Pro：CI 下界 > −5.7；IFEval：CI 下界 > −8.1。",
+   "variant": "d170",
+   "source": "预注册 XM-5a（D170；N47 的答复）",
+   "metric": "逐题配对的差（X-M − 同节点基座，百分点）",
+   "control_name": "同节点基座",
+   "rows": {
+    "mmlu_pro": {
+     "reading": "mmlu_pro_letter",
+     "metric": "accuracy",
+     "n": 2000,
+     "n_expected": 2000,
+     "xm_pct": 52.849999999999994,
+     "control_pct": 54.15,
+     "diff_pp": -1.3000000000000012,
+     "ci_low_pp": -2.8000000000000025,
+     "ci_high_pp": 0.15000000000000568,
+     "threshold": -5.7,
+     "pass": true
+    },
+    "ifeval": {
+     "reading": "ifeval",
+     "metric": "prompt_level_strict",
+     "n": 541,
+     "n_expected": 541,
+     "xm_pct": 80.59149722735674,
+     "control_pct": 83.73382624768946,
+     "diff_pp": -3.1423290203327237,
+     "ci_low_pp": -6.099815157116451,
+     "ci_high_pp": -0.3696857670979714,
+     "threshold": -8.1,
+     "pass": true
+    }
+   },
+   "thresholds": {
+    "mmlu_pro": -5.7,
+    "ifeval": -8.1
+   },
+   "pass": true,
+   "result": "满足",
+   "bootstrap": {
+    "unit": "item",
+    "n_resamples": 10000,
+    "level": 0.95,
+    "seed": 20260929,
+    "function": "src.stats.paired_bootstrap_ci（逐题 0/1 的均值之差 × 100，不取整）"
+   }
+  }
+ },
+ "criterion4": "d170",
+ "diagnostics": {
+  "criterion4_d165": {
+   "rule": "语言不明显变差：大题量的 MMLU-Pro 和 IFEval，X-M 相对 X-2（同尺寸、种子 0）的差值，CI 下界都要 > −2 个百分点。",
+   "variant": "d165",
+   "counts_toward_verdict": false,
+   "metric": "逐题配对的差（X-M − X-2 seed 0，百分点）",
+   "control_name": "X-2 seed 0",
+   "rows": {
+    "mmlu_pro": {
+     "reading": "mmlu_pro_letter",
+     "metric": "accuracy",
+     "n": 2000,
+     "n_expected": 2000,
+     "xm_pct": 52.849999999999994,
+     "control_pct": 54.0,
+     "diff_pp": -1.1500000000000066,
+     "ci_low_pp": -2.400000000000002,
+     "ci_high_pp": 0.10000000000000009,
+     "threshold": -2.0,
+     "pass": false
+    },
+    "ifeval": {
+     "reading": "ifeval",
+     "metric": "prompt_level_strict",
+     "n": 541,
+     "n_expected": 541,
+     "xm_pct": 80.59149722735674,
+     "control_pct": 80.22181146025879,
+     "diff_pp": 0.3696857670979603,
+     "ci_low_pp": -2.2181146025878062,
+     "ci_high_pp": 2.957486136783738,
+     "threshold": -2.0,
+     "pass": false
+    }
+   },
+   "threshold": -2.0,
+   "would_pass": false,
+   "result_if_counted": "不满足",
+   "same_node": true,
+   "bootstrap": {
+    "unit": "item",
+    "n_resamples": 10000,
+    "level": 0.95,
+    "seed": 20260929,
+    "function": "src.stats.paired_bootstrap_ci（逐题 0/1 的均值之差 × 100，不取整）"
+   }
+  },
+  "lb_compare": null
+ },
+ "candidate": {
+  "name": "X-M",
+  "manifest_sha256": "29e26667c7810ef2cf6f1704e72e4d025697c0ab974fe7a74f121ded972d4e8e",
+  "checkpoint": "/home/mail/chenyuma/visint/repo/experiments/XM/0104_xm_hpcgpu07/0104_xm_train/w2c/qwen3.5-9b/seed0/ckpt/final/model",
+  "config_sha256": "45c35566c37cd8f187c4fe67fd602d24f85a5b335836917eb9193b1ec0a6c1a0",
+  "config_version": "xm-train-v1",
+  "seed": 0,
+  "prompt_version": "xm-prompts-v1",
+  "model": "qwen3.5-9b"
+ },
+ "reference": {
+  "name": "X-2 seed 0",
+  "manifest_sha256": "a49cf4e5a81fd8f7f57ca5c86a879cf24cdd1449daa43cc355e6d3a074a6fd0a",
+  "training": {
+   "variant": "w2c",
+   "seed": 0,
+   "identity_sha256": "c724246ff89ac28915da948aa159c57e31d38e9c4fe878e6055b3acb98dca2f4",
+   "w2_config_sha256": "c4d083489783039d46718e19ede810370bd4b9272ef94e99f406104c2e0f9b29",
+   "config_sha256": "c80a4b0b39ac8275dafd6be7af83ec05dc0d5f4fbf21335d5e67e2ab829b5228",
+   "complete": true,
+   "steps": 2000
+  }
+ },
+ "prompt_versions": {
+  "checkpoint": "xm-prompts-v1",
+  "xm_main": "xm-prompts-v1",
+  "xm_box_grabcut": "xm-prompts-v1",
+  "base_det": "xm-prompts-v1"
+ },
+ "decision_split": {
+  "split": "xm_decision",
+  "n_pairs": 1437,
+  "n_images": 500,
+  "pair_ids_sha256": "96a12dc2f9029d5592dce8a62823d78cb64ed9cb4c3c36c5463710b8df1708a0",
+  "splits_file": "/home/mail/chenyuma/visint/wt/wt0108/configs/xm_splits.json",
+  "splits_sha256": "995345f470111e3ac73c9681754dd46eca66da7d9ca0b648873cc1429219db8d"
+ },
+ "nodes": {
+  "decision": {
+   "xm_main": "hpcgpu07",
+   "xm_box_grabcut": "hpcgpu07",
+   "base_det": "hpcgpu07"
+  },
+  "refseg_xm": [
+   "hpcgpu07"
+  ],
+  "refseg_x2": [
+   "hpcgpu07"
+  ],
+  "lb_xm": "hpcgpu07",
+  "lb_base": "hpcgpu07",
+  "lb_x2": "hpcgpu07"
+ },
+ "inputs": {
+  "xm_checkpoint": {
+   "dir": "/home/mail/chenyuma/visint/repo/experiments/XM/0104_xm_hpcgpu07/0104_xm_train/w2c/qwen3.5-9b/seed0/ckpt/final/model",
+   "manifest_sha256": "29e26667c7810ef2cf6f1704e72e4d025697c0ab974fe7a74f121ded972d4e8e"
+  },
+  "xm_main": {
+   "leaf": "/home/mail/chenyuma/visint/repo/experiments/XM/0106_xm_decision_hpcgpu07/0106_xm_dec_r2/qwen3.5-9b/xm/xm_spline_trimap/xm_decision",
+   "sha256": {
+    "predictions.jsonl": "9ed1b307649e645a2414f3045a132e4895782181c56cdafbedd1a241d4f5ba62",
+    "metrics.json": "f75cd919e600ad3165759e37940714874fa599b7b341fbd72b572dc98031a4f8",
+    "config.yaml": "5457c0481277d8f4317947b06af3fc7c38310109f52b65c1cc6e55b212656684",
+    "meta.json": "701f72bb0a56beefeb5d8fba3f1ef007b7d926b81f9859264e8b0ad3312eec54"
+   }
+  },
+  "xm_box_grabcut": {
+   "leaf": "/home/mail/chenyuma/visint/repo/experiments/XM/0106_xm_decision_hpcgpu07/0106_xm_dec_r2/qwen3.5-9b/xm/xm_box_grabcut/xm_decision",
+   "sha256": {
+    "predictions.jsonl": "7fac73fb3c39061567650514359bb83f9dc87abfc9fd687da8466eb4f1607a1b",
+    "metrics.json": "b4291f1474a361013cb45296efecc4a59d51d72ce385ff8f9732f25e3c36fee9",
+    "config.yaml": "bf9ece55575d0905a09f0d286c34e115109dfd28959e2e61abd52b71d2065fb2",
+    "meta.json": "00dd5145c4c51d462ca2cfc16dff21187f77686e59410267a747b04a1a531e4d"
+   }
+  },
+  "base_det": {
+   "leaf": "/home/mail/chenyuma/visint/repo/experiments/XM/0106_xm_decision_hpcgpu07/0106_base_dec/qwen3.5-9b/xm/base_det/xm_decision",
+   "sha256": {
+    "predictions.jsonl": "766ee01851287293a2d4f175878132f7a3eb294f765254872c91809276155dc2",
+    "metrics.json": "a22aefbc70a706a034e71237d19e4fc3565852d4e17c4190f50f235d2e16121d",
+    "config.yaml": "79df92261913ed7f90fbeac173e731c868f674481c99381512fc6d83e5b331ef",
+    "meta.json": "1526dc7120eefc492770826e0c79a876c34488581d54b8a6bdb4cd04f3093fcc"
+   }
+  },
+  "xm_refseg": [
+   {
+    "leaf": "/home/mail/chenyuma/visint/repo/experiments/XM/0107_xm_refseg_lb_hpcgpu07/0107_refseg/qwen3.5-9b/refseg/x2_spline_trimap/explore_val_refcoco_unc_val",
+    "split": "explore_val_refcoco_unc_val",
+    "sha256": {
+     "predictions.jsonl": "a46530ec466e5fec671d80133f75cb97a286ab96be00146dec0425cfcd975985",
+     "metrics.json": "e981d0ffaafd33facae71f110cb05d4ddb8520be2e134a3f2239a5c7a9b52329",
+     "config.yaml": "d61bc1c5c5fee6fdd18f15b74a6902c0767b4abd81a943a8e06dbd3a2aa0d444",
+     "meta.json": "ab999a36dbf4cedea220dff16ae3b8a7bef10c509f46851e97e462e55aa704d5"
+    }
+   },
+   {
+    "leaf": "/home/mail/chenyuma/visint/repo/experiments/XM/0107_xm_refseg_lb_hpcgpu07/0107_refseg/qwen3.5-9b/refseg/x2_spline_trimap/explore_val_refcoco+_unc_val",
+    "split": "explore_val_refcoco+_unc_val",
+    "sha256": {
+     "predictions.jsonl": "ce4ee33a3b32ff098f2491488899764931a67d30ba8dee967f26f62d6d2afd3c",
+     "metrics.json": "dda707a51323ba734153e1b44c5d4b6b820e5b18df0fa740b69af5b033c6b6a9",
+     "config.yaml": "79497eb1e9ea6fff90f0299b3a1ab378d5f3d19ffa59bb69efc65068a4863d45",
+     "meta.json": "256ff0f78c48cfd5ad80594c15c8a9a2090e8042c239e73fff6ae750c4384401"
+    }
+   },
+   {
+    "leaf": "/home/mail/chenyuma/visint/repo/experiments/XM/0107_xm_refseg_lb_hpcgpu07/0107_refseg/qwen3.5-9b/refseg/x2_spline_trimap/explore_val_refcocog_umd_val",
+    "split": "explore_val_refcocog_umd_val",
+    "sha256": {
+     "predictions.jsonl": "397a809f9e5d46e26265525a882b340cec4c7ba6dab4a5e8d9c1598316a32f80",
+     "metrics.json": "79bc55220a4358ebdfbc2e03a93f116334397ec232338365834ba6108909664c",
+     "config.yaml": "451d4de4109a44265e85a24e812d4727b1f2b5e701b5af57ae68204d29b97ab0",
+     "meta.json": "6e9e8e2e7839d9b91a2196308619a18580da9f6ef711daadecd25130beeca309"
+    }
+   },
+   {
+    "leaf": "/home/mail/chenyuma/visint/repo/experiments/XM/0107_xm_refseg_lb_hpcgpu07/0107_refseg/qwen3.5-9b/refseg/x2_spline_trimap/devtune800",
+    "split": "devtune800",
+    "sha256": {
+     "predictions.jsonl": "7a2045374d617bcb930cbc7c1c551f580f65014c907c95ba4102238af22430c3",
+     "metrics.json": "7ac9165b27c3b97a4b4b9d51761330ca6c333fcb3b8a9e2ac630ad4336ceeea2",
+     "config.yaml": "54817fd8aaadfbb64fb8ec4ad8eb0d99737cbcbbb2dc275a1d94aee45ca93f34",
+     "meta.json": "3e69ddd9345e6fedd554aae4326c7784b718919e0f93379da62c4636159b5c71"
+    }
+   },
+   {
+    "leaf": "/home/mail/chenyuma/visint/repo/experiments/XM/0107_xm_refseg_lb_hpcgpu07/0107_refseg/qwen3.5-9b/refseg/x2_spline_trimap/devcheck2",
+    "split": "devcheck2",
+    "sha256": {
+     "predictions.jsonl": "41a6527f742ed994bcf7f3e99d49772ed059dac2b4f3fdf0b0b03802db74e311",
+     "metrics.json": "503372b799f9b82564c4693c9afb32ab4cf302d8690c1b7a3f6a2614f62ab17c",
+     "config.yaml": "4be9d5cb00a7e34b826739a11f6d61a89521c88938566c528aaedbf2c1a28a87",
+     "meta.json": "6a99d037f300c413521a03ab34fbcb8bd31ff29bf8d3991bb7abc36991152b0b"
+    }
+   }
+  ],
+  "x2_refseg": [
+   {
+    "leaf": "/home/mail/chenyuma/visint/repo/experiments/X/0080_x2_hpcgpu07/0080_eval/qwen3.5-9b/refseg/x2_spline_trimap/explore_val_refcoco_unc_val",
+    "split": "explore_val_refcoco_unc_val",
+    "sha256": {
+     "predictions.jsonl": "ccc644fab8eb9bb73809b7648b1d01edf2a88ea27d0731ac90e3d7a2c69f41ef",
+     "metrics.json": "fcce29346db9a6bf9afd8c1a658d845dd16daf669fa0c82384332d25388a67db",
+     "config.yaml": "ed186b8603da313e3b1fbc3c9cee7cf39155ec5ef631e6157aa5d88c19a886e0",
+     "meta.json": "12985547f3ec88c58910c78569bc0b9e4659d1aeaae70e0dc6236887344e937f"
+    }
+   },
+   {
+    "leaf": "/home/mail/chenyuma/visint/repo/experiments/X/0080_x2_hpcgpu07/0080_eval/qwen3.5-9b/refseg/x2_spline_trimap/explore_val_refcoco+_unc_val",
+    "split": "explore_val_refcoco+_unc_val",
+    "sha256": {
+     "predictions.jsonl": "0412a4d1c3ecbcece42ba46832f0792b65707733ee263bcaaef714b695283e38",
+     "metrics.json": "8bcd72b9fa32cd9fa476bd110b3c61ecc42b6f7b28d08df94992c32b4813c1d8",
+     "config.yaml": "65c45c78e7581a4e2c067e7669f39b5754fb77c42dfea512a4f2118eccbad9e5",
+     "meta.json": "2efd52d4b9d8693727eb3e814ecf671ccb335cfab70cd5dd7b34c78a7733f1de"
+    }
+   },
+   {
+    "leaf": "/home/mail/chenyuma/visint/repo/experiments/X/0080_x2_hpcgpu07/0080_eval/qwen3.5-9b/refseg/x2_spline_trimap/explore_val_refcocog_umd_val",
+    "split": "explore_val_refcocog_umd_val",
+    "sha256": {
+     "predictions.jsonl": "ed52c0fcdaee67526d16d5ce8cde8cbe8da863309fbf9e830fba61a4cb17908d",
+     "metrics.json": "862047a8781d113b8c8439cce474fc4b104c8f1a060d68f1f28cd1f620d707d4",
+     "config.yaml": "6f55b491b862944a051a259527df680cd9d95159898d306e5e4d2b5f2fcc1f11",
+     "meta.json": "53725e6d5a35578aab8c36bbd814eee2795f66d2bd44b6baa042de475ed908d0"
+    }
+   },
+   {
+    "leaf": "/home/mail/chenyuma/visint/repo/experiments/X/0080_x2_hpcgpu07/0080_eval/qwen3.5-9b/refseg/x2_spline_trimap/devtune800",
+    "split": "devtune800",
+    "sha256": {
+     "predictions.jsonl": "ad3997a192d75237f717c6745bafd11d9ed69a2226c9b9be9c93308f11b1f069",
+     "metrics.json": "ff95f22925ab600ffec90f5c87992826bfec5cae33d6bb811433ee3147476d08",
+     "config.yaml": "01628de60336080b970766bc10ea8f18bd8217bab76d29a3c72df922a5ee7706",
+     "meta.json": "98455d69c51378c8b5a3be9fef42d67e41e8e68b3ec1aa34695ef3f40a09c137"
+    }
+   },
+   {
+    "leaf": "/home/mail/chenyuma/visint/repo/experiments/X/0080_x2_hpcgpu07/0080_eval/qwen3.5-9b/refseg/x2_spline_trimap/devcheck2",
+    "split": "devcheck2",
+    "sha256": {
+     "predictions.jsonl": "ce6530d80e54211b35d15daddd20d1eb5e64fea5a8ff2a863455ded3c7c57e94",
+     "metrics.json": "4c914103461f41321f3af00048587ff749d7ae3ddad401b1addadcab45baec39",
+     "config.yaml": "7773e30998785e4fefa4c97ac74f6bcb87ad9449f8b6451bed1e38cbc7ecfed5",
+     "meta.json": "52f4c4985ff1e44ac98a555ba5d57823ddefaaae5db401b92d030f502108c9c6"
+    }
+   }
+  ],
+  "lb_xm": {
+   "dir": "/home/mail/chenyuma/visint/repo/experiments/XM/0107_xm_refseg_lb_hpcgpu07/0107_lb_xm",
+   "sha256": {
+    "lang_battery.json": "cb6ec323ebd748db51d4ada4c89b109cc9a4369b670fdb23c503d4c4166795c1",
+    "predictions.jsonl": "79fa2735aa58b58a87783ad8926f0b64cf12fbdc6e86337ede67e4cb1c1d5f3b",
+    "config.yaml": "62bf0ae6dd2e8b9c2f2a5e31cff501c24eb5a941c65f580bb544bb7bd8451f6d",
+    "meta.json": "b27ac10897ae4902ad902104674c50aff22842b12486ee7dc95c29bf25b962fd"
+   }
+  },
+  "lb_base": {
+   "dir": "/home/mail/chenyuma/visint/repo/experiments/X/0084_lb_explore_hpcgpu07/lb_base",
+   "sha256": {
+    "lang_battery.json": "16ccd8c0a7c2125f1794191e39bc5cd3a881722f096efa64158ca8c7df3ef05a",
+    "predictions.jsonl": "6dd04c6403437ffbca662eb9cb4091e91336ac428b5f802e3fa6fd2663aeedc4",
+    "config.yaml": "43cb855f9423730d7ed21e270637e4e1223a42e2f2b55e2bb973135d544b5d7a",
+    "meta.json": "f90b6d9aab095dd97f4f0191814309dbf400e1b0a4c5b8d250b3c1882f7c7fe8"
+   }
+  },
+  "lb_x2": {
+   "dir": "/home/mail/chenyuma/visint/repo/experiments/X/0084_lb_explore_hpcgpu07/lb_x2",
+   "sha256": {
+    "lang_battery.json": "e149db3f3a91b6e381a38e04786daf3b10539873650b4b71c19ea07c75aba48e",
+    "predictions.jsonl": "2073b1ba5a998c4899bb7e60f0bbf29796eb5c091c44bc8a229f676a92376d9d",
+    "config.yaml": "cb1e3f8f00c24623050824147cb2a570ef3d93535682cb83c692a960d689d124",
+    "meta.json": "b6e32a6c613c8477ab5b1bc55b9659d3c5e2bfb13eb34e9b99532f3b7593ad9e"
+   },
+   "role": "D165 原文的诊断，不入结论"
+  },
+  "lb_compare": null,
+  "configs": {
+   "xm_train.json": "45c35566c37cd8f187c4fe67fd602d24f85a5b335836917eb9193b1ec0a6c1a0",
+   "x2_train.json": "c80a4b0b39ac8275dafd6be7af83ec05dc0d5f4fbf21335d5e67e2ab829b5228"
+  }
+ }
+}
