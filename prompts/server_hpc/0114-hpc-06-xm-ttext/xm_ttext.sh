@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# RUN-0114（ITSC HPC hpcgpu06）：X-M 的定位与计数 T 文本读数（run_e1 --task refexp_box count --checkpoint …；D182 第 3 点：补进 X-M 的语言表）。
+# RUN-0114（ITSC HPC，节点可选：06 或 07，补充 1）：X-M 的定位与计数 T 文本读数（run_e1 --task refexp_box count --checkpoint …；D182 第 3 点：补进 X-M 的语言表）。
 #   命令行照抄 RUN-0091（prompts/server_hpc/0091-hpc-06-x-ttext/x_ttext.sh），只换检查点与输出目录。与 RUN-0069 在 06 上的 T 文本基座
 #   （0069_ttext/qwen3.5-9b）逐题配对：从 7f53f240 到现在，run_e1 / src/e1 / src/adapters 没有改动（管理员核对过 git log）。
 #   另：lb_compare_xm（只用 CPU）：scripts/lang_battery.py --compare 07 的基座（RUN-0084 lb_base）与 X-M（RUN-0107 lb_xm），与四方表其余各列同格式。
 # 铁律：任何情况下都不能取消或停止 Slurm 任务 157296、157297。只用本节点自己的暂停文件。
-# 用法：srun --jobid=157296 --overlap -n1 -c 8 env PATH=… TINY=0 EV_CAP_H=… bash …/xm_ttext.sh < /dev/null
+# 补充 1（D183）：06 又被别的项目的 vLLM 占满。谁先空出来用谁：NODE=hpcgpu06 时对 RUN-0069 在 06 上的基座；NODE=hpcgpu07 时先在 07 上
+#   跑一遍基座的 T 文本（命令同 RUN-0069 的 ttext_base），再跑 X-M，同节点配对。
+# 用法：srun --jobid=<157296（06）或 157297（07）> --overlap -n1 -c 8 env PATH=… TINY=0 NODE=<hpcgpu06|hpcgpu07> EV_CAP_H=… bash …/xm_ttext.sh < /dev/null
 # 彩排（开发机）：TINY=1 WT=… REPO=… LOGS=… PY=… bash xm_ttext.sh（只核对目录名与命令行）
 set -uo pipefail
 TINY=${TINY:-0}
@@ -16,7 +18,8 @@ if [ "$TINY" = 1 ]; then
   export EV_NO_GIT=1
   OUT=$REPO/experiments/XM/0114_xm_ttext_tiny
 else
-  NODE=hpcgpu06
+  : "${NODE:?hpcgpu06 或 hpcgpu07}"
+  case "$NODE" in hpcgpu06|hpcgpu07) ;; *) echo "NODE 只能是 hpcgpu06 或 hpcgpu07：$NODE" >&2; exit 2;; esac
   VI=/home/mail/chenyuma/visint
   WT=$VI/wt/wt0114
   REPO=$VI/repo
@@ -33,14 +36,15 @@ else
   export EV_DF_PATH=$VI
   CLAIM_MAX_S=${CLAIM_MAX_S:-3600}
   EV_CAP_S=$(awk -v h="${EV_CAP_H:?任务书的上限（小时）}" 'BEGIN{print int(h * 3600)}')
-  OUT=$REPO/experiments/XM/0114_xm_ttext_hpcgpu06
+  OUT=$REPO/experiments/XM/0114_xm_ttext_$NODE
 fi
 LB_BASE=$REPO/experiments/X/0084_lb_explore_hpcgpu07/lb_base
 LB_XM=$REPO/experiments/XM/0107_xm_refseg_lb_hpcgpu07/0107_lb_xm
 case "$(basename "$OUT")" in [0-9][0-9][0-9][0-9]_*) ;; *) echo "OUT 的目录名没有运行编号：$OUT" >&2; exit 2;; esac
+base_cmd() { echo "$PY" scripts/run_e1.py --model $M --task refexp_box count --subset eval ${D[@]+"${D[@]}"} --out "$OUT"; }
 cmd() { echo "$PY" scripts/run_e1.py --model $M --task refexp_box count --subset eval ${D[@]+"${D[@]}"} --checkpoint "$2" --checkpoint-label "t_text/$1/seed0" --out "$OUT"; }
 if [ "$TINY" = 1 ]; then
-  mkdir -p "$OUT"; { cmd xm "$XM_CK"; echo "$PY scripts/lang_battery.py --compare $LB_BASE $LB_XM --out $OUT/lb_compare_xm.json"; } > "$OUT/cmd.txt"
+  mkdir -p "$OUT"; { echo "# 只在 NODE=hpcgpu07："; base_cmd; cmd xm "$XM_CK"; echo "$PY scripts/lang_battery.py --compare $LB_BASE $LB_XM --out $OUT/lb_compare_xm.json"; } > "$OUT/cmd.txt"
   echo "tiny：只核对目录名与命令行 → $OUT/cmd.txt"; exit 0
 fi
 # shellcheck disable=SC1091
@@ -49,9 +53,12 @@ cd "$WT" || exit 1
 [ "${CUDA_VISIBLE_DEVICES:-}" = 0 ] || { progress "blocked: 不在 srun 的资源范围里"; exit 1; }
 [ -f "$XM_CK/manifest.json" ] || { progress "blocked: 没有 X-M 的检查点 $XM_CK"; exit 1; }
 NOK=0
-claim_gpu "0114-hpc-06-xm-ttext.md" || { progress "blocked: gpu not free after ${CLAIM_MAX_S}s"; exit 1; }
+claim_gpu "0114-hpc-xm-ttext.md ($NODE)" || { progress "blocked: gpu not free after ${CLAIM_MAX_S}s"; exit 1; }
 echo "$(now) start commit $(git -C "$WT" rev-parse HEAD 2>/dev/null || echo unknown) node $NODE" >> "$OUT/steps.log"
 echo "$(now) xm checkpoint manifest $(sha "$XM_CK/manifest.json" | cut -d' ' -f1)" >> "$OUT/steps.log"
+if [ "$NODE" = hpcgpu07 ]; then  # 07 上没有 9B 的 T 文本基座：先跑一遍（同 RUN-0069 的 ttext_base）
+  step ttext_base "$PY" scripts/run_e1.py --model $M --task refexp_box count --subset eval ${D[@]+"${D[@]}"} --out "$OUT" || NOK=$((NOK + 1))
+fi
 step ttext_xm "$PY" scripts/run_e1.py --model $M --task refexp_box count --subset eval ${D[@]+"${D[@]}"} \
   --checkpoint "$XM_CK" --checkpoint-label "t_text/xm/seed0" --out "$OUT" || NOK=$((NOK + 1))
 step lb_compare_xm "$PY" scripts/lang_battery.py --compare "$LB_BASE" "$LB_XM" --out "$OUT/lb_compare_xm.json" || NOK=$((NOK + 1))
