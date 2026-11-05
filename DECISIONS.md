@@ -3783,3 +3783,24 @@
 - RUN-0114 补充 1：06 此刻空着就在 06 上跑，对 RUN-0069 的 T 文本基座；否则在 07 上跑，并在 07 上先补跑一遍基座的 T 文本，同节点配对。07 上多花约 2.1 GPU 小时，在 X-M 的预算之内。
 - 落在 07 时：X-M 的计数与定位相对的是 07 上的基座，X-2 等其余各列相对的是 06 上的基座。每一列都是同节点配对，表注写明。
 - `scripts/mgr/xm_lang_table.py` 按 RUN-0114 实际落在的节点选基座。
+
+## D184（2026-11-05，管理员）：DEV-0084 合入，论文图表加 X-M 一节
+
+- `scripts/figures/make_paper_figures.py` 新增 7 张表，共 19 个文件：
+  - `tab_xm_main`（正文）与 `tab_xm_main_full`（附录：加判定集、逐类 Rex-Omni）；
+  - `tab_xm_lvis`（描述性）、`tab_xm_refseg`；
+  - `tab_xm_lang` 与 `_full`；
+  - `tab_xm_gate`（附录）。
+- 文献灰行：`docs/references/xm_sota.json`，照 `xm_refs_notes.md` 转录。
+- 数字只读分析 JSON（xm_results、xm_lang、gate_xm、xm_sota），不重算 bootstrap。
+- D182 的写法用测试钉住：
+  - 与 Rex-Omni 只在区间跨 0 时写 comparable，全文不出现 outperform；
+  - 不贴边的样条光栅化放进主表的消融，表注点明是"不需要专用解码器"最直接的证据；
+  - ReasonSeg 跨 0 照实写出；
+  - LVIS 注明 Rex-Omni 的训练数据可能重叠；
+  - 语言表里不出现阈值，并列 X-2 三个种子的范围。
+- 待裁的裁定：
+  - 语言表 MMLU-Pro 与 IFEval prompt 严格两行，用 G-XM 的 10,000 次读数（D182 引的就是它们），表注写明来源；其余行用 lb_compare（1,000 次，取整到 0.1）。
+  - 主表注保留"5.7% 的实例退回框的 GrabCut"（D168），如实交代。
+- main 上 `tests/test_paper_figures.py` 51 passed。已有的 61 个输出逐字节不变。
+- 计数、定位、IFEval 指令级三格写 missing，等 RUN-0114 跑完，在 main 上重跑 `xm_lang_table.py` 与 `make_paper_figures.py` 补上。

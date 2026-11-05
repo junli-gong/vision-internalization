@@ -2,8 +2,8 @@
 
 <!-- 由 scripts/figures/make_paper_figures.py 生成；不要手改。数据补齐后重跑：python scripts/figures/make_paper_figures.py -->
 
-- 生成时间：2026-10-31 06:58 UTC
-- 代码 commit：e01429643eeed740a4090f0c748f006e740ebf0f (working tree has uncommitted changes)
+- 生成时间：2026-11-05 22:13 UTC
+- 代码 commit：5bb7a7f15c371728a9af96fd2c23737d7ce361fd (working tree has uncommitted changes)
 - 结果树：`仓库根`
 - matplotlib 3.11.2；PDF 是矢量（TrueType 字体，无 Type 3），PNG 300 dpi；宽度：单栏 3.3 in，双栏 6.9 in。
 - 配色：dataviz 参考调色板。Qwen3.5 四个尺寸用一个有序的蓝色阶（浅→深 = 0.8B→9B），InternVL3.5 用第二个有序色阶（橙）；两类对比用分类槽 1（蓝）与槽 2（橙）。都在白底上过了 validate_palette.js（有序：单色相、亮度单调、相邻 ΔL ≥ 0.06；分类两色全对 CVD ΔE 24.7）。
@@ -15,7 +15,9 @@
 
 ## 缺的数据（missing）
 
-- 无
+- X-M 语言表 battery ifeval.instruction_level_strict（docs/analysis/xm_lang.json 的 battery 里没有；由 RUN-0114 生成，还没有结果）
+- X-M 语言表 ttext count（docs/analysis/xm_lang.json 的 ttext 里没有；由 RUN-0114 生成，还没有结果）
+- X-M 语言表 ttext refexp_box（docs/analysis/xm_lang.json 的 ttext 里没有；由 RUN-0114 生成，还没有结果）
 
 ## 1. E1 差距图：`fig_e1_gap.pdf` / `fig_e1_gap.png`
 
@@ -315,6 +317,93 @@ Where C1 = X-2 (ours) gains, on all 5,000 W2 test expressions (Qwen3.5-9B): pair
 - Language cost is read on the language battery (D154, D162); the health-check flags are reported alongside only.
 - Runs: 4B training, development evaluation and health check RUN-0098 (hpcgpu07); 4B language battery RUN-0101 (hpcgpu07; the 4B base and the 4B model on the same node); 9B: RUN-0080, RUN-0084, RUN-0093, RUN-0094, RUN-0096. Data: x2_4b.json, seed_variance.json.
 
+## 17. X-M（DEV-0084；D182）
+
+- 数据：`docs/analysis/xm_results.json`（`scripts/mgr/xm_results_table.py`，RUN-0113）、`docs/analysis/xm_lang.json`（`scripts/mgr/xm_lang_table.py`）、`experiments/XM/0108_gate_xm_hpcgpu07/0108_gate/gate_xm.json`、`docs/references/xm_sota.json`（照 `docs/references/xm_refs_notes.md`）。划分、设置名、叶目录与配对差的键 import 自 xm_results_table.py，语言读数的键与来源路径 import 自 xm_lang_table.py；本文件只放英文名与版式，不重算任何 bootstrap。
+- 叶目录只取三样（不是读数）：metrics.json 的逐行 CI 重抽次数（并核对 f1_rexomni 与 xm_results.json 相同）、主设置的 failures.fallback（退回框的实例数）、config.yaml 的提示版本、控制点数、框数上限、NMS 与 LVIS 每图的类别上限。
+- ×100、一位小数；"—" = 不适用，"missing" = 该有而 JSON 里没有。不加粗。
+
+### 17.1 正文主表：`tab_xm_main.tex` / `tab_xm_main.md`（附录版 `tab_xm_main_full.*`）
+
+- 最终报告集 xm_final。行：基座零样本、基座的框交给 GrabCut | X-M 主设置（样条 → GrabCut）| 消融三行（样条直接光栅化不贴边、框内椭圆、X-M 的框交给 GrabCut）| Rex-Omni joint | 灰色文献行。列：检测 F1@0.5 [CI]、P / R、F1@mIoU、实例分割 F1@0.5 [CI]、主设置 − 该行的检测差与实例分割差 [CI]（配对差都取 xm_results.json 的 det_paired / seg_paired，键取 XRT.DET_PAIRS / SEG_PAIRS）。
+- 附录版：最终报告集一块加逐类的 Rex-Omni（诊断），再加判定集一块（没有 Rex-Omni）；文献行同正文版。
+- D182 的写法：与 Rex-Omni 只在区间跨 0 时写 comparable（核对见下），不出现 outperform；"样条直接光栅化、不贴边"一句（不需要专用解码器的证据，GrabCut 只再加约 1 点）由配对差生成。定义与文献出处放在表下面（同 tab_unified，caption 太长 pdflatex 会报错）。
+
+**表注（英文，正文版）**
+
+- Category-level detection and instance segmentation with Qwen3.5-9B on the final report set: 1,000 COCO val2017 images, 2,940 (image, category) pairs over 79 categories, disjoint by image from the tuning and decision sets; X-M's training images and all evaluation images are disjoint. Only the categories present in an image are asked (positive only, as in Rex-Omni's evaluation). F1 ×100 = Rex-Omni's class-macro F1 (preregistration XM-3a): COCOeval-style greedy matching per (image, category) in output order, precision and recall per category over the set, averaged over categories, F1 = 2PR/(P+R); IoU 0.5 on boxes (detection) or masks (instance segmentation). P / R: detection precision and recall at IoU 0.5. F1@mIoU: P and R each averaged over IoU 0.5:0.05:0.95 before the harmonic mean.
+- Per-row CIs: 95% bootstrap over images from each run (1,000 resamples). Main − row: X-M's main setting minus the row (for detection, X-M's boxes minus the row's boxes), paired bootstrap over images with the macro average recomputed in every resample, 95%, 10,000 resamples (seed 20260929). — = not applicable (zero-shot boxes and Rex-Omni give boxes only; no row is paired with itself). The X-M rows share call 1's boxes and the two base rows share the base model's boxes, so their detection columns are identical. No entry is in bold.
+- On the final report set, the spline rasterised directly, without snapping to image edges, is only 1.2 points [+0.6, +1.7] below the main setting: the most direct evidence that no dedicated mask decoder is needed. The shape comes entirely from the LLM, and GrabCut adds only about 1 point.
+- External reference: Rex-Omni (IDEA-Research/Rex-Omni at 0e5693d), a detector built on Qwen2.5-VL-3B, i.e. a learned vision model; run by us separately with its official prompts, preprocessing and parsing (deviations recorded with the run, D178), detection only; its outputs are used only for scoring, never in our data or training. Joint = its own protocol: one query per image listing all the image's positive categories. X-M − Rex-Omni (joint): −1.6 [−3.3, +0.5] points; the interval includes 0, so X-M and Rex-Omni are comparable on these images.
+- Gray rows: detection F1@0.5 (Rex-Omni's definition: class-macro precision and recall, F1 = 2PR/(P+R)) on the full COCO val2017 (4,952 images) as reported in the literature, not on our 1,000-image subset; reference only, never paired; sources under the table.
+- X-M (ours): one LoRA on Qwen3.5-9B, trained with X-2's recipe plus two COCO train2017 streams (listing a category's boxes; one spline per given box); supervision only from ground truth and self-distillation replay of the base model; no learned vision model in training or inference. Per (image, category) two calls, single pass, no retries: call 1 lists the category's boxes (at most 30); call 2 traces each box's outline as a closed B-spline with 16 control points. Deterministic post-processing: NMS at IoU 0.7 over the listed boxes, control points clipped to their box. Main setting: the rasterised spline seeds GrabCut as a trimap for each instance (snapping to image edges); GrabCut (OpenCV graph cut) has no learned parameters. Ablations with the same boxes: spline rasterised directly (the spline's interior is the mask, no GrabCut); in-box ellipse → GrabCut (the spline replaced by the ellipse inscribed in the box); boxes → GrabCut (the box alone seeds GrabCut, no spline). Base: the zero-shot Qwen3.5-9B with the same prompts (xm-prompts-v1, frozen) and post-processing. Final report set: 436 of 7,591 predicted instances (5.7%) fall back to boxes → GrabCut in the main setting, because call 2 returned a different number of splines than boxes (D168).
+- Literature rows: Qwen2.5-VL-3B (MLLM, one category per query as in our protocol): Rex-Omni, arXiv 2510.12798 ('Detect Anything via Next Point Prediction'), Table 2, COCO val2017 detection F1@0.5. Qwen2.5-VL-7B (MLLM, one category per query as in our protocol): Rex-Omni, arXiv 2510.12798, Table 2, COCO val2017 detection F1@0.5. SEED1.5-VL (MLLM, not one category per query): Rex-Omni, arXiv 2510.12798, Table 2, COCO val2017 detection F1@0.5. Rex-Omni (MLLM detector built on Qwen2.5-VL-3B, its own protocol): Rex-Omni, arXiv 2510.12798, Table 2, COCO val2017 detection F1@0.5; we also run its released weights (IDEA-Research/Rex-Omni) on our final report set (the non-gray Rex-Omni rows). Grounding DINO-T (specialist detector at the best score threshold of a 0-1 sweep): Rex-Omni, arXiv 2510.12798, Table 2, COCO val2017 detection F1@0.5. DINO-Swin-L (specialist detector at the best score threshold of a 0-1 sweep): Rex-Omni, arXiv 2510.12798, Table 2, COCO val2017 detection F1@0.5.
+- Data: RUN-0109 (X-M, base; hpcgpu07); RUN-0111 (Rex-Omni; hpcgpu06); X-M and the base model on the same node (D93-1); Rex-Omni, an external reference, on hpcgpu06 (D180); readings and paired differences from xm_results.json (computed in RUN-0113 on CPU); literature from xm_sota.json.
+
+### 17.2 LVIS 子集（描述性）：`tab_xm_lvis.tex` / `tab_xm_lvis.md`
+
+- 同主表的列；行同附录版的最终报告集一块（含逐类的 Rex-Omni）；没有文献行。表注写明只作描述、Rex-Omni 的训练数据可能与 LVIS 重叠、每图类别上限（XM-2b，取叶目录 config.yaml 的 xm.lvis_cap）；高于 Rex-Omni 的差只写数，不写成结论。
+
+**表注（英文）**
+
+- Descriptive only (preregistration XM-2b): an LVIS v1 val subset of 1,000 images with at most 3 positive categories per image (chosen by hash rank), 2,213 (image, category) pairs over 446 categories. The images are COCO val2017 images outside the three COCO splits, so none is an X-M training image. For categories not exhaustively annotated in an image (LVIS not_exhaustive), unmatched predictions are ignored (LVIS convention).
+- Metrics, rows and columns as in the main X-M table: F1 ×100 = Rex-Omni's class-macro F1 at IoU 0.5; per-row CIs: 95% bootstrap over images from each run (1,000 resamples); Main − row: paired bootstrap over images, 95%, 10,000 resamples (seed 20260929); — = not applicable. No entry is in bold.
+- External reference: Rex-Omni (IDEA-Research/Rex-Omni at 0e5693d), a detector built on Qwen2.5-VL-3B, i.e. a learned vision model; run by us separately with its official prompts, preprocessing and parsing (deviations recorded with the run, D178), detection only; its outputs are used only for scoring, never in our data or training. Joint = its own protocol: one query per image listing all the image's positive categories. X-M − Rex-Omni (joint): +2.7 [+0.8, +4.1] points. Rex-Omni's training data may overlap with LVIS, so this difference is a description, not a conclusion. Per category = X-M's protocol (one query per (image, category)), a diagnostic: X-M − Rex-Omni +2.8 [+0.8, +4.1] points.
+- On the LVIS subset, the spline rasterised directly, without snapping to image edges, is 3.3 points [+2.3, +4.1] below the main setting.
+- LVIS subset: 109 of 5,086 predicted instances (2.1%) fall back to boxes → GrabCut in the main setting, because call 2 returned a different number of splines than boxes (D168).
+- Data: RUN-0111 (Rex-Omni; hpcgpu06); RUN-0112 (X-M, base; hpcgpu07); X-M and the base model on the same node (D93-1); Rex-Omni, an external reference, on hpcgpu06 (D180); readings and paired differences from xm_results.json (computed in RUN-0113 on CPU).
+
+### 17.3 指代分割：`tab_xm_refseg.tex` / `tab_xm_refseg.md`
+
+- RefCOCO 的 W2 test（5 个划分与合并）与 ReasonSeg val，X-M 对 X-2（cIoU、gIoU、配对差与 CI，取 xm_results.json 的 refcoco_test.xm_vs_x2 与 reasonseg.reasonseg_val；运行目录取 xm_results_table.py 的 XM_TEST、X2_TEST、RS_XM、RS_X2）。ReasonSeg 的差照数据写"低于 / 高于"与"区间跨 0"。
+
+**表注（英文）**
+
+- Referring segmentation with the X-M checkpoint against X-2 = C1 (seed 0; the main method of the referring-segmentation tables), both with X-2's protocol (the model proposes a box and traces a spline; the rasterised spline seeds a GrabCut trimap). cIoU ×100 = summed intersection / summed union; gIoU ×100 = mean per-expression IoU; 95% bootstrap CIs over expressions; X-M − X-2: per-expression paired bootstrap, 95%; 10,000 resamples (seed 20260929). No entry is in bold.
+- RefCOCO family: the five W2 test splits, 1,000 expressions each (pooled 5,000); X-M (RUN-0111) and X-2 (RUN-0092) on the same node (hpcgpu06). Pooled X-M − X-2: cIoU +0.2 [−0.4, +1.0], the interval includes 0.
+- ReasonSeg val, descriptive: 196 items (the first query of each, as in LISA's validation); ignore regions are not subtracted; X-M (RUN-0109) and X-2 (RUN-0105) on the same node (hpcgpu07). X-M is 5.2 cIoU points below X-2 [−12.2, +0.5]; the interval includes 0. gIoU: +0.5 [−2.7, +3.7], on par.
+- Data: xm_results.json (computed in RUN-0113 on CPU).
+
+### 17.4 语言代价：`tab_xm_lang.tex` / `tab_xm_lang.md`（附录版 `tab_xm_lang_full.*` 加健康检查三项）
+
+- 行：大题量 MMLU-Pro、IFEval prompt 严格、IFEval 指令级严格，T 文本计数 CountBench、定位 acc@0.5（附录版加健康检查三项）；列：基座读数、X-M − 基座 [CI]、X-2 三个种子的范围（xm_lang.json 的 x2_range，离 0 近的一端在前；核对与 seed_variance.json 的 seed_range 相同）。
+- MMLU-Pro 与 IFEval prompt 严格取 battery_gate（G-XM 的 10,000 次、不取整，两位小数；D182 第 2 点引的是这两个数）；IFEval 指令级严格只在 battery （RUN-0114 的 lb_compare，取整到 0.1，一位小数）。两份都在时核对点估计取整到 0.1 相同。缺的格子写 missing。
+- 不以阈值作论据：表与表注里没有判定的阈值；表注照数据写 MMLU-Pro、IFEval 在 X-2 三个种子范围之内或之外、IFEval 的代价写进局限、计数与 X-2 的范围并列。
+
+**表注（英文，正文版）**
+
+- Language cost of X-M on Qwen3.5-9B: each cell is the difference from the base model evaluated on the same node, in percentage points, with a 95% paired bootstrap CI over items; Base: the base model's reading (%). Precision follows the source, two decimals where the source is unrounded: MMLU-Pro letter answers and IFEval prompt-level strict from the paired computation of RUN-0108 (10,000 resamples).
+- X-2, range over 3 seeds: the differences of the 3 training seeds of X-2's recipe, each against the base on its own node (language battery: seeds 0 and 1 on hpcgpu07, seed 2 on hpcgpu06; T-text: seeds 0, 1 and 2 on hpcgpu06), the end nearer zero first; one decimal.
+- X-M's MMLU-Pro −1.30 and IFEval −3.14 fall within the range of X-2's 3 seeds (MMLU-Pro −0.2 to −2.3, IFEval 0.0 to −3.5).
+- The IFEval cost of about −3 points is reported as a limitation, together with X-2's.
+- Counting (CountBench): X-M missing (RUN-0114 has no results yet), alongside X-2's 3 seeds: −8.1 to −16.1.
+- Pairing (D93-1): language battery, X-M (RUN-0107) and the base (RUN-0084) both on hpcgpu07; T-text missing (RUN-0114 has no results yet); X-2's seeds each against the base on its own node.
+- Data: xm_lang.json (scripts/mgr/xm_lang_table.py; RUN-0108, RUN-0107, RUN-0084); X-2's seeds: seed_variance.json.
+- Missing: X-M IFEval instruction-level strict, CountBench counting accuracy and Grounding Acc@0.5 (RUN-0114 has no results yet).
+
+### 17.5 判定（附录）：`tab_xm_gate.tex` / `tab_xm_gate.md`
+
+- 第 1–3 条与第 4 条（D170）取 gate_xm.json 的 criteria；D165 原文取 diagnostics.criterion4_d165；N47 的 (b) 不在 gate_xm.json 里：阈值 = xm_lang.json 的 x2_range（X-2 三个种子的点估计）的最差者 − 2（XM_C4_MARGIN_PP），X-M 的 CI 下界照取 gate_xm.json。种子的 CI 下界取 docs/analysis/seed_variance.json（核对 D170 的阈值 = 最低下界 − 2）。
+
+**表注（英文）**
+
+- G-XM, the decision rule for X-M (D165 §5): X-M enters the main text only if all four criteria hold. Criteria 1–2 on the decision set (500 COCO val2017 images, 1,437 (image, category) pairs, sealed until the decision); criterion 3 on 2,300 development expressions of referring segmentation; criterion 4 on the language battery. Verdict: passed, not a rehearsal, 15 of 15 gate-point checks true, criterion 4 per D170.
+- Criteria 1–2: F1 ×100 (Rex-Omni's class-macro F1, IoU 0.5), paired bootstrap over images; criterion 3: cIoU ×100, per-expression paired bootstrap; criterion 4: percentage points, per-item paired bootstrap, unrounded (two decimals); all 95%, 10,000 resamples (seed 20260929). A criterion holds when the CI lower bound exceeds its threshold.
+- Criterion 4 in three formulations, side by side. D170 (preregistration XM-5a; used for the verdict): X-M − base on the same node, the lower bound above the lowest CI lower bound of X-2's three seeds minus 2 points. D165 as written (a diagnostic, not part of the verdict): X-M − X-2 seed 0, the lower bound above −2.0; not met: MMLU-Pro −1.15 [−2.40, +0.10] (lower bound not above −2.0) and IFEval +0.37 [−2.22, +2.96] (lower bound not above −2.0). N47 option (b) (the administrator's original proposal, not adopted): X-M − base on the same node, the lower bound above X-2's worst seed point estimate minus 2 points; not met: IFEval −3.14 [−6.10, −0.37] (lower bound not above −5.5).
+- D170 was written before any X-M training or evaluation. It is wider than (b) because (b) compares a CI lower bound with a threshold set from point estimates, so X-2's own recipe does not meet (b): on IFEval, X-2 seed 0 (lower bound −6.1, not above −5.5). Under (b), X-M does not meet it in the same way.
+- Data: gate_xm.json (RUN-0108); X-2's seeds: seed_variance.json (RUN-0084, RUN-0096); the thresholds of (b) from xm_lang.json (x2_range) minus 2 points.
+
+核对：
+
+- 一致：`docs/analysis/xm_results.json` 与结果目录里的原件 `experiments/XM/0113_xm_results_hpcgpu07/xm_results.json` 相同
+- 一致：docs/analysis/xm_results.json 的点估计 = 各叶目录 metrics.json 的 f1_rexomni（37 格）
+- 一致：配对差里记的两个读数 = 两行的点估计（19 个配对差）
+- 一致：D182 把最终报告集上 X-M 与 Rex-Omni（joint）写成"相当"——差的 95% CI 跨 0
+- 一致：D182 写 ReasonSeg 上 X-M − X-2 的 cIoU 差"区间跨 0"
+- 一致：docs/analysis/xm_lang.json 的 X-2 三个种子范围 = docs/analysis/seed_variance.json 各种子读数的最小与最大（seed_range，7 项）
+- 一致：D170 的 mmlu_pro 阈值 -5.7（gate_xm.json）= docs/analysis/seed_variance.json 三个种子 CI 下界的最低者 -3.7 − 2
+- 一致：D170 的 ifeval 阈值 -8.1（gate_xm.json）= docs/analysis/seed_variance.json 三个种子 CI 下界的最低者 -6.1 − 2
+
 ## 文件
 
 - `fig_e1_gap.pdf`
@@ -377,3 +466,22 @@ Where C1 = X-2 (ours) gains, on all 5,000 W2 test expressions (Qwen3.5-9B): pair
 - `tab_x2_4b.tex`
 - `tab_x2_4b.md`
 - `data/tab_x2_4b.json`
+- `tab_xm_main.tex`
+- `tab_xm_main.md`
+- `data/tab_xm_main.json`
+- `tab_xm_main_full.tex`
+- `tab_xm_main_full.md`
+- `tab_xm_lvis.tex`
+- `tab_xm_lvis.md`
+- `data/tab_xm_lvis.json`
+- `tab_xm_refseg.tex`
+- `tab_xm_refseg.md`
+- `data/tab_xm_refseg.json`
+- `tab_xm_lang.tex`
+- `tab_xm_lang.md`
+- `data/tab_xm_lang.json`
+- `tab_xm_lang_full.tex`
+- `tab_xm_lang_full.md`
+- `tab_xm_gate.tex`
+- `tab_xm_gate.md`
+- `data/tab_xm_gate.json`

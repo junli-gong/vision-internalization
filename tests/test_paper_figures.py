@@ -15,6 +15,9 @@
 - DEV-0078（D162）：四方表（与 _full）在 C1 列后加一列 C1 配方 3 个种子的范围，语言代价图在 C1 的点下面另画一行范围；范围与 seed_variance.json
   逐项一致（并钉住负责人答复 N46 的数）；表注、图注写明其余各列单种子、以大题量为准；tab_seeds 的表注加种子稳定性一句；新增 4B 补充表 tab_x2_4b
   与 x2_4b.json、seed_variance.json 逐项一致。其余图表与 DEV-0078 动手前（dfa4383e7）的逐字节相同，改了的几个只多出点名的列、行与表注。
+- DEV-0084（D182）：X-M 一节的七张表在假结果树里都生成、数字等于输入 JSON；缺计数时写 missing；主表注有 comparable、没有 outperform（区间不跨 0
+  时不写 comparable）；语言表里没有判定的阈值；判定表的 N47 (b) 阈值 = X-2 范围的最差点估计 − 2。真数据（只读 X-M 的输入）钉住 D182 引的数并能用
+  pdflatex 编译。其余输出不变：新增的只有 X-M 的 19 个文件（DEV0084_NEW）。
 """
 
 from __future__ import annotations
@@ -571,6 +574,13 @@ def real_run(tmp_path_factory):
     return out
 
 
+def _missing_except_xm_pending(readme: str) -> list[str]:
+    """README 缺项一节去掉 X-M 待 RUN-0114 的行之后剩下的行（DEV-0084：RUN-0114 跑完之前，X-M 语言表的计数、定位、IFEval 指令级三格是缺的）。
+    其余一项也不缺时，结果是 ["- 无"]（没有 X-M 的缺项）或 []（只有 X-M 待 RUN-0114 的缺项）。"""
+    miss = readme.split("## 缺的数据（missing）")[1].split("\n## ")[0].strip().splitlines()
+    return [m for m in miss if not (m.startswith("- X-M ") and "由 RUN-0114 生成，还没有结果" in m)]
+
+
 def test_split_labels_and_conventions():
     assert list(MPF.W2T.SPLITS) == SPLITS  # 划分与目录的约定取自 scripts/mgr/w2_test_table.py
     assert MPF.split_label("test_refcoco+_unc_testA") == "RefCOCO+ testA"
@@ -601,7 +611,8 @@ def test_real_new_outputs_written(real_run):
     for sec in ("## 5. W2 test 主表", "## 6. W2-a 随尺寸", "## 7. 语言代价", "## 8. 计数分档", "## 9. 附录的全 5,000 句表", "## 10. 语言代价四方对照表",
                 "## 11. 计算记账表"):
         assert sec in readme
-    assert readme.split("## 缺的数据（missing）")[1].split("\n## ")[0].strip() == "- 无"  # W2-a 的合并读数已在（RUN-0095）
+    # W2-a 的合并读数已在（RUN-0095）。DEV-0084：只允许 X-M 待 RUN-0114 的缺项，其余仍须为"无"
+    assert _missing_except_xm_pending(readme) in (["- 无"], []), _missing_except_xm_pending(readme)
     for name in W2_FIGS + W2_TABS:
         assert f"`{name}." in readme.split("## 文件")[1]
     # 来源（文件与运行编号）写进图注、表注与 README
@@ -637,6 +648,10 @@ DEV0078_CHANGED = ("tab_lang_cost.tex", "tab_lang_cost.md", "tab_lang_cost_full.
                    "fig_lang_cost.pdf", "fig_lang_cost.png", "fig_lang_cost_caption.tex", "data/fig_lang_cost.json",
                    "tab_seeds.tex", "tab_seeds.md")
 DEV0078_NEW = ("tab_x2_4b.tex", "tab_x2_4b.md", "data/tab_x2_4b.json")
+# DEV-0084：X-M 一节新增的文件（其余输出逐字节不变）
+XM_TABS = ("tab_xm_main", "tab_xm_main_full", "tab_xm_lvis", "tab_xm_refseg", "tab_xm_lang", "tab_xm_lang_full", "tab_xm_gate")
+XM_DATA = ("tab_xm_main", "tab_xm_lvis", "tab_xm_refseg", "tab_xm_lang", "tab_xm_gate")
+DEV0084_NEW = tuple(f"{t}.{x}" for t in XM_TABS for x in ("tex", "md")) + tuple(f"data/{t}.json" for t in XM_DATA)
 
 
 def _git_show(spec: str) -> bytes | None:
@@ -700,7 +715,7 @@ def test_real_outputs_unchanged_since_dev0078_base(real_run):
     files = [f.removeprefix("docs/figures/") for f in ls.stdout.split()]
     assert set(DEV0078_CHANGED) <= set(files) and not set(DEV0078_NEW) & set(files)
     now = sorted(str(f.relative_to(real_run)) for f in real_run.rglob("*") if f.is_file())
-    assert sorted(set(now) - set(files)) == sorted(DEV0078_NEW)
+    assert sorted(set(now) - set(files) - set(DEV0084_NEW)) == sorted(DEV0078_NEW)
     for f in files:
         if f not in ("README.md",) + DEV0078_CHANGED:
             assert (real_run / f).read_bytes() == _git_show(f"{PRE_DEV0078}:docs/figures/{f}"), f
@@ -1345,7 +1360,7 @@ def test_real_unified_outputs_written(real_run):
         assert f"`{name}." in readme.split("## 文件")[1]
     for src in (MPF.UNIFIED_JSON, MPF.SOTA_JSON, MPF.X_BINS_JSON, MPF.SEED_JSON):
         assert src in readme
-    assert readme.split("## 缺的数据（missing）")[1].split("\n## ")[0].strip() == "- 无"
+    assert _missing_except_xm_pending(readme) in (["- 无"], []), _missing_except_xm_pending(readme)  # DEV-0084：只允许 X-M 待 RUN-0114 的缺项
     # 运行编号写进表注与图注（任务书：RUN-0072、0078、0092、0095、0097、0100）
     runs = ["RUN-0072", "RUN-0078", "RUN-0092", "RUN-0095", "RUN-0097", "RUN-0100"]
     for f in ("tab_unified.tex", "tab_unified.md", "fig_unified_caption.tex"):
@@ -1646,3 +1661,439 @@ def test_unified_failed_system_still_listed(tmp_path):
     assert "- Missing: " in md
     # 只有完成的系统进核对：E3b 不在新跑三项的核对里（20 格 = E1 与 LISA）
     assert next(c for c in u["checks"] if "新跑三项" in c).endswith("（20 格）")
+
+
+# ---------------------------------------------------------------------------------------------
+# DEV-0084（D182）：X-M 一节。假结果树里加 X-M 的输入（xm_results.json、xm_lang.json、gate_xm.json、叶目录的 metrics.json 与 config.yaml、
+# xm_sota.json），核对每张表都生成、数字等于输入 JSON、缺计数时写 missing、主表注有 comparable 没有 outperform、语言表里没有阈值；
+# 另用仓库里的真数据出一遍 X-M 的表（只读 docs/analysis、docs/references 与 experiments/XM，稀疏签出也能跑），钉住 D182 引的数。
+# ---------------------------------------------------------------------------------------------
+
+XM_N = {"xm_final": (2940, 1000, 79), "xm_decision": (1437, 500, 79), "lvis_sub": (2213, 1000, 446)}  # (对, 图, 类别)
+XM_DET = {"xm_final": {"x": 0.695, "base": 0.642, "rexomni_det_joint": 0.711, "rexomni_det": 0.708},
+          "xm_decision": {"x": 0.727, "base": 0.675},
+          "lvis_sub": {"x": 0.720, "base": 0.679, "rexomni_det_joint": 0.693, "rexomni_det": 0.6925}}
+XM_SEG = {"xm_spline_trimap": 0.585, "xm_spline_raster": 0.573, "xm_ellipse_trimap": 0.512, "xm_box_grabcut": 0.412, "base_box_grabcut": 0.393}
+XM_GATE_THR = {"mmlu_pro": -5.9, "ifeval": -8.3}  # 假的 D170 阈值（与真的 −5.7、−8.1 不同，以免和别的数字撞上）
+XM_X2_RANGE = {"mmlu_pro_letter.accuracy": [-0.3, -2.4, -2.4], "ifeval.prompt_level_strict": [-3.6, 0.2, -1.7],
+               "ifeval.instruction_level_strict": [-2.3, 0.4, -0.8], "count": [-7.0, -15.0, -7.5], "refexp_box": [3.3, 3.6, 3.5],
+               "health:mmlu_pro_letter.accuracy": [-2.0, -3.0, -3.0], "health:gsm8k.flexible": [0.0, 2.0, 2.0],
+               "health:ifeval.prompt_level_strict": [-4.0, -12.0, -6.0]}
+
+
+def _xm_det_value(split: str, st: str) -> float:
+    d = XM_DET[split]
+    return d["x"] if st in MPF.XRT.XS else d["base"] if st in MPF.XRT.BS else d[st]
+
+
+def _xm_seg_value(split: str, st: str) -> float | None:
+    v = XM_SEG.get(st)
+    return None if v is None else v + (0.02 if split == "xm_decision" else 0.01 if split == "lvis_sub" else 0.0)
+
+
+def _xm_point(v: float, split: str) -> dict:
+    n, i, c = XM_N[split]
+    return {"f1": v, "p": v + 0.02, "r": v - 0.02, "ci": [v - 0.013, v + 0.030], "f1_miou": v - 0.17, "f1_exact": v + 0.01,
+            "n_pairs": n, "n_images": i, "n_categories": c}
+
+
+def _xm_pair_obj(a: float, b: float, split: str, lo: float, hi: float) -> dict:
+    return {"status": "完成", "n_pairs": XM_N[split][0], "a": a, "b": b, "diff": a - b, "ci": [a - b - lo, a - b + hi]}
+
+
+def _rs(a: float, b: float, n: int) -> dict:
+    return {"status": "完成", "a": {"n": n, "ciou": a, "ci": [a - 0.02, a + 0.02]}, "b": {"n": n, "ciou": b, "ci": [b - 0.02, b + 0.02]},
+            "ciou_diff": {"n": n, "diff": a - b, "ci": [a - b - 0.012, a - b + 0.012]},
+            "a_giou": {"n": n, "giou": a + 0.01, "ci": [a - 0.01, a + 0.03]}, "b_giou": {"n": n, "giou": b + 0.01, "ci": [b - 0.01, b + 0.03]},
+            "giou_diff": {"n": n, "diff": a - b, "ci": [a - b - 0.008, a - b + 0.008]}}
+
+
+XM_CONFIG = "prompts:\n  version: xm-prompts-v1\n  frozen: true\n  n: 16\n  max_instances: 30\npost:\n  nms_iou: 0.7\n" \
+            "xm:\n  lvis_cap:\n    rule: 预注册 XM-2b\n    max_cats_per_image: 3\n"
+
+
+def build_xm(root: Path, with_count: bool = True) -> Path:
+    """X-M 的假输入。结构同真的 xm_results.json / xm_lang.json / gate_xm.json（读数是假的）。"""
+    XRT = MPF.XRT
+    doc = {"n_resamples": 10000, "level": 0.95, "seed": 20260929, "leaves": {s: dict(v) for s, v in XRT.LEAVES.items()},
+           "detection_instance": {}, "refcoco_test": {"xm_vs_x2": {}}, "reasonseg": {}}
+    for split, settings in XRT.LEAVES.items():
+        pts = {}
+        for st, leaf in settings.items():
+            dv, sv = _xm_det_value(split, st), _xm_seg_value(split, st)
+            pts[st] = {"det": _xm_point(dv, split), "seg": None if sv is None else _xm_point(sv, split)}
+            m = {"det": {"f1_rexomni": {"value": dv, "ci": {"low": dv - 0.013, "high": dv + 0.03, "level": 0.95, "n_resamples": 1000}}},
+                 "seg": None if sv is None else {"f1_rexomni": {"value": sv, "ci": {"low": sv - 0.013, "high": sv + 0.03, "level": 0.95,
+                                                                                    "n_resamples": 1000}}}}
+            if st == XRT.MAIN:
+                m["failures"] = {"fallback": {"box_grabcut": 40, "ok": 960}}
+                (root / leaf).mkdir(parents=True, exist_ok=True)
+                (root / leaf / "config.yaml").write_text(XM_CONFIG, encoding="utf-8")
+            _w(root / leaf / "metrics.json", m)
+        main_d, main_s = pts[XRT.MAIN]["det"]["f1"], pts[XRT.MAIN]["seg"]["f1"]
+        doc["detection_instance"][split] = {
+            "points": pts,
+            "det_paired": {name: _xm_pair_obj(main_d, pts[o]["det"]["f1"], split, 0.017, 0.021) for o, name in XRT.DET_PAIRS if o in settings},
+            "seg_paired": {name: _xm_pair_obj(main_s, pts[o]["seg"]["f1"], split, 0.006, 0.005) for o, name in XRT.SEG_PAIRS if o in settings}}
+    for k, sp in enumerate(SPLITS):
+        doc["refcoco_test"]["xm_vs_x2"][sp] = _rs(0.75 - 0.01 * k, 0.745 - 0.01 * k, 1000)
+    doc["refcoco_test"]["xm_vs_x2"]["pooled"] = _rs(0.71, 0.708, 5000)
+    doc["reasonseg"]["reasonseg_val"] = rs = _rs(0.462, 0.515, 196)
+    rs["ciou_diff"]["ci"] = [-0.122, 0.005]  # 区间跨 0（同真数据的写法）
+    rs["b_giou"]["giou"], rs["giou_diff"] = 0.467, {"n": 196, "diff": 0.005, "ci": [-0.027, 0.037]}
+    _w(root / MPF.XM_RESULTS_JSON, doc)
+    _w(root / MPF.XM_RESULTS_RUN / "xm_results.json", doc)
+    shutil.copy(REPO / MPF.XM_SOTA_JSON, (root / MPF.XM_SOTA_JSON).parent.mkdir(parents=True, exist_ok=True) or root / MPF.XM_SOTA_JSON)
+    t06 = "experiments/XM/0114_xm_ttext_hpcgpu06"
+    lang = {"sources": {"health": "experiments/XM/0110_xm_health_hpcgpu06/health/health_compare.json", "battery": f"{t06}/lb_compare_xm.json",
+                        "gate": MPF.XM_GATE_JSON, "ttext": f"{t06}/t_text/xm/seed0/qwen3.5-9b",
+                        "ttext_base": "experiments/W2/0069_w2c_hpcgpu06/0069_ttext/qwen3.5-9b", "ttext_node": "hpcgpu06"},
+            "battery": {"mmlu_pro_letter.accuracy": {"base": 54.2, "sys": 52.9, "delta_pp": -1.3, "ci95_pp": [-2.7, 0.1], "n": 2000},
+                        "ifeval.prompt_level_strict": {"base": 83.7, "sys": 80.6, "delta_pp": -3.1, "ci95_pp": [-6.0, -0.4], "n": 541},
+                        "ifeval.instruction_level_strict": {"base": 88.0, "sys": 86.0, "delta_pp": -2.0, "ci95_pp": [-3.7, -0.3], "n": 800}},
+            "battery_gate": {"mmlu_pro_letter.accuracy": {"base": 54.15, "sys": 52.85, "delta_pp": -1.3, "ci95_pp": [-2.8, 0.15], "n": 2000,
+                                                          "n_resamples": 10000},
+                             "ifeval.prompt_level_strict": {"base": 83.73, "sys": 80.59, "delta_pp": -3.14, "ci95_pp": [-6.1, -0.37], "n": 541,
+                                                            "n_resamples": 10000}},
+            "ttext": {"count": {"n": 442, "base": 89.37, "sys": 80.27, "delta_pp": -9.1, "ci95_pp": [-12.6, -5.2]} if with_count else None,
+                      "refexp_box": {"n": 56857, "base": 87.12, "sys": 90.54, "delta_pp": 3.42, "ci95_pp": [3.18, 3.66]}},
+            "health": {"mmlu_pro_letter.accuracy": {"base": 53.0, "sys": 54.0, "delta_pp": 1.0, "ci95_pp": [-4.0, 7.0], "flag": False, "n": 100},
+                       "gsm8k.flexible": {"base": 86.0, "sys": 90.0, "delta_pp": 4.0, "ci95_pp": [-4.0, 12.0], "flag": False, "n": 50},
+                       "ifeval.prompt_level_strict": {"base": 94.0, "sys": 90.0, "delta_pp": -4.0, "ci95_pp": [-10.0, 0.0], "flag": False,
+                                                      "n": 50},
+                       "any_flag": False},
+            "x2_range": {k: {"min": min(v), "max": max(v), "values": v} for k, v in XM_X2_RANGE.items()}}
+    _w(root / MPF.XM_LANG_JSON, lang)
+    gate = {"verdict": "通过", "pass": True, "rehearsal": False, "criterion4": "d170", "checks": {f"c{i}": True for i in range(15)},
+            "decision_split": {"n_images": 500, "n_pairs": 1437},
+            "criteria": {"1": {"candidate": 0.608, "control": 0.414, "diff": 0.194, "ci_low": 0.165, "ci_high": 0.218, "threshold": 0.0,
+                               "pass": True, "n_pairs": 1437, "bootstrap": {"n_resamples": 10000, "level": 0.95, "seed": 20260929}},
+                         "2": {"candidate": 0.727, "control": 0.675, "diff": 0.052, "ci_low": 0.026, "ci_high": 0.063, "threshold": 0.0,
+                               "pass": True, "n_pairs": 1437, "bootstrap": {"n_resamples": 10000, "level": 0.95, "seed": 20260929}},
+                         "3": {"candidate": 0.736, "control": 0.730, "diff": 0.005, "ci_low": -0.002, "ci_high": 0.012, "threshold": -0.02,
+                               "pass": True, "n": 2300, "bootstrap": {"n_resamples": 10000, "level": 0.95, "seed": 20260929}},
+                         "4": {"rows": {"mmlu_pro": {"n": 2000, "xm_pct": 52.85, "control_pct": 54.15, "diff_pp": -1.3, "ci_low_pp": -2.8,
+                                                     "ci_high_pp": 0.15, "threshold": XM_GATE_THR["mmlu_pro"], "pass": True},
+                                        "ifeval": {"n": 541, "xm_pct": 80.59, "control_pct": 83.73, "diff_pp": -3.14, "ci_low_pp": -6.1,
+                                                   "ci_high_pp": -0.37, "threshold": XM_GATE_THR["ifeval"], "pass": True}},
+                               "thresholds": dict(XM_GATE_THR), "pass": True,
+                               "bootstrap": {"n_resamples": 10000, "level": 0.95, "seed": 20260929}}},
+            "diagnostics": {"criterion4_d165": {"threshold": -2.0, "rows": {
+                "mmlu_pro": {"n": 2000, "xm_pct": 52.85, "control_pct": 54.0, "diff_pp": -1.15, "ci_low_pp": -2.4, "ci_high_pp": 0.1,
+                             "threshold": -2.0, "pass": False},
+                "ifeval": {"n": 541, "xm_pct": 80.59, "control_pct": 80.22, "diff_pp": 0.37, "ci_low_pp": -2.22, "ci_high_pp": 2.96,
+                           "threshold": -2.0, "pass": False}}}},
+            "inputs": {"lb_xm": {"dir": "/x/repo/experiments/XM/0107_xm_refseg_lb_hpcgpu07/0107_lb_xm"},
+                       "lb_base": {"dir": "/x/repo/experiments/X/0084_lb_explore_hpcgpu07/lb_base"}},
+            "nodes": {"lb_xm": "hpcgpu07", "lb_base": "hpcgpu07"}}
+    _w(root / MPF.XM_GATE_JSON, gate)
+    return root
+
+
+@pytest.fixture(scope="module")
+def xm_run(tmp_path_factory):
+    root = build_xm(build_tree(tmp_path_factory.mktemp("tree_xm")))
+    out = run(root, tmp_path_factory.mktemp("out_xm"))
+    return root, out
+
+
+def _md(out: Path, name: str) -> str:
+    return (out / f"{name}.md").read_text(encoding="utf-8")
+
+
+def _tex(out: Path, name: str) -> str:
+    return (out / f"{name}.tex").read_text(encoding="utf-8")
+
+
+def _blocks(md: str) -> dict:
+    """附录版的 Markdown 表按 **划分** 标题切开：{标题: [数据行]}；没有划分标题的整张表放在 "" 下。"""
+    out, cur = {"": []}, ""
+    for r in md.split("\n\n- ")[0].splitlines()[3:]:
+        if r.startswith("| **"):
+            cur = r.split("**")[1]
+            out[cur] = []
+        elif r.startswith("| ") and not r.startswith("| *"):
+            out[cur].append(r)
+    return out
+
+
+def _row(rows: list[str], label: str) -> list[str]:
+    hits = [r for r in rows if r.startswith(f"| {label} |")]
+    assert len(hits) == 1, (label, rows)
+    return _cells(hits[0])[1:]
+
+
+def _expected_det_row(j: dict, split: str, st: str) -> list[str]:
+    d = j["detection_instance"][split]
+    det, seg = d["points"][st]["det"], d["points"][st]["seg"]
+    cells = [_cell(det["f1"], *det["ci"]), f"{100 * det['p']:.1f} / {100 * det['r']:.1f}", _fmt(det["f1_miou"]),
+             "—" if st in MPF.XM_DET_ONLY else _cell(seg["f1"], *seg["ci"])]
+    for kind, pairs in (("det", MPF.XM_DET_PAIR), ("seg", MPF.XM_SEG_PAIR)):
+        p = d[f"{kind}_paired"].get(pairs.get(st)) if st in pairs else None
+        cells.append("—" if st not in pairs else _cell(p["diff"], *p["ci"], signed=True))
+    return cells
+
+
+def test_yaml_scalar_reads_nested_keys():
+    assert MPF._yaml_scalar(XM_CONFIG, "prompts", "n") == "16"
+    assert MPF._yaml_scalar(XM_CONFIG, "post", "nms_iou") == "0.7"
+    assert MPF._yaml_scalar(XM_CONFIG, "xm", "lvis_cap", "max_cats_per_image") == "3"
+    assert MPF._yaml_scalar(XM_CONFIG, "post", "n") is None and MPF._yaml_scalar(XM_CONFIG, "nope") is None
+
+
+def test_xm_tables_written(xm_run):
+    root, out = xm_run
+    for t in XM_TABS:
+        tex = _tex(out, t)
+        assert "\\toprule" in tex and "\\bottomrule" in tex and tex.count("\\caption{") == 1, t
+        assert (out / f"{t}.md").is_file()
+    for t in XM_DATA:
+        assert (out / "data" / f"{t}.json").is_file()
+    readme = (out / "README.md").read_text(encoding="utf-8")
+    assert "## 17. X-M（DEV-0084；D182）" in readme
+    for t in XM_TABS:
+        assert f"`{t}." in readme.split("## 文件")[1]
+    miss = readme.split("## 缺的数据（missing）")[1].split("\n## ")[0]
+    assert not [m for m in miss.splitlines() if m.startswith("- X-M")]  # 假数据齐全：X-M 一项也不缺
+    xm = data(out, "tab_xm_main")
+    assert all(c.startswith("一致") for c in xm["checks"]) and len(xm["checks"]) == 5, xm["checks"]
+
+
+def test_xm_main_numbers_and_wording(xm_run):
+    """主表与附录版：每格等于 xm_results.json；正文版不放逐类的 Rex-Omni；灰行 = xm_sota.json；表注写 comparable、不写 outperform，
+    不贴边的一句由配对差生成（D182）。"""
+    root, out = xm_run
+    j = json.loads((root / MPF.XM_RESULTS_JSON).read_text(encoding="utf-8"))
+    sota = _repo_json(MPF.XM_SOTA_JSON)["rows"]
+    md = _md(out, "tab_xm_main")
+    rows = _blocks(md)[""]
+    for st, lab in MPF.XM_LABELS.items():
+        if st in MPF.XM_MAIN_SKIP:
+            assert not [r for r in rows if r.startswith(f"| {lab} |")]
+        else:
+            assert _row(rows, lab) == _expected_det_row(j, "xm_final", st), st
+    for r in sota:
+        assert _row(rows, f"{r['name']}, {r['kind']}") == [f"{r['f1']:.1f}"] + ["—"] * 5
+    assert len(rows) == len(MPF.XM_LABELS) - len(MPF.XM_MAIN_SKIP) + len(sota)
+    full = _blocks(_md(out, "tab_xm_main_full"))
+    fin, dec = (next(v for k, v in full.items() if k.startswith(w)) for w in ("Final report set", "Decision set"))
+    for st, lab in MPF.XM_LABELS.items():
+        assert _row(fin, lab) == _expected_det_row(j, "xm_final", st)
+        if st in MPF.XRT.LEAVES["xm_decision"]:
+            assert _row(dec, lab) == _expected_det_row(j, "xm_decision", st)
+        else:
+            assert not [r for r in dec if r.startswith(f"| {lab} |")]
+    rex = j["detection_instance"]["xm_final"]["det_paired"][MPF.XM_DET_PAIR["rexomni_det_joint"]]
+    ras = j["detection_instance"]["xm_final"]["seg_paired"][MPF.XM_SEG_PAIR["xm_spline_raster"]]
+    for name in ("tab_xm_main", "tab_xm_main_full"):
+        text = _md(out, name)
+        assert "comparable" in text and "comparable" in _tex(out, name)
+        assert f"X-M − Rex-Omni (joint): {MPF._pts({'value': rex['diff'], 'low': rex['ci'][0], 'high': rex['ci'][1]})} points" in text
+        assert (f"only {100 * ras['diff']:.1f} points [{MPF._signed(100 * ras['ci'][0])}, {MPF._signed(100 * ras['ci'][1])}] below the main "
+                "setting: the most direct evidence that no dedicated mask decoder is needed") in text
+        assert "40 of 1,000 predicted instances (4.0%) fall back" in text  # 叶目录 metrics.json 的 failures.fallback
+    for t in XM_TABS:
+        assert "outperform" not in (_md(out, t) + _tex(out, t)).lower(), t
+
+
+def test_xm_rex_not_comparable_when_interval_excludes_zero(tmp_path):
+    """区间不跨 0 时不写 comparable（只写区间不含 0），README 的核对报"不一致"。"""
+    root = build_xm(tmp_path / "tree")
+    j = json.loads((root / MPF.XM_RESULTS_JSON).read_text(encoding="utf-8"))
+    p = j["detection_instance"]["xm_final"]["det_paired"][MPF.XM_DET_PAIR["rexomni_det_joint"]]
+    p["ci"] = [p["diff"] - 0.01, p["diff"] + 0.005]  # 差 −0.016，上界 −0.011
+    _w(root / MPF.XM_RESULTS_JSON, j)
+    xm = MPF.collect_xm(root)
+    notes = " ".join(n for _w_, n in MPF.xm_main_notes(xm))
+    assert "comparable" not in notes and "the interval excludes 0" in notes
+    assert any(c.startswith("不一致") and "相当" in c for c in xm["checks"])
+
+
+def test_xm_lvis_and_refseg_numbers(xm_run):
+    root, out = xm_run
+    j = json.loads((root / MPF.XM_RESULTS_JSON).read_text(encoding="utf-8"))
+    md = _md(out, "tab_xm_lvis")
+    rows = _blocks(md)[""]
+    for st, lab in MPF.XM_LABELS.items():
+        assert _row(rows, lab) == _expected_det_row(j, "lvis_sub", st)
+    assert "Descriptive only (preregistration XM-2b)" in md and "at most 3 positive categories per image" in md
+    assert "Rex-Omni's training data may overlap with LVIS, so this difference is a description, not a conclusion" in md
+    assert "most direct evidence" not in md and "comparable" not in md
+    md = _md(out, "tab_xm_refseg")
+    rows = _blocks(md)[""]
+    rc = j["refcoco_test"]["xm_vs_x2"]
+
+    def expect(e):
+        return [_cell(e["a"]["ciou"], *e["a"]["ci"]), _cell(e["b"]["ciou"], *e["b"]["ci"]), _cell(e["ciou_diff"]["diff"], *e["ciou_diff"]["ci"], signed=True),
+                _cell(e["a_giou"]["giou"], *e["a_giou"]["ci"]), _cell(e["b_giou"]["giou"], *e["b_giou"]["ci"]),
+                _cell(e["giou_diff"]["diff"], *e["giou_diff"]["ci"], signed=True)]
+    for sp in SPLITS:
+        assert _row(rows, MPF.split_label(sp)) == expect(rc[sp])
+    assert _row(rows, "Pooled (5,000)") == expect(rc["pooled"])
+    rs = j["reasonseg"]["reasonseg_val"]
+    assert _row(rows, "ReasonSeg val (196)") == expect(rs)
+    d = rs["ciou_diff"]
+    assert (f"X-M is {100 * abs(d['diff']):.1f} cIoU points below X-2 [{MPF._signed(100 * d['ci'][0])}, {MPF._signed(100 * d['ci'][1])}]; "
+            "the interval includes 0") in md
+    assert "on the same node (hpcgpu06)" in md and "on the same node (hpcgpu07)" in md
+
+
+def _lang_text(out: Path, name: str) -> tuple[str, str]:
+    """语言表的 .md 与 .tex（计数一行、计数一条表注先去掉：X-2 的计数范围本身就是 −8.1 到 −16.1，会与真的 IFEval 阈值撞上）。"""
+    md = "\n".join(x for x in _md(out, name).splitlines() if "CountBench" not in x and not x.startswith("- Counting"))
+    return md, _tex(out, name)
+
+
+def test_xm_lang_numbers_and_no_thresholds(xm_run):
+    """语言表：每格等于 xm_lang.json（MMLU-Pro 与 IFEval prompt 严格取 battery_gate，两位小数；指令级取 battery，一位小数）；X-2 的范围；
+    表与表注里没有判定的阈值（D170、N47 (b)），也不提阈值（D182 第 2 点）。"""
+    root, out = xm_run
+    lj = json.loads((root / MPF.XM_LANG_JSON).read_text(encoding="utf-8"))
+    for name, full in (("tab_xm_lang", False), ("tab_xm_lang_full", True)):
+        md = _md(out, name)
+        rows = [r for r in md.split("\n\n- ")[0].splitlines()[3:] if r.startswith("| ")]
+        cells, sec_now = {}, None
+        for r in rows:  # (节, 读数) → 格子；节名只写在每节第一行
+            c = _cells(r)
+            sec_now = c[0] or sec_now
+            cells[(sec_now, c[1].split(" (n=")[0])] = c[2:]
+        assert len(cells) == (8 if full else 5)
+        sec_title = {s_: t for s_, t, _i in MPF.XM_LANG_SECTIONS}
+        for sec, key, part, nd in (("battery", "mmlu_pro_letter.accuracy", "battery_gate", 2), ("battery", "ifeval.prompt_level_strict", "battery_gate", 2),
+                                   ("battery", "ifeval.instruction_level_strict", "battery", 1), ("ttext", "count", "ttext", 2),
+                                   ("ttext", "refexp_box", "ttext", 2)) + ((("health", "gsm8k.flexible", "health", 1),) if full else ()):
+            r = lj[part][key]
+            f = (lambda x: f"{x:+.{nd}f}")
+            rg = lj["x2_range"][f"health:{key}" if sec == "health" else key]
+            a, b = sorted((rg["min"], rg["max"]), key=abs)
+            assert cells[(sec_title[sec], MPF.XM_LANG_EN[(sec, key)])] == [f"{r['base']:.{nd}f}", f"{f(r['delta_pp'])} [{f(r['ci95_pp'][0])}, {f(r['ci95_pp'][1])}]",
+                                                         f"{a:+.1f} to {b:+.1f}"], key
+        notes = md.split("\n\n- ", 1)[1]
+        assert "X-M's MMLU-Pro −1.30 and IFEval −3.14 fall within the range of X-2's 3 seeds (MMLU-Pro −0.3 to −2.4, IFEval +0.2 to −3.6)" in notes
+        assert "The IFEval cost of about −3 points is reported as a limitation, together with X-2's." in notes
+        assert "Counting (CountBench): X-M −9.10 [−12.60, −5.20], alongside X-2's 3 seeds: −7.0 to −15.0." in notes
+        md_nc, tex = _lang_text(out, name)
+        thr = list(XM_GATE_THR.values()) + [min(XM_X2_RANGE[k]) - MPF.XM_C4_MARGIN_PP for k in MPF.XM_GATE_KEY]
+        for t in thr:
+            assert f"{abs(t):.1f}" not in md_nc and f"{abs(t):.1f}" not in tex, t
+        for word in ("threshold", "d170", "xm-5a", "g-xm"):
+            assert word not in md.lower() and word not in tex.lower(), word
+        assert ("Health check" in md) == full
+
+
+def test_xm_lang_count_missing(tmp_path):
+    """xm_lang.json 里还没有 X-M 的计数（RUN-0114 没跑完）：那一行写 missing，不留空；表注与缺项写明；X-2 的范围照列。"""
+    root = build_xm(tmp_path / "tree", with_count=False)
+    xl = MPF.collect_xm_lang(root)
+    out = tmp_path / "out"
+    out.mkdir()
+    MPF.tab_xm_lang(xl, out)
+    md = _md(out, "tab_xm_lang")
+    row = _cells(next(r for r in md.splitlines() if r.startswith("|") and "CountBench" in r))
+    assert row[2:] == [MPF.MISSING, MPF.MISSING, "-7.0 to -15.0"]
+    assert all(c for r in md.split("\n\n- ")[0].splitlines()[3:] if r.startswith("| ") for c in _cells(r)[1:])  # 除节标题外没有空格子
+    assert "Counting (CountBench): X-M missing (RUN-0114 has no results yet), alongside X-2's 3 seeds: −7.0 to −15.0." in md
+    assert "- Missing: X-M CountBench counting accuracy (RUN-0114 has no results yet)." in md
+    assert any("ttext count" in m and "RUN-0114" in m for m in xl["missing"])
+    assert "missing" in _tex(out, "tab_xm_lang")
+
+
+def test_xm_gate_numbers(xm_run):
+    """判定表：第 1–4 条与 D165 原文等于 gate_xm.json；N47 (b) 的阈值 = x2_range 的最差点估计 − 2，结果照 X-M 的 CI 下界判。"""
+    root, out = xm_run
+    g = json.loads((root / MPF.XM_GATE_JSON).read_text(encoding="utf-8"))
+    md = _md(out, "tab_xm_gate")
+    rows = [_cells(r) for r in md.split("\n\n- ")[0].splitlines()[3:] if r.startswith("| ") and not r.startswith("| *")]
+    assert len(rows) == 9
+    c = g["criteria"]
+    for k, row in zip(("1", "2", "3"), rows[:3]):
+        e = c[k]
+        assert row[2:] == [_fmt(e["candidate"]), _fmt(e["control"]), _cell(e["diff"], e["ci_low"], e["ci_high"], signed=True),
+                           "> 0" if e["threshold"] == 0 else f"> {100 * e['threshold']:.1f}", "met"]
+
+    def pp(r, thr, res):
+        return [f"{r['xm_pct']:.2f}", f"{r['control_pct']:.2f}", f"{r['diff_pp']:+.2f} [{r['ci_low_pp']:+.2f}, {r['ci_high_pp']:+.2f}]", f"> {thr:.1f}", res]
+    r4, rd = c["4"]["rows"], g["diagnostics"]["criterion4_d165"]["rows"]
+    assert rows[3][2:] == pp(r4["mmlu_pro"], r4["mmlu_pro"]["threshold"], "met") and rows[4][2:] == pp(r4["ifeval"], r4["ifeval"]["threshold"], "met")
+    assert rows[5][2:] == pp(rd["mmlu_pro"], -2.0, "not met") and rows[6][2:] == pp(rd["ifeval"], -2.0, "not met")
+    b_mmlu, b_ife = (min(XM_X2_RANGE[k]) - MPF.XM_C4_MARGIN_PP for k in MPF.XM_GATE_KEY)
+    assert rows[7][2:] == pp(r4["mmlu_pro"], b_mmlu, "met") and rows[8][2:] == pp(r4["ifeval"], b_ife, "not met")
+    assert [r[0] for r in rows[5:]] == ["4. As written in D165 (diagnostic)"] * 2 + ["4. N47 option (b) (not adopted)"] * 2
+    assert "Verdict: passed, not a rehearsal, 15 of 15 gate-point checks true, criterion 4 per D170." in md
+    assert "not met: IFEval −3.14 [−6.10, −0.37] (lower bound not above −5.6)" in md
+
+
+def test_xm_inputs_absent_reported_missing(base_run):
+    """假结果树里没有 X-M 的输入：照常出全部 X-M 表，格子写 missing，README 写明缺。"""
+    _root, out = base_run
+    for t in XM_TABS:
+        assert (out / f"{t}.md").is_file() and (out / f"{t}.tex").is_file()
+    readme = (out / "README.md").read_text(encoding="utf-8")
+    miss = readme.split("## 缺的数据（missing）")[1].split("## 1.")[0]
+    for m in (f"X-M 结果：{MPF.XM_RESULTS_JSON} 不在", f"X-M 文献读数：{MPF.XM_SOTA_JSON} 不在", f"X-M 语言表：{MPF.XM_LANG_JSON} 不在",
+              f"X-M 判定表：{MPF.XM_GATE_JSON} 不在"):
+        assert m in miss, m
+    assert MPF.MISSING in _md(out, "tab_xm_main") and MPF.MISSING in _md(out, "tab_xm_lang")
+
+
+@pytest.fixture(scope="module")
+def real_xm(tmp_path_factory):
+    """仓库里的真数据，只出 X-M 的表（不跑 main：其余各节要读稀疏签出里没有的 experiments）。"""
+    if not (REPO / MPF.XM_RESULTS_JSON).is_file():
+        pytest.skip("仓库里没有 X-M 的分析 JSON")
+    out = tmp_path_factory.mktemp("real_xm")
+    xm, xl, xg = MPF.collect_xm(REPO), MPF.collect_xm_lang(REPO), MPF.collect_xm_gate(REPO)
+    MPF.tab_xm_main(xm, out), MPF.tab_xm_main(xm, out, full=True), MPF.tab_xm_lvis(xm, out), MPF.tab_xm_refseg(xm, out)
+    MPF.tab_xm_lang(xl, out), MPF.tab_xm_lang(xl, out, full=True), MPF.tab_xm_gate(xg, out)
+    return out, xm, xl, xg
+
+
+def test_real_xm_tables_pin_d182_numbers(real_xm):
+    """真数据：钉住 D182 引的数——与 Rex-Omni −1.6 [−3.3, +0.5] 写 comparable；不贴边 1.2 [+0.6, +1.7]；LVIS +2.7 [+0.8, +4.1] 只作描述；
+    ReasonSeg −5.2 [−12.2, +0.5] 区间跨 0；语言 −1.30 [−2.80, +0.15]、−3.14 [−6.10, −0.37] 落在 X-2 三个种子的范围（−0.2 到 −2.3、0.0 到 −3.5）
+    之内；判定表 (b) 的阈值 −4.3、−5.5（D182 第 1 点的表），IFEval 按 (b) 不满足；核对全部一致。"""
+    out, xm, xl, xg = real_xm
+    j = _repo_json(MPF.XM_RESULTS_JSON)
+    rows = _blocks(_md(out, "tab_xm_main"))[""]
+    for st, lab in MPF.XM_LABELS.items():
+        if st not in MPF.XM_MAIN_SKIP:
+            assert _row(rows, lab) == _expected_det_row(j, "xm_final", st), st
+    md = _md(out, "tab_xm_main")
+    assert "X-M − Rex-Omni (joint): −1.6 [−3.3, +0.5] points; the interval includes 0, so X-M and Rex-Omni are comparable" in md
+    assert "only 1.2 points [+0.6, +1.7] below the main setting" in md and "GrabCut adds only about 1 point." in md
+    assert _row(rows, "Rex-Omni, MLLM detector") == ["72.0"] + ["—"] * 5 and _row(rows, "Qwen2.5-VL-7B, MLLM") == ["64.0"] + ["—"] * 5
+    assert "X-M − Rex-Omni (joint): +2.7 [+0.8, +4.1] points. Rex-Omni's training data may overlap with LVIS" in _md(out, "tab_xm_lvis")
+    assert "X-M is 5.2 cIoU points below X-2 [−12.2, +0.5]; the interval includes 0." in _md(out, "tab_xm_refseg")
+    for t in XM_TABS:
+        assert "outperform" not in (_md(out, t) + _tex(out, t)).lower(), t
+    assert all(c.startswith("一致") for c in xm["checks"] + xl["checks"] + xg["checks"]), xm["checks"] + xl["checks"] + xg["checks"]
+    assert xg["b_thresholds"] == {"mmlu_pro_letter.accuracy": -4.3, "ifeval.prompt_level_strict": -5.5}
+    gmd = _md(out, "tab_xm_gate")
+    assert "| 4. N47 option (b) (not adopted) | IFEval, prompt-level strict: X-M − base, same node | 80.59 | 83.73 | -3.14 [-6.10, -0.37] | > -5.5 | not met |" in gmd
+    assert "| 4. As written in D165 (diagnostic) | MMLU-Pro, letter answers: X-M − X-2 seed 0 | 52.85 | 54.00 | -1.15 [-2.40, +0.10] | > -2.0 | not met |" in gmd
+    assert "on IFEval, X-2 seed 0 (lower bound −6.1, not above −5.5)" in gmd
+    lmd = _md(out, "tab_xm_lang")
+    assert "| Language battery | MMLU-Pro, letter answers (n=2,000) | 54.15 | -1.30 [-2.80, +0.15] | -0.2 to -2.3 |" in lmd
+    assert "|  | IFEval, prompt-level strict (n=541) | 83.73 | -3.14 [-6.10, -0.37] | +0.0 to -3.5 |" in lmd
+    assert "fall within the range of X-2's 3 seeds (MMLU-Pro −0.2 to −2.3, IFEval 0.0 to −3.5)" in lmd
+    assert "X-2's 3 seeds: −8.1 to −16.1" in lmd  # D182 第 3 点：计数与 X-2 的范围并列
+    md_nc, tex = _lang_text(out, "tab_xm_lang")
+    for t in ("5.7", "8.1", "4.3", "5.5"):
+        assert t not in md_nc, t
+    assert "threshold" not in (lmd + tex).lower()
+
+
+def test_real_xm_latex_compiles(real_xm, tmp_path):
+    exe = shutil.which("pdflatex")
+    if exe is None:
+        pytest.skip("没有 pdflatex")
+    out = real_xm[0]
+    for t in XM_TABS:
+        shutil.copy(out / f"{t}.tex", tmp_path / f"{t}.tex")
+    doc = ["\\documentclass{article}", "\\usepackage[utf8]{inputenc}", "\\usepackage[T1]{fontenc}",
+           "\\usepackage{booktabs,graphicx,multirow,xcolor}", "\\usepackage[margin=1in]{geometry}", "\\begin{document}",
+           *[x for t in XM_TABS for x in (f"\\input{{{t}.tex}}", "\\clearpage")], "\\end{document}"]
+    (tmp_path / "xm.tex").write_text("\n".join(doc), encoding="utf-8")
+    r = subprocess.run([exe, "-interaction=nonstopmode", "-halt-on-error", "xm.tex"], cwd=tmp_path, capture_output=True, text=True, timeout=300)
+    log = (tmp_path / "xm.log").read_text(encoding="utf-8", errors="replace") if (tmp_path / "xm.log").is_file() else r.stdout
+    assert r.returncode == 0, [ln for ln in log.splitlines() if ln.startswith("!") or ln.startswith("l.")][:6]

@@ -40,6 +40,12 @@
   "C1 的 3 个种子的范围"，fig_lang_cost 在 C1 的点下面另画一行范围（细线 + 每个种子一个空心点）；范围取 seed_variance.json 各种子的读数，
   只做最小、最大与均值的算术。表注、图注写明其余各列单种子、以大题量为准（健康检查的标红只作并列说明）。tab_seeds 的表注加一句种子稳定性。
   新增附录表 tab_x2_4b：4B 上的 X-2（预注册 X-7，补充实验）与 9B 三个种子的范围并列，数字取 docs/analysis/x2_4b.json 与 seed_variance.json。
+- X-M 一节（DEV-0084；D182）：正文主表 tab_xm_main（最终报告集：基座零样本、基座的框交给 GrabCut、X-M 主设置、消融三行附相对主设置的配对差、
+  Rex-Omni joint，最后是灰色的文献行 docs/references/xm_sota.json）与附录版 tab_xm_main_full（加逐类的 Rex-Omni 与判定集一块）、LVIS 子集
+  tab_xm_lvis（描述性）、指代分割 tab_xm_refseg（RefCOCO W2 test 与 ReasonSeg，X-M 对 X-2）、语言代价 tab_xm_lang（与 X-2 三个种子的范围并列，
+  不出现判定的阈值；附录版 tab_xm_lang_full 加健康检查）、判定 tab_xm_gate（附录；第 4 条 D170、D165 原文、N47 (b) 三种写法并列）。数字取
+  docs/analysis/xm_results.json、xm_lang.json 与 gate_xm.json；键与路径 import 自 scripts/mgr/xm_results_table.py、xm_lang_table.py。D182 的写法
+  （与 Rex-Omni 写"相当"、不贴边的一句、ReasonSeg 区间跨 0）由数据生成，README 核对写法与数据对得上。
 """
 
 from __future__ import annotations
@@ -301,6 +307,55 @@ X2_4B_JSON = "docs/analysis/x2_4b.json"  # 补充实验：4B 上的 X-2（预注
 X4B_SELECT = "x2_select"  # 只挑工具候选（W2-c 的挑选管线换成 X-2 的检查点；不描样条）
 assert X4B_SELECT in SV.SETTINGS and X4B_SELECT in X4.SETTINGS, "seed_variance.py / x2_4b.py 的设置名变了"
 X4B_SETTINGS = SEED_SETTINGS + ((X4B_SELECT, "Picking a tool candidate (no spline)"),)  # tab_x2_4b 的分割行（x2_4b.json 的 settings 键）
+
+# DEV-0084（D182）：X-M 一节。划分、设置名、叶目录与配对差的键取自 scripts/mgr/xm_results_table.py（XRT），语言表的读数键与来源路径取自
+# scripts/mgr/xm_lang_table.py（XLT）；这里只放英文名与版式。数字都取 xm_results.json、xm_lang.json、gate_xm.json 与 xm_sota.json。
+XRT = _load_script("_paperfig_xm_results_table", "scripts/mgr/xm_results_table.py")  # LEAVES、MAIN、XS、BS、RS、DET_PAIRS、SEG_PAIRS
+XLT = _load_script("_paperfig_xm_lang_table", "scripts/mgr/xm_lang_table.py")  # BATTERY、TTEXT、HEALTH、GATE_ROWS、xm_sources
+XM_RESULTS_JSON = "docs/analysis/xm_results.json"  # RUN-0113 的输出（检测与实例分割、RefCOCO test、ReasonSeg）
+XM_RESULTS_RUN = "experiments/XM/0113_xm_results_hpcgpu07"  # 同一份 JSON 在结果目录里的原件（README 核对两者相同）
+XM_LANG_JSON = "docs/analysis/xm_lang.json"  # scripts/mgr/xm_lang_table.py（D182 第 2、3 点）
+XM_GATE_JSON = XLT.xm_sources()["gate"]  # G-XM 的判定（RUN-0108）
+XM_SOTA_JSON = "docs/references/xm_sota.json"  # 文献读数（docs/references/xm_refs_notes.md），只作灰行
+REXOMNI_WEIGHTS = "configs/rexomni_weights.json"  # Rex-Omni 的权重仓库与 revision（DEV-0083）
+XM_FINAL, XM_DEC, XM_LVIS = "xm_final", "xm_decision", "lvis_sub"
+assert {XM_FINAL, XM_DEC, XM_LVIS} == set(XRT.LEAVES), f"xm_results_table.py 的划分变了：{list(XRT.LEAVES)}"
+XM_DET_PAIR, XM_SEG_PAIR = dict(XRT.DET_PAIRS), dict(XRT.SEG_PAIRS)  # 设置 → 配对差的键（检测：X-M − 该系统；实例分割：主设置 − 该设置）
+XM_DET_ONLY = ("base_det",) + tuple(XRT.RS)  # 只出框、没有 mask 的设置（实例分割一格写"—"）
+# 主表的行，按块：(块, 块标题, ((设置, 英文名), …))。判定集没有 Rex-Omni（XRT.LEAVES 里没有的设置跳过）。
+XM_BLOCKS = (
+    ("base", "Qwen3.5-9B base model, zero-shot (same prompts and post-processing)",
+     (("base_det", "Base, zero-shot boxes"), ("base_box_grabcut", "Base boxes → GrabCut"))),
+    ("main", "X-M (ours): one LoRA on Qwen3.5-9B", ((XRT.MAIN, "X-M: spline → GrabCut (main setting)"),)),
+    ("ablation", "Ablations of X-M: the same boxes, other masks (paired against the main setting)",
+     (("xm_spline_raster", "X-M: spline rasterised directly, no snapping"), ("xm_ellipse_trimap", "X-M: in-box ellipse → GrabCut"),
+      ("xm_box_grabcut", "X-M: boxes → GrabCut (no spline)"))),
+    ("rexomni", "External reference: Rex-Omni, a learned detector run by us (detection only)",
+     (("rexomni_det_joint", "Rex-Omni, joint (its own protocol)"), ("rexomni_det", "Rex-Omni, per category (X-M's protocol; diagnostic)"))),
+)
+XM_LABELS = {s: lab for _b, _t, rows in XM_BLOCKS for s, lab in rows}
+assert set(XM_LABELS) == set(XRT.LEAVES[XM_FINAL]), "xm_results_table.py 的设置名变了"
+XM_MAIN_SKIP = ("rexomni_det",)  # 正文主表不放逐类的 Rex-Omni（附录版 tab_xm_main_full 放）
+XM_REX_JOINT = "rexomni_det_joint"
+XM_RASTER = "xm_spline_raster"  # D182 第 4 点：不贴边的样条 = "不需要专用解码器"最直接的证据
+# 语言表（D182 第 2、3 点）：(节, 节标题, XLT 的读数清单)；健康检查只进附录版 tab_xm_lang_full
+XM_LANG_SECTIONS = (("battery", "Language battery", XLT.BATTERY), ("ttext", "T-text", XLT.TTEXT),
+                    ("health", "Health check (brief §8.11)", XLT.HEALTH))
+XM_LANG_EN = {("battery", "mmlu_pro_letter.accuracy"): "MMLU-Pro, letter answers", ("battery", "ifeval.prompt_level_strict"): "IFEval, prompt-level strict",
+              ("battery", "ifeval.instruction_level_strict"): "IFEval, instruction-level strict",
+              ("ttext", "count"): "CountBench counting accuracy", ("ttext", "refexp_box"): "Grounding Acc@0.5",
+              ("health", "mmlu_pro_letter.accuracy"): "MMLU-Pro", ("health", "gsm8k.flexible"): "GSM8K",
+              ("health", "ifeval.prompt_level_strict"): "IFEval, prompt-level strict"}
+assert set(XM_LANG_EN) == {(s, k) for s, _t, rows in XM_LANG_SECTIONS for k, _n in rows}, "xm_lang_table.py 的读数键变了"
+XM_GATE_KEY = dict(XLT.GATE_ROWS)  # 读数键 → gate_xm.json 第 4 条的行名（mmlu_pro、ifeval）
+# 判定表第 1–3 条：(条, 英文名, 读数)
+XM_GATE_C13 = (("1", "1. Outlining still matters", "Inst. seg. F1@0.5: X-M main − X-M boxes → GrabCut"),
+               ("2", "2. Becomes a detector", "Det. F1@0.5: X-M − base, zero-shot"),
+               ("3", "3. Referring segmentation does not regress", "cIoU, {n} dev. expressions: X-M − X-2 seed 0"))
+# 第 4 条 D170 与 N47 的 (b) 共用的容差（百分点）。D170（预注册 XM-5a）："X-2 三个种子的 CI 下界中最低者 − 2"；
+# (b)（DECISIONS_NEEDED N47，管理员原建议，未采用）："X-2 三个种子中最差的点估计 − 2"。(b) 的阈值不在 gate_xm.json 里，由这个容差与
+# xm_lang.json 的 x2_range 算出；D170 的阈值取 gate_xm.json，README 核对它等于 seed_variance.json 各种子 CI 下界的最低者 − 容差。
+XM_C4_MARGIN_PP = 2.0
 
 # ---------------------------------------------------------------------------------------------
 # 怎么画：尺寸、字体、配色（dataviz 参考调色板；validate_palette.js 在白底上校验通过）
@@ -3544,6 +3599,945 @@ def readme_x2_4b(x4: dict) -> list[str]:
             "", "**表注（英文）**", ""] + [f"- {n}" for n in x2_4b_table_notes(x4)] + [""]
 
 
+# ---------------------------------------------------------------------------------------------
+# DEV-0084（D182）：X-M 一节——读取、表、README。只读 xm_results.json、xm_lang.json、gate_xm.json、xm_sota.json，另从叶目录的
+# metrics.json / config.yaml 取逐行 CI 的重抽次数、退回框的实例数与推理参数；不重算任何 bootstrap。
+# ---------------------------------------------------------------------------------------------
+
+
+def _yaml_scalar(text: str, *path: str) -> str | None:
+    """config.yaml 里按缩进逐级找 path 的标量（只认"key: value"的块写法，够读叶目录的 config.yaml）；找不到是 None。"""
+    lines, start, parent = text.splitlines(), 0, -1
+    for depth, key in enumerate(path):
+        child = None
+        for k in range(start, len(lines)):
+            ln = lines[k]
+            if not ln.strip() or ln.lstrip().startswith(("#", "- ")):
+                continue
+            ind = len(ln) - len(ln.lstrip(" "))
+            if ind <= parent:
+                return None
+            child = ind if child is None else child
+            m = re.match(r"\s*([^:]+):\s*(.*?)\s*$", ln)
+            if ind == child and m and m.group(1) == key:
+                if depth == len(path) - 1:
+                    return m.group(2) or None
+                start, parent = k + 1, ind
+                break
+        else:
+            return None
+    return None
+
+
+def _xm_pt(p: dict | None, src: str, n_res=None) -> dict | None:
+    """xm_results.json 的点估计（{"f1", "p", "r", "ci", "f1_miou", "n_pairs", …}）→ 一格：value = F1，带 CI、P/R、F1@mIoU。"""
+    if not isinstance(p, dict) or p.get("f1") is None:
+        return None
+    ci = p.get("ci") or [None, None]
+    return {"value": p["f1"], "low": ci[0], "high": ci[1], "p": p.get("p"), "r": p.get("r"), "f1_miou": p.get("f1_miou"),
+            "n_pairs": p.get("n_pairs"), "n_images": p.get("n_images"), "n_categories": p.get("n_categories"), "n_resamples": n_res,
+            "source": src}
+
+
+def _xm_diff(d: dict | None, src: str, n_res) -> dict | None:
+    """xm_results.json 的配对差（{"status": "完成", "diff", "ci", "a", "b", "n_pairs"}）→ 一格；没有完成的是 None。"""
+    if not isinstance(d, dict) or d.get("status") != "完成" or d.get("diff") is None:
+        return None
+    ci = d.get("ci") or [None, None]
+    return {"value": d["diff"], "low": ci[0], "high": ci[1], "a": d.get("a"), "b": d.get("b"), "n": d.get("n_pairs"),
+            "n_resamples": n_res, "source": src}
+
+
+def _leaf_f1(m: dict | None, kind: str) -> tuple:
+    """叶目录 metrics.json 的主读数 f1_rexomni：(值, 它自己的 CI 的重抽次数)。"""
+    f = ((m or {}).get(kind) or {}).get("f1_rexomni") or {}
+    return f.get("value"), (f.get("ci") or {}).get("n_resamples")
+
+
+def _crosses0(p: dict | None) -> bool | None:
+    return None if not p or p.get("low") is None or p.get("high") is None else p["low"] <= 0 <= p["high"]
+
+
+def collect_xm(root: Path) -> dict:
+    """tab_xm_main（与 _full）、tab_xm_lvis、tab_xm_refseg：xm_results.json 的检测与实例分割（三个划分的点估计与配对差）、RefCOCO test 与
+    ReasonSeg 上 X-M 对 X-2；逐行 CI 的重抽次数、退回框的实例数与推理参数取叶目录；文献读数取 xm_sota.json。"""
+    out = {"json": XM_RESULTS_JSON, "missing": [], "checks": [], "splits": {}, "refseg": {}, "reasonseg": {}, "sota": [], "sota_meta": {},
+           "config": {}, "rexomni": {}}
+    j = _load(root / XM_RESULTS_JSON)
+    if j is None:
+        out["missing"].append(f"X-M 结果：{XM_RESULTS_JSON} 不在")
+    j = j or {}
+    n_res, lev = j.get("n_resamples"), j.get("level")
+    out.update({"n_resamples": n_res, "level": lev, "seed": j.get("seed")})
+    orig = _load(root / XM_RESULTS_RUN / "xm_results.json")
+    if j and orig is not None:
+        out["checks"].append(("一致" if orig == j else "不一致") + f"：`{XM_RESULTS_JSON}` 与结果目录里的原件 `{XM_RESULTS_RUN}/xm_results.json` 相同")
+    di, leaves = j.get("detection_instance") or {}, j.get("leaves") or {}
+    bad_leaf, n_leaf, bad_ab, n_ab = [], 0, [], 0
+    for split, settings in XRT.LEAVES.items():
+        d = di.get(split) or {}
+        if j and not d:
+            out["missing"].append(f"X-M {split}：{XM_RESULTS_JSON} 里没有")
+        rows, res = {}, set()
+        for st, default_leaf in settings.items():
+            leaf = (leaves.get(split) or {}).get(st) or default_leaf
+            m = _load(root / leaf / "metrics.json")
+            pt = (d.get("points") or {}).get(st) or {}
+            cell = {"leaf": leaf, "node": _node(leaf), "fallback": ((m or {}).get("failures") or {}).get("fallback")}
+            for kind in ("det", "seg"):
+                lv, lr = _leaf_f1(m, kind)
+                cell[kind] = _xm_pt(pt.get(kind), f"{XM_RESULTS_JSON} :: detection_instance.{split}.points.{st}.{kind}", lr)
+                if lr:
+                    res.add(lr)
+                if cell[kind] is not None and m is not None:
+                    n_leaf += 1
+                    if not _close(lv, cell[kind]["value"]):
+                        bad_leaf.append(f"{split} {st} {kind}")
+                if d and cell[kind] is None and (kind == "det" or st not in XM_DET_ONLY):
+                    out["missing"].append(f"X-M {split} {st} 的{'检测' if kind == 'det' else '实例分割'}读数（{XM_RESULTS_JSON} 里没有）")
+            if d and m is None:
+                out["missing"].append(f"X-M {split} {st} 的叶目录 `{leaf}/metrics.json` 不在（逐行 CI 的重抽次数取不到；读数照用 {XM_RESULTS_JSON}）")
+            for kind, pairs in (("det", XM_DET_PAIR), ("seg", XM_SEG_PAIR)):
+                name = pairs.get(st)
+                r = (d.get(f"{kind}_paired") or {}).get(name) if name else None
+                cell[f"{kind}_diff"] = None if name is None else \
+                    _xm_diff(r, f"{XM_RESULTS_JSON} :: detection_instance.{split}.{kind}_paired.{name}", n_res)
+                if name and d and cell[f"{kind}_diff"] is None:
+                    out["missing"].append(f"X-M {split} 的配对差「{name}」（{XM_RESULTS_JSON} 里" + (f"是 {r.get('status')}）" if r else "没有）"))
+            rows[st] = cell
+        for st, c in rows.items():  # 配对差记的两个读数 = 两行的点估计（检测与实例分割的被减数都是主设置）
+            for kind in ("det", "seg"):
+                dd, a, b = c.get(f"{kind}_diff"), (rows.get(XRT.MAIN) or {}).get(kind), c.get(kind)
+                if dd and a and b:
+                    n_ab += 1
+                    if not (_close(dd["a"], a["value"]) and _close(dd["b"], b["value"])):
+                        bad_ab.append(f"{split} {st} {kind}")
+        npairs = sorted({c[k]["n_pairs"] for c in rows.values() for k in ("det", "seg") if c.get(k)})
+        if len(npairs) > 1:
+            out["missing"].append(f"X-M {split}：各设置的对数不同（{npairs}）")
+        main = (rows.get(XRT.MAIN) or {}).get("det") or {}
+        fb = (rows.get(XRT.MAIN) or {}).get("fallback") or {}
+        out["splits"][split] = {
+            "rows": rows, "n_images": main.get("n_images"), "n_pairs": main.get("n_pairs"), "n_categories": main.get("n_categories"),
+            "leaf_resamples": sorted(res),
+            "fallback": None if not fb.get("box_grabcut") and fb.get("box_grabcut") != 0 else
+            {"n": fb["box_grabcut"], "of": sum(v for v in fb.values() if isinstance(v, int)),
+             "source": f"{(rows.get(XRT.MAIN) or {}).get('leaf')}/metrics.json :: failures.fallback"}}
+    if n_leaf:
+        out["checks"].append(("一致" if not bad_leaf else "不一致") + f"：{XM_RESULTS_JSON} 的点估计 = 各叶目录 metrics.json 的 f1_rexomni（{n_leaf} 格）"
+                             + (f"（不同：{bad_leaf}）" if bad_leaf else ""))
+    if n_ab:
+        out["checks"].append(("一致" if not bad_ab else "不一致") + f"：配对差里记的两个读数 = 两行的点估计（{n_ab} 个配对差）"
+                             + (f"（不同：{bad_ab}）" if bad_ab else ""))
+    # 推理参数（写定义用）：最终报告集主设置的 config.yaml；LVIS 每图的类别上限取 LVIS 主设置的 config.yaml（xm.lvis_cap，D179）
+    fin_leaf = ((out["splits"][XM_FINAL]["rows"].get(XRT.MAIN) or {}).get("leaf")) or XRT.LEAVES[XM_FINAL][XRT.MAIN]
+    lvis_leaf = ((out["splits"][XM_LVIS]["rows"].get(XRT.MAIN) or {}).get("leaf")) or XRT.LEAVES[XM_LVIS][XRT.MAIN]
+    cf, cl = root / fin_leaf / "config.yaml", root / lvis_leaf / "config.yaml"
+    tf = cf.read_text(encoding="utf-8") if cf.is_file() else ""
+    tl = cl.read_text(encoding="utf-8") if cl.is_file() else ""
+    out["config"] = {"n_ctrl": _yaml_scalar(tf, "prompts", "n"), "max_instances": _yaml_scalar(tf, "prompts", "max_instances"),
+                     "prompts": _yaml_scalar(tf, "prompts", "version"), "frozen": _yaml_scalar(tf, "prompts", "frozen"),
+                     "nms_iou": _yaml_scalar(tf, "post", "nms_iou"), "source": _rel(root, cf),
+                     "lvis_cap": _yaml_scalar(tl, "xm", "lvis_cap", "max_cats_per_image"), "lvis_source": _rel(root, cl)}
+    if j and not tf:
+        out["missing"].append(f"X-M 推理参数：`{_rel(root, cf)}` 不在（定义里的控制点数、框数上限、NMS 写 missing）")
+    if j and not tl:
+        out["missing"].append(f"X-M LVIS 每图的类别上限：`{_rel(root, cl)}` 不在")
+    rw = _load(root / REXOMNI_WEIGHTS) or {}
+    out["rexomni"] = {"repo": rw.get("repo"), "revision": rw.get("revision"), "source": REXOMNI_WEIGHTS}
+    # 指代分割：RefCOCO 的 W2 test（5 个划分与合并）、ReasonSeg val，X-M 对 X-2（cIoU、gIoU 与配对差）
+    keys = (("xm", "a"), ("x2", "b"), ("diff", "ciou_diff"), ("xm_g", "a_giou"), ("x2_g", "b_giou"), ("diff_g", "giou_diff"))
+
+    def pair_rows(e: dict, src: str, what: str) -> dict:
+        if j and e.get("status") != "完成":
+            out["missing"].append(f"X-M {what}（{XM_RESULTS_JSON} 里" + (f"是 {e.get('status')}）" if e else "没有）"))
+        return {k: _ut_point(e.get(jk), lev, n_res, f"{src}.{jk}") for k, jk in keys} if e.get("status") == "完成" else {}
+    rc = (j.get("refcoco_test") or {}).get("xm_vs_x2") or {}
+    out["refseg"] = {"splits": list(W2T.SPLITS), "rows": {sp: pair_rows(rc.get(sp) or {}, f"{XM_RESULTS_JSON} :: refcoco_test.xm_vs_x2.{sp}",
+                                                                         f"RefCOCO test {sp}") for sp in list(W2T.SPLITS) + ["pooled"]},
+                     "sources": {"xm": XRT.XM_TEST, "x2": XRT.X2_TEST}, "nodes": {"xm": _node(XRT.XM_TEST), "x2": _node(XRT.X2_TEST)}}
+    out["reasonseg"] = {"row": pair_rows((j.get("reasonseg") or {}).get("reasonseg_val") or {}, f"{XM_RESULTS_JSON} :: reasonseg.reasonseg_val",
+                                         "ReasonSeg val"),
+                        "sources": {"xm": XRT.RS_XM, "x2": XRT.RS_X2}, "nodes": {"xm": _node(XRT.RS_XM), "x2": _node(XRT.RS_X2)}}
+    # D182 的写法与数据对得上：最终报告集上与 Rex-Omni 写"相当"（区间跨 0）；ReasonSeg 的 cIoU 差区间跨 0
+    rj = (out["splits"][XM_FINAL]["rows"].get(XM_REX_JOINT) or {}).get("det_diff")
+    if rj:
+        out["checks"].append(("一致" if _crosses0(rj) else "不一致") + "：D182 把最终报告集上 X-M 与 Rex-Omni（joint）写成\"相当\"——差的 95% CI 跨 0")
+    rs = out["reasonseg"]["row"].get("diff")
+    if rs:
+        out["checks"].append(("一致" if _crosses0(rs) else "不一致") + "：D182 写 ReasonSeg 上 X-M − X-2 的 cIoU 差\"区间跨 0\"")
+    sj = _load(root / XM_SOTA_JSON)
+    if sj is None:
+        out["missing"].append(f"X-M 文献读数：{XM_SOTA_JSON} 不在")
+    sj = sj or {}
+    out["sota_meta"] = {k: sj.get(k) for k in ("dataset", "n_images", "metric", "caveat", "notes")}
+    out["sota"] = [{k: r.get(k) for k in ("name", "kind", "protocol", "f1", "source", "note")} for r in sj.get("rows") or []]
+    return out
+
+
+def collect_xm_lang(root: Path) -> dict:
+    """tab_xm_lang（与 _full）：xm_lang.json 的 X-M 相对同节点基座的差与 CI，与 X-2 三个种子的范围（x2_range）。
+    MMLU-Pro 与 IFEval prompt 严格取 G-XM 的 10,000 次、不取整的读数（battery_gate；D182 第 2 点引的就是这两个数）；IFEval 指令级严格只在
+    RUN-0114 的 lb_compare 里（battery，取整到 0.1）。小数位随来源：不取整的两位，取整到 0.1 的一位。缺的格子写 missing。"""
+    out = {"json": XM_LANG_JSON, "missing": [], "checks": [], "rows": [], "sources": {}, "resamples": {}}
+    j = _load(root / XM_LANG_JSON)
+    if j is None:
+        out["missing"].append(f"X-M 语言表：{XM_LANG_JSON} 不在")
+    j = j or {}
+    src = j.get("sources") or {}
+    out["sources"], out["any_flag"] = src, (j.get("health") or {}).get("any_flag")
+    part_src = {"battery_gate": src.get("gate") or XM_GATE_JSON, "battery": src.get("battery"), "ttext": src.get("ttext"),
+                "health": src.get("health")}
+    for sec, _title, items in XM_LANG_SECTIONS:
+        for key, _cn in items:
+            part = "battery_gate" if sec == "battery" and key in XM_GATE_KEY and (j.get("battery_gate") or {}).get(key) else sec
+            r = (j.get(part) or {}).get(key)
+            ci = (r.get("ci95_pp") if isinstance(r, dict) else None) or [None, None]
+            cell = None if not isinstance(r, dict) or r.get("delta_pp") is None else {
+                "delta": r["delta_pp"], "low": ci[0], "high": ci[1], "base": r.get("base"), "sys": r.get("sys"), "n": r.get("n"),
+                "flag": bool(r.get("flag")) if sec == "health" else None, "nd": 1 if part in ("battery", "health") else 2, "part": part,
+                "source": f"{XM_LANG_JSON} :: {part}.{key}"}
+            rk = f"health:{key}" if sec == "health" else key
+            rg = (j.get("x2_range") or {}).get(rk)
+            rng = None if not isinstance(rg, dict) or rg.get("min") is None else {
+                "low": rg["min"], "high": rg["max"], "values": rg.get("values"), "mean": None, "flagged": None,
+                "source": f"{XM_LANG_JSON} :: x2_range.{rk}"}
+            runs = _runs_of([part_src.get(part)])
+            out["rows"].append({"section": sec, "key": key, "label": XM_LANG_EN[(sec, key)], "cell": cell, "range": rng,
+                                "pending": (runs or MISSING) if cell is None else None})
+            if j and cell is None:
+                out["missing"].append(f"X-M 语言表 {sec} {key}（{XM_LANG_JSON} 的 {part} 里没有" + (f"；由 {runs} 生成，还没有结果" if runs else "") + "）")
+            if j and rng is None:
+                out["missing"].append(f"X-M 语言表 {sec} {key} 的 X-2 三个种子范围（{XM_LANG_JSON} 的 x2_range 里没有）")
+            g, b = (j.get("battery_gate") or {}).get(key), (j.get("battery") or {}).get(key)
+            if sec == "battery" and isinstance(g, dict) and isinstance(b, dict) and g.get("delta_pp") is not None and b.get("delta_pp") is not None:
+                same = abs(round(g["delta_pp"], 1) - b["delta_pp"]) < 0.05 + 1e-9
+                out["checks"].append(("一致" if same else "不一致") + f"：{key} 的 G-XM 读数 {g['delta_pp']:+.2f} 与 lb_compare（RUN-0114）的 "
+                                     f"{b['delta_pp']:+.1f} 取整到 0.1 相同")
+    # 重抽次数（表注）：G-XM 的取 battery_gate 记的；lb_compare 与健康检查取来源 compare 文件的 statistics；T 文本同 lang_cost_table（ttext_pair）
+    res: dict = {"battery_gate": sorted({(v or {}).get("n_resamples") for v in (j.get("battery_gate") or {}).values()} - {None}),
+                 "ttext": [LCT.N_RES]}
+    hc = _load(root / src["health"]) if src.get("health") else None
+    bc = _load(root / src["battery"]) if src.get("battery") else None
+    res["health"] = [x for x in [(((hc or {}).get("statistics") or {}).get("bootstrap") or {}).get("n_resamples")] if x]
+    res["battery"] = [x for x in [(((bc or {}).get("statistics") or {}).get("bootstrap") or {}).get("n_resamples")] if x]
+    out["resamples"], out["health_threshold"] = res, (hc or {}).get("threshold_pp")
+    # 大题量配对的两边（G-XM 的输入与节点）
+    g = _load(root / part_src["battery_gate"]) or {}
+    inp, nodes = g.get("inputs") or {}, g.get("nodes") or {}
+    out["battery_pair"] = {"xm": (inp.get("lb_xm") or {}).get("dir"), "base": (inp.get("lb_base") or {}).get("dir"),
+                           "xm_node": nodes.get("lb_xm"), "base_node": nodes.get("lb_base")}
+    # X-2 三个种子的范围与 seed_variance.json（四方表的 seed_range）核对；种子的配对节点写表注
+    sr = seed_range(collect_seeds(root))
+    out["seed_range"] = {k: sr.get(k) for k in ("seeds", "nodes", "sources")}
+    n_ok, bad = 0, []
+    for row in out["rows"]:
+        s = sr["rows"].get(f"{row['section']}/{row['key']}")
+        if s and row["range"]:
+            n_ok += 1
+            if not (_close(s["low"], row["range"]["low"]) and _close(s["high"], row["range"]["high"])):
+                bad.append(f"{row['section']}/{row['key']}")
+    if n_ok:
+        out["checks"].append(("一致" if not bad else "不一致") + f"：{XM_LANG_JSON} 的 X-2 三个种子范围 = {SEED_JSON} 各种子读数的最小与最大"
+                             f"（seed_range，{n_ok} 项）" + (f"（不同：{bad}）" if bad else ""))
+    return out
+
+
+def _c4_row(block: str, criterion: str, reading: str, r: dict, thr, ok, src: str) -> dict:
+    """判定表第 4 条的一行（百分点，两位小数，同 gate_xm.json 不取整的读数）。"""
+    return {"block": block, "criterion": criterion, "reading": reading, "xm": r.get("xm_pct"), "control": r.get("control_pct"),
+            "diff": None if r.get("diff_pp") is None else {"value": r["diff_pp"], "low": r.get("ci_low_pp"), "high": r.get("ci_high_pp")},
+            "threshold": thr, "pass": ok, "scale": 1.0, "nd": 2, "source": f"{XM_GATE_JSON} :: {src}"}
+
+
+def collect_xm_gate(root: Path) -> dict:
+    """tab_xm_gate（附录）：gate_xm.json 的四条（读数、对照、差、CI、阈值、结果）；第 4 条三种写法并列：D170（判定用）、D165 原文（诊断）、
+    N47 的 (b)（未采用；阈值 = xm_lang.json 的 X-2 三个种子范围的最差点估计 − XM_C4_MARGIN_PP）。种子的 CI 下界取 seed_variance.json。"""
+    out = {"json": XM_GATE_JSON, "missing": [], "checks": [], "rows": [], "b_thresholds": {}, "seed_lows": {}, "seeds_fail_b": {}}
+    g = _load(root / XM_GATE_JSON)
+    if g is None:
+        out["missing"].append(f"X-M 判定表：{XM_GATE_JSON} 不在")
+    g = g or {}
+    crit = g.get("criteria") or {}
+    checks = g.get("checks") or {}
+    out.update({"verdict": g.get("verdict"), "pass": g.get("pass"), "rehearsal": g.get("rehearsal"), "criterion4": g.get("criterion4"),
+                "n_checks": len(checks), "n_checks_true": sum(1 for v in checks.values() if v is True),
+                "decision_split": {k: (g.get("decision_split") or {}).get(k) for k in ("n_images", "n_pairs")},
+                "bootstrap": {c: (crit.get(c) or {}).get("bootstrap") for c in sorted(crit)}})
+    verdict, d165_rows, b_rows = [], [], []
+    for c, name, reading in XM_GATE_C13:
+        e = crit.get(c)
+        if g and not e:
+            out["missing"].append(f"X-M 判定表：第 {c} 条（{XM_GATE_JSON} 里没有）")
+        e = e or {}
+        verdict.append({"block": "verdict", "criterion": name, "reading": reading.format(n=_nfmt(e.get("n"))), "n": e.get("n") or e.get("n_pairs"),
+                        "xm": e.get("candidate"),
+                        "control": e.get("control"),
+                        "diff": None if e.get("diff") is None else {"value": e["diff"], "low": e.get("ci_low"), "high": e.get("ci_high")},
+                        "threshold": e.get("threshold"), "pass": e.get("pass"), "scale": 100.0, "nd": 1,
+                        "source": f"{XM_GATE_JSON} :: criteria.{c}"})
+    c4 = crit.get("4") or {}
+    d165 = (g.get("diagnostics") or {}).get("criterion4_d165") or {}
+    lj = _load(root / XM_LANG_JSON) or {}
+    seeds = [s for s in collect_seeds(root)["seeds"] if s["status"] == "完成"]
+    for key, gk in XM_GATE_KEY.items():
+        lab = XM_LANG_EN[("battery", key)]
+        r4, rd = (c4.get("rows") or {}).get(gk) or {}, (d165.get("rows") or {}).get(gk) or {}
+        if g and not r4:
+            out["missing"].append(f"X-M 判定表：第 4 条 {gk}（{XM_GATE_JSON} 里没有）")
+        if g and not rd:
+            out["missing"].append(f"X-M 判定表：D165 原文的第 4 条 {gk}（{XM_GATE_JSON} 的 diagnostics 里没有）")
+        verdict.append(_c4_row("verdict", "4. Language (D170)", f"{lab} (n={_nfmt(r4.get('n'))}): X-M − base, same node", r4,
+                               r4.get("threshold"), r4.get("pass"), f"criteria.4.rows.{gk}"))
+        d165_rows.append(_c4_row("d165", "4. As written in D165 (diagnostic)", f"{lab}: X-M − X-2 seed 0", rd, rd.get("threshold"),
+                                 rd.get("pass"), f"diagnostics.criterion4_d165.rows.{gk}"))
+        rg = (lj.get("x2_range") or {}).get(key)
+        thr = None if not isinstance(rg, dict) or rg.get("min") is None else round(rg["min"] - XM_C4_MARGIN_PP, 6)
+        ok = None if thr is None or r4.get("ci_low_pp") is None else bool(r4["ci_low_pp"] > thr)
+        out["b_thresholds"][key] = thr
+        if g and thr is None:
+            out["missing"].append(f"X-M 判定表：N47 (b) 的 {gk} 阈值（要 {XM_LANG_JSON} 的 x2_range.{key}）")
+        row = _c4_row("b", "4. N47 option (b) (not adopted)", f"{lab}: X-M − base, same node", r4, thr, ok, f"criteria.4.rows.{gk}")
+        row["threshold_source"] = f"{XM_LANG_JSON} :: x2_range.{key}.min − {XM_C4_MARGIN_PP:g}"
+        b_rows.append(row)
+        lows = {s["seed"]: (s["language"].get(key) or {}).get("low") for s in seeds}
+        out["seed_lows"][key] = lows
+        if thr is not None and lows:
+            out["seeds_fail_b"][key] = [s for s, lo in lows.items() if lo is not None and not lo > thr]
+        if lows and all(v is not None for v in lows.values()) and r4.get("threshold") is not None:
+            exp = round(min(lows.values()) - XM_C4_MARGIN_PP, 6)
+            out["checks"].append(("一致" if abs(exp - r4["threshold"]) < 1e-9 else "不一致") +
+                                 f"：D170 的 {gk} 阈值 {r4['threshold']:g}（gate_xm.json）= {SEED_JSON} 三个种子 CI 下界的最低者 "
+                                 f"{min(lows.values()):g} − {XM_C4_MARGIN_PP:g}")
+    out["rows"] = verdict + d165_rows + b_rows
+    out["runs"] = {"gate": _runs_of([XM_GATE_JSON]), "seeds": run_ids([p for s in seeds for p in [s["lang_sources"].get("battery")] if p])}
+    return out
+
+
+# ---- X-M 的表 ------------------------------------------------------------------------------------
+
+
+def _na(latex: bool) -> str:
+    return "--" if latex else "—"
+
+
+XM_DET_HEADS = ("Det. F1@0.5 [95% CI]", "Det. P / R", "Det. F1@mIoU", "Inst. seg. F1@0.5 [95% CI]", "Main − row: det. F1 [95% CI]",
+                "Main − row: inst. seg. F1 [95% CI]")
+
+
+def _xm_det_cells(split: dict, st: str, latex: bool) -> list[str]:
+    """检测与实例分割表一行的 6 格（×100，一位小数）。不适用写"—"（只出框的系统没有 mask；主设置与自己没有差），该有而 JSON 里没有的写 missing。"""
+    c = (split.get("rows") or {}).get(st) or {}
+    det, seg = c.get("det"), c.get("seg")
+    m = (lambda t: f"${t}$") if latex else (lambda t: t)
+    pr = MISSING if det is None or det.get("p") is None or det.get("r") is None else \
+        f"{m(format(100 * det['p'], '.1f'))} / {m(format(100 * det['r'], '.1f'))}"
+    cells = [MISSING if det is None else fmt_w2(det, False, latex), pr,
+             MISSING if det is None or det.get("f1_miou") is None else fmt_w2({"value": det["f1_miou"]}, False, latex),
+             _na(latex) if st in XM_DET_ONLY else MISSING if seg is None else fmt_w2(seg, False, latex)]
+    for kind, pairs in (("det", XM_DET_PAIR), ("seg", XM_SEG_PAIR)):
+        p = c.get(f"{kind}_diff")
+        cells.append(_na(latex) if st not in pairs else MISSING if p is None else fmt_w2(p, True, latex))
+    return cells
+
+
+def _xm_split_head(xm: dict, split: str) -> str:
+    s = xm["splits"].get(split) or {}
+    what = {XM_FINAL: "Final report set", XM_DEC: "Decision set (G-XM)", XM_LVIS: "LVIS subset (descriptive)"}[split]
+    return f"{what}: {_nfmt(s.get('n_images'))} images, {_nfmt(s.get('n_pairs'))} (image, category) pairs"
+
+
+def _xm_det_blocks(xm: dict, split: str, skip: tuple, body: list, M: list, ncol: int, head: str | None = None) -> None:
+    s = xm["splits"].get(split) or {}
+    if head:
+        body += ["\\midrule", f"\\multicolumn{{{ncol}}}{{l}}{{\\textbf{{{_tex_escape(head)}}}}} \\\\"]
+        M.append(f"| **{head}** |" + " |" * (ncol - 1))
+    for _b, title, rows in XM_BLOCKS:
+        rows = [(st, lab) for st, lab in rows if st in XRT.LEAVES[split] and st not in skip]
+        if not rows:
+            continue
+        body += ["\\midrule", f"\\multicolumn{{{ncol}}}{{l}}{{\\emph{{{_tex_escape(title)}}}}} \\\\"]
+        M.append(f"| *{title}* |" + " |" * (ncol - 1))
+        for st, lab in rows:
+            body.append(_tex_escape(lab) + " & " + " & ".join(_xm_det_cells(s, st, True)) + " \\\\")
+            M.append(f"| {lab} | " + " | ".join(_xm_det_cells(s, st, False)) + " |")
+
+
+def _xm_sota_block(xm: dict, body: list, M: list, ncol: int) -> None:
+    """主表最后的灰行：文献读数（xm_sota.json，已是 ×100），只有检测 F1@0.5 一格，其余写"—"；标"不是同一批图"。"""
+    if not xm["sota"]:
+        return
+    meta = xm["sota_meta"]
+    t = (f"Literature: {meta.get('dataset') or MISSING}, all {_nfmt(meta.get('n_images'))} images, as reported (not the same images; "
+         "reference only, not paired)")
+    body += ["\\midrule", f"\\multicolumn{{{ncol}}}{{l}}{{\\textcolor{{gray}}{{\\emph{{{_tex_escape(t)}}}}}}} \\\\"]
+    M.append(f"| *{t}; gray in the paper* |" + " |" * (ncol - 1))
+    for r in xm["sota"]:
+        lab = f"{r['name']}, {r['kind']}"
+        body.append(f"\\textcolor{{gray}}{{{_tex_escape(lab)}}} & {_sota_cell(r.get('f1'), True)} & " +
+                    " & ".join(["\\textcolor{gray}{--}"] * (ncol - 2)) + " \\\\")
+        M.append(f"| {lab} | {_sota_cell(r.get('f1'), False)} |" + " — |" * (ncol - 2))
+
+
+def _pts(p: dict, scale: float = 100.0, nd: int = 1) -> str:
+    """表注里的差与 CI："+1.2 [+0.6, +1.7]"（Unicode 负号）。"""
+    return f"{_signed(scale * p['value'], nd)} [{_signed(scale * p['low'], nd)}, {_signed(scale * p['high'], nd)}]"
+
+
+def _xm_raster_text(d: dict | None, split_word: str, evidence: bool = False) -> str | None:
+    """D182 第 4 点：不贴边的样条只比主设置低一点，是"不需要专用解码器"最直接的证据（evidence=True：正文主表的最终报告集）；判定集、LVIS
+    只写数。数字取配对差（主设置 − 样条直接光栅化）。"""
+    if not d:
+        return None
+    v = 100 * d["value"]
+    ci = f"[{_signed(100 * d['low'])}, {_signed(100 * d['high'])}]"
+    head = f"On the {split_word}, the spline rasterised directly, without snapping to image edges, is"
+    if v < 0:
+        return f"{head} {abs(v):.1f} points {ci} above the main setting."
+    if not evidence:
+        return f"{head} {v:.1f} points {ci} below the main setting."
+    return (f"{head} only {v:.1f} points {ci} below the main setting: the most direct evidence that no dedicated mask decoder is needed. The "
+            f"shape comes entirely from the LLM, and GrabCut adds only about {v:.0f} point{'' if f'{v:.0f}' == '1' else 's'}.")
+
+
+def _xm_rex_text(xm: dict, split: str, per_category: bool) -> str:
+    """Rex-Omni 一句（D182 第 4 点：最终报告集上写"相当"，不写"超过"）。区间跨 0 才写 comparable；不跨 0 时只写区间不含 0（README 的核对报不一致）。"""
+    rows = (xm["splits"].get(split) or {}).get("rows") or {}
+    rex = xm["rexomni"]
+    who = (f"Rex-Omni ({rex['repo']}" + (f" at {rex['revision'][:7]}" if rex.get("revision") else "") + ")") if rex.get("repo") else "Rex-Omni"
+    s = (f"External reference: {who}, a detector built on Qwen2.5-VL-3B, i.e. a learned vision model; run by us separately with its official "
+         "prompts, preprocessing and parsing (deviations recorded with the run, D178), detection only; its outputs are used only for scoring, "
+         "never in our data or training. Joint = its own protocol: one query per image listing all the image's positive categories.")
+    d = (rows.get(XM_REX_JOINT) or {}).get("det_diff")
+    if d is None:
+        s += f" X-M − Rex-Omni (joint): {MISSING}."
+    elif split == XM_FINAL:
+        s += (f" X-M − Rex-Omni (joint): {_pts(d)} points; " +
+              ("the interval includes 0, so X-M and Rex-Omni are comparable on these images." if _crosses0(d) else "the interval excludes 0."))
+    else:
+        s += (f" X-M − Rex-Omni (joint): {_pts(d)} points. Rex-Omni's training data may overlap with LVIS, so this difference is a "
+              "description, not a conclusion.")
+    if per_category:
+        dp = (rows.get("rexomni_det") or {}).get("det_diff")
+        s += (" Per category = X-M's protocol (one query per (image, category)), a diagnostic: X-M − Rex-Omni "
+              f"{_pts(dp) + ' points' if dp else MISSING}.")
+    return s
+
+
+def _xm_def_text(xm: dict) -> str:
+    cfg = xm["config"]
+    return (f"X-M (ours): one LoRA on Qwen3.5-9B, trained with X-2's recipe plus two COCO train2017 streams (listing a category's boxes; one "
+            "spline per given box); supervision only from ground truth and self-distillation replay of the base model; no learned vision "
+            "model in training or inference. Per (image, category) two calls, single pass, no retries: call 1 lists the category's boxes "
+            f"(at most {cfg.get('max_instances') or MISSING}); call 2 traces each box's outline as a closed B-spline with "
+            f"{cfg.get('n_ctrl') or MISSING} control points. Deterministic post-processing: NMS at IoU {cfg.get('nms_iou') or MISSING} over the "
+            "listed boxes, control points clipped to their box. Main setting: the rasterised spline seeds GrabCut as a trimap for each instance "
+            "(snapping to image edges); GrabCut (OpenCV graph cut) has no learned parameters. Ablations with the same boxes: spline rasterised "
+            "directly (the spline's interior is the mask, no GrabCut); in-box ellipse → GrabCut (the spline replaced by the ellipse inscribed "
+            "in the box); boxes → GrabCut (the box alone seeds GrabCut, no spline). Base: the zero-shot Qwen3.5-9B with the same prompts "
+            f"({cfg.get('prompts') or MISSING}" + (", frozen" if cfg.get("frozen") == "true" else "") + ") and post-processing.")
+
+
+def _xm_fallback_text(xm: dict, split: str, word: str) -> str | None:
+    fb = (xm["splits"].get(split) or {}).get("fallback")
+    if not fb or not fb.get("of"):
+        return None
+    return (f"{word}: {fb['n']:,} of {fb['of']:,} predicted instances ({100 * fb['n'] / fb['of']:.1f}%) fall back to boxes → GrabCut in the main "
+            "setting, because call 2 returned a different number of splines than boxes (D168).")
+
+
+def _xm_data_text(xm: dict, splits: tuple) -> str:
+    by: dict = {}
+    for split in splits:
+        for st, c in ((xm["splits"].get(split) or {}).get("rows") or {}).items():
+            who = "X-M" if st in XRT.XS else "base" if st in XRT.BS else "Rex-Omni"
+            key = (_runs_of([c["leaf"]]), c["node"] or MISSING)
+            if who not in by.setdefault(key, []):
+                by[key].append(who)
+    parts = [f"{r} ({', '.join(w)}; {n})" for (r, n), w in sorted(by.items())]
+    own = {n for (_r, n), w in by.items() if set(w) & {"X-M", "base"}}
+    rex = {n for (_r, n), w in by.items() if "Rex-Omni" in w}
+    node = ("X-M and the base model on the same node (D93-1)" if len(own) == 1 else f"X-M and the base model on {', '.join(sorted(own))}")
+    if rex and rex != own:
+        node += f"; Rex-Omni, an external reference, on {', '.join(sorted(rex))} (D180)"
+    return ("Data: " + "; ".join(parts) + f"; {node}; readings and paired differences from {XM_RESULTS_JSON.split('/')[-1]} "
+            f"(computed in {_runs_of([XM_RESULTS_RUN])} on CPU)")
+
+
+def _xm_miss_text(missing: list[str], keys: tuple) -> str | None:
+    m = [x for x in missing if any(k in x for k in keys)]
+    return ("Missing: " + "; ".join(m) + ".") if m else None
+
+
+def xm_main_notes(xm: dict, full: bool = False) -> list[tuple[str, str]]:
+    """tab_xm_main（与 _full）的表注：(位置, 表注)；位置 "cap" 进 caption，"below" 放在表下面（定义与文献出处太长，同 tab_unified）。"""
+    fin = xm["splits"].get(XM_FINAL) or {}
+    rows = fin.get("rows") or {}
+    res = _res_text(sorted({r for s in (XM_FINAL, XM_DEC) for r in (xm["splits"].get(s) or {}).get("leaf_resamples") or []}))
+    notes = [("cap", f"Category-level detection and instance segmentation with Qwen3.5-9B on the final report set: "
+                     f"{_nfmt(fin.get('n_images'))} COCO val2017 images, {_nfmt(fin.get('n_pairs'))} (image, category) pairs over "
+                     f"{_nfmt(fin.get('n_categories'))} categories, disjoint by image from the tuning and decision sets"
+                     + (f" (decision set: {_nfmt((xm['splits'].get(XM_DEC) or {}).get('n_images'))} images, "
+                        f"{_nfmt((xm['splits'].get(XM_DEC) or {}).get('n_pairs'))} pairs, sealed until G-XM)" if full else "") +
+                     "; X-M's training images and all evaluation images are disjoint. Only the categories present in an image are asked "
+                     "(positive only, as in Rex-Omni's evaluation). F1 ×100 = Rex-Omni's class-macro F1 (preregistration XM-3a): COCOeval-style "
+                     "greedy matching per (image, category) in output order, precision and recall per category over the set, averaged over "
+                     "categories, F1 = 2PR/(P+R); IoU 0.5 on boxes (detection) or masks (instance segmentation). P / R: detection precision and "
+                     "recall at IoU 0.5. F1@mIoU: P and R each averaged over IoU 0.5:0.05:0.95 before the harmonic mean."),
+             ("cap", f"Per-row CIs: 95% bootstrap over images from each run ({res} resamples). Main − row: X-M's main setting minus the row "
+                     "(for detection, X-M's boxes minus the row's boxes), paired bootstrap over images with the macro average recomputed in "
+                     f"every resample, 95%, {_res_text([xm.get('n_resamples')])} resamples (seed {xm.get('seed') or MISSING}). — = not applicable "
+                     "(zero-shot boxes and Rex-Omni give boxes only; no row is paired with itself). The X-M rows share call 1's boxes and the two "
+                     "base rows share the base model's boxes, so their detection columns are identical. No entry is in bold.")]
+    for t in (_xm_raster_text((rows.get(XM_RASTER) or {}).get("seg_diff"), "final report set", evidence=True),
+              _xm_raster_text(((xm["splits"].get(XM_DEC) or {}).get("rows") or {}).get(XM_RASTER, {}).get("seg_diff"), "decision set")
+              if full else None):
+        if t:
+            notes.append(("cap", t))
+    notes.append(("cap", _xm_rex_text(xm, XM_FINAL, per_category=full)))
+    if xm["sota"]:
+        meta = xm["sota_meta"]
+        notes.append(("cap", f"Gray rows: {meta.get('metric') or MISSING} on the full {meta.get('dataset') or MISSING} "
+                             f"({_nfmt(meta.get('n_images'))} images) as reported in the literature, not on our {_nfmt(fin.get('n_images'))}-image "
+                             "subset; reference only, never paired; sources under the table."))
+    notes.append(("below", _xm_def_text(xm) + " " + " ".join(
+        t for t in (_xm_fallback_text(xm, XM_FINAL, "Final report set"), _xm_fallback_text(xm, XM_DEC, "Decision set") if full else None) if t)))
+    if xm["sota"]:
+        notes.append(("below", "Literature rows: " + " ".join(
+            f"{r['name']} ({r.get('protocol') or r.get('kind') or MISSING}): {r.get('source') or MISSING}" + (f"; {r['note']}" if r.get("note") else "")
+            + "." for r in xm["sota"])))
+    notes.append(("cap", _xm_data_text(xm, (XM_FINAL, XM_DEC) if full else (XM_FINAL,)) + (f"; literature from {XM_SOTA_JSON.split('/')[-1]}"
+                                                                                         if xm["sota"] else "") + "."))
+    miss = _xm_miss_text(xm["missing"], ("X-M 结果", "X-M 文献", "X-M 推理", XM_FINAL) + ((XM_DEC,) if full else ()))
+    if miss:
+        notes.append(("cap", miss))
+    return notes
+
+
+def _xm_write_det(xm: dict, out: Path, name: str, title: str, md_title: str, blocks, tagged: list, sota: bool) -> list[Path]:
+    heads = list(XM_DET_HEADS)
+    ncol = len(heads) + 1
+    body, M = [], ["| System | " + " | ".join(heads) + " |", "|---|" + "---:|" * len(heads)]
+    for split, skip, head in blocks:
+        _xm_det_blocks(xm, split, skip, body, M, ncol, head)
+    if sota:
+        _xm_sota_block(xm, body, M, ncol)
+    caption = (f"\\caption{{{title} " + " ".join(_tex_escape(n) for w, n in tagged if w == "cap") +
+               (" Definitions of the settings are under the table.}" if any(w == "below" for w, _n in tagged) else "}"))
+    below = [] if not any(w == "below" for w, _n in tagged) else \
+        ["\\par\\smallskip", "\\begin{minipage}{\\textwidth}\\footnotesize",
+         " ".join(_tex_escape(n) for w, n in tagged if w == "below").replace("—", "--"), "\\end{minipage}"]
+    header = ["System & " + " & ".join(_tex_escape(h) for h in heads) + " \\\\"]
+    return _write_table(out, name, caption, name.replace("tab_", "").replace("_", "-"), "l" + "c" * len(heads), header, body, md_title, M,
+                        [n for _w, n in tagged], after_tex=below)
+
+
+def tab_xm_main(xm: dict, out: Path, full: bool = False) -> list[Path]:
+    """正文主表（D182）：最终报告集上的基座零样本、基座的框交给 GrabCut、X-M 主设置、消融三行（各附相对主设置的配对差）、Rex-Omni（joint），
+    最后是灰色的文献行。列 = 检测 F1@0.5 [CI]、P / R、F1@mIoU、实例分割 F1@0.5 [CI]、主设置 − 该行（检测、实例分割）[CI]；×100，一位小数，不加粗。
+    附录版 tab_xm_main_full：最终报告集另加逐类的 Rex-Omni，再加判定集一块。"""
+    if full:
+        blocks = ((XM_FINAL, (), _xm_split_head(xm, XM_FINAL)), (XM_DEC, (), _xm_split_head(xm, XM_DEC)))
+        title, md = "X-M, full version (appendix): final report set and decision set.", "X-M detection and instance segmentation, full (appendix)"
+    else:
+        blocks = ((XM_FINAL, XM_MAIN_SKIP, None),)
+        title, md = ("X-M: one LLM for detection and instance segmentation (final report set, Qwen3.5-9B, F1 $\\times$100).",
+                     "X-M detection and instance segmentation (final report set)")
+    return _xm_write_det(xm, out, "tab_xm_main_full" if full else "tab_xm_main", title, md, blocks, xm_main_notes(xm, full), sota=True)
+
+
+def xm_lvis_notes(xm: dict) -> list[str]:
+    lv = xm["splits"].get(XM_LVIS) or {}
+    rows = lv.get("rows") or {}
+    notes = [f"Descriptive only (preregistration XM-2b): an LVIS v1 val subset of {_nfmt(lv.get('n_images'))} images with at most "
+             f"{xm['config'].get('lvis_cap') or MISSING} positive categories per image (chosen by hash rank), {_nfmt(lv.get('n_pairs'))} "
+             f"(image, category) pairs over {_nfmt(lv.get('n_categories'))} categories. The images are COCO val2017 images outside the three "
+             "COCO splits, so none is an X-M training image. For categories not exhaustively annotated in an image (LVIS not_exhaustive), "
+             "unmatched predictions are ignored (LVIS convention).",
+             f"Metrics, rows and columns as in the main X-M table: F1 ×100 = Rex-Omni's class-macro F1 at IoU 0.5; per-row CIs: 95% bootstrap "
+             f"over images from each run ({_res_text(lv.get('leaf_resamples') or [])} resamples); Main − row: paired bootstrap over images, 95%, "
+             f"{_res_text([xm.get('n_resamples')])} resamples (seed {xm.get('seed') or MISSING}); — = not applicable. No entry is in bold.",
+             _xm_rex_text(xm, XM_LVIS, per_category=True)]
+    t = _xm_raster_text((rows.get(XM_RASTER) or {}).get("seg_diff"), "LVIS subset")
+    if t:
+        notes.append(t)
+    fb = _xm_fallback_text(xm, XM_LVIS, "LVIS subset")
+    if fb:
+        notes.append(fb)
+    notes.append(_xm_data_text(xm, (XM_LVIS,)) + ".")
+    miss = _xm_miss_text(xm["missing"], ("X-M 结果", "LVIS", XM_LVIS))
+    if miss:
+        notes.append(miss)
+    return notes
+
+
+def tab_xm_lvis(xm: dict, out: Path) -> list[Path]:
+    """LVIS 子集（XM-2b；描述性）：同主表的列；行同附录版的最终报告集一块（含逐类的 Rex-Omni）；没有文献行。"""
+    tagged = [("cap", n) for n in xm_lvis_notes(xm)]
+    return _xm_write_det(xm, out, "tab_xm_lvis", "X-M on an LVIS subset (descriptive; Qwen3.5-9B, F1 $\\times$100).",
+                         "X-M on the LVIS subset (descriptive)", ((XM_LVIS, (), None),), tagged, sota=False)
+
+
+XM_REFSEG_HEADS = ("X-M cIoU [95% CI]", "X-2 cIoU [95% CI]", "X-M − X-2, cIoU [95% CI]", "X-M gIoU [95% CI]", "X-2 gIoU [95% CI]",
+                   "X-M − X-2, gIoU [95% CI]")
+XM_REFSEG_KEYS = ("xm", "x2", "diff", "xm_g", "x2_g", "diff_g")
+
+
+def xm_refseg_notes(xm: dict) -> list[str]:
+    rf, rs = xm["refseg"], xm["reasonseg"]
+    pooled, row = rf["rows"].get("pooled") or {}, rs.get("row") or {}
+    n_sp = sorted({(rf["rows"].get(sp) or {}).get("xm", {}).get("n") for sp in rf["splits"]} - {None})
+    res = _res_text([xm.get("n_resamples")])
+    notes = [f"Referring segmentation with the X-M checkpoint against X-2 = C1 (seed 0; the main method of the referring-segmentation "
+             "tables), both with X-2's protocol (the model proposes a box and traces a spline; the rasterised spline seeds a GrabCut trimap). "
+             "cIoU ×100 = summed intersection / summed union; gIoU ×100 = mean per-expression IoU; 95% bootstrap CIs over expressions; "
+             f"X-M − X-2: per-expression paired bootstrap, 95%; {res} resamples (seed {xm.get('seed') or MISSING}). No entry is in bold."]
+    s = (f"RefCOCO family: the five W2 test splits, {'/'.join(f'{n:,}' for n in n_sp) or MISSING} expressions each "
+         f"(pooled {_nfmt((pooled.get('xm') or {}).get('n'))}); X-M ({_runs_of([rf['sources']['xm']])}) and X-2 ({_runs_of([rf['sources']['x2']])}) "
+         + (f"on the same node ({rf['nodes']['xm']})" if rf["nodes"]["xm"] == rf["nodes"]["x2"] else
+            f"on different nodes ({rf['nodes']['xm']}, {rf['nodes']['x2']})") + ".")
+    if pooled.get("diff"):
+        s += f" Pooled X-M − X-2: cIoU {_pts(pooled['diff'])}" + (", the interval includes 0" if _crosses0(pooled["diff"]) else "") + "."
+    notes.append(s)
+    s = (f"ReasonSeg val, descriptive: {_nfmt((row.get('xm') or {}).get('n'))} items (the first query of each, as in LISA's validation); "
+         f"ignore regions are not subtracted; X-M ({_runs_of([rs['sources']['xm']])}) and X-2 ({_runs_of([rs['sources']['x2']])}) "
+         + (f"on the same node ({rs['nodes']['xm']})" if rs["nodes"]["xm"] == rs["nodes"]["x2"] else
+            f"on different nodes ({rs['nodes']['xm']}, {rs['nodes']['x2']})") + ".")
+    d, dg = row.get("diff"), row.get("diff_g")
+    if d:
+        s += (f" X-M is {100 * abs(d['value']):.1f} cIoU points {'below' if d['value'] < 0 else 'above'} X-2 "
+              f"[{_signed(100 * d['low'])}, {_signed(100 * d['high'])}]; the interval {'includes' if _crosses0(d) else 'excludes'} 0.")
+    if dg:
+        s += f" gIoU: {_pts(dg)}" + (", on par." if _crosses0(dg) else ".")
+    notes.append(s)
+    notes.append(f"Data: {XM_RESULTS_JSON.split('/')[-1]} (computed in {_runs_of([XM_RESULTS_RUN])} on CPU).")
+    miss = _xm_miss_text(xm["missing"], ("X-M 结果", "RefCOCO", "ReasonSeg"))
+    if miss:
+        notes.append(miss)
+    return notes
+
+
+def tab_xm_refseg(xm: dict, out: Path) -> list[Path]:
+    """指代分割：RefCOCO 的 W2 test（5 个划分与合并，X-M 对 X-2，同在 06）与 ReasonSeg val（X-M 对 X-2，同在 07）；cIoU、gIoU 与配对差。"""
+    heads = list(XM_REFSEG_HEADS)
+    ncol = len(heads) + 1
+    rf, rs = xm["refseg"], xm["reasonseg"]
+    body, M = [], ["| Split | " + " | ".join(heads) + " |", "|---|" + "---:|" * len(heads)]
+    n_sp = sorted({(rf["rows"].get(sp) or {}).get("xm", {}).get("n") for sp in rf["splits"]} - {None})
+    blocks = ((f"RefCOCO family, W2 test, {'/'.join(f'{n:,}' for n in n_sp) or MISSING} expressions per split",
+               [(split_label(sp), rf["rows"].get(sp) or {}) for sp in rf["splits"]] +
+               [(f"Pooled ({_nfmt(((rf['rows'].get('pooled') or {}).get('xm') or {}).get('n'))})", rf["rows"].get("pooled") or {})]),
+              ("ReasonSeg val (descriptive)", [(f"ReasonSeg val ({_nfmt(((rs.get('row') or {}).get('xm') or {}).get('n'))})", rs.get("row") or {})]))
+    for title, rows in blocks:
+        body += ["\\midrule", f"\\multicolumn{{{ncol}}}{{l}}{{\\emph{{{_tex_escape(title)}}}}} \\\\"]
+        M.append(f"| *{title}* |" + " |" * (ncol - 1))
+        for lab, r in rows:
+            cells = [(MISSING if r.get(k) is None else fmt_w2(r[k], k.startswith("diff"), True)) for k in XM_REFSEG_KEYS]
+            body.append(_tex_escape(lab) + " & " + " & ".join(cells) + " \\\\")
+            M.append(f"| {lab} | " + " | ".join(MISSING if r.get(k) is None else fmt_w2(r[k], k.startswith("diff"), False)
+                                                for k in XM_REFSEG_KEYS) + " |")
+    notes = xm_refseg_notes(xm)
+    caption = ("\\caption{X-M on referring segmentation, against X-2 (Qwen3.5-9B, $\\times$100). " + " ".join(_tex_escape(n) for n in notes) + "}")
+    header = ["Split & " + " & ".join(_tex_escape(h) for h in heads) + " \\\\"]
+    return _write_table(out, "tab_xm_refseg", caption, "xm-refseg", "l" + "c" * len(heads), header, body,
+                        "X-M on referring segmentation (RefCOCO W2 test, ReasonSeg val)", M, notes)
+
+
+def _xm_pp_cell(c: dict | None, latex: bool) -> str:
+    """语言表一格：差 [95% CI]（百分点；小数位随来源），健康检查标红加 †；缺写 missing。"""
+    if c is None:
+        return MISSING
+    nd = c["nd"]
+    f = (lambda x: f"{x:+.{nd}f}")
+    ci = c.get("low") is not None and c.get("high") is not None
+    if latex:
+        return (f"${f(c['delta'])}$" + ("\\textsuperscript{\\dag}" if c.get("flag") else "") +
+                (f"\\,{{\\scriptsize $[{f(c['low'])}, {f(c['high'])}]$}}" if ci else ""))
+    return f(c["delta"]) + ("†" if c.get("flag") else "") + (f" [{f(c['low'])}, {f(c['high'])}]" if ci else "")
+
+
+def _pp_text(c: dict) -> str:
+    """表注里语言表一格的差与 CI（小数位随来源，Unicode 负号）。"""
+    nd = c["nd"]
+    return f"{_signed(c['delta'], nd)}" + (f" [{_signed(c['low'], nd)}, {_signed(c['high'], nd)}]" if c.get("low") is not None else "")
+
+
+def _signed0(v: float, nd: int = 1) -> str:
+    """表注里的范围端点：0 写 "0.0"（D182 的写法 "IFEval 0.0 到 −3.5"），其余带符号、Unicode 负号。"""
+    return f"{0:.{nd}f}" if round(v, nd) == 0 else _signed(v, nd)
+
+
+def _range_text(r: dict) -> str:
+    a, b = range_ends(r)
+    return f"{_signed0(a)} to {_signed0(b)}"
+
+
+def xm_lang_notes(xl: dict, full: bool = False) -> list[str]:
+    rows = {(r["section"], r["key"]): r for r in xl["rows"]}
+    shown = [r for r in xl["rows"] if full or r["section"] != "health"]
+    src = xl["sources"]
+    sr = xl.get("seed_range") or {}
+    k = len(next((r["range"]["values"] for r in shown if r["range"] and r["range"].get("values")), []) or sr.get("seeds") or [])
+    res = xl["resamples"]
+    precision = []
+    by_nd: dict = {}
+    for r in shown:
+        if r["cell"]:
+            by_nd.setdefault(r["cell"]["nd"], []).append(r)
+    def rs_(k):
+        return f"{_res_text(res.get(k))} resamples" if res.get(k) else "resamples missing"
+    part_words = {"battery_gate": f"the paired computation of {_runs_of([src.get('gate') or XM_GATE_JSON]) or MISSING} ({rs_('battery_gate')})",
+                  "battery": f"the language-battery comparison ({rs_('battery')})", "ttext": f"per-item pairing ({rs_('ttext')})",
+                  "health": f"the health-check comparison ({rs_('health')})"}
+    for nd, rs in sorted(by_nd.items(), reverse=True):
+        parts: dict = {}
+        for r in rs:
+            lab = r["label"].replace(", ", " ") if r["section"] != "health" else "the health check"
+            if lab not in parts.setdefault(r["cell"]["part"], []):
+                parts[r["cell"]["part"]].append(lab)
+        precision.append(("two decimals where the source is unrounded" if nd == 2 else "one decimal where the source rounds to 0.1") + ": " +
+                         "; ".join(f"{_and(labs)} from {part_words[p]}" for p, labs in parts.items()))
+    notes = [f"Language cost of X-M on Qwen3.5-9B: each cell is the difference from the base model evaluated on the same node, in percentage "
+             f"points, with a 95% paired bootstrap CI over items; Base: the base model's reading (%). Precision follows the source, "
+             f"{'; '.join(precision) or MISSING}.",
+             f"X-2, range over {k or MISSING} seeds: the differences of the {k or MISSING} training seeds of X-2's recipe, each against the base "
+             "on its own node" + (f" ({seed_pairing_text({'nodes': sr['nodes']}, ('battery', 'ttext') + (('health',) if full else ())) })"
+                                  if sr.get("nodes") and sr.get("seeds") else "") + ", the end nearer zero first; one decimal."]
+    # D182 第 2 点：MMLU-Pro 与 IFEval 落在 X-2 三个种子的范围之内（照数据写"之内"或"之外"），IFEval 约 −3 点的代价写进局限
+    inside, outside, ranges = [], [], []
+    for key in XM_GATE_KEY:
+        r = rows.get(("battery", key))
+        if not r or not r["cell"] or not r["range"]:
+            continue
+        lo, hi = sorted((r["range"]["low"], r["range"]["high"]))
+        word = f"{r['label'].split(',')[0]} {_signed(r['cell']['delta'], r['cell']['nd'])}"
+        (inside if lo - 1e-9 <= r["cell"]["delta"] <= hi + 1e-9 else outside).append(word)
+        ranges.append(f"{r['label'].split(',')[0]} {_range_text(r['range'])}")
+    s = ""
+    if inside:
+        s += f"X-M's {_and(inside)} fall{'s' if len(inside) == 1 else ''} within the range of X-2's {k} seeds"
+    if outside:
+        s += ("; " if s else "") + f"X-M's {_and(outside)} fall{'s' if len(outside) == 1 else ''} outside the range of X-2's {k} seeds"
+    if s:
+        notes.append(s + f" ({', '.join(ranges)}).")
+    ife = rows.get(("battery", "ifeval.prompt_level_strict"))
+    if ife and ife["cell"] and ife["cell"]["delta"] < 0:
+        notes.append(f"The IFEval cost of about {_signed(ife['cell']['delta'], 0)} points is reported as a limitation, together with X-2's.")
+    cnt = rows.get(("ttext", "count"))
+    if cnt:
+        xr = f"X-2's {k} seeds: {_range_text(cnt['range'])}" if cnt["range"] else f"X-2's range {MISSING}"
+        xc = _pp_text(cnt["cell"]) if cnt["cell"] else f"{MISSING} ({cnt['pending']} has no results yet)"
+        notes.append(f"Counting (CountBench): X-M {xc}, alongside {xr}.")
+    bp = xl.get("battery_pair") or {}
+    pair = [f"language battery, X-M ({_runs_of([bp.get('xm')]) or MISSING}) and the base ({_runs_of([bp.get('base')]) or MISSING}) "
+            + (f"both on {bp.get('xm_node')}" if bp.get("xm_node") and bp.get("xm_node") == bp.get("base_node") else
+               f"on {bp.get('xm_node') or MISSING} and {bp.get('base_node') or MISSING}")]
+    have = {r["cell"]["part"] for r in shown if r["cell"]}
+    tn, tbn = _node(src.get("ttext")), _node(src.get("ttext_base"))
+    if "ttext" in have:
+        pair.append(f"T-text, X-M ({_runs_of([src.get('ttext')]) or MISSING}) against the base T-text run {_runs_of([src.get('ttext_base')]) or MISSING}, "
+                    + (f"both on {tn}" if tn and tn == tbn else f"on {tn or MISSING} and {tbn or MISSING}"))
+    else:
+        pair.append(f"T-text {MISSING} ({_runs_of([src.get('ttext')]) or MISSING} has no results yet)")
+    if full:
+        pair.append(f"health check, X-M ({_runs_of([src.get('health')]) or MISSING}) against the base on {_node(src.get('health')) or MISSING}")
+    notes.append("Pairing (D93-1): " + "; ".join(pair) + "; X-2's seeds each against the base on its own node.")
+    if full:
+        hn = [f"{r['label'].replace(', ', ' ')} {_nfmt((r['cell'] or {}).get('n'))}" for r in xl["rows"] if r["section"] == "health"]
+        flagged = [r["label"] for r in xl["rows"] if r["section"] == "health" and (r["cell"] or {}).get("flag")]
+        notes.append(f"Health check (brief §8.11; fixed items: {', '.join(hn)}): † = flagged by its rule (the headline metric drops by more "
+                     f"than {xl.get('health_threshold') if xl.get('health_threshold') is not None else MISSING} points); flagged for X-M: "
+                     f"{_and(flagged) if flagged else 'none'}.")
+    used = ((XM_GATE_JSON, bp.get("xm"), bp.get("base")) if "battery_gate" in have else ()) + \
+        ((src.get("battery"),) if "battery" in have else ()) + ((src.get("ttext"), src.get("ttext_base")) if "ttext" in have else ()) + \
+        ((src.get("health"),) if "health" in have else ())
+    runs = run_ids([p for p in used if p])
+    notes.append(f"Data: {XM_LANG_JSON.split('/')[-1]} (scripts/mgr/xm_lang_table.py; {', '.join(f'RUN-{r}' for r in runs) or MISSING}); "
+                 f"X-2's seeds: {SEED_JSON.split('/')[-1]}.")
+    pend: dict = {}
+    for r in shown:
+        if r["cell"] is None:
+            pend.setdefault(r["pending"], []).append(r["label"].replace(", ", " "))
+    if pend:
+        notes.append("Missing: " + "; ".join(f"X-M {_and(labs)} ({p} has no results yet)" for p, labs in pend.items()) + ".")
+    return notes
+
+
+def tab_xm_lang(xl: dict, out: Path, full: bool = False) -> list[Path]:
+    """X-M 的语言代价（D182 第 2、3 点）：行 = 大题量三项、T 文本两项（附录版加健康检查三项）；列 = 基座读数、X-M − 基座 [95% CI]、X-2 三个种子的
+    范围。不以阈值作论据：表与表注里都不出现判定的阈值。缺的格子写 missing。"""
+    sr_n = len(next((r["range"]["values"] for r in xl["rows"] if r["range"] and r["range"].get("values")), []))
+    heads = ["Check", "Reading", "Base", "X-M − base [95% CI]", f"X-2, range over {sr_n or MISSING} seeds"]
+    body, M = [], ["| " + " | ".join(heads) + " |", "|---|---|---:|---:|---:|"]
+    for sec, sec_lab, _items in XM_LANG_SECTIONS:
+        if sec == "health" and not full:
+            continue
+        rows = [r for r in xl["rows"] if r["section"] == sec]
+        body.append("\\midrule")
+        for i, r in enumerate(rows):
+            c = r["cell"]
+            lab = r["label"] + (f" (n={c['n']:,})" if c and c.get("n") else "")
+            base = MISSING if not c or c.get("base") is None else f"{c['base']:.{c['nd']}f}"
+            rng_t, rng_m = (_range_cell(r["range"], True), _range_cell(r["range"], False)) if r["range"] else (MISSING, MISSING)
+            first = f"\\multirow{{{len(rows)}}}{{*}}{{{_tex_escape(sec_lab)}}}" if i == 0 else ""
+            body.append(f"{first} & {_tex_escape(lab)} & {base} & {_xm_pp_cell(c, True)} & {rng_t} \\\\")
+            M.append(f"| {sec_lab if i == 0 else ''} | {lab} | {base} | {_xm_pp_cell(c, False)} | {rng_m} |")
+    notes = xm_lang_notes(xl, full)
+    name = "tab_xm_lang_full" if full else "tab_xm_lang"
+    title = "Language cost of X-M" + (" (with the health check, appendix)" if full else "")
+    caption = (f"\\caption{{{title}: difference from the base on the same node (Qwen3.5-9B, percentage points), next to X-2's three seeds. " +
+               " ".join(_tex_escape(n) for n in notes) + "}")
+    header = [" & ".join(_tex_escape(h) for h in heads) + " \\\\"]
+    return _write_table(out, name, caption, name.replace("tab_", "").replace("_", "-"), "lllcc", header, body,
+                        title[0].lower() + title[1:], M, notes)
+
+
+def _gate_num(v, scale: float, nd: int, latex: bool, signed: bool = False) -> str:
+    if v is None:
+        return MISSING
+    s = f"{scale * v:+.{nd}f}" if signed else f"{scale * v:.{nd}f}"
+    return f"${s}$" if latex else s
+
+
+def _gate_thr(v, scale: float, latex: bool) -> str:
+    if v is None:
+        return MISSING
+    s = "0" if v == 0 else f"{scale * v:.1f}"
+    return f"$>{s}$" if latex else f"> {s}"
+
+
+def xm_gate_notes(xg: dict) -> list[str]:
+    ds = xg.get("decision_split") or {}
+    rows = xg["rows"]
+    res = sorted({(b or {}).get("n_resamples") for b in (xg.get("bootstrap") or {}).values()} - {None})
+    seeds = sorted({(b or {}).get("seed") for b in (xg.get("bootstrap") or {}).values()} - {None})
+    c3 = next((r for r in rows if r["criterion"].startswith("3.")), {})
+    lab4 = {r["reading"]: XM_LANG_EN[("battery", k)].split(",")[0] for r in rows for k in XM_GATE_KEY if r["reading"].startswith(XM_LANG_EN[("battery", k)])}
+    verdict = MISSING if xg.get("pass") is None else ("passed" if xg["pass"] else "not passed")
+    notes = [f"G-XM, the decision rule for X-M (D165 §5): X-M enters the main text only if all four criteria hold. Criteria 1–2 on the decision "
+             f"set ({_nfmt(ds.get('n_images'))} COCO val2017 images, {_nfmt(ds.get('n_pairs'))} (image, category) pairs, sealed until the decision); "
+             f"criterion 3 on {_nfmt(c3.get('n'))} development expressions of referring segmentation; criterion 4 on the language "
+             f"battery. Verdict: {verdict}" + ("" if xg.get("rehearsal") is not False else ", not a rehearsal") +
+             f", {xg.get('n_checks_true', 0)} of {xg.get('n_checks', 0)} gate-point checks true, criterion 4 per {str(xg.get('criterion4') or MISSING).upper()}.",
+             "Criteria 1–2: F1 ×100 (Rex-Omni's class-macro F1, IoU 0.5), paired bootstrap over images; criterion 3: cIoU ×100, per-expression "
+             "paired bootstrap; criterion 4: percentage points, per-item paired bootstrap, unrounded (two decimals); all 95%, "
+             f"{_res_text(res)} resamples (seed {', '.join(str(s) for s in seeds) or MISSING}). A criterion holds when the CI lower bound exceeds "
+             "its threshold."]
+
+    def not_met(block):
+        return [f"{lab4.get(r['reading'], r['reading'])} {_pts(r['diff'], 1.0, 2)} (lower bound not above {_signed0(r['threshold'])})"
+                for r in rows if r["block"] == block and r["pass"] is False and r.get("diff") and r["threshold"] is not None]
+    m165, mb = not_met("d165"), not_met("b")
+    notes.append(f"Criterion 4 in three formulations, side by side. D170 (preregistration XM-5a; used for the verdict): X-M − base on the same "
+                 f"node, the lower bound above the lowest CI lower bound of X-2's three seeds minus {XM_C4_MARGIN_PP:g} points. D165 as "
+                 "written (a diagnostic, not part of the verdict): X-M − X-2 seed 0, the lower bound above "
+                 f"{_signed0(next((r['threshold'] for r in rows if r['block'] == 'd165' and r['threshold'] is not None), 0))}"
+                 + (f"; not met: {_and(m165)}" if m165 else "") + ". N47 option (b) (the administrator's original proposal, not adopted): "
+                 f"X-M − base on the same node, the lower bound above X-2's worst seed point estimate minus {XM_C4_MARGIN_PP:g} points"
+                 + (f"; not met: {_and(mb)}" if mb else "") + ".")
+    fails = {k: v for k, v in (xg.get("seeds_fail_b") or {}).items() if v}
+    if fails:
+        parts = []
+        for key, ss in fails.items():
+            lab = XM_LANG_EN[("battery", key)].split(",")[0]
+            lows = xg["seed_lows"][key]
+            parts.append(f"on {lab}, X-2 {_seeds_text(ss)} (lower bound {_and([_signed(lows[s]) for s in ss])}, not above "
+                         f"{_signed0(xg['b_thresholds'][key])})")
+        notes.append("D170 was written before any X-M training or evaluation. It is wider than (b) because (b) compares a CI lower bound with "
+                     "a threshold set from point estimates, so X-2's own recipe does not meet (b): " + "; ".join(parts) + "."
+                     + (" Under (b), X-M does not meet it in the same way." if mb else ""))
+    notes.append(f"Data: {XM_GATE_JSON.split('/')[-1]} ({xg['runs']['gate'] or MISSING}); "
+                 f"X-2's seeds: {SEED_JSON.split('/')[-1]} ({', '.join(f'RUN-{r}' for r in xg['runs']['seeds']) or MISSING}); the thresholds of (b) from "
+                 f"{XM_LANG_JSON.split('/')[-1]} (x2_range) minus {XM_C4_MARGIN_PP:g} points.")
+    if xg["missing"]:
+        notes.append("Missing: " + "; ".join(xg["missing"]) + ".")
+    return notes
+
+
+def tab_xm_gate(xg: dict, out: Path) -> list[Path]:
+    """附录：G-XM 的四条（读数、X-M、对照、差 [CI]、阈值、结果）；第 4 条另列 D165 原文（诊断）与 N47 的 (b)（未采用）。"""
+    heads = ["Criterion", "Reading", "X-M", "Control", "Difference [95% CI]", "Lower bound must exceed", "Result"]
+    body, M = [], ["| " + " | ".join(heads) + " |", "|---|---|---:|---:|---:|---:|---|"]
+    titles = {"verdict": "Criteria used for the verdict (D165 §5; criterion 4 as rewritten in D170)",
+              "d165": "Criterion 4 in other formulations (not part of the verdict)", "b": None}
+    for block in ("verdict", "d165", "b"):
+        rows = [r for r in xg["rows"] if r["block"] == block]
+        if titles[block]:
+            body += ["\\midrule", f"\\multicolumn{{{len(heads)}}}{{l}}{{\\emph{{{_tex_escape(titles[block])}}}}} \\\\"]
+            M.append(f"| *{titles[block]}* |" + " |" * (len(heads) - 1))
+        for r in rows:
+            sc, nd = r["scale"], r["nd"]
+            d = r.get("diff")
+            res = MISSING if r["pass"] is None else ("met" if r["pass"] else "not met")
+            for latex in (True, False):
+                diff = MISSING if not d else (
+                    _gate_num(d["value"], sc, nd, latex, True) + (f"\\,{{\\scriptsize $[{sc * d['low']:+.{nd}f}, {sc * d['high']:+.{nd}f}]$}}" if latex
+                                                                  else f" [{sc * d['low']:+.{nd}f}, {sc * d['high']:+.{nd}f}]"))
+                cells = [r["criterion"], r["reading"], _gate_num(r["xm"], sc, nd, latex), _gate_num(r["control"], sc, nd, latex), diff,
+                         _gate_thr(r["threshold"], sc, latex), res]
+                if latex:
+                    body.append(" & ".join([_tex_escape(cells[0]), _tex_escape(cells[1])] + cells[2:6] + [_tex_escape(cells[6])]) + " \\\\")
+                else:
+                    M.append("| " + " | ".join(cells) + " |")
+    notes = xm_gate_notes(xg)
+    caption = "\\caption{G-XM decision for X-M (appendix). " + " ".join(_tex_escape(n) for n in notes) + "}"
+    header = [" & ".join(_tex_escape(h) for h in heads) + " \\\\"]
+    return _write_table(out, "tab_xm_gate", caption, "xm-gate", "llccccl", header, body, "G-XM decision for X-M (appendix)", M, notes)
+
+
+def readme_xm(xm: dict, xl: dict, xg: dict) -> list[str]:
+    """README 的 DEV-0084 一节：X-M 的五张表（主表与附录版、LVIS、指代分割、语言代价与附录版、判定）。"""
+    L = ["## 17. X-M（DEV-0084；D182）", "",
+         f"- 数据：`{XM_RESULTS_JSON}`（`scripts/mgr/xm_results_table.py`，{_runs_of([XM_RESULTS_RUN])}）、`{XM_LANG_JSON}`（`scripts/mgr/xm_lang_table.py`）、"
+         f"`{XM_GATE_JSON}`、`{XM_SOTA_JSON}`（照 `docs/references/xm_refs_notes.md`）。划分、设置名、叶目录与配对差的键 import 自 xm_results_table.py，"
+         "语言读数的键与来源路径 import 自 xm_lang_table.py；本文件只放英文名与版式，不重算任何 bootstrap。",
+         "- 叶目录只取三样（不是读数）：metrics.json 的逐行 CI 重抽次数（并核对 f1_rexomni 与 xm_results.json 相同）、主设置的 failures.fallback（退回框的实例数）、"
+         "config.yaml 的提示版本、控制点数、框数上限、NMS 与 LVIS 每图的类别上限。",
+         "- ×100、一位小数；\"—\" = 不适用，\"missing\" = 该有而 JSON 里没有。不加粗。", "",
+         "### 17.1 正文主表：`tab_xm_main.tex` / `tab_xm_main.md`（附录版 `tab_xm_main_full.*`）", "",
+         "- 最终报告集 xm_final。行：基座零样本、基座的框交给 GrabCut | X-M 主设置（样条 → GrabCut）| 消融三行（样条直接光栅化不贴边、框内椭圆、X-M 的框交给 GrabCut）| "
+         "Rex-Omni joint | 灰色文献行。列：检测 F1@0.5 [CI]、P / R、F1@mIoU、实例分割 F1@0.5 [CI]、主设置 − 该行的检测差与实例分割差 [CI]（配对差都取 "
+         "xm_results.json 的 det_paired / seg_paired，键取 XRT.DET_PAIRS / SEG_PAIRS）。",
+         "- 附录版：最终报告集一块加逐类的 Rex-Omni（诊断），再加判定集一块（没有 Rex-Omni）；文献行同正文版。",
+         "- D182 的写法：与 Rex-Omni 只在区间跨 0 时写 comparable（核对见下），不出现 outperform；\"样条直接光栅化、不贴边\"一句（不需要专用解码器的证据，GrabCut 只再加约 1 点）"
+         "由配对差生成。定义与文献出处放在表下面（同 tab_unified，caption 太长 pdflatex 会报错）。", "",
+         "**表注（英文，正文版）**", ""] + [f"- {n}" for _w, n in xm_main_notes(xm)] + [
+         "", "### 17.2 LVIS 子集（描述性）：`tab_xm_lvis.tex` / `tab_xm_lvis.md`", "",
+         "- 同主表的列；行同附录版的最终报告集一块（含逐类的 Rex-Omni）；没有文献行。表注写明只作描述、Rex-Omni 的训练数据可能与 LVIS 重叠、每图类别上限（XM-2b，"
+         "取叶目录 config.yaml 的 xm.lvis_cap）；高于 Rex-Omni 的差只写数，不写成结论。", "",
+         "**表注（英文）**", ""] + [f"- {n}" for n in xm_lvis_notes(xm)] + [
+         "", "### 17.3 指代分割：`tab_xm_refseg.tex` / `tab_xm_refseg.md`", "",
+         "- RefCOCO 的 W2 test（5 个划分与合并）与 ReasonSeg val，X-M 对 X-2（cIoU、gIoU、配对差与 CI，取 xm_results.json 的 refcoco_test.xm_vs_x2 与 "
+         "reasonseg.reasonseg_val；运行目录取 xm_results_table.py 的 XM_TEST、X2_TEST、RS_XM、RS_X2）。ReasonSeg 的差照数据写\"低于 / 高于\"与\"区间跨 0\"。", "",
+         "**表注（英文）**", ""] + [f"- {n}" for n in xm_refseg_notes(xm)] + [
+         "", "### 17.4 语言代价：`tab_xm_lang.tex` / `tab_xm_lang.md`（附录版 `tab_xm_lang_full.*` 加健康检查三项）", "",
+         "- 行：大题量 MMLU-Pro、IFEval prompt 严格、IFEval 指令级严格，T 文本计数 CountBench、定位 acc@0.5（附录版加健康检查三项）；列：基座读数、X-M − 基座 [CI]、"
+         "X-2 三个种子的范围（xm_lang.json 的 x2_range，离 0 近的一端在前；核对与 seed_variance.json 的 seed_range 相同）。",
+         "- MMLU-Pro 与 IFEval prompt 严格取 battery_gate（G-XM 的 10,000 次、不取整，两位小数；D182 第 2 点引的是这两个数）；IFEval 指令级严格只在 battery "
+         "（RUN-0114 的 lb_compare，取整到 0.1，一位小数）。两份都在时核对点估计取整到 0.1 相同。缺的格子写 missing。",
+         "- 不以阈值作论据：表与表注里没有判定的阈值；表注照数据写 MMLU-Pro、IFEval 在 X-2 三个种子范围之内或之外、IFEval 的代价写进局限、计数与 X-2 的范围并列。", "",
+         "**表注（英文，正文版）**", ""] + [f"- {n}" for n in xm_lang_notes(xl)] + [
+         "", "### 17.5 判定（附录）：`tab_xm_gate.tex` / `tab_xm_gate.md`", "",
+         f"- 第 1–3 条与第 4 条（D170）取 gate_xm.json 的 criteria；D165 原文取 diagnostics.criterion4_d165；N47 的 (b) 不在 gate_xm.json 里："
+         f"阈值 = xm_lang.json 的 x2_range（X-2 三个种子的点估计）的最差者 − {XM_C4_MARGIN_PP:g}（XM_C4_MARGIN_PP），X-M 的 CI 下界照取 gate_xm.json。"
+         f"种子的 CI 下界取 {SEED_JSON}（核对 D170 的阈值 = 最低下界 − {XM_C4_MARGIN_PP:g}）。", "",
+         "**表注（英文）**", ""] + [f"- {n}" for n in xm_gate_notes(xg)] + [""]
+    checks = xm["checks"] + xl["checks"] + xg["checks"]
+    if checks:
+        L += ["核对：", ""] + [f"- {c}" for c in checks] + [""]
+    return L
+
+
+def xm_data(xm: dict, xl: dict, xg: dict) -> dict:
+    """data/tab_xm_*.json：每张表上每个数字的来源（附录版与正文版共用一份）。"""
+    common = {k: xm[k] for k in ("json", "n_resamples", "level", "seed", "config", "rexomni")}
+    return {"tab_xm_main": {**common, "splits": {s: xm["splits"].get(s) for s in (XM_FINAL, XM_DEC)}, "sota": xm["sota"],
+                            "sota_meta": xm["sota_meta"], "missing": xm["missing"], "checks": xm["checks"]},
+            "tab_xm_lvis": {**common, "splits": {XM_LVIS: xm["splits"].get(XM_LVIS)}, "missing": xm["missing"]},
+            "tab_xm_refseg": {**common, "refseg": xm["refseg"], "reasonseg": xm["reasonseg"], "missing": xm["missing"]},
+            "tab_xm_lang": xl, "tab_xm_gate": xg}
+
+
 def _git_commit(root: Path) -> str:
     try:
         sha = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=20).stdout.strip()
@@ -3669,7 +4663,7 @@ def readme_w2(w2: dict, sz: dict, lc: dict, cb: dict, lt: dict, captions: dict, 
 
 
 def write_readme(root: Path, out: Path, e1, e2, e3, itf, captions: dict, files: dict, w2=None, sz=None, lc=None, cb=None,
-                 lt=None, u=None, bn=None, sd=None, x4=None) -> Path:
+                 lt=None, u=None, bn=None, sd=None, x4=None, xm=None) -> Path:
     now = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     L = ["# 论文用图表（docs/figures/）", "",
          "<!-- 由 scripts/figures/make_paper_figures.py 生成；不要手改。数据补齐后重跑：python scripts/figures/make_paper_figures.py -->", "",
@@ -3695,7 +4689,7 @@ def write_readme(root: Path, out: Path, e1, e2, e3, itf, captions: dict, files: 
          "相邻顺序与配色检查不变。",
          "- 每个数字都从结果文件读；逐点来源见 `data/*.json`（每个点带 source 路径）。", ""]
     # 缺的数据
-    w2s = [x for x in (w2, sz, lc, cb, lt, u, bn, sd, x4) if x is not None]
+    w2s = [x for x in (w2, sz, lc, cb, lt, u, bn, sd, x4) if x is not None] + list(xm or ())  # xm：DEV-0084 的 (xm, xl, xg)
     miss = e1["missing"] + e2["missing"] + e3["missing"] + itf["missing"] + [m for x in w2s for m in x["missing"]]
     L += ["## 缺的数据（missing）", ""]
     L += [f"- {m}" for m in miss] if miss else ["- 无"]
@@ -3776,6 +4770,8 @@ def write_readme(root: Path, out: Path, e1, e2, e3, itf, captions: dict, files: 
         L += readme_unified(u, bn, sd, captions)
     if x4 is not None:
         L += readme_x2_4b(x4)
+    if xm is not None:
+        L += readme_xm(*xm)
     L += ["## 文件", ""] + [f"- `{_rel(out, p)}`" for ps in files.values() for p in ps] + [""]
     p = out / "README.md"
     p.write_text("\n".join(L), encoding="utf-8")
@@ -3852,6 +4848,15 @@ def main(argv=None) -> int:
     files["fig_bins"] = fig_bins(bn, out)
     files["tab_seeds"] = tab_seeds(sd, out)
     files["tab_x2_4b"] = tab_x2_4b(x4, out)  # DEV-0078：在原有各项之后出
+    # DEV-0084（D182）：X-M 一节，在原有各项之后出，原有输出不受影响
+    xm, xl, xg = collect_xm(root), collect_xm_lang(root), collect_xm_gate(root)
+    files["tab_xm_main"] = tab_xm_main(xm, out)
+    files["tab_xm_main_full"] = tab_xm_main(xm, out, full=True)
+    files["tab_xm_lvis"] = tab_xm_lvis(xm, out)
+    files["tab_xm_refseg"] = tab_xm_refseg(xm, out)
+    files["tab_xm_lang"] = tab_xm_lang(xl, out)
+    files["tab_xm_lang_full"] = tab_xm_lang(xl, out, full=True)
+    files["tab_xm_gate"] = tab_xm_gate(xg, out)
     w2caps = {"fig_w2_size": caption_w2_size(sz), "fig_lang_cost": caption_lang_cost(lc), "fig_count_bins": caption_count_bins(cb)}
     for name, cap in w2caps.items():
         p = out / f"{name}_caption.tex"
@@ -3880,10 +4885,14 @@ def main(argv=None) -> int:
         p = out / "data" / f"{name}.json"
         p.write_text(json.dumps(_jsonable(data), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         files[name].append(p)
-    readme = write_readme(root, out, e1, e2, e3, itf, captions, files, w2, sz, lc, cb, lt, u, bn, sd, x4)
+    for name, data in xm_data(xm, xl, xg).items():  # DEV-0084
+        p = out / "data" / f"{name}.json"
+        p.write_text(json.dumps(_jsonable(data), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        files[name].append(p)
+    readme = write_readme(root, out, e1, e2, e3, itf, captions, files, w2, sz, lc, cb, lt, u, bn, sd, x4, (xm, xl, xg))
     print(f"wrote {sum(len(v) for v in files.values()) + 1} files to {out} (README: {readme})")
     miss = e1["missing"] + e2["missing"] + e3["missing"] + itf["missing"] + w2["missing"] + sz["missing"] + lc["missing"] + cb["missing"] + \
-        lt["missing"] + u["missing"] + bn["missing"] + sd["missing"] + x4["missing"]
+        lt["missing"] + u["missing"] + bn["missing"] + sd["missing"] + x4["missing"] + xm["missing"] + xl["missing"] + xg["missing"]
     if miss:
         print("missing:\n  " + "\n  ".join(miss))
     return 0
