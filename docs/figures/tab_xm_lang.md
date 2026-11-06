@@ -4,15 +4,14 @@
 |---|---|---:|---:|---:|
 | Language battery | MMLU-Pro, letter answers (n=2,000) | 54.15 | -1.30 [-2.80, +0.15] | -0.2 to -2.3 |
 |  | IFEval, prompt-level strict (n=541) | 83.73 | -3.14 [-6.10, -0.37] | +0.0 to -3.5 |
-|  | IFEval, instruction-level strict | missing | missing | +0.4 to -2.3 |
-| T-text | CountBench counting accuracy | missing | missing | -8.1 to -16.1 |
-|  | Grounding Acc@0.5 | missing | missing | +3.4 to +3.5 |
+|  | IFEval, instruction-level strict (n=834) | 88.4 | -2.2 [-4.3, +0.0] | +0.4 to -2.3 |
+| T-text | CountBench counting accuracy (n=442) | 89.37 | -20.59 [-25.11, -16.06] | -8.1 to -16.1 |
+|  | Grounding Acc@0.5 (n=56,857) | 87.14 | +3.54 [+3.30, +3.77] | +3.4 to +3.5 |
 
-- Language cost of X-M on Qwen3.5-9B: each cell is the difference from the base model evaluated on the same node, in percentage points, with a 95% paired bootstrap CI over items; Base: the base model's reading (%). Precision follows the source, two decimals where the source is unrounded: MMLU-Pro letter answers and IFEval prompt-level strict from the paired computation of RUN-0108 (10,000 resamples).
+- Language cost of X-M on Qwen3.5-9B: each cell is the difference from the base model evaluated on the same node, in percentage points, with a 95% paired bootstrap CI over items; Base: the base model's reading (%). Precision follows the source, two decimals where the source is unrounded: MMLU-Pro letter answers and IFEval prompt-level strict from the paired computation of RUN-0108 (10,000 resamples); CountBench counting accuracy and Grounding Acc@0.5 from per-item pairing (10,000 resamples); one decimal where the source rounds to 0.1: IFEval instruction-level strict from the language-battery comparison (1,000 resamples).
 - X-2, range over 3 seeds: the differences of the 3 training seeds of X-2's recipe, each against the base on its own node (language battery: seeds 0 and 1 on hpcgpu07, seed 2 on hpcgpu06; T-text: seeds 0, 1 and 2 on hpcgpu06), the end nearer zero first; one decimal.
 - X-M's MMLU-Pro −1.30 and IFEval −3.14 fall within the range of X-2's 3 seeds (MMLU-Pro −0.2 to −2.3, IFEval 0.0 to −3.5).
 - The IFEval cost of about −3 points is reported as a limitation, together with X-2's.
-- Counting (CountBench): X-M missing (RUN-0114 has no results yet), alongside X-2's 3 seeds: −8.1 to −16.1.
-- Pairing (D93-1): language battery, X-M (RUN-0107) and the base (RUN-0084) both on hpcgpu07; T-text missing (RUN-0114 has no results yet); X-2's seeds each against the base on its own node.
-- Data: xm_lang.json (scripts/mgr/xm_lang_table.py; RUN-0108, RUN-0107, RUN-0084); X-2's seeds: seed_variance.json.
-- Missing: X-M IFEval instruction-level strict, CountBench counting accuracy and Grounding Acc@0.5 (RUN-0114 has no results yet).
+- Counting (CountBench): X-M −20.59 [−25.11, −16.06], alongside X-2's 3 seeds: −8.1 to −16.1.
+- Pairing (D93-1): language battery, X-M (RUN-0107) and the base (RUN-0084) both on hpcgpu07; T-text, X-M (RUN-0114) against the base T-text run RUN-0069, both on hpcgpu06; X-2's seeds each against the base on its own node.
+- Data: xm_lang.json (scripts/mgr/xm_lang_table.py; RUN-0108, RUN-0107, RUN-0084, RUN-0114, RUN-0069); X-2's seeds: seed_variance.json.

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 import statistics
 import subprocess
@@ -1938,10 +1939,46 @@ def test_xm_lvis_and_refseg_numbers(xm_run):
     assert "on the same node (hpcgpu06)" in md and "on the same node (hpcgpu07)" in md
 
 
-def _lang_text(out: Path, name: str) -> tuple[str, str]:
-    """语言表的 .md 与 .tex（计数一行、计数一条表注先去掉：X-2 的计数范围本身就是 −8.1 到 −16.1，会与真的 IFEval 阈值撞上）。"""
-    md = "\n".join(x for x in _md(out, name).splitlines() if "CountBench" not in x and not x.startswith("- Counting"))
-    return md, _tex(out, name)
+XM_GATE_WORDS = ("threshold", "d170", "d165", "g-xm", "xm-5a", "n47", "must exceed", "lower bound above", "not above", "criterion")
+
+
+def _plain(text: str) -> str:
+    """.md / .tex 的文字统一成一种写法：LaTeX 的 $>$、$-$、$…$ 与 Unicode 负号都换成 ASCII，便于按数字查。"""
+    for a, b in (("$>$", ">"), ("$<$", "<"), ("$\\geq$", ">"), ("$\\leq$", "<"), ("$-$", "-"), ("−", "-"), ("$", ""), ("\\,", " ")):
+        text = text.replace(a, b)
+    return text
+
+
+def _threshold_hits(text: str, bare: tuple, compared: tuple = ()) -> list[str]:
+    """语言表里写成判定阈值的地方（D182 第 2 点：不以阈值作论据）。查三种：
+    - 提到阈值或判定的词（XM_GATE_WORDS）；
+    - 写成比较的阈值，如 "> −5.7"（bare 与 compared 里的每一个）；
+    - 去掉方括号里的 CI 与 "a to b" 的范围（这两样都是读数）之后，单独出现的 bare 阈值数字（带符号，前后不连着别的数字）。
+    读数恰好等于某个阈值（IFEval 指令级的 CI 下界 −4.3、X-2 计数范围的一端 −8.1）不算。compared 只查比较的写法
+    （D165 原文的 −2.0 太常见，单独出现的不查）。"""
+    t = _plain(text)
+    hits = [w for w in XM_GATE_WORDS if w in t.lower()]
+    rest = re.sub(r"\[[^\]]*\]", " ", t)
+    rest = re.sub(r"[+-]?\d+(?:\.\d+)? to [+-]?\d+(?:\.\d+)?", " ", rest)
+    for th in tuple(bare) + tuple(compared):
+        if re.search(rf"[>≥<≤]\s*-?{re.escape(f'{abs(th):.1f}')}(?!\d)", t):
+            hits.append(f"> {th:g}")
+    for th in bare:
+        if re.search(rf"(?<![\d.]){'-' if th < 0 else ''}{re.escape(f'{abs(th):.1f}')}(?!\d)", rest):
+            hits.append(f"{th:g}")
+    return hits
+
+
+def test_threshold_hits_rule():
+    """_threshold_hits 自己的规则：阈值写成比较、单独出现或提到阈值都算；同一个数只出现在 CI 或 X-2 的范围里不算。"""
+    thr = (-5.7, -8.1, -4.3, -5.5)
+    for ok in ("| IFEval, instruction-level strict | 87.43 | -2.2 [-4.3, +0.0] | +0.4 to -2.3 |", "X-2's 3 seeds: −8.1 to −16.1.",
+               "{\\scriptsize $[-6.10, -0.37]$} & $-$0.2 to $-$2.3", "base 85.7; −15.5 [−18.1, −12.9]; +5.5 points"):
+        assert _threshold_hits(ok, thr, (-2.0,)) == [], ok
+    for bad, hit in (("lower bound > −5.7", "> -5.7"), ("$>$ $-$8.1", "> -8.1"), ("X-M is −4.3 here", "-4.3"),
+                     ("the threshold of the gate", "threshold"), ("D170 says so", "d170"), ("bound > −2.0", "> -2"),
+                     ("below the G-XM bound", "g-xm")):
+        assert hit in _threshold_hits(bad, thr, (-2.0,)), bad
 
 
 def test_xm_lang_numbers_and_no_thresholds(xm_run):
@@ -1972,12 +2009,9 @@ def test_xm_lang_numbers_and_no_thresholds(xm_run):
         assert "X-M's MMLU-Pro −1.30 and IFEval −3.14 fall within the range of X-2's 3 seeds (MMLU-Pro −0.3 to −2.4, IFEval +0.2 to −3.6)" in notes
         assert "The IFEval cost of about −3 points is reported as a limitation, together with X-2's." in notes
         assert "Counting (CountBench): X-M −9.10 [−12.60, −5.20], alongside X-2's 3 seeds: −7.0 to −15.0." in notes
-        md_nc, tex = _lang_text(out, name)
-        thr = list(XM_GATE_THR.values()) + [min(XM_X2_RANGE[k]) - MPF.XM_C4_MARGIN_PP for k in MPF.XM_GATE_KEY]
-        for t in thr:
-            assert f"{abs(t):.1f}" not in md_nc and f"{abs(t):.1f}" not in tex, t
-        for word in ("threshold", "d170", "xm-5a", "g-xm"):
-            assert word not in md.lower() and word not in tex.lower(), word
+        thr = tuple(XM_GATE_THR.values()) + tuple(min(XM_X2_RANGE[k]) - MPF.XM_C4_MARGIN_PP for k in MPF.XM_GATE_KEY)
+        for text in (md, _tex(out, name)):
+            assert _threshold_hits(text, thr, (-2.0,)) == [], _threshold_hits(text, thr, (-2.0,))
         assert ("Health check" in md) == full
 
 
@@ -2077,10 +2111,13 @@ def test_real_xm_tables_pin_d182_numbers(real_xm):
     assert "|  | IFEval, prompt-level strict (n=541) | 83.73 | -3.14 [-6.10, -0.37] | +0.0 to -3.5 |" in lmd
     assert "fall within the range of X-2's 3 seeds (MMLU-Pro −0.2 to −2.3, IFEval 0.0 to −3.5)" in lmd
     assert "X-2's 3 seeds: −8.1 to −16.1" in lmd  # D182 第 3 点：计数与 X-2 的范围并列
-    md_nc, tex = _lang_text(out, "tab_xm_lang")
-    for t in ("5.7", "8.1", "4.3", "5.5"):
-        assert t not in md_nc, t
-    assert "threshold" not in (lmd + tex).lower()
+    # 不出现判定阈值：D170 的两个（gate_xm.json）与 N47 (b) 的两个；D165 原文的 −2.0 只查比较的写法
+    thr = tuple(r["threshold"] for r in xg["rows"] if r["block"] == "verdict" and r["criterion"].startswith("4.")) + tuple(xg["b_thresholds"].values())
+    assert sorted(thr) == [-8.1, -5.7, -5.5, -4.3]
+    d165 = tuple({r["threshold"] for r in xg["rows"] if r["block"] == "d165"})
+    for name in ("tab_xm_lang", "tab_xm_lang_full"):
+        for text in (_md(out, name), _tex(out, name)):
+            assert _threshold_hits(text, thr, d165) == [], (name, _threshold_hits(text, thr, d165))
 
 
 def test_real_xm_latex_compiles(real_xm, tmp_path):

@@ -2,8 +2,8 @@
 
 <!-- 由 scripts/figures/make_paper_figures.py 生成；不要手改。数据补齐后重跑：python scripts/figures/make_paper_figures.py -->
 
-- 生成时间：2026-11-05 22:13 UTC
-- 代码 commit：5bb7a7f15c371728a9af96fd2c23737d7ce361fd (working tree has uncommitted changes)
+- 生成时间：2026-11-06 04:34 UTC
+- 代码 commit：919a19ad9013432b04bf356ec021e6d0f9924baa (working tree has uncommitted changes)
 - 结果树：`仓库根`
 - matplotlib 3.11.2；PDF 是矢量（TrueType 字体，无 Type 3），PNG 300 dpi；宽度：单栏 3.3 in，双栏 6.9 in。
 - 配色：dataviz 参考调色板。Qwen3.5 四个尺寸用一个有序的蓝色阶（浅→深 = 0.8B→9B），InternVL3.5 用第二个有序色阶（橙）；两类对比用分类槽 1（蓝）与槽 2（橙）。都在白底上过了 validate_palette.js（有序：单色相、亮度单调、相邻 ΔL ≥ 0.06；分类两色全对 CVD ΔE 24.7）。
@@ -15,9 +15,7 @@
 
 ## 缺的数据（missing）
 
-- X-M 语言表 battery ifeval.instruction_level_strict（docs/analysis/xm_lang.json 的 battery 里没有；由 RUN-0114 生成，还没有结果）
-- X-M 语言表 ttext count（docs/analysis/xm_lang.json 的 ttext 里没有；由 RUN-0114 生成，还没有结果）
-- X-M 语言表 ttext refexp_box（docs/analysis/xm_lang.json 的 ttext 里没有；由 RUN-0114 生成，还没有结果）
+- 无
 
 ## 1. E1 差距图：`fig_e1_gap.pdf` / `fig_e1_gap.png`
 
@@ -372,14 +370,13 @@ Where C1 = X-2 (ours) gains, on all 5,000 W2 test expressions (Qwen3.5-9B): pair
 
 **表注（英文，正文版）**
 
-- Language cost of X-M on Qwen3.5-9B: each cell is the difference from the base model evaluated on the same node, in percentage points, with a 95% paired bootstrap CI over items; Base: the base model's reading (%). Precision follows the source, two decimals where the source is unrounded: MMLU-Pro letter answers and IFEval prompt-level strict from the paired computation of RUN-0108 (10,000 resamples).
+- Language cost of X-M on Qwen3.5-9B: each cell is the difference from the base model evaluated on the same node, in percentage points, with a 95% paired bootstrap CI over items; Base: the base model's reading (%). Precision follows the source, two decimals where the source is unrounded: MMLU-Pro letter answers and IFEval prompt-level strict from the paired computation of RUN-0108 (10,000 resamples); CountBench counting accuracy and Grounding Acc@0.5 from per-item pairing (10,000 resamples); one decimal where the source rounds to 0.1: IFEval instruction-level strict from the language-battery comparison (1,000 resamples).
 - X-2, range over 3 seeds: the differences of the 3 training seeds of X-2's recipe, each against the base on its own node (language battery: seeds 0 and 1 on hpcgpu07, seed 2 on hpcgpu06; T-text: seeds 0, 1 and 2 on hpcgpu06), the end nearer zero first; one decimal.
 - X-M's MMLU-Pro −1.30 and IFEval −3.14 fall within the range of X-2's 3 seeds (MMLU-Pro −0.2 to −2.3, IFEval 0.0 to −3.5).
 - The IFEval cost of about −3 points is reported as a limitation, together with X-2's.
-- Counting (CountBench): X-M missing (RUN-0114 has no results yet), alongside X-2's 3 seeds: −8.1 to −16.1.
-- Pairing (D93-1): language battery, X-M (RUN-0107) and the base (RUN-0084) both on hpcgpu07; T-text missing (RUN-0114 has no results yet); X-2's seeds each against the base on its own node.
-- Data: xm_lang.json (scripts/mgr/xm_lang_table.py; RUN-0108, RUN-0107, RUN-0084); X-2's seeds: seed_variance.json.
-- Missing: X-M IFEval instruction-level strict, CountBench counting accuracy and Grounding Acc@0.5 (RUN-0114 has no results yet).
+- Counting (CountBench): X-M −20.59 [−25.11, −16.06], alongside X-2's 3 seeds: −8.1 to −16.1.
+- Pairing (D93-1): language battery, X-M (RUN-0107) and the base (RUN-0084) both on hpcgpu07; T-text, X-M (RUN-0114) against the base T-text run RUN-0069, both on hpcgpu06; X-2's seeds each against the base on its own node.
+- Data: xm_lang.json (scripts/mgr/xm_lang_table.py; RUN-0108, RUN-0107, RUN-0084, RUN-0114, RUN-0069); X-2's seeds: seed_variance.json.
 
 ### 17.5 判定（附录）：`tab_xm_gate.tex` / `tab_xm_gate.md`
 
@@ -400,6 +397,8 @@ Where C1 = X-2 (ours) gains, on all 5,000 W2 test expressions (Qwen3.5-9B): pair
 - 一致：配对差里记的两个读数 = 两行的点估计（19 个配对差）
 - 一致：D182 把最终报告集上 X-M 与 Rex-Omni（joint）写成"相当"——差的 95% CI 跨 0
 - 一致：D182 写 ReasonSeg 上 X-M − X-2 的 cIoU 差"区间跨 0"
+- 一致：mmlu_pro_letter.accuracy 的 G-XM 读数 -1.30 与 lb_compare（RUN-0114）的 -1.3 取整到 0.1 相同
+- 一致：ifeval.prompt_level_strict 的 G-XM 读数 -3.14 与 lb_compare（RUN-0114）的 -3.1 取整到 0.1 相同
 - 一致：docs/analysis/xm_lang.json 的 X-2 三个种子范围 = docs/analysis/seed_variance.json 各种子读数的最小与最大（seed_range，7 项）
 - 一致：D170 的 mmlu_pro 阈值 -5.7（gate_xm.json）= docs/analysis/seed_variance.json 三个种子 CI 下界的最低者 -3.7 − 2
 - 一致：D170 的 ifeval 阈值 -8.1（gate_xm.json）= docs/analysis/seed_variance.json 三个种子 CI 下界的最低者 -6.1 − 2
